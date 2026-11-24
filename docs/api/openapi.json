@@ -11429,6 +11429,26 @@
             "title": "Next Sync At",
             "type": "number"
           },
+          "parse_failed_reasons": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "enum": [
+                "charset_error",
+                "message_defects",
+                "mime_error",
+                "other",
+                "part_defects",
+                "pdf_unsupported",
+                "recursion",
+                "unicode_error",
+                "worker_rejected"
+              ]
+            },
+            "title": "Parse Failed Reasons",
+            "type": "object"
+          },
           "pending_imported_count": {
             "title": "Pending Imported Count",
             "type": "integer"
@@ -11464,6 +11484,7 @@
           "last_error",
           "pending_imported_count",
           "batch_processed_count",
+          "parse_failed_reasons",
           "google_revoke_url",
           "google_revoke_affects_calendar_sync"
         ],
@@ -11476,6 +11497,11 @@
           "force_full_resync": {
             "default": false,
             "title": "Force Full Resync",
+            "type": "boolean"
+          },
+          "retry_parse_failed": {
+            "default": false,
+            "title": "Retry Parse Failed",
             "type": "boolean"
           }
         },
@@ -15830,7 +15856,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.46.0"
+    "version": "0.47.0"
   },
   "openapi": "3.1.0",
   "paths": {

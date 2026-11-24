@@ -5955,6 +5955,10 @@ export interface components {
             last_sync_at: number | null;
             /** Next Sync At */
             next_sync_at: number;
+            /** Parse Failed Reasons */
+            parse_failed_reasons: {
+                [key: string]: number;
+            };
             /** Pending Imported Count */
             pending_imported_count: number;
             /**
@@ -5972,6 +5976,11 @@ export interface components {
              * @default false
              */
             force_full_resync: boolean;
+            /**
+             * Retry Parse Failed
+             * @default false
+             */
+            retry_parse_failed: boolean;
         };
         /** BudgetReceiptGmailSyncResult */
         BudgetReceiptGmailSyncResult: {

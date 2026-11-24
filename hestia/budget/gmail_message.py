@@ -6,23 +6,46 @@ from dataclasses import replace
 from email import policy
 from email.errors import MessageError
 from email.parser import BytesParser
+import logging
 import re
 
 from .gmail_address import canonical_mailbox
 from .gmail_client import GmailError
 from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
-from .gmail_store import RFC_MESSAGE_DOMAIN, PendingMessage, digest
+from .gmail_store import RFC_MESSAGE_DOMAIN, PendingMessage, digest, normalize_parse_failed_reason
 from .gmail_trust import classify_sender, forward_sender_domain, mime_parts, unwrap_trusted_forward
-from .gmail_worker import MAX_HTML_BYTES, MAX_PDF_BYTES, WorkerRejected, WorkerUnavailable
+from .gmail_worker import MAX_HTML_BYTES, MAX_PDF_BYTES, PDFUnsupported, WorkerRejected, WorkerUnavailable
 
 
 MAX_MESSAGE_BYTES = 10 * 1024 * 1024
 _MAX_BASE64_CHARS = 4 * ((MAX_MESSAGE_BYTES + 2) // 3)
 _INTERNAL_DATE = re.compile(r"[0-9]{1,19}\Z", re.ASCII)
+_PARSE_FAILED = "parse_failed"
+log = logging.getLogger("hestia.budget.gmail_message")
 
 
 class _PartOversized(WorkerRejected):
     """The selected MIME data exceeded its worker input limit."""
+
+
+class _Rejected(WorkerRejected):
+    """Local MIME or charset rejection carrying a fixed diagnostic reason."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _worker_reason(error):
+    if isinstance(error, PDFUnsupported):
+        return "pdf_unsupported"
+    if isinstance(error, _Rejected):
+        return error.reason
+    return "worker_rejected"
+
+
+def _parse_failed(pending, reason):
+    return replace(pending, outcome=_PARSE_FAILED, parse_failed_reason=normalize_parse_failed_reason(reason))
 
 
 def _metadata(response, message_id):
@@ -77,13 +100,25 @@ def _rfc_message_hmac(message, secret):
     return digest(secret, RFC_MESSAGE_DOMAIN, f"{local}@{domain}")
 
 
+def _is_pdf_part(part):
+    content_type = part.get_content_type()
+    if content_type == "application/pdf":
+        return True
+    if content_type != "application/octet-stream":
+        return False
+    filename = part.get_filename()
+    if not filename or not filename.lower().endswith(".pdf"):
+        return False
+    return (part.get_payload(decode=True) or b"").startswith(b"%PDF-")
+
+
 def _document_parts(message):
     for subtype, kind in (("plain", "text"), ("html", "html")):
         part = message.get_body((subtype,))
         if part is not None:
             yield kind, part
     for part in mime_parts(message):
-        if part.get_content_type() == "application/pdf":
+        if _is_pdf_part(part):
             yield "pdf", part
 
 
@@ -91,14 +126,14 @@ def _document_payload(kind, part):
     limit = MAX_PDF_BYTES if kind == "pdf" else MAX_HTML_BYTES
     payload = part.get_payload(decode=True) or b""
     if part.defects:
-        raise WorkerRejected
+        raise _Rejected("part_defects")
     if len(payload) > limit:
         raise _PartOversized
     if kind != "pdf":
         try:
             payload = payload.decode(part.get_content_charset() or "utf-8", errors="replace").encode("utf-8")
         except (LookupError, UnicodeError):
-            raise WorkerRejected from None
+            raise _Rejected("charset_error") from None
         if len(payload) > limit:
             raise _PartOversized
     return payload
@@ -129,16 +164,17 @@ class GmailMessageProcessor:
                     continue
                 text = self.worker.parse(kind, payload)
             except _PartOversized:
-                pending = replace(pending, outcome="skipped_oversized")
+                pending = replace(pending, outcome="skipped_oversized", parse_failed_reason=None)
                 continue
-            except WorkerRejected:
-                pending = replace(pending, outcome="parse_failed")
+            except WorkerRejected as error:
+                pending = _parse_failed(pending, _worker_reason(error))
                 continue
             invoice = extract_invoice(text)
             if invoice is not None:
                 return replace(pending, outcome="imported", invoice=invoice,
                                rfc_message_id_hmac=_rfc_message_hmac(message, self.settings.hmac_secret),
-                               source_kind="attachment" if kind == "pdf" else "email")
+                               source_kind="attachment" if kind == "pdf" else "email",
+                               parse_failed_reason=None)
         return pending
 
     def _parse(self, raw, pending):
@@ -146,7 +182,7 @@ class GmailMessageProcessor:
         if self._trust(message.raw_items()) != pending.trust_path:
             return replace(pending, trust_path="untrusted", outcome="skipped_untrusted_sender")
         if message.defects:
-            return replace(pending, outcome="parse_failed")
+            return _parse_failed(pending, "message_defects")
         if pending.trust_path in ("spouse_forward", "owner_forward"):
             selected = unwrap_trusted_forward(
                 message,
@@ -183,14 +219,23 @@ class GmailMessageProcessor:
         pending = replace(pending, trust_path=trust_path)
         try:
             raw = _raw_bytes(run.message(message_id, raw=True), message_id)
-            return self._parse(raw, pending)
+            result = self._parse(raw, pending)
         except GmailError as error:
             if error.http_status == 404:
                 return replace(pending, outcome="deleted")
             raise
         except _PartOversized:
             return replace(pending, outcome="skipped_oversized")
-        except (MessageError, RecursionError, UnicodeError, WorkerRejected):
-            return replace(pending, outcome="parse_failed")
+        except WorkerRejected as error:
+            result = _parse_failed(pending, _worker_reason(error))
+        except MessageError:
+            result = _parse_failed(pending, "mime_error")
+        except RecursionError:
+            result = _parse_failed(pending, "recursion")
+        except UnicodeError:
+            result = _parse_failed(pending, "unicode_error")
         except WorkerUnavailable:
             raise GmailError("parser_unavailable") from None
+        if result.outcome == _PARSE_FAILED:
+            log.warning("gmail parse_failed reason=%s", result.parse_failed_reason)
+        return result

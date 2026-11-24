@@ -26,6 +26,7 @@ from typing import Annotated, Literal
 from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, WrapValidator
 from pydantic.json_schema import models_json_schema
 
+from .budget.gmail_store import PARSE_FAILED_REASONS
 from .budget.i18n import LANGUAGES, validate_languages
 
 # The contract's own version, independent of the app release — bumped when the wire shape changes.
@@ -110,7 +111,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.45.0: ordered per-user budget display languages, category and one-off label translations
 #         (migration 0029, down_revision 0028), resolved display fields and admin bulk import.
 # 0.46.0: additive 409 device_token_limit_reached response for new password-login device names at the active cap.
-CONTRACT_VERSION = "0.46.0"
+# 0.47.0: additive parse_failed_reasons on BudgetReceiptGmailStatus and retry_parse_failed on BudgetReceiptGmailSyncRequest (zero migration).
+CONTRACT_VERSION = "0.47.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2782,6 +2784,7 @@ BudgetReceiptDocumentKind = Literal["receipt", "invoice", "payment_confirmation"
 BudgetReceiptGmailGrantStatus = Literal["disabled", "active", "revoked"]
 BudgetReceiptGmailSyncPhase = Literal["idle", "backfill", "incremental", "full_resync"]
 BudgetReceiptGmailAttention = Literal["authorization", "configuration", "identity_mismatch", "quota"]
+BudgetReceiptGmailParseFailedReason = Literal[*PARSE_FAILED_REASONS]
 
 
 class BudgetReceiptParseTextRequest(BaseModel):
@@ -3025,6 +3028,7 @@ class BudgetReceiptGmailRevokeRequest(BaseModel):
 class BudgetReceiptGmailSyncRequest(BaseModel):
     model_config = _STRICT
     force_full_resync: bool = False
+    retry_parse_failed: bool = False
 
 
 class BudgetReceiptGmailGrantResult(BaseModel):
@@ -3059,6 +3063,7 @@ class BudgetReceiptGmailStatus(BaseModel):
     last_error: str | None
     pending_imported_count: int
     batch_processed_count: int
+    parse_failed_reasons: dict[BudgetReceiptGmailParseFailedReason, int]
     google_revoke_url: Literal["https://myaccount.google.com/linkedapps"]
     google_revoke_affects_calendar_sync: Literal[True]
 
