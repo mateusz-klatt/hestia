@@ -607,6 +607,30 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         active = {token_id for token_id, row in records.items() if row.revoked_at is None}
         self.assertEqual(active, {paired[0]["token_id"], replacement["token_id"]})
 
+    async def test_rotation_audit_follows_the_replaced_token_not_an_older_sibling(self):
+        self._set_login_passwords("alice")
+        start = int(web._now())
+        with mock.patch.dict(os.environ, {analytics_api.FLAG: "1"}), \
+                mock.patch.object(device_token, "now", side_effect=range(start, start + 10)):
+            older = await self._logged_in_device(name="Shared")
+            code = await self._pair()
+            response = await self._redeem(code["code"], name="Shared")
+            _status(response, 200)
+            newer = await response.json()
+            replacement = await self._logged_in_device(name="Shared")
+            inbox = await self.client.get(analytics_api.PREFIX + "/inbox", headers=self.headers())
+            _status(inbox, 200)
+            alerts = {item["ref"]["token_id"] for item in (await inbox.json())["items"]
+                      if item["kind"] == "device_added"}
+
+        records = {row.id: row for row in self.rows(db.BudgetReceiptDeviceToken)}
+        self.assertIsNone(records[older["token_id"]].revoked_at)
+        self.assertIsNotNone(records[newer["token_id"]].revoked_at)
+        actions = {row.action for row in self.rows(db.BudgetAnalyticsAudit)
+                   if row.subject_id == replacement["token_id"]}
+        self.assertEqual(actions, {device_token.NEW_DEVICE_LOGIN})
+        self.assertIn(replacement["token_id"], alerts)
+
     async def test_new_device_inbox_item_is_owner_private_and_can_be_marked_read(self):
         self._set_login_passwords("alice")
         grant = household.grant_member("viewer", "alice")["grant_id"]
