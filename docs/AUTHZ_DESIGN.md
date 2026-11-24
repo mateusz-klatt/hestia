@@ -428,3 +428,20 @@ These details complete Parts A and B for client implementers. Each field below i
    - `device-token` needs a current native session and is allowed over plain-HTTP LAN.
    - QR issuance and redemption stay https-only. Their origin is the configured `HESTIA_PUBLIC_ORIGIN`.
    - A 200 response from `qr-redeem` always includes `token`, using the same shape as `POST /api/login` with `bearer: true`, i.e. `{ok, user, token}`.
+
+## Part C addendum: feature detection, token binding, calendar instances (2026-11-24)
+
+6. **Feature probe (PR 2):** a new public, unauthenticated, `no-store` route `GET /api/auth/features` returns
+   ```json
+   {"auth_contract": 2, "features": ["capabilities", "qr_login", "device_exchange", "calendar_instances"], "qr_origin": "https://hestia.example"|null}
+   ```
+   - `features` lists only what the server actually has enabled. `qr_origin` is the configured `HESTIA_PUBLIC_ORIGIN` when QR login is available.
+   - A server older than PR 2 answers this path with 401, 403 or 404 depending on the auth state (the 0.46.0 middleware applies the admin floor before routing). **Any response other than a 200 carrying `auth_contract >= 2` means legacy:** use `whoami.role`, show no QR sign-in, and skip the exchange.
+   - Clients must not infer support from a 404 on `/api/me/capabilities`.
+   - Each later PR adds its feature string when its endpoint ships, so a client never sees a QR or exchange button on a server that can't serve it.
+7. **Owner-scope key:** the `device-token` response also carries `owner_key`. It is an opaque, stable per-installation HMAC of the target owner (namespace `hestia/auth/owner-key/v1`), never the username. Clients bind a stored token to `(origin, actor, owner_key)`.
+8. **Legacy device tokens:** no introspection route. A client migrates a legacy receipts token by calling `POST /api/auth/device-token` with `prior_token` set to the legacy token. The server verifies it as rotation proof, binds it as actor = owner (the self slot) and returns the new token, preserving `token_id`. Until then the legacy token keeps working on the legacy routes, up to PR 4.
+9. **`GET /api/calendars/instances`** (OpenAPI 0.47.0) freezes its shape when it merges:
+   - the response is `{enabled, groups, truncated, instances[{instance_id, event_id, revision, group, summary, location, start, end, all_day, status, recurrence_id}]}`;
+   - query parameters are `from` (inclusive), `to` (exclusive), `group?` and `tz?` (IANA, default UTC).
+   - Distinct outcomes: a route missing on an older server means `calendar_instances` is absent from the feature probe; a disabled feature gives 200 with `enabled:false`; a missing permission gives 403.
