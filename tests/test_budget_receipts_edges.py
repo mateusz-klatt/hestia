@@ -496,7 +496,9 @@ class StoreEdgeTests(AnalyticsCase):
 
 class ReceiptApiEdgeTests(unittest.TestCase):
     def test_store_refuses_a_non_authoritative_backend(self):
-        with mock.patch("hestia.budget.receipt_api.init_db", return_value=(mock.Mock(), mock.Mock())), \
+        sessions = mock.MagicMock()
+        sessions.return_value.__enter__.return_value.get.return_value = None
+        with mock.patch("hestia.budget.receipt_api.init_db", return_value=(mock.Mock(), sessions)), \
                 mock.patch("hestia.budget.receipt_api.store_sql.is_users_db_authoritative", return_value=False):
             with self.assertRaises(BudgetUsersBackendRequired):
                 receipt_api._store(b"secret")

@@ -87,20 +87,8 @@ def downgrade():
         "ix_budget_receipt_device_tokens_owner_actor",
         table_name="budget_receipt_device_tokens",
     )
-    op.drop_index("ix_budget_receipts_owner_date", table_name="budget_receipts")
-
-    for table, columns in (
-        ("budget_receipt_device_tokens", ("issued_permissions", "actor")),
-        ("budget_receipts", ("submitted_by",)),
-        ("users", ("credential_generation", "budget_owner")),
-    ):
-        op.execute(f'DROP TABLE IF EXISTS "_alembic_tmp_{table}"')
-        with op.batch_alter_table(table, recreate="always") as batch:
-            for column in columns:
-                batch.drop_column(column)
-
-    op.create_index(
-        "ix_budget_receipts_owner_date",
-        "budget_receipts",
-        ["owner", sa.text("receipt_date DESC"), "id"],
-    )
+    op.drop_column("budget_receipt_device_tokens", "issued_permissions")
+    op.drop_column("budget_receipt_device_tokens", "actor")
+    op.drop_column("budget_receipts", "submitted_by")
+    op.drop_column("users", "credential_generation")
+    op.drop_column("users", "budget_owner")

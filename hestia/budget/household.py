@@ -54,7 +54,7 @@ import secrets
 from pathlib import Path
 
 from alembic.script import ScriptDirectory
-from sqlalchemy import event, text
+from sqlalchemy import event, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -138,13 +138,8 @@ def authorize_household(session, member, *, header, require_header):
     grant = session.get(BudgetHouseholdMember, member)
     if grant is None or grant.member_username != member or grant.owner == member:
         raise HouseholdAuthError(403, "budget_forbidden")
-    owner = session.get(User, grant.owner)
-    if (
-        owner is None
-        or owner.disabled
-        or owner.role != "admin"
-        or (phase == authz.POLICY_PHASE_COMPAT and not owner.budget_owner)
-    ):
+    owner = _active(session, grant.owner, "admin", check_budget_owner=(phase == authz.POLICY_PHASE_COMPAT))
+    if owner is None or (phase == authz.POLICY_PHASE_COMPAT and not owner.budget_owner):
         raise HouseholdAuthError(403, "budget_forbidden")
     if require_header and not hmac.compare_digest(header, grant.grant_id):
         raise HouseholdAuthError(403, "budget_forbidden")
@@ -198,10 +193,11 @@ def _require_lineage(session):
         raise HouseholdCommandError("household_users_required")
 
 
-def _active(session, username, *roles):
+def _active(session, username, *roles, check_budget_owner=False):
     if not isinstance(username, str) or not username:
         return None
-    row = session.get(User, username)
+    columns = (User.disabled, User.role, User.budget_owner) if check_budget_owner else (User.disabled, User.role)
+    row = session.execute(select(*columns).where(User.username == username)).first()
     if row is None or row.disabled or row.role not in roles:
         return None
     return row
@@ -211,7 +207,7 @@ def _grant(session, member, owner):
     phase = authz.require_supported_policy_phase(session)
     if _active(session, member, *_MEMBER_ROLES) is None or member == owner:
         raise HouseholdCommandError("household_member_invalid")
-    owner_row = _active(session, owner, "admin")
+    owner_row = _active(session, owner, "admin", check_budget_owner=(phase == authz.POLICY_PHASE_COMPAT))
     if owner_row is None or (phase == authz.POLICY_PHASE_COMPAT and not owner_row.budget_owner):
         raise HouseholdCommandError("household_owner_invalid")
     existing = session.get(BudgetHouseholdMember, member)

@@ -229,12 +229,12 @@ class HouseholdCommandTests(unittest.TestCase):
         try:
             db._run_sqlite_migration(
                 engine, lambda connection: command.upgrade(db._alembic_config(connection), "0021"))
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "INSERT INTO users (username, password_hash, role) "
+                    "VALUES ('alice', 'unused', 'admin'), ('viewer', 'unused', 'viewer')"
+                )
             with Session(engine) as session, session.begin():
-                session.add_all([
-                    db.User(username="alice", password_hash="unused", role="admin"),
-                    db.User(username="viewer", password_hash="unused", role="viewer"),
-                ])
-                session.flush()
                 session.add(db.BudgetOwnerInboxRead(owner="alice", kind="mortgage_due", subject_id="ab" * 32,
                                                     milestone="due", read_at=1))
             with engine.begin() as connection:

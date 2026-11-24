@@ -259,9 +259,30 @@ class MigrationDowngradeTests(unittest.TestCase):
                     ("f" * 64,),
                 )
 
-        # Downgrade 0030 -> 0029 through production runner (with a leftover temp table to exercise cleanup).
-        with closing(sqlite3.connect(target)) as raw_conn:
-            raw_conn.execute('CREATE TABLE "_alembic_tmp_users" (stale TEXT)')
+        # Downgrade 0030 -> 0029 with raw Alembic + PRAGMA foreign_keys=ON (direct CLI/test path).
+        with engine.begin() as conn:
+            self.assertEqual(conn.exec_driver_sql("PRAGMA foreign_keys").scalar(), 1)
+            command.downgrade(db._alembic_config(conn), "0029")
+        db.reset_engine_cache()
+        engine, _ = db.init_db(target)
+        # Re-populate 0030 fields before exercising db.downgrade_db(target, "0029") as well.
+        with engine.begin() as conn:
+            conn.exec_driver_sql("INSERT INTO app_meta (key, value) VALUES ('auth_session_phase', 'v2')")
+            conn.exec_driver_sql("INSERT INTO app_meta (key, value) VALUES ('authz_policy_phase', 'catalog_compat')")
+            conn.exec_driver_sql(
+                "INSERT INTO permission_grants (username, permission_id, target_owner) VALUES ('bob', 'household.view', 'alice')"
+            )
+            conn.exec_driver_sql(
+                "INSERT INTO native_login_codes (id, username, code_hmac, generation, created_at, expires_at) "
+                "VALUES ('nc-1', 'bob', ?, 0, 1.0, 10.0)",
+                ("e" * 64,),
+            )
+            conn.exec_driver_sql("UPDATE budget_receipts SET submitted_by='bob' WHERE id='rcpt-1'")
+            conn.exec_driver_sql(
+                "UPDATE budget_receipt_device_tokens SET actor='bob', issued_permissions='[\"budget.receipts.add\"]' "
+                "WHERE id='tok-1'"
+            )
+        engine.dispose()
         db.downgrade_db(target, "0029")
 
         with closing(sqlite3.connect(target)) as raw_conn:
