@@ -1235,22 +1235,6 @@ class EngineGlobalTests(unittest.TestCase):
         self.assertEqual(len(eng.on_global(rt, "outdoor_temp", -3.0)), 1)  # 5→-3 crosses <0 → fires
         self.assertEqual(eng.on_global(rt, "crib_temp", -3.0), [])         # different global field → no-op
 
-    def test_restore_global_edges_preserves_frame_producing_only(self):
-        gated = {
-            "id": "crib-gated",
-            "trigger": {"type": "state", "field": "crib_temp", "op": "gt", "value": 24},
-            "conditions": [{"node": 10, "field": "switch", "op": "eq", "value": True}],
-            "actions": [{"op": "switch", "node": 15, "on": True}],
-        }
-        eng = _engine(dict(CRIB_RULE, debounce=60.0), gated)
-        rt = _rt()
-        self.assertEqual(len(eng.on_global(rt, "crib_temp", 25.6)), 1)     # only CRIB_RULE yielded frames
-        eng.restore_global_edges()                                         # simulate no gateway connected
-        rt.state.switches[10] = True                                       # gated condition now true
-        frames = eng.on_global(rt, "crib_temp", 25.8)                      # CRIB_RULE re-fires; gated stayed consumed
-        self.assertEqual(len(frames), 1)
-        self.assertEqual(eng.on_global(rt, "crib_temp", 26.0), [])         # now consumed -> no re-fire
-
 
 class EngineConditionTests(unittest.TestCase):
     def _rule(self):

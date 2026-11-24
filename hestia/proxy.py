@@ -1304,20 +1304,19 @@ async def _autosave(rt, interval: float = AUTOSAVE_SECS) -> None:
                 log.exception("autosave failed — will retry in %ss", interval)
 
 
-async def _inject(rt, frames, source: str = "scheduler", pace: bool = True) -> bool:
+async def _inject(rt, frames, source: str = "scheduler", pace: bool = True) -> None:
     """Inject automation frames to the current device session: no device connected → drop + warn (not
-    deferred) and return ``False``; a per-frame OSError is logged and aborts the rest (returns ``False``
-    if zero frames were sent, ``True`` otherwise). Shared by the scheduler and global-field feeders —
-    ``source`` tags the log lines so an incident is traced to the right producer (the scheduler tests pin
-    the default ``"scheduler"`` wording). ``pace`` spaces a multi-frame burst so back-to-back frames
-    don't wedge the gateway — left on for command bursts (automations), turned OFF for GET-poll reads
-    (the thermostat confirm), which don't need it."""
+    deferred); a per-frame OSError is logged and aborts the rest (the session is broken). Shared by the
+    scheduler and the niania poller — ``source`` tags the log lines so an incident is traced to the
+    right producer (the scheduler tests pin the default ``"scheduler"`` wording). ``pace`` spaces a
+    multi-frame burst so back-to-back frames don't wedge the gateway — left on for command bursts
+    (automations), turned OFF for GET-poll reads (the thermostat confirm), which don't need it."""
     if not frames:
-        return True
+        return
     session = rt.sessions[-1] if rt.sessions else None
     if session is None:
         log.warning("%s: dropping %d automation frame(s) — no device connected", source, len(frames))
-        return False
+        return
     for i, raw in enumerate(frames):
         if pace and i > 0 and INJECT_GAP_SECS > 0:
             await asyncio.sleep(INJECT_GAP_SECS)   # pace the burst so back-to-back frames don't wedge the gateway
@@ -1326,8 +1325,7 @@ async def _inject(rt, frames, source: str = "scheduler", pace: bool = True) -> b
         except OSError as exc:
             log.warning("%s inject failed (%d of %d frame(s) not sent): %r",
                         source, len(frames) - i, len(frames), exc)
-            return i > 0
-    return True
+            break
 
 
 async def _scheduler(rt, now=datetime.datetime.now, interval: float = SCHEDULER_SECS) -> None:
@@ -1354,9 +1352,8 @@ async def _apply_global(rt, field: str, value, source: str, *, with_timestamp: b
                         post_fields: "dict | None" = None,
                         dirty: bool = False) -> None:
     """Record a fresh GLOBAL field sample into ``State``, publish a live ``globals`` SSE delta, and
-    fire matching ``on_global`` automation triggers via ``_inject``. When ``_inject`` cannot deliver any
-    frame (no gateway connected yet), pending frame-producing rule edges are restored rather than
-    consumed. Shared by ``_poll_global_field`` (Tuya / Open-Meteo) and ``_sensor433_poller``."""
+    fire matching ``on_global`` automation triggers via ``_inject``. Shared by ``_poll_global_field``
+    (Tuya / Open-Meteo) and ``_sensor433_poller``."""
     log.debug("%s: %s = %r", source, field, value)
     if getattr(rt.state, field) != value or dirty:                       # only a REAL change needs persisting —
         rt.state.dirty = True                                            # else a steady poll re-flushes (+ re-runs
@@ -1371,9 +1368,7 @@ async def _apply_global(rt, field: str, value, source: str, *, with_timestamp: b
     if post_fields:                                                      # preserve legacy wire key order after *_ts
         fields.update(post_fields)
     rt.event_bus.publish({"type": "globals", "fields": fields})          # live dashboard update (every tick)
-    frames = rt.engine.on_global(rt, field, value)
-    if await _inject(rt, frames, source=source) is False:
-        rt.engine.restore_global_edges()
+    await _inject(rt, rt.engine.on_global(rt, field, value), source=source)
 
 
 async def _poll_global_field(rt, field, read, interval, source, *, with_timestamp=False) -> None:

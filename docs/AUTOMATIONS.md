@@ -409,7 +409,10 @@ with bounded stderr diagnostics and the stream is relaunched after `HESTIA_RTL43
 > **Crib precedence, humidity & battery:** if both `HESTIA_NIANIA_*` and `HESTIA_RTL433_CRIB_MODEL` are
 > configured, the `rtl_433` crib route wins — hestia logs a warning once and does **not** start the
 > Tuya poller. Crib humidity is ignored (the API has no crib humidity field). Low battery for crib is
-> logged once per transition into low when `HESTIA_RTL433_BATTERY_WARN` is enabled.
+> logged once per transition into low when `HESTIA_RTL433_BATTERY_WARN` is enabled. Known limitation:
+> a global-field trigger edge (`crib_temp` / `outdoor_temp`) that fires while no gateway is connected
+> is dropped and consumed (identical to the Tuya poller), so it will re-arm only once the reading
+> crosses back below the threshold and then rises again.
 
 > **Hardware requirement:** `local` needs a **433-tuned antenna near the sensors** and a **dedicated**
 > SDR/`rtl_tcp` endpoint. Do **not** point `HESTIA_RTL433_DEVICE` at an `rtl_tcp` shared with another

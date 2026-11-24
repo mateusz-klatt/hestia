@@ -2247,43 +2247,6 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(crib_events[0]), {"crib_temp", "crib_temp_ts"})  # humidity ignored, no new API field
         self.assertRegex(crib_events[0]["crib_temp_ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 
-    async def test_crib_rule_edge_preserved_until_gateway_connects(self):
-        rt = proxy.ProxyRuntime()
-        rt.engine.set_rule(Rule.from_dict(CRIB_RULE))
-        # A second rule gated by a false condition MUST still consume its edge even while disconnected.
-        rt.engine.set_rule(Rule.from_dict({
-            "id": "crib-gated",
-            "trigger": {"type": "state", "field": "crib_temp", "op": "gt", "value": 24},
-            "conditions": [{"node": 10, "field": "switch", "op": "eq", "value": True}],
-            "actions": [{"op": "switch", "node": 15, "on": True}],
-        }))
-        sess = FakeSession()
-        connected = asyncio.Event()
-        delivered_first = asyncio.Event()
-
-        async def delayed_stream(_on_reading, *, on_crib_reading=None, **_kw):
-            await on_crib_reading(sensor433.Reading(25.6, 50.0))     # before gateway connects
-            delivered_first.set()
-            await asyncio.wait_for(connected.wait(), timeout=1.0)
-            await on_crib_reading(sensor433.Reading(25.7, 50.0))     # still >24 after gateway connects -> fires
-            await on_crib_reading(sensor433.Reading(26.0, 50.0))     # edge now consumed -> no re-fire
-            await asyncio.Event().wait()
-
-        with self.assertLogs("hestia.proxy", level="WARNING") as logs:
-            task = asyncio.create_task(proxy._sensor433_poller(
-                rt, stream=delayed_stream, enabled=False,
-                crib_model="Nexus-TH", crib_id="*", crib_channel="2", backoff=0.0))
-            await asyncio.wait_for(delivered_first.wait(), timeout=1.0)
-            self.assertEqual(sess.sent, [])                          # dropped while disconnected
-            rt.state.switches[10] = True                             # satisfy crib-gated's condition too
-            rt.sessions.append(sess)
-            connected.set()
-            await asyncio.sleep(0.05)
-            task.cancel()
-            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1.0)
-        self.assertTrue(any("sensor433: dropping" in m for m in logs.output))
-        self.assertEqual(len(sess.sent), 1)                          # crib-hot fired once; crib-gated stayed consumed
-
     async def test_crib_only_runs_even_when_outdoor_open_meteo_or_off(self):
         for enabled, source in ((False, "open-meteo"), (True, "open-meteo")):
             with self.subTest(enabled=enabled, source=source):
