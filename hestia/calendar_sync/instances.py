@@ -18,7 +18,7 @@ from .events import original_start_key, to_ical
 
 INSTANCE_LIMIT = 2000
 OCCURRENCE_BOUND = 5000
-REPLAY_BOUND = 200000
+REQUEST_REPLAY_BUDGET = 200_000
 MAX_EXPLICIT_DATES = 500
 MAX_RECURRING_DURATION = timedelta(days=31)
 _MAX_INTERVAL = 1000
@@ -53,6 +53,11 @@ class _Window:
     zone: ZoneInfo
     lower: datetime
     upper: datetime
+
+
+@dataclass
+class _ReplayBudget:
+    remaining: int = REQUEST_REPLAY_BUDGET
 
 
 class _Collector:
@@ -472,7 +477,7 @@ def _replay_upper_bound(payload: dict, end: datetime, query_start: datetime | No
     return bound
 
 
-def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
+def _expand_event(event: dict, window: _Window, budget: _ReplayBudget | None = None) -> tuple[list[dict], bool]:
     payload = event["payload"]
     if not payload.get("recurrence"):
         return ([_instance(event, payload, None)] if _overlaps(payload, window) else []), False
@@ -515,9 +520,13 @@ def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
     if _occurrence_upper_bound(payload, lookback_start, query_end, len(rdates)) > OCCURRENCE_BOUND:
         _LOG.warning("Calendar event %s exceeds the instance occurrence bound; using DTSTART only", event["id"])
         return dtstart_only(exdates)
-    if _replay_upper_bound(payload, query_end, query_start) > REPLAY_BOUND:
-        _LOG.warning("Calendar event %s exceeds the recurrence replay bound; using DTSTART only", event["id"])
+    if budget is None:
+        budget = _ReplayBudget()
+    replay_bound = _replay_upper_bound(payload, query_end, query_start)
+    if replay_bound > budget.remaining:
+        _LOG.warning("Calendar event %s exceeds the remaining request replay bound; using DTSTART only", event["id"])
         return dtstart_only(exdates)
+    budget.remaining -= replay_bound
 
     explicit = {_key(payload["start"], all_day), *rdates}
     seen_overrides = set()
@@ -593,12 +602,13 @@ def expand_events(events: list[dict], window_start: date, window_end: date, zone
     window = _make_window(window_start, window_end, zone_name)
     empty_timed_window = window.lower >= window.upper
     collector = _Collector(window)
+    budget = _ReplayBudget(REQUEST_REPLAY_BUDGET)
     incomplete = False
     for event in events:
         if empty_timed_window and "date" not in event["payload"]["start"]:
             continue
         try:
-            expanded, event_incomplete = _expand_event(event, window)
+            expanded, event_incomplete = _expand_event(event, window, budget)
         except (ValueError, TypeError, KeyError, AttributeError, IndexError, OverflowError):
             try:
                 first = _first_instance(event, window)

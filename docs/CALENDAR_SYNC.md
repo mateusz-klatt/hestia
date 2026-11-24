@@ -249,8 +249,12 @@ zwraca wyłącznie `DTSTART` (z obsługą `EXDATE` i wyjątków dla `DTSTART`) z
 Jeśli górne oszacowanie liczby wystąpień w poszerzonym oknie (z uwzględnieniem
 lookbacku od `query_start - czas_trwania`) przekracza 5000 albo szacowana liczba
 badanych kroków replay od `min(DTSTART, query_start - czas_trwania)` do końca
-poszerzonego okna przekracza 200000, stosowany jest ten sam fallback bez wywoływania
-biblioteki. Szacunek okresów przyjmuje konserwatywnie do 366 dni w roku, 31 w
+poszerzonego okna przekracza pozostały wspólny budżet żądania (`REQUEST_REPLAY_BUDGET`,
+200000 kroków na całe żądanie dla wydarzeń przetwarzanych w ustalonej kolejności
+identyfikatorów), stosowany jest ten sam fallback bez wywoływania biblioteki
+(bez pomniejszania pozostałego budżetu dla kolejnych mniejszych lub niecyklicznych
+wydarzeń). Każde rozwinięte wydarzenie z `RRULE` odejmuje swój oszacowany koszt
+od budżetu żądania. Szacunek okresów przyjmuje konserwatywnie do 366 dni w roku, 31 w
 miesiącu, 7 w tygodniu i 1 dziennie przy selektorach `BYDAY`/`BYMONTHDAY`, a `COUNT`
 nie zmniejsza budżetu badanych okresów. Zmieniony wyjątek zastępuje swoje pierwotne wystąpienie.
 Odległy `RECURRENCE-ID` nie poszerza generowania, ale zapisany wyjątek trafiający w

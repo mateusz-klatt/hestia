@@ -867,6 +867,82 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(by_summary["31d recurring"], ["2026-01-01", "2026-02-01"])
         self.assertEqual(by_summary["Long single"], ["1500-01-01"])
 
+    async def test_instances_codex_1000_series_shares_request_replay_budget(self):
+        payload = {"summary": "Shared budget",
+                   "start": {"dateTime": "2000-01-01T09:00:00Z", "timeZone": "UTC"},
+                   "end": {"dateTime": "2000-01-01T10:00:00Z", "timeZone": "UTC"},
+                   "recurrence": ["RRULE:FREQ=DAILY"]}
+        store = api._store()
+        for index in range(1000):
+            store.save_local("family", payload, idempotency_key=f"codex-1000-series-{index:04d}")
+        ordered_ids = [row["id"] for row in store.list_events("family")]
+        per_event_bound = instance_expander._replay_upper_bound(
+            payload, datetime(2026, 1, 4, tzinfo=timezone.utc), datetime(2026, 1, 1, tzinfo=timezone.utc)
+        )
+        expected_expanded = instance_expander.REQUEST_REPLAY_BUDGET // per_event_bound
+        self.assertEqual(expected_expanded, 21)
+
+        started = time.monotonic()
+        with self.assertLogs("hestia.calendar_sync.instances", level="WARNING") as logs:
+            response = await self.instances("from=2026-01-02&to=2026-01-03")
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 2)
+        self.assertEqual(response.status, 200)
+        state = await response.json()
+        self.assertTrue(state["truncated"])
+        self.assertEqual([item["event_id"] for item in state["instances"]], ordered_ids[:expected_expanded])
+        self.assertTrue(all(
+            item["start"] == {"dateTime": "2026-01-02T09:00:00+00:00", "timeZone": "UTC"}
+            for item in state["instances"]
+        ))
+        self.assertIn("remaining request replay bound", "\n".join(logs.output))
+
+    def test_expand_events_shared_budget_fallback_and_exact_boundary(self):
+        events = [
+            {"id": "e1-within", "uid": "e1", "revision": 1, "group_id": "family",
+             "payload": {"summary": "First within",
+                         "start": {"dateTime": "2026-01-01T09:00:00+00:00", "timeZone": "UTC"},
+                         "end": {"dateTime": "2026-01-01T10:00:00+00:00", "timeZone": "UTC"},
+                         "recurrence": ["RRULE:FREQ=DAILY"]}},
+            {"id": "e2-over", "uid": "e2", "revision": 1, "group_id": "family",
+             "payload": {"summary": "Exceeds remaining",
+                         "start": {"dateTime": "2026-01-02T10:00:00+00:00", "timeZone": "UTC"},
+                         "end": {"dateTime": "2026-01-02T11:00:00+00:00", "timeZone": "UTC"},
+                         "recurrence": ["RRULE:FREQ=DAILY;COUNT=2"]}},
+            {"id": "e3-exact", "uid": "e3", "revision": 1, "group_id": "family",
+             "payload": {"summary": "Fits remaining",
+                         "start": {"dateTime": "2026-01-01T11:00:00+00:00", "timeZone": "UTC"},
+                         "end": {"dateTime": "2026-01-01T11:00:00+00:00", "timeZone": "UTC"},
+                         "recurrence": ["RRULE:FREQ=DAILY"]}},
+            {"id": "e4-single", "uid": "e4", "revision": 1, "group_id": "family",
+             "payload": {"summary": "Nonrecurring",
+                         "start": {"dateTime": "2026-01-03T08:00:00+00:00", "timeZone": "UTC"},
+                         "end": {"dateTime": "2026-01-03T09:00:00+00:00", "timeZone": "UTC"}}},
+            {"id": "e5-zero", "uid": "e5", "revision": 1, "group_id": "family",
+             "payload": {"summary": "Zero remaining",
+                         "start": {"dateTime": "2026-01-03T12:00:00+00:00", "timeZone": "UTC"},
+                         "end": {"dateTime": "2026-01-03T13:00:00+00:00", "timeZone": "UTC"},
+                         "recurrence": ["RRULE:FREQ=DAILY;COUNT=2"]}},
+        ]
+        with mock.patch.object(instance_expander, "REQUEST_REPLAY_BUDGET", 11):
+            with mock.patch.object(instance_expander, "of", wraps=instance_expander.of) as library:
+                with self.assertLogs("hestia.calendar_sync.instances", level="WARNING"):
+                    result = instance_expander.expand_events(events, date(2026, 1, 2), date(2026, 1, 4))
+        self.assertEqual(library.call_count, 2)
+        self.assertTrue(result["truncated"])
+        self.assertEqual(
+            [(item["event_id"], item["start"]["dateTime"]) for item in result["instances"]],
+            [
+                ("e1-within", "2026-01-02T09:00:00+00:00"),
+                ("e2-over", "2026-01-02T10:00:00+00:00"),
+                ("e3-exact", "2026-01-02T11:00:00+00:00"),
+                ("e4-single", "2026-01-03T08:00:00+00:00"),
+                ("e1-within", "2026-01-03T09:00:00+00:00"),
+                ("e3-exact", "2026-01-03T11:00:00+00:00"),
+                ("e5-zero", "2026-01-03T12:00:00+00:00"),
+            ],
+        )
+
     async def test_instances_disallowed_rule_shapes_use_dtstart_fallback(self):
         cases = [
             ("2026-01-01", "RRULE:FREQ=YEARLY;BYYEARDAY=1"),
