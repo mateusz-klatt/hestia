@@ -130,9 +130,8 @@ serve(sys.argv[1])
                     parsed = client.parse("pdf", _write_pdf(writer))
                     self.assertEqual(parsed, "Orange\nNumer dokumentu: FV/2026/042\nKwota: 12,19 EUR\n"
                                              "Termin platnosci: 05.02.2026")
-                    self.assertEqual(extract_invoice(parsed), ImportedInvoice(
-                        "Orange", None, "FV/2026/042", "12.19", "EUR", None, "2026-02-05",
-                    ))
+                    # Extraction only: this generic layout is not the real Orange template.
+                    self.assertIsNone(extract_invoice(parsed))
                     with self.assertRaises(worker.WorkerRejected):
                         client.parse("pdf", b"%PDF-synthetic")
                     with self.assertRaises(worker.WorkerRejected):
