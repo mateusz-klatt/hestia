@@ -97,6 +97,26 @@ async def _drain(create, **kw):
     return out
 
 
+async def _drain_routes(create, *, enable_outdoor=True, **kw):
+    """Run ``stream_readings`` with optional outdoor + crib collectors."""
+    outdoor = []
+    crib = []
+
+    async def on_outdoor(reading):
+        outdoor.append(reading)
+
+    async def on_crib(reading):
+        crib.append(reading)
+
+    await sensor433.stream_readings(
+        on_outdoor if enable_outdoor else None,
+        on_crib_reading=on_crib if kw.get("crib_model") else None,
+        create=create,
+        **kw,
+    )
+    return outdoor, crib
+
+
 class StreamReadingsTests(unittest.IsolatedAsyncioTestCase):
     async def test_happy_path_temp_and_humidity(self):
         proc = _FakeProc([_line(model="Prologue-TH", id=204, temperature_C=21.1, humidity=44)])
@@ -154,6 +174,147 @@ class StreamReadingsTests(unittest.IsolatedAsyncioTestCase):
         create = _make_create(_FakeProc([_line(temperature_C=1.0)]))
         await _drain(create)
         self.assertNotIn("-R", create.calls[0][0])
+
+    async def test_extra_args_empty_keeps_exact_argv(self):
+        for empty in (None, "", "   "):
+            create = _make_create(_FakeProc([_line(temperature_C=1.0)]))
+            await _drain(create, device="rtl_tcp:127.0.0.1:1234", extra_args=empty)
+            self.assertEqual(create.calls[0][0], ["rtl_433", "-d", "rtl_tcp:127.0.0.1:1234", "-F", "json"])
+
+    async def test_extra_args_appended_to_argv(self):
+        create = _make_create(_FakeProc([_line(temperature_C=1.0)]))
+        await _drain(
+            create,
+            device="rtl_tcp:127.0.0.1:1234",
+            extra_args="-f 433.92M -f 868M -s 1024k -Y classic -H 30",
+        )
+        self.assertEqual(
+            create.calls[0][0],
+            ["rtl_433", "-d", "rtl_tcp:127.0.0.1:1234", "-F", "json",
+             "-f", "433.92M", "-f", "868M", "-s", "1024k", "-Y", "classic", "-H", "30"],
+        )
+
+    async def test_extra_args_quoted_and_negative_numeric_values_allowed(self):
+        create = _make_create(_FakeProc([_line(temperature_C=1.0)]))
+        await _drain(
+            create,
+            protocol="245",
+            extra_args="-X 'n=flex,m=OOK_PWM,s=500,l=1000,r=3000' -R -3 -p -12 -M level -qv",
+        )
+        self.assertEqual(
+            create.calls[0][0],
+            ["rtl_433", "-d", "rtl_tcp:127.0.0.1:1234", "-F", "json", "-R", "245",
+             "-X", "n=flex,m=OOK_PWM,s=500,l=1000,r=3000", "-R", "-3", "-p", "-12", "-M", "level", "-qv"],
+        )
+
+    async def test_extra_args_validation_rejects_disallowed_and_file_writing_flags(self):
+        bad_cases = [
+            "-d 0",
+            "-d0",
+            "-F csv",
+            "-F json:/tmp/out.json",
+            "-Fcsv:/tmp/out.csv",
+            "-T 30",
+            "-T30",
+            "-w /tmp/raw.cu8",
+            "-w/tmp/raw.cu8",
+            "-w-",
+            "-W /tmp/raw.cu8",
+            "-W/tmp/raw.cu8",
+            "-S all",
+            "-S unknown",
+            "-Sknown",
+            "-c /tmp/rtl_433.conf",
+            "-qw /tmp/raw.cu8",
+            "-vd0",
+            "--output=csv:/tmp/out.csv",
+            "--write-file=/tmp/raw.cu8",
+            "--",
+            "-f 433.92M > /tmp/out",
+            "-f 433.92M 868M",
+            "-",
+            "-f",
+            "-f -w",
+            "-f 'unclosed",
+            "-f 433.92M\x00bad",
+            "-Z 1",
+        ]
+        for bad in bad_cases:
+            with self.subTest(extra_args=bad):
+                create = _make_create(_FakeProc([]))
+                with self.assertRaises(ValueError):
+                    await _drain(create, extra_args=bad)
+                self.assertEqual(create.calls, [])           # never spawned rtl_433
+
+    async def test_routing_outdoor_vs_crib_vs_neither(self):
+        proc = _FakeProc([
+            _line(model="Prologue-TH", id=227, channel=1, temperature_C=4.2, humidity=80, battery_ok=1),
+            _line(model="Thermopro-TX2C", id=211, channel=3, temperature_C=21.6, humidity=48, battery_ok=1),
+            _line(model="Thermopro-TX2C", id=99, channel=2, temperature_C=19.0, humidity=50),  # neighbour ch
+            _line(model="Acme-Doorbell", id=7, button=1),                                       # neither
+        ])
+        packets = []
+        outdoor, crib = await _drain_routes(
+            _make_create(proc),
+            model="Prologue-TH", sensor_id="*", channel="1",
+            crib_model="Thermopro-TX2C", crib_id="*", crib_channel="3",
+            on_packet=packets.append,
+        )
+        self.assertEqual(outdoor, [sensor433.Reading(4.2, 80.0, 1)])
+        self.assertEqual(crib, [sensor433.Reading(21.6, 48.0, 1)])
+        self.assertEqual(len(packets), 4)
+
+    async def test_crib_route_only_when_outdoor_disabled(self):
+        proc = _FakeProc([
+            _line(model="Prologue-TH", id=227, channel=1, temperature_C=4.2),
+            _line(model="Thermopro-TX2C", id=211, channel=3, temperature_C=21.6, humidity=48),
+        ])
+        outdoor, crib = await _drain_routes(
+            _make_create(proc),
+            enable_outdoor=False,
+            model=None,
+            crib_model="Thermopro-TX2C", crib_id="*", crib_channel="3",
+        )
+        self.assertEqual(outdoor, [])
+        self.assertEqual(crib, [sensor433.Reading(21.6, 48.0, None)])
+
+    async def test_ambiguous_packet_matching_both_routes_logs_once_and_skips(self):
+        proc = _FakeProc([
+            _line(model="Thermopro-TX2C", id=211, channel=3, temperature_C=21.6),  # matches both (outdoor=any)
+            _line(model="Thermopro-TX2C", id=212, channel=3, temperature_C=22.0),  # second ambiguous packet
+            _line(model="Prologue-TH", id=227, channel=1, temperature_C=5.0),      # matches outdoor only
+        ])
+        with self.assertLogs("hestia.sensor433", level="ERROR") as logs:
+            outdoor, crib = await _drain_routes(
+                _make_create(proc),
+                model=None, sensor_id=None, channel=None,                          # matches ANY temp packet
+                crib_model="Thermopro-TX2C", crib_id="*", crib_channel="3",
+            )
+        self.assertEqual(len(logs.output), 1)                                      # logged once, not twice
+        self.assertIn("both outdoor and crib", logs.output[0])
+        self.assertEqual(crib, [])                                                 # ambiguous packets dropped
+        self.assertEqual(outdoor, [sensor433.Reading(5.0, None, None)])            # non-ambiguous still routes
+
+    async def test_crib_wildcard_id_and_channel_survives_battery_swap(self):
+        proc = _FakeProc([
+            _line(model="Thermopro-TX2C", id=211, channel=3, temperature_C=21.5),
+            _line(model="Thermopro-TX2C", id=88, channel=3, temperature_C=21.7),   # new random id after battery swap
+            _line(model="Thermopro-TX2C", id=211, channel=1, temperature_C=18.0),  # wrong channel
+            _line(model="Thermopro-TX2C", id=211, temperature_C=17.0),             # missing channel -> rejected
+        ])
+        outdoor, crib = await _drain_routes(
+            _make_create(proc),
+            enable_outdoor=False,
+            crib_model="Thermopro-TX2C", crib_id="*", crib_channel="3",
+        )
+        self.assertEqual(outdoor, [])
+        self.assertEqual(crib, [sensor433.Reading(21.5, None, None), sensor433.Reading(21.7, None, None)])
+
+    async def test_no_active_routes_returns_without_spawning(self):
+        create = _make_create(_FakeProc([]))
+        outdoor, crib = await _drain_routes(create, enable_outdoor=False, crib_model=None)
+        self.assertEqual((outdoor, crib), ([], []))
+        self.assertEqual(create.calls, [])
 
     async def test_model_filter_match(self):
         proc = _FakeProc([_line(model="Nexus-TH", temperature_C=9.0)])

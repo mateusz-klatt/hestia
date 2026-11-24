@@ -252,6 +252,15 @@ RTL433_PROTOCOL = os.environ.get("HESTIA_RTL433_PROTOCOL")  # None/"" -> all def
 # `id` which a Prologue-TH-class sensor RANDOMISES on every power-cycle. None/"" -> any channel. Pair with
 # HESTIA_RTL433_ID=* to track one sensor across battery swaps while still excluding a neighbour on another channel.
 RTL433_CHANNEL = os.environ.get("HESTIA_RTL433_CHANNEL")    # None/"" -> no channel filter
+# Extra rtl_433 CLI flags (shell-split via shlex, appended after -d/-F/-R) — e.g. for multi-band
+# frequency hopping (`-f 433.92M -f 868M -s 1024k -Y classic -H 30`). Validated against disallowed
+# flags (-d/-F/-T/-w/-W/-S/-c) in _sensor433_poller; bad config disables the feeder fail-safe.
+RTL433_EXTRA_ARGS = os.environ.get("HESTIA_RTL433_EXTRA_ARGS")          # None/"" -> default argv
+# Second (indoor/crib) sensor route on the SAME rtl_433 stream into State.crib_temp + crib_temp_ts.
+# Enabled iff CRIB_MODEL is non-empty; supersedes the Tuya baby-monitor poller if both are configured.
+RTL433_CRIB_MODEL = os.environ.get("HESTIA_RTL433_CRIB_MODEL")          # None/"" -> crib route off
+RTL433_CRIB_ID = os.environ.get("HESTIA_RTL433_CRIB_ID")                # None/"" -> no id filter
+RTL433_CRIB_CHANNEL = os.environ.get("HESTIA_RTL433_CRIB_CHANNEL")      # None/"" -> no channel filter
 # Show the sensor's battery flag on the dashboard. OFF by default (opt-in): some sensors (e.g. a Prologue-TH on
 # a rechargeable cell, ~1.2 V < the alkaline threshold) report battery_ok=low PERMANENTLY, so a default-on badge
 # would be constant false-alarm noise. The freshness "N ago" badge is the reliable dead-sensor signal regardless.
@@ -1338,6 +1347,29 @@ async def _scheduler(rt, now=datetime.datetime.now, interval: float = SCHEDULER_
         await _inject(rt, frames)
 
 
+_UNSET = object()
+
+
+async def _apply_global(rt, field: str, value, source: str, *, with_timestamp: bool = False,
+                        extra_fields: "dict | None" = None, dirty: bool = False) -> None:
+    """Record a fresh GLOBAL field sample into ``State``, publish a live ``globals`` SSE delta, and
+    fire matching ``on_global`` automation triggers via ``_inject``. Shared by ``_poll_global_field``
+    (Tuya baby-monitor / Open-Meteo) and ``_sensor433_poller`` (outdoor / crib 433 routes)."""
+    log.debug("%s: %s = %r", source, field, value)
+    if getattr(rt.state, field) != value or dirty:                       # only a REAL change needs persisting —
+        rt.state.dirty = True                                            # else a steady poll re-flushes (+ re-runs
+    setattr(rt.state, field, value)                                      # Alembic) the device-state cache every tick
+    fields = {field: value}
+    if extra_fields:
+        fields.update(extra_fields)
+    if with_timestamp:                                                   # freshness: stamp the sample time
+        now = time.time()
+        setattr(rt.state, f"{field}_ts", now)
+        fields[f"{field}_ts"] = _iso(now)
+    rt.event_bus.publish({"type": "globals", "fields": fields})          # live dashboard update (every tick)
+    await _inject(rt, rt.engine.on_global(rt, field, value), source=source)
+
+
 async def _poll_global_field(rt, field, read, interval, source, *, with_timestamp=False) -> None:
     """Generic poller for a GLOBAL automation field. Every ``interval`` seconds, call the BLOCKING
     ``read()`` OFF the event loop (a worker thread, so the loop stays free); a non-``None`` return sets
@@ -1355,17 +1387,7 @@ async def _poll_global_field(rt, field, read, interval, source, *, with_timestam
             value = await loop.run_in_executor(None, read)
             if value is None:                        # failed read -> keep the last value
                 continue
-            log.debug("%s: %s = %r", source, field, value)
-            if getattr(rt.state, field) != value:                                # only a REAL change needs persisting —
-                rt.state.dirty = True                                            # else a steady poll re-flushes (+ re-runs
-            setattr(rt.state, field, value)                                      # Alembic) the device-state cache every tick
-            fields = {field: value}
-            if with_timestamp:                                                   # freshness: stamp the sample time
-                now = time.time()
-                setattr(rt.state, f"{field}_ts", now)
-                fields[f"{field}_ts"] = _iso(now)
-            rt.event_bus.publish({"type": "globals", "fields": fields})           # live dashboard update (every tick)
-            await _inject(rt, rt.engine.on_global(rt, field, value), source=source)
+            await _apply_global(rt, field, value, source, with_timestamp=with_timestamp)
         except Exception:                            # a daemon loop must never die on a tick error
             log.exception("%s poller tick failed", source)
 
@@ -1390,9 +1412,21 @@ def _niania_read(dev):
     return read
 
 
-async def _niania_poller(rt, make_device=_niania_device, interval: float = NIANIA_SECS) -> None:
+async def _niania_poller(rt, make_device=_niania_device, interval: float = NIANIA_SECS,
+                         rtl_crib_model=_UNSET) -> None:
     """Poll the Tuya baby monitor for the crib temperature into ``State.crib_temp`` (the `crib_temp`
-    global field). OFF when no device is configured. See ``_poll_global_field`` / ``_niania_read``."""
+    global field). OFF when no device is configured, or superseded by the rtl_433 crib route when
+    ``HESTIA_RTL433_CRIB_MODEL`` is set (logs a warning once when both are configured). See
+    ``_poll_global_field`` / ``_niania_read``."""
+    crib_model = RTL433_CRIB_MODEL if rtl_crib_model is _UNSET else rtl_crib_model
+    if crib_model:
+        niania_configured = bool(NIANIA_IP and NIANIA_ID and NIANIA_KEY)
+        if not niania_configured and make_device is not _niania_device:
+            niania_configured = make_device() is not None
+        if niania_configured:
+            log.warning("niania: both Tuya baby-monitor and HESTIA_RTL433_CRIB_MODEL=%r "
+                        "configured — rtl_433 crib route wins; Tuya poller not started", crib_model)
+        return
     dev = make_device()
     if dev is None:                                  # not configured -> nothing to poll
         return
@@ -1426,36 +1460,61 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
                             source: str = OUTDOOR_TEMP_SOURCE, device: str = RTL433_DEVICE,
                             model=RTL433_MODEL, sensor_id=RTL433_ID, channel=RTL433_CHANNEL,
                             protocol=RTL433_PROTOCOL, battery_warn: bool = RTL433_BATTERY_WARN,
-                            backoff: float = RTL433_RESTART_SECS) -> None:
-    """Stream a local 433 MHz weather sensor (rtl_433) into ``State.outdoor_temp`` (the `outdoor_temp`
-    global field) + ``State.outdoor_humidity`` (display-only). OPT-IN: returns immediately (zero work,
-    no rtl_433 spawned) unless explicitly ``enabled`` AND ``source == "local"`` — mutually exclusive with
-    the Open-Meteo poller. A PUSH source: one long-lived rtl_433 is consumed and each reading applied the
-    instant it arrives (no interval). If rtl_433 exits (rtl_tcp restart / SDR hiccup) the stream is
-    relaunched after ``backoff`` seconds. One bad reading never drops the stream; the daemon loop never
-    dies on an error (``CancelledError`` is a ``BaseException``, so shutdown still cancels cleanly and
-    ``stream`` reaps the child). See ``sensor433.stream_readings``."""
-    if not (enabled and source == "local"):
+                            backoff: float = RTL433_RESTART_SECS,
+                            extra_args=_UNSET, crib_model=_UNSET, crib_id=_UNSET,
+                            crib_channel=_UNSET) -> None:
+    """Stream local 433 / 868 MHz weather sensors (ONE long-lived ``rtl_433``) into ``State.outdoor_temp``
+    (+ display-only ``State.outdoor_humidity``) and/or ``State.crib_temp``. OPT-IN: returns immediately
+    (zero work, no rtl_433 spawned) unless ``enabled and source == "local"`` OR ``HESTIA_RTL433_CRIB_MODEL``
+    is set. Validates ``HESTIA_RTL433_EXTRA_ARGS`` upfront (bad config logs a warning and disables the
+    feeder fail-safe). If rtl_433 exits (rtl_tcp restart / SDR hiccup) the stream is relaunched after
+    ``backoff`` seconds. One bad reading never drops the stream; the daemon loop never dies on an error
+    (``CancelledError`` is a ``BaseException``, so shutdown still cancels cleanly and ``stream`` reaps the
+    child). See ``sensor433.stream_readings``."""
+    resolved_extra = RTL433_EXTRA_ARGS if extra_args is _UNSET else extra_args
+    resolved_crib_model = RTL433_CRIB_MODEL if crib_model is _UNSET else crib_model
+    resolved_crib_id = RTL433_CRIB_ID if crib_id is _UNSET else crib_id
+    resolved_crib_channel = RTL433_CRIB_CHANNEL if crib_channel is _UNSET else crib_channel
+
+    outdoor_local = bool(enabled and source == "local")
+    crib_local = bool(resolved_crib_model)
+    if not (outdoor_local or crib_local):
         return                                       # off / not selected -> no rtl_433
 
-    async def on_reading(reading) -> None:
+    try:
+        parsed_extra = sensor433.parse_extra_args(resolved_extra)
+    except ValueError as exc:
+        log.warning("sensor433: bad HESTIA_RTL433_EXTRA_ARGS (%s) — rtl_433 feeder disabled", exc)
+        return
+
+    async def on_outdoor_reading(reading) -> None:
         try:
-            if (rt.state.outdoor_temp != reading.temperature_C        # only a REAL change needs persisting
-                    or rt.state.outdoor_humidity != reading.humidity):
-                rt.state.dirty = True
-            rt.state.outdoor_temp = reading.temperature_C
-            rt.state.outdoor_humidity = reading.humidity
-            now = time.time()                                         # sample time -> freshness badge
-            rt.state.outdoor_temp_ts = now
             battery_ok = _battery_flag(reading.battery_ok, battery_warn)
+            humidity_changed = rt.state.outdoor_humidity != reading.humidity
+            rt.state.outdoor_humidity = reading.humidity
             rt.state.outdoor_battery_ok = battery_ok                  # runtime-only, opt-in low-battery flag
-            log.debug("sensor433: outdoor_temp=%r humidity=%r battery_ok=%r",
-                      reading.temperature_C, reading.humidity, battery_ok)
-            rt.event_bus.publish({"type": "globals", "fields": {                  # live dashboard delta
-                "outdoor_temp": reading.temperature_C, "outdoor_humidity": reading.humidity,
-                "outdoor_temp_ts": _iso(now), "outdoor_battery_ok": battery_ok}})
-            await _inject(rt, rt.engine.on_global(rt, "outdoor_temp", reading.temperature_C),
-                          source="sensor433")
+            await _apply_global(
+                rt, "outdoor_temp", reading.temperature_C, "sensor433",
+                with_timestamp=True,
+                extra_fields={"outdoor_humidity": reading.humidity,
+                              "outdoor_battery_ok": battery_ok},
+                dirty=humidity_changed,
+            )
+        except Exception:                            # one bad reading/rule-eval must NOT drop the SDR stream
+            log.exception("sensor433 reading failed")
+
+    last_crib_battery_ok: "bool | None" = None
+
+    async def on_crib_reading(reading) -> None:
+        nonlocal last_crib_battery_ok
+        try:
+            battery_ok = _battery_flag(reading.battery_ok, battery_warn)
+            if battery_ok is False and last_crib_battery_ok is not False:
+                log.warning("sensor433: crib sensor (%s) battery low", resolved_crib_model)
+            if battery_ok is not None:
+                last_crib_battery_ok = battery_ok
+            # Crib has no Globals humidity/battery fields — just update crib_temp + crib_temp_ts and fire rules.
+            await _apply_global(rt, "crib_temp", reading.temperature_C, "sensor433", with_timestamp=True)
         except Exception:                            # one bad reading/rule-eval must NOT drop the SDR stream
             log.exception("sensor433 reading failed")
 
@@ -1464,8 +1523,16 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
 
     while True:
         try:
-            await stream(on_reading, device=device, model=model, sensor_id=sensor_id,
-                         channel=channel, protocol=protocol, on_packet=on_packet)
+            await stream(
+                on_outdoor_reading if outdoor_local else None,
+                device=device, model=model, sensor_id=sensor_id,
+                channel=channel, protocol=protocol, extra_args=parsed_extra,
+                crib_model=resolved_crib_model if crib_local else None,
+                crib_id=resolved_crib_id if crib_local else None,
+                crib_channel=resolved_crib_channel if crib_local else None,
+                on_crib_reading=on_crib_reading if crib_local else None,
+                on_packet=on_packet,
+            )
         except asyncio.CancelledError:
             raise                                    # shutdown -> stream already reaped rtl_433; propagate
         except Exception:                            # spawn/stream blew up -> log, then back off and relaunch
@@ -1985,9 +2052,9 @@ async def main() -> None:  # pragma: no cover
     proxy_srv, control_srv = await _start(rt, config)
     autosave = asyncio.create_task(_autosave(rt))
     scheduler = asyncio.create_task(_scheduler(rt))
-    niania = asyncio.create_task(_niania_poller(rt))   # no-op unless HESTIA_NIANIA_* configured
+    niania = asyncio.create_task(_niania_poller(rt))   # no-op unless HESTIA_NIANIA_* (suppressed if rtl crib route set)
     weather_task = asyncio.create_task(_weather_poller(rt))  # no-op unless HESTIA_OUTDOOR_TEMP + source=open-meteo
-    sensor433_task = asyncio.create_task(_sensor433_poller(rt))  # no-op unless HESTIA_OUTDOOR_TEMP + source=local
+    sensor433_task = asyncio.create_task(_sensor433_poller(rt))  # no-op unless local outdoor or rtl crib route set
     ir_worker = asyncio.create_task(_ir_worker(rt))    # no-op unless HESTIA_FLIPPER enabled
     thermostat_task = asyncio.create_task(_thermostat_poller(rt))  # no-op in proxy (the cloud polls)
     cover_confirm_task = asyncio.create_task(_cover_confirm_watcher(rt))  # no-op in proxy (cloud retries)

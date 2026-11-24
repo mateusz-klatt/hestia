@@ -323,7 +323,7 @@ class State:
     plug_v: dict = field(default_factory=dict)               # node -> mains voltage, V
     gang: dict = field(default_factory=dict)                 # node -> {endpoint: on} (multi-gang switch)
     scene_seq: dict = field(default_factory=dict)            # node -> last Central-Scene seq (dedup only; not state)
-    crib_temp: "float | None" = None                         # GLOBAL (node-less) °C from the Tuya baby-monitor poller
+    crib_temp: "float | None" = None                         # GLOBAL (node-less) °C from the crib feeder (rtl_433 or Tuya baby-monitor)
     crib_temp_ts: "float | None" = None                      # GLOBAL epoch secs of the last crib_temp sample (freshness badge); snapshot-cached
     outdoor_temp: "float | None" = None                      # GLOBAL (node-less) °C from the Open-Meteo / local-433 feeder
     outdoor_humidity: "float | None" = None                  # GLOBAL (node-less) %RH companion from the local-433 feeder (display-only)
