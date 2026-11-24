@@ -762,7 +762,7 @@ const en = {
   "budget.rules.fields.mcc": "card merchant code",
   "budget.rules.operators.contains": "contains",
   "budget.rules.operators.equals": "equals",
-  "budget.rules.conditionSummary": "{field} {operator} „{value}”",
+  "budget.rules.conditionSummary": "{field} {operator} “{value}”",
   "budget.rules.category": "Category",
   "budget.rules.keep": "No category change",
   "budget.rules.kind": "Type",
