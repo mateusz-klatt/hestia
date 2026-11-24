@@ -9,7 +9,7 @@ import time
 from aiohttp import web
 from pydantic import ValidationError
 
-from .. import api_contract, store_sql
+from .. import api_contract, authz, store_sql
 from ..db import init_db
 from . import api, consent_context, device_token
 from .config import BudgetConfigError
@@ -47,6 +47,9 @@ _RETENTION_SECRET = b"hestia/budget/receipts/retention/v1"
 
 def _store(secret, device_id=None):
     engine, sessions = init_db()
+    with sessions() as session:
+        store_sql.auth_session_phase(session)
+        authz.require_supported_policy_phase(session)
     if not store_sql.is_users_db_authoritative(engine):
         raise BudgetUsersBackendRequired()
     return BudgetReceiptStore(sessions, clock=time.time, cursor_secret=secret, device_id=device_id)
@@ -59,6 +62,9 @@ def retain_expired(path=None, clock=time.time):
     reads or writes a cursor, and it skips a database that is not the users backend.
     """
     engine, sessions = init_db(path)
+    with sessions() as session:
+        store_sql.auth_session_phase(session)
+        authz.require_supported_policy_phase(session)
     if not store_sql.is_users_db_authoritative(engine):
         return {"drafts_purged": 0, "raw_texts_purged": 0}
     return BudgetReceiptStore(sessions, clock=clock, cursor_secret=_RETENTION_SECRET).purge_expired()

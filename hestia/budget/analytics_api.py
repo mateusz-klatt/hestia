@@ -8,7 +8,7 @@ import re
 
 from aiohttp import web
 
-from .. import api_contract, store_sql
+from .. import api_contract, authz, store_sql
 from ..db import init_db
 from . import api
 from .analytics_core import AnalyticsError
@@ -97,6 +97,9 @@ def _query(request, operation):
 
 def _store(secret):
     engine, sessions = init_db()
+    with sessions() as session:
+        store_sql.auth_session_phase(session)
+        authz.require_supported_policy_phase(session)
     if not store_sql.is_users_db_authoritative(engine):
         raise BudgetUsersBackendRequired()
     return BudgetAnalyticsViews(sessions, cursor_secret=secret)

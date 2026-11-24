@@ -9,7 +9,7 @@ import time
 from aiohttp import web
 from pydantic import ValidationError
 
-from .. import api_contract, store_sql
+from .. import api_contract, authz, store_sql
 from ..db import db_path, init_db
 from . import api, gmail_config, receipt_api
 from .config import BudgetConfigError
@@ -42,6 +42,9 @@ def _poll_enabled(auth_enabled):
 
 def _store(path):
     engine, sessions = init_db(path)
+    with sessions() as session:
+        store_sql.auth_session_phase(session)
+        authz.require_supported_policy_phase(session)
     if not store_sql.is_users_db_authoritative(engine):
         raise BudgetUsersBackendRequired()
     return GmailStore(sessions, clock=time.time)
@@ -103,10 +106,13 @@ class _Runtime:
         if not _poll_enabled(auth_enabled):
             return
         try:
-            settings = _settings(api._secret(session_secret))
             path = db_path()
-            service = self._service(path, _store(path), settings)
+            store = _store(path)
+            settings = _settings(api._secret(session_secret))
+            service = self._service(path, store, settings)
             service.sync(settings.owner, poll=True)
+        except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+            raise
         except (GmailError, BudgetConfigError, BudgetAccessDenied, BudgetUsersBackendRequired):
             return
         except Exception as error:

@@ -27,7 +27,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
-from .. import auth
+from .. import auth, authz, store_sql
 from ..db import BudgetAnalyticsAudit, BudgetConnection
 from ..db import BudgetReceiptDeviceToken as DeviceToken
 from ..db import BudgetReceiptPairCode as PairCode
@@ -139,11 +139,30 @@ def client_ip(request):
     return remote
 
 
-def _owner_password_hash(session, username):
-    return session.scalar(select(User.password_hash).where(
-        User.username == username, User.role == "admin", User.disabled.is_(False),
+def _owner_eligible(session, user):
+    store_sql.auth_session_phase(session)
+    phase = authz.require_supported_policy_phase(session)
+    return (
+        user is not None
+        and not user.disabled
+        and user.role == "admin"
+        and (phase != authz.POLICY_PHASE_COMPAT or bool(user.budget_owner))
+    )
+
+
+def _owner_login_state(session, username):
+    store_sql.auth_session_phase(session)
+    phase = authz.require_supported_policy_phase(session)
+    criteria = [
+        User.username == username,
+        User.role == "admin",
+        User.disabled.is_(False),
         select(BudgetConnection.id).where(BudgetConnection.owner == username).exists(),
-    ))
+    ]
+    if phase == authz.POLICY_PHASE_COMPAT:
+        criteria.append(User.budget_owner.is_(True))
+    row = session.execute(select(User.password_hash, User.credential_generation).where(*criteria)).first()
+    return None if row is None else (row[0], int(row[1]))
 
 
 def _same(left, right):
@@ -318,12 +337,14 @@ def revoke_owner_tokens(session, owner, moment=None):
 
 def open_store(*, clock=None):
     from .views import BudgetUsersBackendRequired
-    from .. import store_sql
     from ..db import init_db
 
     if os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
         raise BudgetUsersBackendRequired()
     engine, sessions = init_db()
+    with sessions() as session:
+        store_sql.auth_session_phase(session)
+        authz.require_supported_policy_phase(session)
     if not store_sql.is_users_db_authoritative(engine):
         raise BudgetUsersBackendRequired()
     return DeviceTokenStore(sessions, clock=clock or now)
@@ -350,7 +371,7 @@ def decide(method, path, headers, cookies, secret, moment):
     token = _bearer(headers)
     if token is None:
         return {"action": "pass"}
-    if auth.verify_session(token, now=moment, secret=secret) is not None:
+    if auth.decode_session(token, now=moment, secret=secret) is not None:
         return {"action": "pass"}
     allow = (method, path) in ALLOWED
     if _bearer_token(token) is None:
@@ -361,6 +382,8 @@ def decide(method, path, headers, cookies, secret, moment):
         return {"action": "response", "status": 403, "code": "budget_forbidden"}
     try:
         found = open_store(clock=lambda: moment).identify(token, slide=path != REVOKE_PATH)
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return {"action": "response", "status": 503, "code": "authorization_bridge_incompatible"}
     except (BudgetUsersBackendRequired, BudgetConfigError):
         found = {"status": "unknown"}
     except Exception as exc:
@@ -412,13 +435,12 @@ class DeviceTokenStore:
 
     def _require_owner(self, session, owner):
         user = session.get(User, owner)
-        if user is None or user.disabled or user.role != "admin":
+        if not _owner_eligible(session, user):
             raise DeviceTokenError(403, "budget_forbidden")
         return user
 
     def _owner_ok(self, session, owner):
-        user = session.get(User, owner)
-        return user is not None and not user.disabled and user.role == "admin"
+        return _owner_eligible(session, session.get(User, owner))
 
     def issue_code(self, owner):
         root = _rule_key()
@@ -457,15 +479,16 @@ class DeviceTokenStore:
 
     def login(self, username, password, name):
         with self.sessions() as session:
-            stored = _owner_password_hash(session, username)
+            state = _owner_login_state(session, username)
+        stored = None if state is None else state[0]
         # Every valid-shaped attempt does one scrypt. Ineligible users take the
         # same dummy-hash path as unknown users, even with a correct password.
         if not auth.authenticate(username, password, {username: stored}):
             return None
         with self._transaction() as session:
             # Recheck under the same write lock used for account mutations. A
-            # password reset or demotion during scrypt cannot issue a new token.
-            if _owner_password_hash(session, username) != stored:
+            # password reset, generation bump, or demotion during scrypt cannot issue a new token.
+            if _owner_login_state(session, username) != state:
                 return None
             return self._issue_token(session, username, name, self._moment(), _rule_key(), rotate=True)
 
@@ -477,11 +500,19 @@ class DeviceTokenStore:
         root = _rule_key()
         digest = _mac(root, _CODE_DOMAIN, normalized)
         with self._transaction() as session:
+            store_sql.auth_session_phase(session)
+            phase = authz.require_supported_policy_phase(session)
             moment = self._moment()
-            row = session.scalar(select(PairCode).join(User, PairCode.owner == User.username).where(
-                PairCode.code_hmac == digest, PairCode.consumed_at.is_(None), PairCode.expires_at > moment,
-                User.role == "admin", User.disabled.is_(False),
-            ))
+            conditions = [
+                PairCode.code_hmac == digest,
+                PairCode.consumed_at.is_(None),
+                PairCode.expires_at > moment,
+                User.role == "admin",
+                User.disabled.is_(False),
+            ]
+            if phase == authz.POLICY_PHASE_COMPAT:
+                conditions.append(User.budget_owner.is_(True))
+            row = session.scalar(select(PairCode).join(User, PairCode.owner == User.username).where(*conditions))
             if not _accepted(None if row is None else row.code_hmac, digest):
                 return None
             row.consumed_at = moment
@@ -557,6 +588,8 @@ class DeviceTokenStore:
         return result
 
     def _inspect_token(self, session, digest, *, slide, write):
+        store_sql.auth_session_phase(session)
+        authz.require_supported_policy_phase(session)
         row = session.scalar(select(DeviceToken).where(DeviceToken.token_hmac == digest))
         if not _accepted(None if row is None else row.token_hmac, digest):
             return {"status": "unknown"}, False
@@ -596,6 +629,8 @@ class DeviceTokenStore:
         elif not isinstance(token_id, str) or _UUID.fullmatch(token_id) is None:
             raise DeviceTokenError(400, "budget_invalid_request")
         with self._transaction() as session:
+            store_sql.auth_session_phase(session)
+            authz.require_supported_policy_phase(session)
             if actor_token_id is None:
                 self._require_owner(session, owner)
             row = session.get(DeviceToken, token_id)

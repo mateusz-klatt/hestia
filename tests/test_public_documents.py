@@ -27,7 +27,15 @@ class PublicDocumentTests(unittest.IsolatedAsyncioTestCase):
         patches = [mock.patch.dict("os.environ", {"HESTIA_UI_DIST": str(self.dist)}),
                    mock.patch.object(web, "_AUTH_ENABLED", True),
                    mock.patch.object(web, "_SESSION_SECRET", b"public-document-test"),
-                   mock.patch.object(store_sql, "current_user_role", return_value="admin")]
+                   mock.patch.object(store_sql, "load_auth_state", side_effect=lambda _u: self._auth_state)]
+        self._auth_state = store_sql.AuthState(
+            backend="json",
+            session_phase="legacy",
+            policy_phase="legacy",
+            enabled=True,
+            role="admin",
+            generation=0,
+        )
         for patch in patches:
             result = patch.start()
             self.addCleanup(patch.stop)
@@ -81,7 +89,14 @@ class PublicDocumentTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(await response.read(), b"")
         for path in ("/", "/ui/", "/assets/app.js"):
             self.assertEqual((await self.client.head(path)).status, 401)
-        self.role_lookup.return_value = "viewer"
+        self._auth_state = store_sql.AuthState(
+            backend="json",
+            session_phase="legacy",
+            policy_phase="legacy",
+            enabled=True,
+            role="viewer",
+            generation=0,
+        )
         denied = await self.client.post("/privacy-policy.html", headers=self.signed_headers())
         self.assertEqual(denied.status, 403)
         self.assertEqual(await denied.read(), b"")

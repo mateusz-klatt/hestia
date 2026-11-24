@@ -840,3 +840,83 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await over.json())["error"], "budget_consent_limit")
         self.assertEqual(calls, [])
         self.audit.assert_not_called()
+
+    async def test_active_v2_consent_matrix_browser_purpose_and_custom_phase(self):
+        from hestia import authz
+
+        store_sql.activate_sessions_v2(path=self.path)
+        with self.sessions.begin() as session:
+            session.get(db.User, "alice").budget_owner = True
+
+        v1 = auth.make_session("alice", now=web._now(), secret=SECRET)
+        v2_browser = auth.make_session("alice", now=web._now(), secret=SECRET, generation=0, purpose="browser")
+        v2_native = auth.make_session("alice", now=web._now(), secret=SECRET, generation=0, purpose="native")
+
+        # All four private consent GETs require v2 browser cookie (without Origin), reject v1 & native bearer.
+        for op in ("pending", "status", "renewal-reminders", "reconcile"):
+            with self.subTest(get=op):
+                r_ok = await self.get(op, headers={"Cookie": f"hestia_session={v2_browser}"})
+                self.assertEqual(r_ok.status, 200)
+                r_v1 = await self.get(op, headers={"Cookie": f"hestia_session={v1}"})
+                self.assertEqual(r_v1.status, 401)
+                self.assertEqual((await r_v1.json())["error"], "budget_browser_session_upgrade_required")
+                r_nat = await self.get(op, headers={"Authorization": f"Bearer {v2_native}"})
+                self.assertEqual(r_nat.status, 403)
+                self.assertEqual((await r_nat.json())["error"], "budget_browser_session_required")
+
+        # Private consent POSTs require v2 browser cookie + Origin; original cookie bytes stay fingerprinted.
+        for op, body in (
+            ("start", {"connection_id": "bank", "expected_version": 1, "intent": "renew"}),
+            ("complete", {"flow_id": FLOW}),
+            ("cancel", {"flow_id": FLOW}),
+        ):
+            with self.subTest(post=op):
+                hdrs_ok = {"Cookie": f"hestia_session={v2_browser}; {module.cookie_name(FLOW)}={NONCE}", "Origin": ORIGIN}
+                r_ok = await self.post(op, body, headers=hdrs_ok)
+                self.assertEqual(r_ok.status, 200)
+                r_v1 = await self.post(op, body, headers={"Cookie": f"hestia_session={v1}", "Origin": ORIGIN})
+                self.assertEqual(r_v1.status, 401)
+                self.assertEqual((await r_v1.json())["error"], "budget_browser_session_upgrade_required")
+                r_nat = await self.post(op, body, headers={"Authorization": f"Bearer {v2_native}"})
+                self.assertEqual(r_nat.status, 403)
+                self.assertEqual((await r_nat.json())["error"], "budget_browser_session_required")
+
+        # Consent fingerprinting uses exact original cookie bytes (validate_browser_context returns v2_browser).
+        expected_fp = module._fingerprint(v2_browser, SECRET)
+        req = make_mocked_request("GET", module.PREFIX + "/pending", headers={"Cookie": f"hestia_session={v2_browser}"})
+        req["hestia_user"], req["hestia_role"] = "alice", "admin"
+        req[web._SESSION_CONTEXT_KEY] = web.ValidatedSessionContext(
+            username="alice", role="admin", carrier="cookie", version=2, purpose="browser",
+            generation=0, expiry=int(web._now()) + 100, session_phase="v2", policy_phase="legacy",
+            raw_token=v2_browser,
+        )
+        owner, fp = module._browser(req, lambda: True, lambda: SECRET, mutation=False)
+        self.assertEqual((owner, fp), ("alice", expected_fp))
+        self.assertEqual(module.validate_browser_context(req, actor="alice", now=web._now()), v2_browser)
+
+        # Public callback and completion bundle keep their existing public protocol.
+        self.assertEqual((await self.client.get(module.CALLBACK, params={"state": "s", "code": "c"})).status, 200)
+        self.assertEqual((await self.client.get(module.COMPLETE)).status, 200)
+        self.assertEqual((await self.client.get(module.SCRIPT)).status, 200)
+
+        # Unsupported custom phase propagates out of lifetime, create_service, and auth_transition.
+        with self.sessions.begin() as session:
+            session.add(db.AppMeta(key="authz_policy_phase", value="catalog_custom"))
+        with mock.patch.object(module, "load_config", return_value=self.config):
+            with self.assertRaises(authz.PolicyPhaseUnsupported):
+                REAL_CREATE(auth_enabled=lambda: True, session_secret=lambda: SECRET, secure_cookie=lambda: True)
+        with mock.patch.object(module, "create_service", side_effect=authz.PolicyPhaseUnsupported("catalog_custom")):
+            app = web.web.Application()
+            module.register(app, web._read_json_body, auth_enabled=lambda: True, session_secret=lambda: SECRET, secure_cookie=lambda: True)
+            app.freeze()
+            with self.assertRaises(authz.PolicyPhaseUnsupported):
+                await app.startup()
+        fallback_req = make_mocked_request(
+            "POST",
+            "/api/logout",
+            headers={"Cookie": f"hestia_session={v2_browser}; {module.cookie_name(FLOW)}={NONCE}"},
+            app=self.client.server.app,
+        )
+        self.client.server.app[module.KEY].service = None
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            await module.auth_transition(fallback_req)

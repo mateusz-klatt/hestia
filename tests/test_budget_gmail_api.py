@@ -131,7 +131,15 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
         for key in ("HESTIA_BUDGET_HTTP_ENABLED", receipt_api.FLAG):
             with mock.patch.dict(os.environ, {key: "0"}):
                 self.assertEqual((await self.call("gmail-status")).status, 404)
-        with mock.patch.object(store_sql, "current_user_role", return_value="admin"):
+        admin_state = store_sql.AuthState(
+            backend="json",
+            session_phase="legacy",
+            policy_phase="legacy",
+            enabled=True,
+            role="admin",
+            generation=0,
+        )
+        with mock.patch.object(store_sql, "load_auth_state", return_value=admin_state):
             with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json"}):
                 self.assertEqual((await self.call("gmail-status")).status, 409)
             with mock.patch.object(store_sql, "is_users_db_authoritative", return_value=False):
@@ -513,3 +521,23 @@ class GmailPollLifecycleTests(IsolatedAsyncioTestCase):
                 runtime.poll(lambda: True, lambda: _SESSION)
             self.assertIn("RuntimeError", logs.output[0])
             self.assertNotIn("synthetic-PII", logs.output[0])
+
+    def test_custom_policy_phase_blocks_store_and_poll_before_secrets(self):
+        import tempfile
+        from hestia import authz
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_file = Path(tmpdir) / "gmail_custom.db"
+            self.addCleanup(db.reset_engine_cache)
+            engine, sessions = db.init_db(db_file)
+            with sessions.begin() as s:
+                s.add(db.AppMeta(key="authz_policy_phase", value="catalog_custom"))
+            engine.dispose()
+            flags = {gmail_api.FLAG: "1", "HESTIA_BUDGET_HTTP_ENABLED": "1", receipt_api.FLAG: "1",
+                     "HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(db_file)}
+            with mock.patch.dict(os.environ, flags, clear=True):
+                with self.assertRaises(authz.PolicyPhaseUnsupported):
+                    gmail_api._store(db_file)
+                with mock.patch.object(gmail_api, "_settings", side_effect=AssertionError("read secrets")):
+                    with self.assertRaises(authz.PolicyPhaseUnsupported):
+                        gmail_api._Runtime().poll(lambda: True, lambda: _SESSION)

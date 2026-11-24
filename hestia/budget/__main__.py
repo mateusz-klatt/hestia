@@ -7,6 +7,7 @@ import os
 import sys
 import time
 
+from .. import authz, store_sql
 from .config import BudgetConfigError, load_config
 from .import_file import BudgetImportError, load_import
 from .limits import BudgetLimits, LIMIT_SCOPES
@@ -27,6 +28,9 @@ def execute(args):
     target = db_path() if args.db is None else args.db
     with budget_lock(target):
         _, sessions = init_db(target)
+        with sessions() as session:
+            store_sql.auth_session_phase(session)
+            authz.require_supported_policy_phase(session)
         store = BudgetStore(sessions)
         if importing:
             return {"import": store.import_snapshot(config, snapshot), "status": store.status()}
@@ -100,6 +104,9 @@ def main(argv=None):
     except (BudgetConfigError, BudgetImportError, BudgetBusyError, BudgetStoreError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        print("authorization_bridge_incompatible", file=sys.stderr)
+        return 1
     except Exception:
         print("Bank acquisition failed; previously committed data is retained", file=sys.stderr)
         return 1
