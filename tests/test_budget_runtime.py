@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import datetime, timezone
+import gc
 import io
 import json
 import os
@@ -12,6 +13,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
+import warnings
 
 from sqlalchemy import select
 
@@ -132,9 +134,16 @@ class BudgetRuntimeTests(AdvancingTime, unittest.TestCase):
                                 clock=lambda: self.now, monotonic=self.monotonic, sleeper=self.sleep, **kwargs)
 
     def invoke(self, arguments):
+        # Finalize connections leaked by earlier tests now, so a GC-timed ResourceWarning
+        # cannot land in the captured CLI stderr that the assertions require to be empty.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ResourceWarning)
+            gc.collect()
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
             code = cli.main(arguments)
+            # Unsuppressed: a connection this CLI call leaked surfaces in the captured stderr.
+            gc.collect()
         return code, stdout.getvalue(), stderr.getvalue()
 
     def cli_acquisition(self, config, *, path):
