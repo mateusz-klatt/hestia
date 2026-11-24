@@ -1773,7 +1773,7 @@ export interface paths {
         };
         /**
          * Concrete calendar occurrences in a half-open date window
-         * @description Requires viewer. Expands RRULE/RDATE, applies moved or modified exceptions, and omits EXDATE and every cancelled occurrence. SECONDLY and MINUTELY rules return only DTSTART with truncated=true. The window is [from, to) at local midnights in tz (default UTC), from is inclusive, to is exclusive, and its duration cannot exceed 92 days. Instances are sorted by start and capped at 2000. Disabled synchronization returns 200 with enabled=false and empty groups and instances.
+         * @description Requires viewer. Expands RRULE/RDATE, applies moved or modified exceptions, and omits EXDATE and every cancelled occurrence. SECONDLY and MINUTELY rules, and windows estimated to produce over 5000 occurrences, return only DTSTART with truncated=true. The window is [from, to) at local midnights in tz (default UTC), from is inclusive, to is exclusive, and its duration cannot exceed 92 days. Instances are sorted by start and capped at 2000. Disabled synchronization returns 200 with enabled=false and empty groups and instances.
          */
         get: operations["getCalendarInstances"];
         put?: never;

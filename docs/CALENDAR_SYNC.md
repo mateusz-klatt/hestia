@@ -220,13 +220,20 @@ Rozwijane są `RRULE` i `RDATE` przez bibliotekę `recurring-ical-events`, pomij
 `EXDATE` oraz wszystkie odwołane wystąpienia. Nieistniejąca godzina przy wiosennej
 zmianie czasu jest przesuwana z użyciem wcześniejszego przesunięcia UTC i liczy się
 do `COUNT` zgodnie z erratą RFC 5545. Reguły `SECONDLY` i `MINUTELY` nie są rozwijane:
-zwracany jest tylko `DTSTART` z `truncated: true` i wpisem do dziennika. Zmieniony
-wyjątek zastępuje swoje pierwotne wystąpienie. Uwzględniane są także
+zwracany jest tylko `DTSTART` z `truncated: true` i wpisem do dziennika. Jeśli górne
+oszacowanie liczby wystąpień w poszerzonym oknie przekracza 5000, stosowany jest ten
+sam fallback bez wywoływania biblioteki. Zmieniony wyjątek zastępuje swoje pierwotne
+wystąpienie. Uwzględniane są także
 wystąpienia zaczynające się przed oknem, ale nachodzące na nie. Daty całodniowe
 pozostają datami, a godziny zachowują strefę IANA przez zmianę czasu. Odpowiedź jest
 ograniczona do 2000 najwcześniejszych wystąpień. `truncated: true` sygnalizuje także
 niepełne rozwinięcie po przekroczeniu budżetu pracy albo pominięcie niezgodnej reguły;
 takie zdarzenie jest raportowane w dzienniku serwera i nie blokuje pozostałych.
+
+Znane ograniczenia: fallback `SECONDLY`/`MINUTELY` obejmuje tylko `DTSTART`, więc później
+aktywowane wyjątki odwołanego wzorca pozostają w nim pominięte. Wystąpienia oddalone o
+mniej niż czas trwania zdarzenia od `0001-01-01` mogą zostać pominięte, gdy obliczenie
+granicznego czasu UTC wyszłoby poza obsługiwany zakres dat.
 
 Nieprawidłowa data, odwrócony zakres lub zakres dłuższy niż 92 dni zwraca `400`
 z `{"error": "invalid_calendar_event"}`. Nieznana grupa zwraca `400` z
