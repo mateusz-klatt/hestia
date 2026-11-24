@@ -445,3 +445,26 @@ These details complete Parts A and B for client implementers. Each field below i
    - the response is `{enabled, groups, truncated, instances[{instance_id, event_id, revision, group, summary, location, start, end, all_day, status, recurrence_id}]}`;
    - query parameters are `from` (inclusive), `to` (exclusive), `group?` and `tz?` (IANA, default UTC).
    - Distinct outcomes: a route missing on an older server means `calendar_instances` is absent from the feature probe; a disabled feature gives 200 with `enabled:false`; a missing permission gives 403.
+10. **`prior_token` outcomes on `POST /api/auth/device-token` (PR 3):**
+   - A valid proof returns 200 and the new token. The old token is retired server-side and `token_id` is preserved.
+   - A proof that is rejected (unknown, revoked, expired, or bound to a different actor/owner) returns **409 `device_token_prior_invalid`**. Nothing is issued and nothing is revoked.
+     - Only this code tells the client it may drop the prior token locally. It then repeats the exchange without `prior_token`, which gets a fresh `token_id` and raises the "Nowe urządzenie" alert.
+     - After the fresh exchange succeeds, the client may self-revoke the old `token_id` as a best-effort step.
+   - Any 401 (native session missing or stale) or 403 (`budget_forbidden`) leaves the prior token as it is. The client keeps it, retries later, and never revokes it on these codes.
+11. **Native budget read (PR 3):**
+   - The same exchange covers it. There is no separate request or scope parameter.
+   - Device-eligible permissions are `budget.view` plus the `budget.receipts.*` set.
+   - `issued_permissions` is the intersection of the actor's effective grants for the resolved owner with that set.
+   - Eligibility means a non-empty intersection, so an owner holding only `budget.view` gets a token.
+   - `scope` is `"receipts"` when the issued set contains only receipt permissions, and `"device"` otherwise.
+   - With `budget.view` issued, the bearer may call these GET routes, which keep their 0.46.0 response bodies:
+     - `/api/budget/status`;
+     - `/api/budget/analytics/monthly-budget`;
+     - `/api/budget/analytics/monthly-budget/charts`;
+     - `/api/budget/analytics/transactions`;
+     - `/api/budget/analytics/overview`;
+     - `/api/budget/analytics/categories`.
+   - Every other budget route stays browser-only and returns 403 `budget_forbidden` to a device token.
+   - At use, the live grants are re-intersected, as for receipts.
+   - The feature string is **`budget_native_read`** in `GET /api/auth/features`.
+   - The credential is `Authorization: Bearer <device token>` with no cookie. Cookie plus bearer together stays 400 `budget_auth_ambiguous`.
