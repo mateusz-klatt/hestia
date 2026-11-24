@@ -188,6 +188,22 @@ class DeviceTokenStoreTests(unittest.TestCase):
         self.assertIsNone(self.store.redeem(issued["code"], "Vesta"))
         self.assertEqual([row.id for row in self._audits()], [audit.id])
 
+    def test_redeem_rolls_back_token_and_code_when_audit_insert_fails(self):
+        issued = self.store.issue_code("alice")
+        with mock.patch.object(device_token, "write_device_audit", side_effect=RuntimeError("synthetic")):
+            with self.assertRaises(RuntimeError):
+                self.store.redeem(issued["code"], "Vesta")
+        self.assertEqual(self._tokens(), [])
+        self.assertEqual(self._audits(), [])
+        self.assertIsNone(self._codes()[0].consumed_at)
+
+        redeemed = self.store.redeem(issued["code"], "Vesta")
+        token, = self._tokens()
+        self.assertEqual(token.id, redeemed["token_id"])
+        audit, = self._audits()
+        self.assertEqual((audit.subject_id, audit.action), (redeemed["token_id"], device_token.NEW_DEVICE_LOGIN))
+        self.assertIsNotNone(self._codes()[0].consumed_at)
+
     def test_identify_avoids_writer_lock_for_unknown_debounced_and_revoke_requests(self):
         issued = self.store.issue_code("alice")
         device = self.store.redeem(issued["code"], "Vesta")

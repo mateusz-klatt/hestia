@@ -423,6 +423,29 @@ class OwnerInboxViewsAndCAS0019Tests(AnalyticsCase):
         self.assertFalse(any(entry["kind"] == inbox_mod.KIND_DEVICE
                              for entry in self.views.inbox("other")["items"]))
 
+    def test_second_redeem_with_same_name_is_a_separate_unread_alert(self):
+        key_file = self.path.parent / "device-rule.key"
+        key_file.touch(mode=0o600)
+        key_file.write_bytes(bytes(32))
+        with mock.patch.dict(os.environ, {device_token._RULE_KEY_FILE: str(key_file)}):
+            devices = device_token.DeviceTokenStore(self.sessions, clock=lambda: self.now)
+            first = devices.redeem(devices.issue_code("owner")["code"], "Paired phone")
+            snap = self.views.inbox("owner")
+            first_item, = [entry for entry in snap["items"] if entry["kind"] == inbox_mod.KIND_DEVICE]
+            marked = self.views.mark_inbox("owner", items=[_key(first_item)], read=True,
+                                           expected_reads_version=snap["reads_version"])
+            second = devices.redeem(devices.issue_code("owner")["code"], "Paired phone")
+
+        self.assertNotEqual(first["token_id"], second["token_id"])
+        result = self.views.inbox("owner")
+        api_contract.BudgetAnalyticsInbox.model_validate(result)
+        self.assertEqual(result["reads_version"], marked["reads_version"])
+        by_token = {entry["ref"]["token_id"]: entry for entry in result["items"]
+                    if entry["kind"] == inbox_mod.KIND_DEVICE}
+        self.assertEqual(set(by_token), {first["token_id"], second["token_id"]})
+        self.assertTrue(by_token[first["token_id"]]["read"])
+        self.assertFalse(by_token[second["token_id"]]["read"])
+
     def _seed_all_three_sources(self):
         # 1. Consent renewal: expire owner's existing connection ("bank") within 5 days (lead tier 7).
         with self.sessions.begin() as session:
