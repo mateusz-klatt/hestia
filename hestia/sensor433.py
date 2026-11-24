@@ -1,14 +1,15 @@
-"""Outdoor temperature + humidity from a local 433 MHz weather sensor via the ``rtl_433`` binary — a
-stdlib-only, opt-in, on-LAN/zero-egress PUSH feeder for the ``outdoor_temp`` GLOBAL automation field
-(plus a display-only ``outdoor_humidity`` global).
+"""Temperature + humidity from local 433 MHz weather sensors via the ``rtl_433`` binary — a stdlib-only,
+opt-in, on-LAN/zero-egress PUSH feeder for the ``outdoor_temp`` and ``crib_temp`` GLOBAL automation
+fields (plus a display-only ``outdoor_humidity`` global).
 
 ``rtl_433 -F json`` emits one JSON object per decoded packet to stdout and flushes it the instant the
 packet is received (empirically verified over a pipe: a keyfob press and the sensor's reading both
 arrive in real time, not batched at exit). So hestia spawns ONE long-lived ``rtl_433`` and reacts to
-every matching line as it streams in — no polling interval, no reception window, no dead sleep. ``rtl_433``
-is an external SYSTEM binary (same category as the dnsmasq/Pi-hole the project already relies on), spawned
-via :func:`asyncio.create_subprocess_exec` — NOT a Python import, so the zero-runtime-deps rule holds.
-OFF by default; selected by ``HESTIA_OUTDOOR_TEMP_SOURCE=local``. See ``docs/AUTOMATIONS.md``.
+every matching line as it streams in — no polling interval, no reception window, no dead sleep — routing
+each decoded packet to at most one target (outdoor or crib). ``rtl_433`` is an external SYSTEM binary
+(same category as the dnsmasq/Pi-hole the project already relies on), spawned via
+:func:`asyncio.create_subprocess_exec` — NOT a Python import, so the zero-runtime-deps rule holds. OFF
+by default; see ``docs/AUTOMATIONS.md``.
 
 CRITICAL: an ``rtl_tcp`` endpoint serves a SINGLE client, so the long-lived child MUST be terminated
 *and reaped* when the stream ends or is cancelled — a leaked ``rtl_433`` would hold the SDR and silently
@@ -30,6 +31,7 @@ RTL_433_BIN = "rtl_433"
 # A DEDICATED rtl_tcp endpoint. Do NOT point this at an rtl_tcp shared with another consumer (e.g. an
 # FM/RDS receiver): rtl_433 retunes/monopolises the SDR for 433 MHz and breaks the other consumer. Use its own SDR.
 DEFAULT_DEVICE = "rtl_tcp:127.0.0.1:1234"
+_STDERR_LIMIT = 2048   # max trailing stderr bytes logged on nonzero rtl_433 exit
 
 
 class Reading(NamedTuple):
@@ -139,8 +141,29 @@ async def _terminate(proc) -> None:
         raise
 
 
+async def _drain_stderr(stderr, limit: int = _STDERR_LIMIT) -> str:
+    """Drain ``stderr`` to EOF while keeping at most the trailing ``limit`` bytes so a noisy child can
+    never block on a full OS pipe and exit diagnostics stay bounded."""
+    if stderr is None:
+        return ""
+    buf = bytearray()
+    truncated = False
+    while True:
+        chunk = await stderr.read(1024)
+        if not chunk:
+            break
+        buf.extend(chunk)
+        if len(buf) > limit:
+            del buf[:len(buf) - limit]
+            truncated = True
+    text = " | ".join(ln.strip() for ln in buf.decode("utf-8", "replace").splitlines() if ln.strip())
+    if truncated and text:
+        return "..." + text
+    return text
+
+
 async def stream_readings(
-    on_reading: "Callable[[Reading], Awaitable[None]]",
+    on_reading: "Callable[[Reading], Awaitable[None]] | None" = None,
     *,
     device: str = DEFAULT_DEVICE,
     model: "str | None" = None,
@@ -148,25 +171,41 @@ async def stream_readings(
     channel: "str | None" = None,
     protocol: "str | None" = None,
     on_packet: "Callable[[dict], None] | None" = None,
+    crib_model: "str | None" = None,
+    crib_id: "str | None" = None,
+    crib_channel: "str | None" = None,
+    on_crib_reading: "Callable[[Reading], Awaitable[None]] | None" = None,
     binary: str = RTL_433_BIN,
     create=asyncio.create_subprocess_exec,
 ) -> None:
-    """Spawn a long-lived ``rtl_433 -F json`` and ``await on_reading(reading)`` for every matching finite
-    reading as it streams in (PUSH — no interval). Returns when the process exits or its stdout closes, so
-    the caller can restart it after a backoff. NEVER raises on a malformed line. ``on_packet(obj)``, if
-    given, is called for EVERY decoded packet (before the model/id filter) — the 433 discovery tap; it must
-    not raise. The child is always
-    terminated AND reaped on return/cancel (see :func:`_terminate`) so no ``rtl_433`` is orphaned. ``create``
-    is injectable (defaults to :func:`asyncio.create_subprocess_exec`) so tests never spawn a real process."""
+    """Spawn a long-lived ``rtl_433 -F json`` and push each matching finite reading to ``on_reading``
+    (outdoor) or ``on_crib_reading`` (crib) in real time. Each decoded packet is routed to AT MOST ONE
+    target; if a packet matches both active filters, it is treated as a config error, logged once, and
+    routed to neither. Returns when the process exits or its stdout closes, so the caller can restart it
+    after a backoff, logging a warning with bounded stderr diagnostics on nonzero exit. NEVER raises on
+    a malformed line (raises :class:`ValueError` upfront if ``crib_model`` is given without
+    ``on_crib_reading``). ``on_packet(obj)``, if given, is called for EVERY decoded packet (pre-filter) —
+    the 433 discovery tap. The child is always terminated AND reaped on return/cancel (see
+    :func:`_terminate`). ``create`` is injectable so tests never spawn a real process."""
+    if bool(crib_model) and on_crib_reading is None:
+        raise ValueError("crib_model requires on_crib_reading")
+    outdoor_active = on_reading is not None
+    crib_active = bool(crib_model) and on_crib_reading is not None
+    if not outdoor_active and not crib_active:
+        return
     cmd = _rtl433_command(binary, device, protocol)
     try:
-        proc = await create(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        proc = await create(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     except (OSError, ValueError) as exc:                 # binary missing / bad argv -> caller backs off + retries
         # A spawn failure is a CONFIG error (missing rtl_433, bad device/argv), not a transient rtl_tcp drop
         # (which spawns fine then exits via EOF). Log it concisely — once per backoff — so it is not silent,
         # without the traceback spam that re-raising would produce on every retry.
         log.warning("rtl_433 spawn failed (%s): %s", binary, exc)
         return
+    stderr = getattr(proc, "stderr", None)
+    stderr_task = asyncio.create_task(_drain_stderr(stderr)) if stderr is not None else None
+    ambiguous_logged = False
+    cancelled = False
     try:
         stdout = proc.stdout
         if stdout is not None:
@@ -175,8 +214,47 @@ async def stream_readings(
                 if obj is not None:
                     if on_packet is not None:
                         on_packet(obj)                             # discovery: EVERY decoded packet, pre-filter
-                    reading = _matching_reading(obj, model, sensor_id, channel)
-                    if reading is not None:
-                        await on_reading(reading)
+                    outdoor = _matching_reading(obj, model, sensor_id, channel) if outdoor_active else None
+                    crib = _matching_reading(obj, crib_model, crib_id, crib_channel) if crib_active else None
+                    if outdoor is not None and crib is not None:
+                        if not ambiguous_logged:
+                            log.error(
+                                "rtl_433 config error: packet (model=%r, id=%r, channel=%r) "
+                                "matches both outdoor and crib filters — ignoring",
+                                obj.get("model"), obj.get("id"), obj.get("channel"),
+                            )
+                            ambiguous_logged = True
+                    elif outdoor is not None:
+                        await on_reading(outdoor)
+                    elif crib is not None:
+                        await on_crib_reading(crib)
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
     finally:
-        await _terminate(proc)
+        try:
+            await _terminate(proc)
+        except BaseException:
+            if stderr_task is not None:
+                stderr_task.cancel()
+                with contextlib.suppress(BaseException):
+                    await stderr_task
+            raise
+        err_text = ""
+        if stderr_task is not None:
+            if cancelled:
+                stderr_task.cancel()
+                with contextlib.suppress(BaseException):
+                    await stderr_task
+            else:
+                try:
+                    err_text = await asyncio.wait_for(stderr_task, 1.0)
+                except Exception:
+                    stderr_task.cancel()
+                    with contextlib.suppress(BaseException):
+                        await stderr_task
+        if not cancelled and proc.returncode not in (None, 0):
+            if err_text:
+                log.warning("rtl_433 exited with code %s: %s", proc.returncode, err_text)
+            else:
+                log.warning("rtl_433 exited with code %s", proc.returncode)

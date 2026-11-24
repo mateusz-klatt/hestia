@@ -62,7 +62,7 @@ _VALID_ACTION_OPS = _FRAME_ACTION_OPS | _EFFECT_ACTION_OPS
 # ``endpoints`` (a dict) and ``scene`` (an event, not state) are deliberately excluded, so
 # a rule can never receive a non-scalar as a predicate operand.
 # Sentinel for GLOBAL (node-less) scalar fields — a single value on ``State`` (not a per-node dict),
-# fed by a poller rather than device events. ``crib_temp`` (the Tuya baby-monitor) is the first; predicates
+# fed by a poller rather than device events. ``crib_temp`` (rtl_433 crib route / Tuya baby-monitor) is the first; predicates
 # on a global field omit ``node`` and are driven by ``AutomationEngine.on_global`` / read by conditions.
 _GLOBAL = object()
 _UNSET = object()                    # "no value seen yet" sentinel for per-rule gang-edge baselining
@@ -77,7 +77,7 @@ _STATE_FIELD_ATTRS = {
     "power_w": "plug_w",
     "energy_kwh": "plug_kwh",
     "voltage_v": "plug_v",
-    "crib_temp": _GLOBAL,            # global scalar (State.crib_temp), node-less — Tuya baby-monitor poller
+    "crib_temp": _GLOBAL,            # global scalar (State.crib_temp), node-less — rtl_433 crib / Tuya poller
     "outdoor_temp": _GLOBAL,         # global scalar (State.outdoor_temp), node-less — Open-Meteo poller
 }
 _VALID_STATE_FIELDS = frozenset(_STATE_FIELD_ATTRS)

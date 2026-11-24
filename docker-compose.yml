@@ -20,18 +20,27 @@ services:
       # HESTIA_MODE is intentionally UNSET so the persisted registry.mode is the
       # single source of truth (env would override it, defeating graduation).
       #
-      # Optional: fill outdoor_temp from a local 433 MHz weather sensor instead of
-      # Open-Meteo. rtl_433 is baked into the image; point it at a host-side rtl_tcp
-      # (host networking → 127.0.0.1) so no USB device is passed in. Set these in the
-      # gitignored .env / override, narrowing MODEL+ID to YOUR sensor (rtl_433 also
-      # hears the neighbours'):
-      #   HESTIA_OUTDOOR_TEMP: "1"
-      #   HESTIA_OUTDOOR_TEMP_SOURCE: local
-      #   HESTIA_RTL433_DEVICE: rtl_tcp:127.0.0.1:1234
-      #   HESTIA_RTL433_MODEL: <rtl_433 model name>
-      #   HESTIA_RTL433_ID: <sensor id, or * for any — a Prologue-TH randomises its id on each battery swap>
-      #   HESTIA_RTL433_CHANNEL: <DIP-switch channel — stable across battery swaps; pair with ID=*>
-      #   HESTIA_RTL433_BATTERY_WARN: "1"   # opt-in low-battery badge (off by default; noisy on a rechargeable)
+      # Optional: feed outdoor_temp and/or crib_temp from two 433 MHz sensors via ONE
+      # long-lived rtl_433 process instead of Open-Meteo / the Tuya baby monitor. rtl_433
+      # is baked into the image; point it at a host-side rtl_tcp (host networking →
+      # 127.0.0.1) so no USB device is passed in. The stock service does NOT forward `.env`
+      # into the container, so put these in a `docker-compose.override.yml` service
+      # `environment:` override (narrowing MODEL+CHANNEL to YOUR sensors, as rtl_433 hears
+      # the neighbours'; set CRIB_* once the second 433 MHz sensor appears on /api/rf433):
+      #   services:
+      #     hestia:
+      #       environment:
+      #         HESTIA_OUTDOOR_TEMP: "1"
+      #         HESTIA_OUTDOOR_TEMP_SOURCE: local
+      #         HESTIA_RTL433_DEVICE: rtl_tcp:127.0.0.1:1234
+      #         HESTIA_RTL433_MODEL: Prologue-TH
+      #         HESTIA_RTL433_ID: "*"             # * for any — Prologue-TH randomises id on battery swap
+      #         HESTIA_RTL433_CHANNEL: "1"        # DIP-switch channel — stable across battery swaps
+      #         HESTIA_RTL433_CRIB_MODEL: Nexus-TH   # second 433 MHz sensor (different model or channel!)
+      #         HESTIA_RTL433_CRIB_ID: "*"           # supersedes HESTIA_NIANIA_* Tuya poller if both are set
+      #         HESTIA_RTL433_CRIB_CHANNEL: "2"
+      #         # Leave HESTIA_RTL433_PROTOCOL unset unless both sensors share one protocol (-R)
+      #         # HESTIA_RTL433_BATTERY_WARN: "1"  # opt-in low-battery badge/log (noisy on a rechargeable)
       #
       # Optional: app-level per-user login (gates /api/*). OFF unless HESTIA_SESSION_SECRET is set (an
       # empty secret means auth off — fail closed). Create accounts with

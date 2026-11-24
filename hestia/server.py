@@ -255,9 +255,9 @@ async def main() -> None:  # pragma: no cover
     device_srv, control_srv = await _start(rt, config, _standalone_session)
     autosave = asyncio.create_task(_autosave(rt))
     scheduler = asyncio.create_task(_scheduler(rt))
-    niania = asyncio.create_task(_niania_poller(rt))   # no-op unless HESTIA_NIANIA_* configured
+    niania = asyncio.create_task(_niania_poller(rt))   # no-op unless HESTIA_NIANIA_* (suppressed if rtl crib route set)
     weather_task = asyncio.create_task(_weather_poller(rt))  # no-op unless HESTIA_OUTDOOR_TEMP + source=open-meteo
-    sensor433_task = asyncio.create_task(_sensor433_poller(rt))  # no-op unless HESTIA_OUTDOOR_TEMP + source=local
+    sensor433_task = asyncio.create_task(_sensor433_poller(rt))  # no-op unless local outdoor or rtl crib route set
     ir_worker = asyncio.create_task(_ir_worker(rt))    # no-op unless HESTIA_FLIPPER enabled
     thermostat_task = asyncio.create_task(_thermostat_poller(rt))  # GET-polls thermostat mode/temp (standalone)
     cover_confirm_task = asyncio.create_task(_cover_confirm_watcher(rt))  # re-sends dropped blind commands
