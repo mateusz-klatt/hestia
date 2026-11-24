@@ -259,7 +259,7 @@ describe("rules", () => {
     await show(fakeApi());
     const panel = section("Rules");
     expect(panel.textContent).toContain("Your own choice on an entry always wins");
-    expect(panel.querySelector("li")?.textContent).toContain("counterparty contains „Synthetic Grocer”→Synthetic FoodExpensePriority 50disabled");
+    expect(panel.querySelector("li")?.textContent).toContain("counterparty contains “Synthetic Grocer”→Synthetic FoodExpensePriority 50disabled");
     const badge = panel.querySelector<HTMLElement>(".budget-cat-badge");
     expect(badge?.textContent).toBe("Synthetic Food");
     const rgb = (value: string) => {
