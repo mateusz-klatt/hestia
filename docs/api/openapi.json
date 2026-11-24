@@ -15830,7 +15830,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.45.0"
+    "version": "0.46.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -23688,7 +23688,7 @@
     },
     "/api/budget/receipts/device-token/login": {
       "post": {
-        "description": "Requires budget HTTP and receipts. Send uncompressed application/json (at most 4096 bytes) without Cookie or Authorization. Shares the /api/login quota of 10 attempts per minute per username and IPv4 address or IPv6 /64. An unrevoked token with the same device name is rotated. At five active tokens, issuance revokes the least recently used token.",
+        "description": "Requires budget HTTP and receipts. Send uncompressed application/json (at most 4096 bytes) without Cookie or Authorization. Shares the /api/login quota of 10 attempts per minute per username and IPv4 address or IPv6 /64. An unrevoked token with the same device name is rotated. At five active tokens, a new device name is rejected with 409 device_token_limit_reached; same-name rotation remains allowed.",
         "operationId": "loginBudgetReceiptDevice",
         "requestBody": {
           "content": {
@@ -23750,6 +23750,16 @@
               }
             },
             "description": "Request body read timed out."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "The owner has 5 active tokens and this is a new device name (device_token_limit_reached). Same-name rotation is still allowed."
           },
           "411": {
             "content": {

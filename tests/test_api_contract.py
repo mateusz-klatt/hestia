@@ -58,7 +58,11 @@ class OpenApiArtifactTests(unittest.TestCase):
     def test_monthly_budget_contract_chain_from_0_27_0(self):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
-        self.assertEqual(document["info"]["version"], "0.45.0")
+        self.assertEqual(document["info"]["version"], "0.46.0")
+        login_responses = document["paths"]["/api/budget/receipts/device-token/login"]["post"]["responses"]
+        self.assertIn("device_token_limit_reached", login_responses["409"]["description"])
+        del login_responses["409"]
+        document["info"]["version"] = "0.45.0"
         schemas = document["components"]["schemas"]
         for operation in ("category-translation-set", "category-translation-delete", "label-translation-set",
                           "label-translation-delete", "translation-import"):

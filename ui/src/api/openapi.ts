@@ -1395,7 +1395,7 @@ export interface paths {
         put?: never;
         /**
          * Issue a receipts-scoped device token using an enabled budget owner's password.
-         * @description Requires budget HTTP and receipts. Send uncompressed application/json (at most 4096 bytes) without Cookie or Authorization. Shares the /api/login quota of 10 attempts per minute per username and IPv4 address or IPv6 /64. An unrevoked token with the same device name is rotated. At five active tokens, issuance revokes the least recently used token.
+         * @description Requires budget HTTP and receipts. Send uncompressed application/json (at most 4096 bytes) without Cookie or Authorization. Shares the /api/login quota of 10 attempts per minute per username and IPv4 address or IPv6 /64. An unrevoked token with the same device name is rotated. At five active tokens, a new device name is rejected with 409 device_token_limit_reached; same-name rotation remains allowed.
          */
         post: operations["loginBudgetReceiptDevice"];
         delete?: never;
@@ -14040,6 +14040,15 @@ export interface operations {
             };
             /** @description Request body read timed out. */
             408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description The owner has 5 active tokens and this is a new device name (device_token_limit_reached). Same-name rotation is still allowed. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
