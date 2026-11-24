@@ -11485,6 +11485,11 @@
             "default": false,
             "title": "Force Full Resync",
             "type": "boolean"
+          },
+          "retry_parse_failed": {
+            "default": false,
+            "title": "Retry Parse Failed",
+            "type": "boolean"
           }
         },
         "title": "BudgetReceiptGmailSyncRequest",

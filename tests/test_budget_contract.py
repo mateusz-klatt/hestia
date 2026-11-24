@@ -313,6 +313,17 @@ class BudgetOpenApiTests(unittest.TestCase):
                          {"ok", "sync_phase", "version"})
         self.assertIn("batch_processed_count", document["components"]["schemas"]["BudgetReceiptGmailStatus"]["required"])
         self.assertIn("parse_failed_reasons", document["components"]["schemas"]["BudgetReceiptGmailStatus"]["required"])
+        sync_req = document["components"]["schemas"]["BudgetReceiptGmailSyncRequest"]
+        self.assertEqual(set(sync_req["properties"]), {"force_full_resync", "retry_parse_failed"})
+        self.assertEqual(sync_req.get("required", []), [])
+        self.assertEqual(sync_req["properties"]["retry_parse_failed"]["type"], "boolean")
+        self.assertEqual(contract.BudgetReceiptGmailSyncRequest().model_dump(),
+                         {"force_full_resync": False, "retry_parse_failed": False})
+        self.assertEqual(contract.BudgetReceiptGmailSyncRequest(retry_parse_failed=True).model_dump(),
+                         {"force_full_resync": False, "retry_parse_failed": True})
+        for invalid in ({"retry_parse_failed": "true"}, {"retry_parse_failed": 1}, {"retry_parse_failed": None}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                contract.BudgetReceiptGmailSyncRequest.model_validate(invalid)
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)

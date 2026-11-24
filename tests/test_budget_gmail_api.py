@@ -150,6 +150,7 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
                 self.assertEqual((await self.call(operation, data=duplicate, headers=headers)).status, 400)
                 self.assertEqual((await self.call(operation, json={"unknown": 1})).status, 400)
         self.assertEqual((await self.call("gmail-sync", json={"force_full_resync": "false"})).status, 400)
+        self.assertEqual((await self.call("gmail-sync", json={"retry_parse_failed": "false"})).status, 400)
         self.assertEqual((await self.call("gmail-grant", json={"action": "yes", "expected_version": 1})).status, 400)
         self.assertEqual((await self.call("gmail-revoke", json={"expected_version": True})).status, 400)
         self.assertEqual(self.transport.calls, [])
@@ -461,6 +462,107 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
         stored = Path(self.env["HESTIA_DB"]).read_bytes()
         for secret in (*messages, "Sensitive Subject", "billing@merchant.example.test", "sensitive-pdf-detail"):
             self.assertNotIn(secret.encode(), stored)
+
+    async def test_retry_parse_failed_route_and_cli_reprocess_failed_messages(self):
+        os.environ[gmail_api.FLAG] = "1"
+        granted = await self.call("gmail-grant", json={"action": "enable", "expected_version": 1})
+        self.assertEqual(granted.status, 200)
+
+        from contextlib import redirect_stderr, redirect_stdout
+        import io
+        from hestia.budget import __main__ as cli
+        from hestia.budget.gmail_worker import PDFUnsupported
+
+        ok_mail = _scheduled_invoice()
+        pdf_mail = _scheduled_invoice()
+        pdf_mail.set_content(b"%PDF-1.4 fixture", maintype="application", subtype="pdf")
+        self.transport.routes[("/messages", None)] = response_json(page_ids("msg-ok", "msg-pdf"))
+        self.transport.routes[("/messages/msg-ok", None)] = _provider_message("msg-ok", ok_mail)
+        self.transport.routes[("/messages/msg-pdf", None)] = _provider_message("msg-pdf", pdf_mail)
+
+        def fail_pdf(kind, payload):
+            if kind == "pdf":
+                raise PDFUnsupported()
+            return payload.decode("utf-8")
+
+        self.worker.parse.side_effect = fail_pdf
+        await asyncio.to_thread(gmail_api._Runtime().poll, lambda: True, lambda: _SESSION)
+        status = await (await self.call("gmail-status")).json()
+        self.assertEqual((status["pending_imported_count"], status["parse_failed_reasons"]),
+                         (1, {"pdf_unsupported": 1}))
+
+        # Advance 15 days (> 7d force_full_resync window, < 30d IMPORT_TTL) and trigger retry via HTTP.
+        self.clock.now += 15 * 86400
+        retry = await self.call("gmail-sync", json={"retry_parse_failed": True})
+        self.assertEqual(retry.status, 202, await retry.text())
+        api_contract.BudgetReceiptGmailSyncResult.model_validate(await retry.json())
+        with self.sessions() as session:
+            outcomes = sorted(row.outcome for row in session.scalars(select(db.BudgetGmailMessage)))
+        self.assertEqual(outcomes, ["imported"])
+
+        # Now PDF extraction succeeds; poller imports msg-pdf using full backfill window.
+        self.worker.parse.side_effect = lambda kind, payload: (
+            ok_mail.get_body(("plain",)).get_content() if kind == "pdf" else payload.decode("utf-8")
+        )
+        self.transport.profile["historyId"] = "250"
+        await asyncio.to_thread(gmail_api._Runtime().poll, lambda: True, lambda: _SESSION)
+        after = await (await self.call("gmail-status")).json()
+        self.assertEqual((after["pending_imported_count"], after["parse_failed_reasons"], after["sync_phase"]),
+                         (2, {}, "idle"))
+        expected_cutoff = int(self.clock.now - 365 * 86400)
+        self.assertIn(f"after:{expected_cutoff}", self.transport.requests("/messages")[-1]["q"][0])
+
+        # Exercise the CLI subcommand path (including error boundaries and flag-less sync).
+        def invoke_cli(argv):
+            out, err = io.StringIO(), io.StringIO()
+            with mock.patch.object(cli.time, "time", self.clock.wall), \
+                    redirect_stdout(out), redirect_stderr(err):
+                code = cli.main(argv)
+            return code, out.getvalue(), err.getvalue()
+
+        with self.sessions.begin() as session:
+            session.add(db.BudgetGmailMessage(
+                owner="alice", gmail_id_hmac="ab" * 32, internal_date=self.clock.now,
+                trust_path="direct_allowlist", outcome="parse_failed", created_at=self.clock.now,
+            ))
+        self.clock.now += 60
+        code, out, err = invoke_cli(["--db", self.env["HESTIA_DB"], "gmail", "sync", "--retry-parse-failed"])
+        self.assertEqual((code, err), (0, ""))
+        cli_result = api_contract.BudgetReceiptGmailSyncResult.model_validate(json.loads(out))
+        self.assertTrue(cli_result.ok)
+        self.assertNotIn("alice", out)
+        self.assertNotIn(MAILBOX, out)
+        with self.sessions() as session:
+            self.assertIsNone(session.get(db.BudgetGmailMessage, ("alice", "ab" * 32)))
+            state = session.get(db.BudgetGmailState, "alice")
+            self.assertEqual((state.run_requested, state.force_full_resync), (1, 1))
+
+        # Flag-less CLI sync coalesces without failing, and error branches stay safe.
+        code, out, err = invoke_cli(["gmail", "sync"])
+        self.assertEqual((code, err), (0, ""))
+        self.assertTrue(json.loads(out)["ok"])
+
+        with mock.patch.object(gmail_config, "load_settings", return_value=None):
+            code, out, err = invoke_cli(["gmail", "sync"])
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("HESTIA_BUDGET_RECEIPTS_GMAIL_CONFIG", err)
+
+        with mock.patch.object(store_sql, "is_users_db_authoritative", return_value=False):
+            code, out, err = invoke_cli(["gmail", "sync"])
+        self.assertEqual((code, out), (2, ""))
+        self.assertEqual(err.strip(), "budget_requires_sqlite_users")
+
+        with self.sessions.begin() as session:
+            session.get(db.BudgetGmailState, "alice").grant_status = "disabled"
+        code, out, err = invoke_cli(["gmail", "sync", "--retry-parse-failed"])
+        self.assertEqual((code, out), (2, ""))
+        self.assertEqual(err.strip(), "budget_receipt_gmail_disabled")
+
+        with mock.patch.object(gmail_config, "load_settings", side_effect=RuntimeError("SECRET_PATH")):
+            code, out, err = invoke_cli(["gmail", "sync"])
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(err.strip(), "Gmail sync scheduling failed")
+        self.assertNotIn("SECRET_PATH", err)
 
 
 def _scheduled_invoice():

@@ -62,6 +62,7 @@ class OpenApiArtifactTests(unittest.TestCase):
         self.assertEqual(document["info"]["version"], "0.47.0")
         schemas["BudgetReceiptGmailStatus"]["properties"].pop("parse_failed_reasons")
         schemas["BudgetReceiptGmailStatus"]["required"].remove("parse_failed_reasons")
+        schemas["BudgetReceiptGmailSyncRequest"]["properties"].pop("retry_parse_failed")
         document["info"]["version"] = "0.46.0"
         login_responses = document["paths"]["/api/budget/receipts/device-token/login"]["post"]["responses"]
         self.assertIn("device_token_limit_reached", login_responses["409"]["description"])

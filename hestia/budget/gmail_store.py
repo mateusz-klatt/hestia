@@ -39,10 +39,15 @@ STATUS_FIELDS = ("grant_status", "grant_generation", "version", "sync_phase", "a
                  "next_sync_at", "backoff_until", "failures", "last_http_status", "last_error",
                  "batch_processed_count")
 _PARSE_FAILED_REASONS_PREFIX = "budget_gmail_parse_failed_reasons:"
+_RETRY_WINDOW_PREFIX = "budget_gmail_retry_full_window:"
 
 
 def _reasons_key(owner):
     return _PARSE_FAILED_REASONS_PREFIX + owner
+
+
+def _retry_window_key(owner):
+    return _RETRY_WINDOW_PREFIX + owner
 
 
 def digest(secret, domain, value):
@@ -134,7 +139,7 @@ class GmailStore(BudgetStore):
     def fence(self, owner, generation):
         self._active(self.state(owner), generation)
 
-    def schedule_sync(self, owner, *, now, force_full_resync, cooldown):
+    def schedule_sync(self, owner, *, now, force_full_resync, cooldown, retry_parse_failed=False):
         """Queue a poller run. The request does not fetch or parse mail."""
         with self.transaction() as session:
             BudgetHTTPStore._owner(session, owner)
@@ -145,12 +150,22 @@ class GmailStore(BudgetStore):
                 raise GmailError("mailbox_mismatch", 403, attention="identity_mismatch")
             if row.backoff_until > now:
                 raise GmailError("budget_receipt_gmail_backoff", 429)
+            if not row.run_requested and row.last_attempt_at is not None and row.last_attempt_at + cooldown > now:
+                raise GmailError("budget_receipt_gmail_cooldown", 429)
+            if retry_parse_failed:
+                session.execute(delete(BudgetGmailMessage).where(
+                    BudgetGmailMessage.owner == owner,
+                    BudgetGmailMessage.outcome == "parse_failed",
+                    BudgetGmailMessage.receipt_id.is_(None),
+                ))
+                key = _retry_window_key(owner)
+                if session.get(AppMeta, key) is None:
+                    session.add(AppMeta(key=key, value="1"))
+                force_full_resync = True
             if row.run_requested:
-                if force_full_resync and row.sync_phase != "full_resync":
+                if force_full_resync and (retry_parse_failed or row.sync_phase != "full_resync"):
                     row.force_full_resync = 1
                 return {"ok": True, "sync_phase": row.sync_phase, "version": row.version}
-            if row.last_attempt_at is not None and row.last_attempt_at + cooldown > now:
-                raise GmailError("budget_receipt_gmail_cooldown", 429)
             session.add(row)
             row.next_sync_at = now
             row.run_requested = 1
@@ -158,6 +173,10 @@ class GmailStore(BudgetStore):
                 row.force_full_resync = 1
             row.version += 1
             return {"ok": True, "sync_phase": row.sync_phase, "version": row.version}
+
+    def retry_full_window(self, owner):
+        with self.sessions() as session:
+            return session.get(AppMeta, _retry_window_key(owner)) is not None
 
     def check_version(self, owner, expected):
         self._version(self.state(owner), expected)
@@ -193,7 +212,7 @@ class GmailStore(BudgetStore):
             session.add(row)
             for key, value in GRANT_RESET.items():
                 setattr(row, key, value)
-            session.execute(delete(AppMeta).where(AppMeta.key == _reasons_key(owner)))
+            session.execute(delete(AppMeta).where(AppMeta.key.in_((_reasons_key(owner), _retry_window_key(owner)))))
             row.grant_status = status
             row.grant_generation += 1
             row.version += 1
@@ -260,7 +279,7 @@ class GmailStore(BudgetStore):
         session.flush()
         return receipt.id
 
-    def commit(self, owner, generation, changes, pending=(), *, reset_reasons=False):
+    def commit(self, owner, generation, changes, pending=(), *, reset_reasons=False, clear_retry_window=False):
         """Commit up to one chunk; never advance a page past an uncommitted message."""
         imported = skipped = 0
         drained = True
@@ -310,6 +329,8 @@ class GmailStore(BudgetStore):
                         meta.value = encoded
                 elif meta is not None:
                     session.delete(meta)
+            if clear_retry_window:
+                session.execute(delete(AppMeta).where(AppMeta.key == _retry_window_key(owner)))
             if drained:
                 for key, value in changes.items():
                     setattr(row, key, value)

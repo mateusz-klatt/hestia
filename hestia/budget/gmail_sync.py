@@ -178,10 +178,11 @@ class GmailSync:
             self.store.transition(owner, expected_version, status, mailbox_hmac, queue_sync=defer_profile)
             return self.store.status(owner)
 
-    def _commit(self, owner, progress, changes, pending=(), *, reset_reasons=False):
+    def _commit(self, owner, progress, changes, pending=(), *, reset_reasons=False, clear_retry_window=False):
         should_reset = reset_reasons or (progress.reset_reasons and bool(pending))
         imported, skipped, drained = self.store.commit(
-            owner, progress.generation, changes, pending, reset_reasons=should_reset,
+            owner, progress.generation, changes, pending,
+            reset_reasons=should_reset, clear_retry_window=clear_retry_window,
         )
         if should_reset:
             progress.reset_reasons = False
@@ -190,10 +191,10 @@ class GmailSync:
         if not drained:
             raise RunLimit()
 
-    def _start_recovery(self, owner, progress, profile_history, state, *, full):
+    def _start_recovery(self, owner, progress, profile_history, state, *, full, full_window=False):
         now = self.store.clock()
         cutoff = max(0, now - self.settings.backfill_days * DAY)
-        if full:
+        if full and not full_window:
             last_sync = state.last_sync_at if state.last_sync_at is not None else now
             cutoff = max(cutoff, last_sync - 7 * DAY)
         changes = {
@@ -203,7 +204,7 @@ class GmailSync:
         if full:
             changes["force_full_resync"] = 0
         progress.reset_reasons = False
-        self._commit(owner, progress, changes, reset_reasons=True)
+        self._commit(owner, progress, changes, reset_reasons=True, clear_retry_window=True)
 
     def _completion(self, state):
         now = self.store.clock()
@@ -393,8 +394,9 @@ class GmailSync:
                 state = self.store.state(owner)
                 force = bool(force_full_resync or state.force_full_resync)
                 while True:
+                    full_window = force and self.store.retry_full_window(owner)
                     if force or (state.history_id is None and state.pending_history_id is None):
-                        self._start_recovery(owner, progress, profile_history, state, full=force)
+                        self._start_recovery(owner, progress, profile_history, state, full=force, full_window=full_window)
                     if state.history_id is None or force:
                         self._backfill(owner, progress)
                     else:
@@ -417,8 +419,8 @@ class GmailSync:
                     "skipped_count": progress.skipped, "has_more": state.sync_phase != "idle",
                     "attention": state.attention, "next_sync_at": state.next_sync_at}
 
-    def schedule(self, owner, *, force_full_resync=False):
+    def schedule(self, owner, *, force_full_resync=False, retry_parse_failed=False):
         """Record a due poller run. Import work stays on the background loop."""
         self._require_owner(owner)
         return self.store.schedule_sync(owner, now=self.store.clock(), force_full_resync=force_full_resync,
-                                        cooldown=MANUAL_COOLDOWN)
+                                        retry_parse_failed=retry_parse_failed, cooldown=MANUAL_COOLDOWN)
