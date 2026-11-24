@@ -10,7 +10,7 @@ from aiohttp import web
 from ..db import init_db
 from .config import ConfigError, load_config
 from .instances import MAX_REQUEST_EVENTS, expand_events
-from .store import CalendarConflict, SyncStore
+from .store import CalendarConflict, REQUEST_PAYLOAD_BYTES, SyncStore
 from .time_zones import canonical_zone
 
 PATH = "/api/calendars"
@@ -73,13 +73,15 @@ def _read_instances(group, window_start, window_end, zone_name):
     groups = store.groups()
     selected = group or (groups[0]["id"] if groups else None)
     try:
-        events = store.list_events(selected, limit=MAX_REQUEST_EVENTS + 1) if selected is not None else []
+        events, store_truncated = (
+            store.list_bounded_events(selected, limit=MAX_REQUEST_EVENTS, max_payload_bytes=REQUEST_PAYLOAD_BYTES)
+            if selected is not None else ([], False)
+        )
     except ValueError as exc:
         raise _UnknownCalendarGroup from exc
-    truncated_events = len(events) > MAX_REQUEST_EVENTS
-    result = expand_events(events[:MAX_REQUEST_EVENTS], window_start, window_end, zone_name)
+    result = expand_events(events, window_start, window_end, zone_name)
     return {"enabled": True, "groups": groups,
-            "truncated": truncated_events or result["truncated"],
+            "truncated": store_truncated or result["truncated"],
             "instances": result["instances"]}
 
 

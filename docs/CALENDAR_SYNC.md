@@ -247,11 +247,15 @@ przecięcia `BYDAY`+`BYMONTHDAY`, `BYSETPOS` przy `YEARLY`/`DAILY`/`WEEKLY`,
 zwraca wyłącznie `DTSTART` (z obsługą `EXDATE` i wyjątków dla `DTSTART`) z
 `truncated: true` i wpisem ostrzeżenia do dziennika serwera.
 Jeśli górne oszacowanie liczby wystąpień w poszerzonym oknie (z uwzględnieniem
-lookbacku od `query_start - czas_trwania`) przekracza 5000 albo szacowany koszt
-badania zdarzenia przekracza pozostały wspólny budżet żądania (`REQUEST_REPLAY_BUDGET`,
-600000 jednostek sprawdzeń dni oraz osobny limit `50000` skonstruowanych wystąpień na
-całe żądanie dla maksymalnie `5000` wydarzeń pobieranych z bazy z `LIMIT 5001` w
-ustalonej kolejności identyfikatorów), stosowane jest cięcie pracy:
+lookbacku od `query_start - czas_trwania` oraz końca `UNTIL` reguły) przekracza 5000
+albo szacowany koszt badania zdarzenia przekracza pozostały wspólny budżet żądania
+(`REQUEST_REPLAY_BUDGET`, 600000 jednostek sprawdzeń dni, limit `50000` kandydatów
+wygenerowanych lub skonstruowanych w bibliotece oraz budżet `16 MiB` zdekodowanego JSON
+`REQUEST_PAYLOAD_BYTES` w SQL dla maksymalnie `5000` wydarzeń pobieranych w ustalonej
+kolejności identyfikatorów z `LIMIT 5001` i `length(CAST(payload_json AS BLOB))`),
+stosowane jest cięcie pracy:
+- wiersze w SQL przekraczające pozostały budżet bajtów albo limit `5000` wydarzeń są
+  pomijane bez `json.loads` i ustawiają `truncated: true`;
 - gdy pozostały budżet nie pokrywa nawet kosztu jawnych dat `RDATE`/`EXDATE` (po 300
   jednostek) i zapisanych wyjątków zdarzenia (po 100 jednostek na wyjątek przed
   zbudowaniem jakichkolwiek map), zdarzenie jest w całości pomijane bez parsowania
@@ -261,15 +265,20 @@ ustalonej kolejności identyfikatorów), stosowane jest cięcie pracy:
   `EXDATE` i wyjątków, bez wywoływania biblioteki i bez pomniejszania budżetu dla
   kolejnych mniejszych lub niecyklicznych wydarzeń).
 Koszt zdarzenia sumuje sprawdzenia dni z `RRULE` od `min(DTSTART, query_start -
-czas_trwania)` do końca poszerzonego okna (bez przesuwania `DTSTART`, aby zachować
-fazy `COUNT`/`INTERVAL`: `okresy * dni_w_okresie * 1` kandydat dziennie, gdzie `DAILY=1`,
-`WEEKLY=7`, `MONTHLY=31`, `YEARLY=366`), policzoną przed parsowaniem liczbę `RDATE`
-i `EXDATE` oraz liczbę wyjątków (indeksowanych po wstępnym odfiltrowaniu do poszerzonego
-okna). Rozwijanie przekazuje strefy `ZoneInfo` bezpośrednio do `icalendar` bez
-budowania `VTIMEZONE` na każde zdarzenie (a serializacja `to_ical` buforuje `VTIMEZONE`
-w pamięci podręcznej LRU). Po przekroczeniu limitu `5000` wydarzeń w SQL lub `50000`
-skonstruowanych wystąpień w żądaniu rozwijanie przerywa pracę i ustawia `truncated: true`,
-używając ograniczonego wyboru `heapq.nsmallest` zamiast pełnego sortowania. Zmieniony wyjątek
+czas_trwania)` do `min(koniec_okna, UNTIL + 1 dzień)` (bez przesuwania `DTSTART`, aby
+zachować fazy `COUNT`/`INTERVAL`: `okresy * dni_w_okresie * 1` kandydat dziennie, gdzie
+`DAILY=1`, `WEEKLY=7`, `MONTHLY=31`, `YEARLY=366`), policzoną przed parsowaniem liczbę
+`RDATE`/`EXDATE` oraz liczbę wyjątków (indeksowanych po wstępnym odfiltrowaniu do
+poszerzonego okna). Wywołanie `RRULE` zachowuje górną granicę `UNTIL + 1 dzień`, więc
+zakończone serie nie generują zbędnych kandydatów po końcu serii, a każdy wygenerowany
+kandydat biblioteki (również odrzucony) obciąża budżet `50000` instancji. Przepełnienie
+daty przy konwersji strefy końca pojedynczego wystąpienia (np. wokół roku `9999` w
+`Pacific/Kiritimati`) pomija tylko to wystąpienie bez odrzucania wcześniejszych.
+Rozwijanie przekazuje strefy `ZoneInfo` bezpośrednio do `icalendar` bez budowania
+`VTIMEZONE` na każde zdarzenie (a serializacja `to_ical` buforuje `VTIMEZONE` w pamięci
+podręcznej LRU). Po przekroczeniu limitu `5000` wydarzeń, `16 MiB` bajtów lub `50000`
+kandydatów w żądaniu rozwijanie przerywa pracę i ustawia `truncated: true`, używając
+ograniczonego wyboru `heapq.nsmallest` zamiast pełnego sortowania. Zmieniony wyjątek
 zastępuje swoje pierwotne wystąpienie, a kontrola osieroconych wyjątków używa tego
 samego wyłącznego końca poszerzonego okna co wywołanie biblioteki.
 Odległy `RECURRENCE-ID` nie poszerza generowania, ale zapisany wyjątek trafiający w

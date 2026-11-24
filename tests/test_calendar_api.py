@@ -564,6 +564,8 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item["start"]["dateTime"] for item in instances],
                          ["2026-10-25T02:30:00+01:00", "2026-10-26T02:30:00+01:00"])
         self.assertEqual(instances[0]["instance_id"], event["id"] + "/2026-10-25T01:30:00+00:00")
+        later = await (await self.instances("from=2026-10-26&to=2026-10-27")).json()
+        self.assertEqual([item["start"]["dateTime"] for item in later["instances"]], ["2026-10-26T02:30:00+01:00"])
 
     async def test_instances_fold_straddling_master_preserves_anchor_and_offsets(self):
         event = await self.create({"summary": "Fold duration",
@@ -963,8 +965,8 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cap_result, {"instances": [], "truncated": True})
         self.assertIn("processing limit", "\n".join(cap_logs.output))
 
-    async def test_instances_sql_limit_avoids_decoding_beyond_5001_rows(self):
-        from hestia.calendar_sync.store import SyncStore
+    async def test_instances_sql_limit_and_payload_byte_budget_skip_json_decode(self):
+        from hestia.calendar_sync import store as sync_store
 
         old_payload = {"summary": "Old", "start": {"date": "2025-12-01"}, "end": {"date": "2025-12-02"}}
         in_window = {"summary": "Late row", "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"}}
@@ -980,16 +982,108 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
                 for i in range(5005)
             ])
         started = time.monotonic()
-        with mock.patch.object(SyncStore, "_event_dict", wraps=SyncStore._event_dict) as decoder:
-            with mock.patch.object(SyncStore, "list_events", wraps=store.list_events) as listed:
+        with mock.patch.object(sync_store.SyncStore, "_event_dict", wraps=sync_store.SyncStore._event_dict) as decoder:
+            with mock.patch.object(sync_store.SyncStore, "list_bounded_events", wraps=store.list_bounded_events) as listed:
                 response = await self.instances("from=2026-01-01&to=2026-01-02")
         self.assertLess(time.monotonic() - started, 2)
         self.assertEqual(response.status, 200)
         state = await response.json()
         self.assertEqual(state["instances"], [])
         self.assertTrue(state["truncated"])
-        self.assertEqual(listed.call_args.kwargs.get("limit"), instance_expander.MAX_REQUEST_EVENTS + 1)
-        self.assertEqual(decoder.call_count, instance_expander.MAX_REQUEST_EVENTS + 1)
+        self.assertEqual(listed.call_args.kwargs.get("limit"), instance_expander.MAX_REQUEST_EVENTS)
+        self.assertEqual(listed.call_args.kwargs.get("max_payload_bytes"), sync_store.REQUEST_PAYLOAD_BYTES)
+        self.assertEqual(decoder.call_count, instance_expander.MAX_REQUEST_EVENTS)
+
+        # Item 1 regression: SQL byte budget (16 MiB) skips oversized rows BEFORE json.loads and sets truncated=true.
+        large_payload = {
+            "summary": "Huge cancellations",
+            "start": {"dateTime": "2026-01-01T09:00:00+00:00", "timeZone": "UTC"},
+            "end": {"dateTime": "2026-01-01T10:00:00+00:00", "timeZone": "UTC"},
+            "description": "x" * (500 * 1024),
+        }
+        large_json = json.dumps(large_payload)
+        # Test unmocked 16 MiB byte cap in a clean store group with 50 x 500 KiB payloads (~25 MiB > 16 MiB) + small tail.
+        other_group = {"id": "bytes", "calendars": [{"id": "bytes-google", "account": "google", "calendar_id": "b@example.test"}]}
+        self.config_path.write_text(json.dumps({**self.config, "groups": [*self.config["groups"], other_group]}))
+        bytes_store = api._store()
+        tiny_tail = {"summary": "Tail fits", "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"}}
+        tiny_json = json.dumps(tiny_tail)
+        with bytes_store.transaction() as session:
+            session.add_all([
+                db.CalendarEvent(
+                    id=f"huge-{i:04d}", group_id="bytes", uid=f"huge-{i:04d}@hestia",
+                    payload_json=large_json, fingerprint=f"fp-huge-{i:04d}",
+                    deleted=False, deleted_at=None, revision=1, modified_at=0.0, source="local",
+                )
+                for i in range(50)
+            ])
+            session.add(db.CalendarEvent(
+                id="zzzz-tail", group_id="bytes", uid="zzzz-tail@hestia",
+                payload_json=tiny_json, fingerprint="fp-tail",
+                deleted=False, deleted_at=None, revision=1, modified_at=0.0, source="local",
+            ))
+        expected_large = sync_store.REQUEST_PAYLOAD_BYTES // len(large_json.encode("utf-8"))
+        with mock.patch.object(sync_store.SyncStore, "_event_dict", wraps=sync_store.SyncStore._event_dict) as decoder:
+            started = time.monotonic()
+            response = await self.instances("from=2026-01-01&to=2026-01-02&group=bytes")
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(response.status, 200)
+        bytes_state = await response.json()
+        self.assertTrue(bytes_state["truncated"])
+        self.assertEqual(len(bytes_state["instances"]), expected_large + 1)
+        self.assertIn("zzzz-tail", [item["event_id"] for item in bytes_state["instances"]])
+        self.assertEqual(decoder.call_count, expected_large + 1)
+
+    async def test_instances_expired_until_and_discarded_candidates_respect_instance_budget(self):
+        # Item 2(a): 5,000 daily series ending on Jan 1 (UNTIL) queried Jan 2 - Apr 4 finish < 2s without replaying past UNTIL.
+        expired_payload = {"summary": "Ended Jan 1",
+                           "start": {"dateTime": "2026-01-01T09:00:00+00:00", "timeZone": "UTC"},
+                           "end": {"dateTime": "2026-01-01T10:00:00+00:00", "timeZone": "UTC"},
+                           "recurrence": ["RRULE:FREQ=DAILY;UNTIL=20260101T090000Z"]}
+        self._seed_group_events(5000, "until1", expired_payload)
+        started = time.monotonic()
+        response = await self.instances("from=2026-01-02&to=2026-04-04")
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(response.status, 200)
+        state = await response.json()
+        self.assertEqual(state["instances"], [])
+        self.assertFalse(state["truncated"])
+
+        # Item 2(b): discarded candidates (out-of-window or EXDATE) still charge REQUEST_INSTANCE_BUDGET and stop when exhausted.
+        discard_payload = {"summary": "Discarded daily",
+                           "start": {"dateTime": "2026-01-01T09:00:00+00:00", "timeZone": "UTC"},
+                           "end": {"dateTime": "2026-01-01T10:00:00+00:00", "timeZone": "UTC"},
+                           "recurrence": ["RRULE:FREQ=DAILY", "EXDATE:20260102T090000Z"]}
+        discard_events = [
+            {"id": f"disc{i:04d}", "uid": f"disc{i:04d}", "revision": 1, "group_id": "family", "payload": discard_payload}
+            for i in range(1000)
+        ]
+        started = time.monotonic()
+        with self.assertLogs("hestia.calendar_sync.instances", level="WARNING") as logs:
+            discarded = instance_expander.expand_events(discard_events, date(2026, 1, 2), date(2026, 4, 4))
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertTrue(discarded["truncated"])
+        self.assertIn("constructed instance limit", "\n".join(logs.output))
+
+    async def test_instances_kiritimati_end_overflow_skips_only_overflowing_occurrence(self):
+        # Item 3 regression: DAILY;COUNT=3 ending in Pacific/Kiritimati (+14:00) keeps Dec 27 & 28 when Dec 29 overflows year 9999.
+        await self.create({
+            "summary": "Kiritimati edge",
+            "start": {"dateTime": "9999-12-27T09:00:00Z", "timeZone": "UTC"},
+            "end": {"dateTime": "9999-12-30T10:00:00+14:00", "timeZone": "Pacific/Kiritimati"},
+            "recurrence": ["RRULE:FREQ=DAILY;COUNT=3"],
+        })
+        response = await self.instances("from=9999-12-27&to=9999-12-31")
+        self.assertEqual(response.status, 200)
+        state = await response.json()
+        self.assertFalse(state["truncated"])
+        self.assertEqual(
+            [(item["start"]["dateTime"], item["end"]["dateTime"]) for item in state["instances"]],
+            [
+                ("9999-12-27T09:00:00+00:00", "9999-12-30T10:00:00+14:00"),
+                ("9999-12-28T09:00:00+00:00", "9999-12-31T10:00:00+14:00"),
+            ],
+        )
 
     async def test_instances_92_day_5000_daily_series_hits_constructed_instance_budget_fast(self):
         daily_payload = {"summary": "92d daily",
@@ -1541,6 +1635,12 @@ class CalendarApiContractTests(unittest.TestCase):
         comma_rdate = {"start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
                        "recurrence": ["RDATE;VALUE=DATE:20260102,20260103"]}
         self.assertEqual(instance_expander._replay_upper_bound(comma_rdate, end), 600)
+        all_day_until = {"start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
+                         "recurrence": ["RRULE:FREQ=DAILY;UNTIL=20260101"]}
+        self.assertEqual(
+            instance_expander._replay_upper_bound(all_day_until, datetime(2026, 4, 5, tzinfo=timezone.utc)),
+            2,
+        )
         self.assertEqual(
             instance_expander._property_values({"recurrence": ["RDATE;TZID=Europe/Warsaw:20260101T090000"]}, "RDATE"),
             [datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)],

@@ -31,6 +31,7 @@ _MAX_INTERVAL = 1000
 _UTC = timezone.utc
 _MIN_UTC = datetime.min.replace(tzinfo=_UTC)
 _MAX_UTC = datetime.max.replace(tzinfo=_UTC)
+_MAX_ICAL_UTC = datetime(9999, 12, 31, 23, 59, 59, tzinfo=_UTC)
 # Enumerated allowlist of simple Google/Outlook RRULE shapes; anything outside S1-S7 falls back to DTSTART.
 _ALLOWED_FREQUENCIES = {"DAILY", "WEEKLY", "MONTHLY", "YEARLY"}
 _ALLOWED_RULE_KEYS = {
@@ -195,7 +196,8 @@ def _build_calendar(payload: dict, uid: str, rdates: list, all_day: bool) -> tup
         rule = vRecur.from_ical(line.split(":", 1)[1])
         if not all_day and "UNTIL" in rule:
             until = rule["UNTIL"][0].astimezone(_UTC)
-            del rule["UNTIL"]
+            # Keep UNTIL + 1 day padding so dateutil stops at series end while DST gap shifts still yield.
+            rule["UNTIL"] = [min(_shift_datetime(until, timedelta(days=1)), _MAX_ICAL_UTC)]
         event.add("rrule", rule)
     if rdates:
         event.add("rdate", rdates)
@@ -247,20 +249,20 @@ def _occurrence_instance(
         return None
     try:
         ending = original + duration
+        if start_zone is None:
+            if not (original < window.end and ending > window.start):
+                return None
+            start_dict = {"date": original.isoformat()}
+            end_dict = {"date": ending.isoformat()}
+        else:
+            if not (original < window.upper and (ending > window.lower or original == ending and original >= window.lower)):
+                return None
+            start_zone_name = payload["start"].get("timeZone") or "UTC"
+            end_zone_name = payload["end"]["timeZone"]
+            start_dict = {"dateTime": original.astimezone(start_zone).isoformat(timespec="seconds"), "timeZone": start_zone_name}
+            end_dict = {"dateTime": ending.astimezone(end_zone).isoformat(timespec="seconds"), "timeZone": end_zone_name}
     except OverflowError:
         return None
-    if start_zone is None:
-        if not (original < window.end and ending > window.start):
-            return None
-        start_dict = {"date": original.isoformat()}
-        end_dict = {"date": ending.isoformat()}
-    else:
-        if not (original < window.upper and (ending > window.lower or original == ending and original >= window.lower)):
-            return None
-        start_zone_name = payload["start"].get("timeZone") or "UTC"
-        end_zone_name = payload["end"]["timeZone"]
-        start_dict = {"dateTime": original.astimezone(start_zone).isoformat(timespec="seconds"), "timeZone": start_zone_name}
-        end_dict = {"dateTime": ending.astimezone(end_zone).isoformat(timespec="seconds"), "timeZone": end_zone_name}
     return {
         "instance_id": event["id"] + "/" + original.isoformat(),
         "event_id": event["id"],
@@ -497,13 +499,22 @@ def _query_bounds(window: _Window) -> tuple[datetime, datetime]:
     return _shift_datetime(window.lower, -timedelta(days=1)), _shift_datetime(window.upper, timedelta(days=1))
 
 
+def _until_bound(raw: str, end: datetime) -> datetime:
+    until_dt = (
+        datetime.fromisoformat(raw).astimezone(_UTC)
+        if "T" in raw else datetime.combine(date.fromisoformat(raw), time.min, tzinfo=_UTC)
+    )
+    return min(end, _shift_datetime(until_dt, timedelta(days=1)))
+
+
 def _occurrence_upper_bound(payload: dict, start: datetime, end: datetime, rdate_count: int) -> int:
-    seconds = max(0, (end - start).total_seconds())
     bound = 1 + rdate_count + len(payload.get("exceptions", []))
     for line in payload.get("recurrence", []):
         if _kind(line) != "RRULE":
             continue
         parts = _rrule_parts(line)
+        rule_end = _until_bound(parts["UNTIL"], end) if "UNTIL" in parts else end
+        seconds = max(0, (rule_end - start).total_seconds())
         interval = int(parts.get("INTERVAL", "1"))
         estimated = ceil(seconds / (_FREQUENCY_SECONDS[parts["FREQ"]] * interval)) + 1
         bound += min(int(parts["COUNT"]), estimated) if "COUNT" in parts else estimated
@@ -522,7 +533,6 @@ def _replay_upper_bound(payload: dict, end: datetime, query_start: datetime | No
         lookback = _shift_datetime(query_start, -_event_duration(payload))
         if lookback < anchor:
             anchor = lookback
-    seconds = max(0, (end - anchor).total_seconds())
     rdate_count, exdate_count = _explicit_date_counts(payload)
     exception_count = len(payload.get("exceptions", []))
     bound = (rdate_count + exdate_count) * _EXPLICIT_DATE_COST + exception_count * _OVERRIDE_COST
@@ -531,6 +541,8 @@ def _replay_upper_bound(payload: dict, end: datetime, query_start: datetime | No
             continue
         parts = _rrule_parts(line)
         frequency = parts["FREQ"]
+        rule_end = _until_bound(parts["UNTIL"], end) if "UNTIL" in parts else end
+        seconds = max(0, (rule_end - anchor).total_seconds())
         periods = ceil(seconds / (_FREQUENCY_SECONDS[frequency] * int(parts.get("INTERVAL", "1")))) + 1
         bound += periods * _DAYS_PER_PERIOD[frequency] * _CANDIDATES_PER_DAY
     return bound
@@ -619,11 +631,10 @@ def _expand_event(event: dict, window: _Window, budget: _ReplayBudget | None = N
     start_zone = None if all_day else _zone(payload["start"].get("timeZone") or "UTC")
     end_zone = None if all_day else _zone(payload["end"]["timeZone"])
 
-    def add(instance):
+    def record(instance):
         if instance is not None and instance["instance_id"] not in identifiers:
             identifiers.add(instance["instance_id"])
             matches.append(instance)
-            budget.instances_remaining -= 1
 
     def sort_key(instance):
         return _sort_key(instance, window)
@@ -635,6 +646,8 @@ def _expand_event(event: dict, window: _Window, budget: _ReplayBudget | None = N
                 _LOG.warning("Calendar request exceeded %d constructed instance limit; truncating response",
                              REQUEST_INSTANCE_BUDGET)
                 return nsmallest(INSTANCE_LIMIT + 1, matches, key=sort_key), True
+            # Charge every candidate yielded by the library (including discarded ones).
+            budget.instances_remaining -= 1
             original = occurrence.start if all_day else occurrence.start.astimezone(_UTC)
             if until is not None and original not in explicit and original > until:
                 continue
@@ -653,9 +666,12 @@ def _expand_event(event: dict, window: _Window, budget: _ReplayBudget | None = N
                 candidate_wall = original.astimezone(zone).replace(tzinfo=None)
                 if original != second_fold and candidate_wall == original_wall:
                     continue
-            add(instance)
+            record(instance)
     if second_fold is not None:
-        add(_first_instance(event, window))
+        fold_instance = _first_instance(event, window)
+        if fold_instance is not None:
+            record(fold_instance)
+            budget.instances_remaining -= 1
     for original, exception in pending.items():
         if original in seen_overrides or original in exdates:
             continue
@@ -668,7 +684,9 @@ def _expand_event(event: dict, window: _Window, budget: _ReplayBudget | None = N
             if near:
                 _LOG.debug("Skipping orphan override for calendar event %s at %s", event["id"], original.isoformat())
                 continue
-        add(_stored_override(event, exception, original))
+        override = _stored_override(event, exception, original)
+        record(override)
+        budget.instances_remaining -= 1
     return nsmallest(INSTANCE_LIMIT + 1, matches, key=sort_key), False
 
 

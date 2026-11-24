@@ -13,11 +13,14 @@ from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from sqlalchemy import select, text
+from sqlalchemy import LargeBinary, cast, func, select, text
 
 from ..db import CalendarEndpoint as Endpoint, CalendarEvent as Event
 from ..db import CalendarGroup as Group, CalendarOutbox as Outbox, CalendarReplica as Replica
 from .events import fingerprint, validate_payload
+
+
+REQUEST_PAYLOAD_BYTES = 16 * 1024 * 1024  # 16 MiB per-request JSON decode budget.
 
 
 class CalendarConflict(ValueError):
@@ -115,16 +118,37 @@ class SyncStore:
                 "payload": json.loads(event.payload_json), "revision": event.revision,
                 "deleted": event.deleted, "modified_at": event.modified_at}
 
-    def list_events(self, group, include_deleted=False, *, limit=None):
+    def _group_events_query(self, s, group, include_deleted=False):
+        self._require_group(s, group)
+        query = select(Event).where(Event.group_id == group)
+        if not include_deleted:
+            query = query.where(Event.deleted.is_(False))
+        return query.order_by(Event.id)
+
+    def list_events(self, group, include_deleted=False):
         with self.sessions() as s:
-            self._require_group(s, group)
-            query = select(Event).where(Event.group_id == group)
-            if not include_deleted:
-                query = query.where(Event.deleted.is_(False))
-            query = query.order_by(Event.id)
-            if limit is not None:
-                query = query.limit(limit)
-            return [self._event_dict(row) for row in s.scalars(query)]
+            return [self._event_dict(row) for row in s.scalars(self._group_events_query(s, group, include_deleted))]
+
+    def list_bounded_events(self, group, *, limit, max_payload_bytes=REQUEST_PAYLOAD_BYTES):
+        with self.sessions() as s:
+            query = (
+                self._group_events_query(s, group)
+                .add_columns(func.length(cast(Event.payload_json, LargeBinary)))
+                .limit(limit + 1)
+            )
+            events = []
+            remaining = max_payload_bytes
+            truncated = False
+            for row, payload_bytes in s.execute(query):
+                if len(events) >= limit:
+                    truncated = True
+                    break
+                if payload_bytes > remaining:
+                    truncated = True
+                    continue
+                remaining -= payload_bytes
+                events.append(self._event_dict(row))
+            return events, truncated
 
     @staticmethod
     def _require_group(s, group):
