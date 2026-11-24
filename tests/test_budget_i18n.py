@@ -228,6 +228,54 @@ class TranslationStoreTests(AnalyticsCase):
         self.assertEqual([row["ok"] for row in results], [True, False, False])
         self.assertEqual([row["error"] for row in results[1:]], ["budget_analytics_conflict"] * 2)
 
+    def test_translations_allow_joiners_between_letters_in_direct_and_bulk_writes(self):
+        persian = "می\u200cخواهم"
+        translated = self.store.set_category_translation(
+            "owner", category_id=self.food["id"], lang="fa", name=persian)
+        self.assertEqual(translated["name"], persian)
+        key = {"account_id": self.accounts["a"], "entry_reference": "debit"}
+        indic = "\u0995\u200d\u09b7"
+        label = self.store.set_label_translation("owner", **key, lang="bn", label=indic)
+        self.assertEqual(label["label"], indic)
+
+        bulk_persian = "کتاب\u200cها"
+        results = self.store.import_translations("owner", entries=[
+            {"kind": "category", "category_id": self.other["id"], "lang": "fa", "name": bulk_persian},
+            {"kind": "label", **key, "lang": "fa", "label": persian},
+        ])
+        self.assertEqual([(row["ok"], row["changed"]) for row in results], [(True, True), (True, True)])
+        self.assertEqual(self.store.set_category_translation(
+            "owner", category_id=self.other["id"], lang="fa", name=bulk_persian)["name"], bulk_persian)
+
+    def test_translation_joiner_placement_and_blocked_hidden_characters(self):
+        for joiner in ("\u200c", "\u200d"):
+            for bad in (joiner + "ab", "ab" + joiner, "a" + joiner * 2 + "b",
+                        "a" + joiner + "1", "1" + joiner + "b"):
+                with self.subTest(joiner=ord(joiner), bad=repr(bad)), self.assertRaises(AnalyticsError):
+                    self.store.set_category_translation(
+                        "owner", category_id=self.food["id"], lang="fa", name=bad)
+
+        blocked = [chr(point) for point in (
+            *range(0x202A, 0x202F), *range(0x2066, 0x206A),
+            0x200B, 0xFEFF, 0x2060, 0x00AD, 0x000A, 0x200E, 0xD800,
+        )]
+        key = {"account_id": self.accounts["a"], "entry_reference": "debit"}
+        for char in blocked:
+            with self.subTest(codepoint=f"U+{ord(char):04X}"):
+                with self.assertRaises(AnalyticsError):
+                    self.store.set_category_translation(
+                        "owner", category_id=self.food["id"], lang="fa", name="a" + char + "b")
+                with self.assertRaises(AnalyticsError):
+                    self.store.set_label_translation("owner", **key, lang="fa", label="a" + char + "b")
+
+        with self.assertRaises(AnalyticsError):
+            self.store.create_category("owner", "Canonical\u200cName")
+        with self.assertRaises(AnalyticsError):
+            self.store.update_category(
+                "owner", self.food["id"], name="Canonical\u200cName", archived=False, expected_version=1)
+        with self.assertRaises(AnalyticsError):
+            self.annotation(kind="expense", label="Canonical\u200cLabel", expected_version=1)
+
     def test_integrity_race_is_reported_as_a_collision(self):
         real_flush = Session.flush
 

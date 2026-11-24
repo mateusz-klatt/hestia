@@ -115,12 +115,18 @@ def _annotation_audit(row):
 
 
 _KEEP_LABEL = object()
+_TRANSLATION_JOINERS = frozenset("\u200c\u200d")
 
 
-def _text(value, limit=80):
-    if (not isinstance(value, str) or len(value) > limit
-            or any(unicodedata.category(char) in ("Cc", "Cf", "Cs") for char in value)):
+def _text(value, limit=80, *, translation=False):
+    if not isinstance(value, str) or len(value) > limit:
         raise AnalyticsError()
+    for index, char in enumerate(value):
+        if unicodedata.category(char) not in ("Cc", "Cf", "Cs"):
+            continue
+        if (not translation or char not in _TRANSLATION_JOINERS or index == 0 or index + 1 == len(value)
+                or not value[index - 1].isalpha() or not value[index + 1].isalpha()):
+            raise AnalyticsError()
     normalized = unicodedata.normalize("NFC", value.strip())
     if not normalized or len(normalized) > limit:
         raise AnalyticsError()
@@ -407,7 +413,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
 
     def _set_category_translation(self, session, owner, category_id, lang, name):
         lang = self._translation_language(lang)
-        name = " ".join(_text(name).split())
+        name = " ".join(_text(name, translation=True).split())
         self._owned(session, Category, owner, category_id)
         key = name.casefold()
         canonical = session.scalar(select(Category.id).where(
@@ -456,9 +462,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
 
     def _set_label_translation(self, session, owner, account_id, entry_reference, lang, label):
         lang = self._translation_language(lang)
-        label = clean_one_off_label(label)
-        if label is None:
-            raise AnalyticsError()
+        label = _text(label, translation=True)
         self._owned_label(session, owner, account_id, entry_reference, require_label=True)
         key = (account_id, entry_reference, lang)
         row = session.get(LabelTranslation, key)
