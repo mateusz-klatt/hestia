@@ -108,9 +108,9 @@ ProxyAddHeaders On
 
 `mod_remoteip` restores the client address before proxying. The `RequestHeader` directive strips incoming `X-Forwarded-For`, and `ProxyAddHeaders` builds the forwarded header from Apache's restored address. Use the normal request-header phase for this removal so it follows address restoration. Without the trusted loopback setting and client-address restoration, pairing traffic collapses into one per-IP bucket. [Apache remote-IP documentation](https://httpd.apache.org/docs/2.4/mod/mod_remoteip.html), [Apache proxy headers](https://httpd.apache.org/docs/2.4/mod/mod_proxy.html#proxyaddheaders)
 
-## Gmail invoice import (receipts v1d-a)
+## Gmail invoice import (receipts v1d-a and v1d-b)
 
-Default off (`HESTIA_BUDGET_GMAIL_IMPORT_ENABLED` unset). Invoice HTML/plain text is parsed only by the isolated `receipt-parser` service (`network_mode: none`, read-only root, `cap_drop: ALL`, `no-new-privileges`, UID 1000, 256 MiB / 32 pids / 0.5 CPU, noexec tmpfs). It is behind the compose profile `receipt-parser`, so an ordinary Hestia deploy does not start it. Hestia never falls back to in-process parsing: with the flag on and the service down, the Gmail routes return `503 budget_receipt_gmail_parser_unavailable` and no Gmail call is made.
+Default off (`HESTIA_BUDGET_GMAIL_IMPORT_ENABLED` unset). The isolated `receipt-parser` service handles invoice HTML, plain text, and PDF attachments (`network_mode: none`, read-only root, `cap_drop: ALL`, `no-new-privileges`, UID 1000, 256 MiB / 32 pids / 0.5 CPU, noexec tmpfs). It is behind the compose profile `receipt-parser`, so an ordinary Hestia deploy does not start it. With the flag on and the service down, the Gmail routes return `503 budget_receipt_gmail_parser_unavailable` before contacting Gmail.
 
 The service reads all three files through `config._read_secret`. Each must be a regular file owned by container UID 1000 with mode `0400` or `0600`. Symlinks are rejected.
 
@@ -143,5 +143,7 @@ Enable, in this order:
 3. Wait until `docker compose ps receipt-parser` reports `healthy`.
 4. Set `HESTIA_BUDGET_GMAIL_IMPORT_ENABLED=1` in `.env` and recreate the `hestia` container.
 5. Smoke: the Gmail status route reports `configured=true`; no import has run yet unless triggered.
+
+For an existing Gmail import deployment, run step 2 after updating Hestia to rebuild the sidecar with PDF support, then verify its health as in step 3.
 
 To roll back, remove the flag from `.env` and recreate `hestia` (Gmail routes return 404 and the poller stops). Then run `docker compose --profile receipt-parser stop receipt-parser`. Disabling Gmail leaves migration `0027` applied. To roll back the Gmail follow-up schema, stop the app and run `downgrade_db(path, "0026")` (this keeps the `0026` category hues). Migration `0027` discards queued Gmail syncs on downgrade and requires any manual-forward receipts and `owner_forward` provenance rows to be removed first. Downgrading below `0026` also drops the category hues, and below `0025` deletes device pairing codes, tokens, and their audit entries.

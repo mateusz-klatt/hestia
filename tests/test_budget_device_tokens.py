@@ -75,6 +75,10 @@ class DeviceTokenStoreTests(unittest.TestCase):
         with self.sessions() as session:
             return list(session.scalars(select(db.BudgetReceiptDeviceToken)))
 
+    def _audits(self):
+        with self.sessions() as session:
+            return list(session.scalars(select(db.BudgetAnalyticsAudit)))
+
     def _absent(self, secret):
         for row in self._codes():
             self.assertRegex(row.code_hmac, r"^[0-9a-f]{64}$")
@@ -164,6 +168,48 @@ class DeviceTokenStoreTests(unittest.TestCase):
         self.assertEqual(self._tokens()[0].last_used_at, self.moment["now"])
         self.store.identify(redeemed["token"], slide=False)
         self.assertEqual(self._tokens()[0].sliding_written_at, self.moment["now"])
+
+    def test_redeem_writes_new_device_audit_only_after_success(self):
+        self.assertIsNone(self.store.redeem("Z" * 8, "Vesta"))
+        expired = self.store.issue_code("alice")
+        self.moment["now"] += device_token.PAIR_TTL
+        self.assertIsNone(self.store.redeem(expired["code"], "Vesta"))
+        self.assertEqual(self._audits(), [])
+
+        issued = self.store.issue_code("alice")
+        redeemed = self.store.redeem(issued["code"], "Vesta")
+        audit, = self._audits()
+        self.assertEqual(
+            (audit.owner, audit.subject_type, audit.subject_id, audit.action, audit.changed_at),
+            ("alice", "receipt_device_token", redeemed["token_id"], device_token.NEW_DEVICE_LOGIN,
+             self.moment["now"]),
+        )
+        self.assertEqual(json.loads(audit.after_json), {"actor": "device:" + redeemed["token_id"]})
+        self.assertIsNone(self.store.redeem(issued["code"], "Vesta"))
+        self.assertEqual([row.id for row in self._audits()], [audit.id])
+
+    def test_redeem_rolls_back_token_and_code_when_audit_insert_fails(self):
+        issued = self.store.issue_code("alice")
+        real_writer = device_token.write_device_audit
+
+        def stage_then_fail(session, *args):
+            real_writer(session, *args)
+            session.flush()
+            raise RuntimeError("synthetic")
+
+        with mock.patch.object(device_token, "write_device_audit", side_effect=stage_then_fail):
+            with self.assertRaises(RuntimeError):
+                self.store.redeem(issued["code"], "Vesta")
+        self.assertEqual(self._tokens(), [])
+        self.assertEqual(self._audits(), [])
+        self.assertIsNone(self._codes()[0].consumed_at)
+
+        redeemed = self.store.redeem(issued["code"], "Vesta")
+        token, = self._tokens()
+        self.assertEqual(token.id, redeemed["token_id"])
+        audit, = self._audits()
+        self.assertEqual((audit.subject_id, audit.action), (redeemed["token_id"], device_token.NEW_DEVICE_LOGIN))
+        self.assertIsNotNone(self._codes()[0].consumed_at)
 
     def test_identify_avoids_writer_lock_for_unknown_debounced_and_revoke_requests(self):
         issued = self.store.issue_code("alice")
@@ -352,7 +398,8 @@ class DeviceTokenStoreTests(unittest.TestCase):
         for _ in range(2):
             self.assertEqual(self.store.revoke("alice", token_id, actor_token_id=token_id), {"ok": True})
         with self.sessions() as session:
-            rows = list(session.scalars(select(db.BudgetAnalyticsAudit)))
+            rows = list(session.scalars(select(db.BudgetAnalyticsAudit).where(
+                db.BudgetAnalyticsAudit.action == "receipt_device_revoke")))
             self.assertIsNone(session.scalar(select(db.Audit)))
         self.assertEqual(len(rows), 1)
         row = rows[0]
@@ -617,6 +664,10 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
             response = await self._redeem(code["code"], name="Shared")
             _status(response, 200)
             newer = await response.json()
+            with self.sessions.begin() as session:
+                for audit in session.scalars(select(db.BudgetAnalyticsAudit).where(
+                        db.BudgetAnalyticsAudit.subject_id == newer["token_id"])):
+                    session.delete(audit)
             replacement = await self._logged_in_device(name="Shared")
             inbox = await self.client.get(analytics_api.PREFIX + "/inbox", headers=self.headers())
             _status(inbox, 200)
@@ -691,16 +742,17 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
                                         db.BudgetAnalyticsAudit.subject_id == row.id)):
                                     session.delete(audit)
                     replacement = await self._logged_in_device(name=name)
+                    rotates = case in ("password", "qr")
                     actions = {row.action for row in self.rows(db.BudgetAnalyticsAudit)
                                if row.subject_id == replacement["token_id"]}
                     self.assertEqual(actions, {device_token.NEW_DEVICE_LOGIN, device_token.DEVICE_ROTATE}
-                                     if case == "password" else {device_token.NEW_DEVICE_LOGIN})
+                                     if rotates else {device_token.NEW_DEVICE_LOGIN})
                     inbox = await self.client.get(analytics_api.PREFIX + "/inbox", headers=self.headers())
                     _status(inbox, 200)
                     alerts = {item["ref"]["token_id"] for item in (await inbox.json())["items"]
                               if item["kind"] == "device_added"}
-                    self.assertEqual(replacement["token_id"] in alerts, case != "password")
-                    if case == "password":
+                    self.assertEqual(replacement["token_id"] in alerts, not rotates)
+                    if rotates:
                         again = await self._logged_in_device(name=name)
                         inbox = await self.client.get(analytics_api.PREFIX + "/inbox", headers=self.headers())
                         self.assertFalse(any(item["ref"].get("token_id") == again["token_id"]
