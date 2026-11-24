@@ -924,27 +924,73 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         state = await response.json()
         self.assertTrue(state["truncated"])
-        self.assertEqual(len(state["instances"]), 1000)
-        self.assertEqual(sorted({item["event_id"] for item in state["instances"]}), ordered_ids[:2])
-        # Only the 2 events within budget parsed RDATE+EXDATE (plus 0 EXDATE calls on out-of-window DTSTART fallbacks).
-        self.assertEqual(parser.call_count, 4)
+        self.assertEqual(len(state["instances"]), 2000)
+        self.assertEqual(sorted({item["event_id"] for item in state["instances"]}), ordered_ids[:4])
+        # Only the 4 events within budget parsed RDATE+EXDATE; remaining 996 were omitted untouched.
+        self.assertEqual(parser.call_count, 8)
 
-        # Verify EXDATE-only events with in-window DTSTART also charge before expansion and stay < 2s.
+        # Verify 10,000 events with 500 later EXDATEs each parse only within budget, omit excess events safely, and cap at 5,000 events.
         exdates = [f"EXDATE:202601{(i % 27) + 2:02d}T{i % 24:02d}{i % 60:02d}00Z" for i in range(500)]
         exdate_events = [
-            {"id": f"ex{i:04d}", "uid": f"ex{i:04d}", "revision": 1, "group_id": "family",
+            {"id": f"ex{i:05d}", "uid": f"ex{i:05d}", "revision": 1, "group_id": "family",
              "payload": {"summary": "Many EXDATEs",
                          "start": {"dateTime": "2026-01-01T09:00:00+00:00", "timeZone": "UTC"},
                          "end": {"dateTime": "2026-01-01T10:00:00+00:00", "timeZone": "UTC"},
-                         "recurrence": exdates}}
-            for i in range(1000)
+                         "recurrence": ["RRULE:FREQ=DAILY", *exdates]}}
+            for i in range(10000)
         ]
         started = time.monotonic()
-        with self.assertLogs("hestia.calendar_sync.instances", level="WARNING"):
-            ex_result = instance_expander.expand_events(exdate_events, date(2026, 1, 1), date(2026, 1, 2))
+        with mock.patch.object(instance_expander, "_property_values", wraps=instance_expander._property_values) as parser:
+            with self.assertLogs("hestia.calendar_sync.instances", level="WARNING"):
+                ex_result = instance_expander.expand_events(exdate_events, date(2026, 1, 1), date(2026, 1, 2))
         self.assertLess(time.monotonic() - started, 2)
         self.assertTrue(ex_result["truncated"])
-        self.assertEqual(len(ex_result["instances"]), 1000)
+        self.assertEqual([item["event_id"] for item in ex_result["instances"]], ["ex00000", "ex00001", "ex00002"])
+        self.assertEqual(parser.call_count, 6)
+
+        # Verify the hard per-request cap (MAX_REQUEST_EVENTS = 5000) stops and truncates even without budget/collector overflow.
+        cap_events = [
+            {"id": f"cap{i:04d}", "uid": f"cap{i:04d}", "revision": 1, "group_id": "family",
+             "payload": {"summary": "Cap check",
+                         "start": {"date": "2026-01-01" if i == 5001 else "2025-12-01"},
+                         "end": {"date": "2026-01-02" if i == 5001 else "2025-12-02"}}}
+            for i in range(5005)
+        ]
+        started = time.monotonic()
+        with self.assertLogs("hestia.calendar_sync.instances", level="WARNING") as cap_logs:
+            cap_result = instance_expander.expand_events(cap_events, date(2026, 1, 1), date(2026, 1, 2))
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(cap_result, {"instances": [], "truncated": True})
+        self.assertIn("5000 event limit", "\n".join(cap_logs.output))
+
+    async def test_instances_codex_1000_etc_gmt5_series_reuse_zone_without_vtimezone(self):
+        from icalendar import Timezone as ICalTimezone
+        from hestia.calendar_sync import events as event_codec
+
+        gmt5_payload = {"summary": "GMT+5 daily",
+                        "start": {"dateTime": "2026-01-01T09:00:00-05:00", "timeZone": "Etc/GMT+5"},
+                        "end": {"dateTime": "2026-01-01T10:00:00-05:00", "timeZone": "Etc/GMT+5"},
+                        "recurrence": ["RRULE:FREQ=DAILY;COUNT=1"]}
+        self._seed_group_events(1000, "gmt5", gmt5_payload)
+        event_codec._vtimezone.cache_clear()
+        started = time.monotonic()
+        with mock.patch.object(ICalTimezone, "from_tzinfo", wraps=ICalTimezone.from_tzinfo) as tz_scan:
+            response = await self.instances("from=2026-01-01&to=2026-01-02")
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(tz_scan.call_count, 0)
+        self.assertEqual(response.status, 200)
+        state = await response.json()
+        self.assertFalse(state["truncated"])
+        self.assertEqual(len(state["instances"]), 1000)
+        self.assertEqual(state["instances"][0]["start"],
+                         {"dateTime": "2026-01-01T09:00:00-05:00", "timeZone": "Etc/GMT+5"})
+        # Serialization to_ical() also builds each TZID VTIMEZONE at most once.
+        started = time.monotonic()
+        with mock.patch.object(ICalTimezone, "from_tzinfo", wraps=ICalTimezone.from_tzinfo) as tz_scan:
+            for index in range(1000):
+                event_codec.to_ical(gmt5_payload, f"u-{index}")
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(tz_scan.call_count, 1)
 
     async def test_instances_codex_1500_yearly_s1_series_use_day_check_budget(self):
         yearly_payload = {"summary": "Yearly 1900",
@@ -1388,7 +1434,7 @@ class CalendarApiContractTests(unittest.TestCase):
         daily = {"start": {"dateTime": "2026-01-01T00:00:00Z", "timeZone": "UTC"},
                  "end": {"dateTime": "2026-01-01T01:00:00Z", "timeZone": "UTC"},
                  "recurrence": ["RRULE:FREQ=DAILY", "RDATE:20260102T000000Z"]}
-        self.assertEqual(instance_expander._replay_upper_bound(daily, end), 503)
+        self.assertEqual(instance_expander._replay_upper_bound(daily, end), 303)
         yearly_s1 = {"start": {"dateTime": "1900-01-01T09:00:00Z", "timeZone": "UTC"},
                      "end": {"dateTime": "1900-01-01T10:00:00Z", "timeZone": "UTC"},
                      "recurrence": ["RRULE:FREQ=YEARLY"]}
@@ -1398,7 +1444,7 @@ class CalendarApiContractTests(unittest.TestCase):
         )
         comma_rdate = {"start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
                        "recurrence": ["RDATE;VALUE=DATE:20260102,20260103"]}
-        self.assertEqual(instance_expander._replay_upper_bound(comma_rdate, end), 1000)
+        self.assertEqual(instance_expander._replay_upper_bound(comma_rdate, end), 600)
         self.assertEqual(
             instance_expander._property_values({"recurrence": ["RDATE;TZID=Europe/Warsaw:20260101T090000"]}, "RDATE"),
             [datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)],
