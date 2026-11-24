@@ -1773,7 +1773,7 @@ export interface paths {
         };
         /**
          * Concrete calendar occurrences in a half-open date window
-         * @description Requires viewer. Expands RRULE/RDATE, applies moved or modified exceptions, and omits EXDATE and every cancelled occurrence. The window is [from, to), from is inclusive, to is exclusive, and its duration cannot exceed 92 days. Instances are sorted by start and capped at 2000. Disabled synchronization returns 200 with enabled=false and empty groups and instances.
+         * @description Requires viewer. Expands RRULE/RDATE, applies moved or modified exceptions, and omits EXDATE and every cancelled occurrence. The window is [from, to) at local midnights in tz (default UTC), from is inclusive, to is exclusive, and its duration cannot exceed 92 days. Instances are sorted by start and capped at 2000. Disabled synchronization returns 200 with enabled=false and empty groups and instances.
          */
         get: operations["getCalendarInstances"];
         put?: never;
@@ -6593,7 +6593,7 @@ export interface components {
             instances: components["schemas"]["CalendarExpandedInstance"][];
             /**
              * Truncated
-             * @description True when additional matching instances were omitted at the 2000-instance cap.
+             * @description True when matching instances were omitted at the 2000-instance cap or an event could not be fully expanded within compatibility and work limits.
              */
             truncated: boolean;
         };
@@ -15915,6 +15915,8 @@ export interface operations {
                 from: string;
                 /** @description Exclusive window end date (YYYY-MM-DD), matching exclusive CalendarDate end semantics. */
                 to: string;
+                /** @description IANA time zone used to interpret from/to as local midnights. Defaults to UTC; aliases resolve through the server's canonical timezone helpers. */
+                tz?: string;
                 /** @description Selected configured group; defaults to the first group. */
                 group?: string;
             };

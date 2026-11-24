@@ -15,7 +15,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from pydantic import ValidationError
 
 from hestia import api_contract, auth, db, store_sql, web
-from hestia.calendar_sync import api
+from hestia.calendar_sync import api, instances as instance_expander
 from hestia.calendar_sync.config import ConfigError
 from hestia.calendar_sync.store import CalendarConflict
 
@@ -398,6 +398,144 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
                 instances = state["instances"]
                 self.assertEqual([(item["group"], item["event_id"]) for item in instances], [expected])
 
+    async def test_instances_seek_old_unbounded_rules_near_the_window(self):
+        await self.create({"summary": "Ancient", "start": {"date": "0001-01-01"}, "end": {"date": "0001-01-02"},
+                           "recurrence": ["RRULE:FREQ=DAILY"]})
+        with mock.patch.object(instance_expander, "WORK_LIMIT", 100):
+            response = await self.instances("from=2026-01-01&to=2026-01-04")
+        self.assertEqual(response.status, 200)
+        state = await response.json()
+        self.assertEqual([item["start"]["date"] for item in state["instances"]],
+                         ["2026-01-01", "2026-01-02", "2026-01-03"])
+        self.assertFalse(state["truncated"])
+
+    async def test_instances_work_budget_is_finite_and_marks_truncation(self):
+        exceptions = [{"originalStartTime": {"date": f"2026-01-{day:02d}"}, "status": "cancelled"}
+                      for day in range(1, 21)]
+        await self.create({"summary": "Excluded", "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
+                           "recurrence": ["RRULE:FREQ=DAILY"], "exceptions": exceptions})
+        with mock.patch.object(instance_expander, "WORK_LIMIT", 5):
+            with self.assertLogs("hestia.calendar_sync.instances", level="WARNING") as logs:
+                response = await self.instances("from=2026-01-01&to=2026-01-21")
+        self.assertEqual(response.status, 200)
+        state = await response.json()
+        self.assertEqual(state["instances"], [])
+        self.assertTrue(state["truncated"])
+        self.assertIn("work budget", "\n".join(logs.output))
+
+    async def test_instances_filter_exceptions_before_membership_checks(self):
+        await self.create({"summary": "Base", "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
+                           "recurrence": ["RRULE:FREQ=DAILY;COUNT=1"], "exceptions": [
+                               {"originalStartTime": {"date": "2000-01-01"}, "status": "cancelled"},
+                               {"originalStartTime": {"date": "2000-01-02"}, "summary": "Outside",
+                                "start": {"date": "2025-01-01"}, "end": {"date": "2025-01-02"}}]})
+        with mock.patch.object(instance_expander, "_contains", side_effect=AssertionError("membership replay")):
+            response = await self.instances("from=2026-01-01&to=2026-01-02")
+        self.assertEqual(response.status, 200)
+        self.assertEqual([item["summary"] for item in (await response.json())["instances"]], ["Base"])
+
+    async def test_instances_cancelled_master_skips_rule_iteration(self):
+        await self.create({"summary": "Cancelled", "status": "cancelled",
+                           "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
+                           "recurrence": ["RRULE:FREQ=SECONDLY"]})
+        with mock.patch.object(instance_expander, "rrulestr", side_effect=AssertionError("rule replay")):
+            response = await self.instances("from=2026-01-01&to=2026-01-02")
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["instances"], [])
+
+    async def test_instances_skip_spring_gaps_and_deduplicate_instants(self):
+        await self.create({"summary": "Gap",
+                           "start": {"dateTime": "2026-03-28T02:30:00+01:00", "timeZone": "Europe/Warsaw"},
+                           "end": {"dateTime": "2026-03-28T03:30:00+01:00", "timeZone": "Europe/Warsaw"},
+                           "recurrence": ["RRULE:FREQ=DAILY;COUNT=3", "RDATE:20260329T013000Z"]})
+        await self.create({"summary": "Until gap",
+                           "start": {"dateTime": "2026-03-29T01:30:00+01:00", "timeZone": "Europe/Warsaw"},
+                           "end": {"dateTime": "2026-03-29T01:45:00+01:00", "timeZone": "Europe/Warsaw"},
+                           "recurrence": ["RRULE:FREQ=MINUTELY;INTERVAL=30;UNTIL=20260329T011500Z"]})
+        response = await self.instances("from=2026-03-28&to=2026-04-01")
+        instances = (await response.json())["instances"]
+        by_summary = {}
+        for item in instances:
+            by_summary.setdefault(item["summary"], []).append(item["start"]["dateTime"])
+        self.assertEqual(by_summary["Gap"], ["2026-03-28T02:30:00+01:00", "2026-03-29T03:30:00+02:00",
+                                             "2026-03-30T02:30:00+02:00", "2026-03-31T02:30:00+02:00"])
+        self.assertEqual(by_summary["Until gap"], ["2026-03-29T01:30:00+01:00", "2026-03-29T03:00:00+02:00"])
+        identifiers = [item["instance_id"] for item in instances]
+        self.assertEqual(len(identifiers), len(set(identifiers)))
+
+    async def test_instances_fall_back_rdates_keep_distinct_utc_identities(self):
+        event = await self.create({"summary": "Fold",
+                                   "start": {"dateTime": "2026-10-24T09:00:00+02:00", "timeZone": "Europe/Warsaw"},
+                                   "end": {"dateTime": "2026-10-24T10:00:00+02:00", "timeZone": "Europe/Warsaw"},
+                                   "recurrence": ["RDATE:20261025T003000Z", "RDATE:20261025T013000Z",
+                                                  "EXDATE:20261025T003000Z"], "exceptions": [
+                                       {"originalStartTime": {"dateTime": "2026-10-25T01:30:00Z"},
+                                        "summary": "Fold override",
+                                        "start": {"dateTime": "2026-10-25T04:00:00+01:00", "timeZone": "Europe/Warsaw"},
+                                        "end": {"dateTime": "2026-10-25T05:00:00+01:00", "timeZone": "Europe/Warsaw"}}]})
+        response = await self.instances("from=2026-10-25&to=2026-10-26")
+        instances = (await response.json())["instances"]
+        self.assertEqual(len(instances), 1)
+        self.assertEqual(instances[0]["summary"], "Fold override")
+        self.assertEqual(instances[0]["recurrence_id"],
+                         {"dateTime": "2026-10-25T02:30:00+01:00", "timeZone": "Europe/Warsaw"})
+        self.assertEqual(instances[0]["instance_id"], event["id"] + "/2026-10-25T01:30:00+00:00")
+
+    async def test_instances_date_rules_ignore_time_selectors_before_count(self):
+        await self.create({"summary": "Dates", "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
+                           "recurrence": ["RRULE:FREQ=DAILY;BYHOUR=0,12;COUNT=3"]})
+        response = await self.instances("from=2026-01-01&to=2026-01-05")
+        instances = (await response.json())["instances"]
+        self.assertEqual([item["start"]["date"] for item in instances],
+                         ["2026-01-01", "2026-01-02", "2026-01-03"])
+        self.assertEqual(len({item["instance_id"] for item in instances}), 3)
+
+    async def test_instances_empty_window_excludes_spanning_event(self):
+        await self.create({"summary": "Spanning", "start": {"date": "2025-12-31"}, "end": {"date": "2026-01-02"}})
+        response = await self.instances("from=2026-01-01&to=2026-01-01")
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["instances"], [])
+
+    async def test_instances_clamp_extreme_date_lookback_and_ends(self):
+        await self.create({"summary": "Minimum", "start": {"date": "0001-01-01"}, "end": {"date": "0001-01-02"},
+                           "recurrence": ["RRULE:FREQ=DAILY;COUNT=1"]})
+        await self.create({"summary": "Maximum", "start": {"date": "9999-12-30"}, "end": {"date": "9999-12-31"},
+                           "recurrence": ["RRULE:FREQ=DAILY;COUNT=2"]})
+        response = await self.instances("from=0001-01-01&to=0001-01-02")
+        self.assertEqual(response.status, 200)
+        self.assertEqual([item["summary"] for item in (await response.json())["instances"]], ["Minimum"])
+        response = await self.instances("from=9999-12-30&to=9999-12-31")
+        self.assertEqual(response.status, 200)
+        self.assertEqual([item["summary"] for item in (await response.json())["instances"]], ["Maximum"])
+
+    async def test_instances_incompatible_rule_does_not_fail_group(self):
+        incompatible = await self.create({"summary": "Leap second",
+                                          "start": {"dateTime": "2026-01-01T09:00:00Z", "timeZone": "UTC"},
+                                          "end": {"dateTime": "2026-01-01T10:00:00Z", "timeZone": "UTC"},
+                                          "recurrence": ["RRULE:FREQ=DAILY;BYSECOND=60;COUNT=2"]})
+        healthy = await self.create({"summary": "Healthy", "start": {"date": "2026-01-02"}, "end": {"date": "2026-01-03"}})
+        with self.assertLogs("hestia.calendar_sync.instances", level="WARNING") as logs:
+            response = await self.instances("from=2026-01-01&to=2026-01-03")
+        self.assertEqual(response.status, 200)
+        state = await response.json()
+        self.assertEqual([(item["event_id"], item["summary"]) for item in state["instances"]],
+                         [(incompatible["id"], "Leap second"), (healthy["id"], "Healthy")])
+        self.assertTrue(state["truncated"])
+        self.assertTrue(any(incompatible["id"] in line for line in logs.output))
+
+    async def test_instances_timezone_parameter_uses_local_midnights(self):
+        event = await self.create({"summary": "Local midnight",
+                                   "start": {"dateTime": "2026-01-02T00:30:00+01:00", "timeZone": "Europe/Warsaw"},
+                                   "end": {"dateTime": "2026-01-02T00:30:00+01:00", "timeZone": "Europe/Warsaw"}})
+        response = await self.instances("from=2026-01-02&to=2026-01-03")
+        self.assertEqual((await response.json())["instances"], [])
+        response = await self.instances("from=2026-01-02&to=2026-01-03&tz=Europe/Warsaw")
+        self.assertEqual(response.status, 200)
+        self.assertEqual([item["event_id"] for item in (await response.json())["instances"]], [event["id"]])
+        response = await self.instances("from=2026-01-02&to=2026-01-03&tz=Invalid/Unknown")
+        self.assertEqual(response.status, 400)
+        self.assertEqual(await response.json(), {"error": "invalid_calendar_event"})
+
 
 class CalendarApiContractTests(unittest.TestCase):
     def test_contract_requests_and_optimistic_revision_shape(self):
@@ -434,6 +572,9 @@ class CalendarApiContractTests(unittest.TestCase):
         self.assertTrue(parameters["to"]["required"])
         self.assertIn("Inclusive", parameters["from"]["description"])
         self.assertIn("Exclusive", parameters["to"]["description"])
+        self.assertNotIn("required", parameters["tz"])
+        self.assertEqual(parameters["tz"]["schema"]["default"], "UTC")
+        self.assertIn("local midnights", parameters["tz"]["description"])
         self.assertNotIn("required", parameters["group"])
         schema = document["components"]["schemas"]["CalendarExpandedInstance"]
         self.assertEqual(set(schema["required"]), {"instance_id", "event_id", "revision", "group", "summary", "location",

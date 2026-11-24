@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date
+from zoneinfo import ZoneInfo
 
 from aiohttp import web
 
@@ -10,11 +11,16 @@ from ..db import init_db
 from .config import ConfigError, load_config
 from .instances import expand_events
 from .store import CalendarConflict, SyncStore
+from .time_zones import canonical_zone
 
 PATH = "/api/calendars"
 INSTANCES_PATH = PATH + "/instances"
 EVENTS_PATH = PATH + "/events"
 DELETE_PATH = EVENTS_PATH + "/delete"
+
+
+class _UnknownCalendarGroup(ValueError):
+    pass
 
 
 def _store():
@@ -49,19 +55,26 @@ def _window(query):
             raise ValueError("Calendar dates must use YYYY-MM-DD")
         if first > last or (last - first).days > 92:
             raise ValueError("Calendar window cannot exceed 92 days")
-        return first, last
+        zone_name = query.get("tz", "UTC")
+        ZoneInfo(zone_name)
+        zone_name = canonical_zone(zone_name)
+        ZoneInfo(zone_name)
+        return first, last, zone_name
     except (KeyError, ValueError, OverflowError) as exc:
         raise ValueError("Invalid calendar window") from exc
 
 
-def _read_instances(group, window_start, window_end):
+def _read_instances(group, window_start, window_end, zone_name):
     store = _store()
     if store is None:
         return {"enabled": False, "groups": [], "truncated": False, "instances": []}
     groups = store.groups()
     selected = group or (groups[0]["id"] if groups else None)
-    events = store.list_events(selected) if selected is not None else []
-    result = expand_events(events, window_start, window_end)
+    try:
+        events = store.list_events(selected) if selected is not None else []
+    except ValueError as exc:
+        raise _UnknownCalendarGroup from exc
+    result = expand_events(events, window_start, window_end, zone_name)
     return {"enabled": True, "groups": groups, "truncated": result["truncated"], "instances": result["instances"]}
 
 
@@ -105,15 +118,15 @@ def register(app, read_json_body):
 
     async def instances(request):
         try:
-            window_start, window_end = _window(request.query)
+            window_start, window_end, zone_name = _window(request.query)
         except ValueError:
             return web.json_response({"error": "invalid_calendar_event"}, status=400)
         try:
-            result = await asyncio.to_thread(_read_instances, request.query.get("group"), window_start, window_end)
+            result = await asyncio.to_thread(_read_instances, request.query.get("group"), window_start, window_end, zone_name)
             return web.json_response(result)
         except (ConfigError, CalendarConflict):
             return web.json_response({"error": "calendar_configuration_invalid"}, status=503)
-        except ValueError:
+        except _UnknownCalendarGroup:
             return web.json_response({"error": "unknown_calendar_group"}, status=400)
 
     async def write(request):

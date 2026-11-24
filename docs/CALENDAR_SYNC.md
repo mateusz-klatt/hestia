@@ -195,9 +195,11 @@ CLI tworzy nowe wydarzenie przy każdym osobnym wywołaniu `put` bez `--event`.
 wystąpienia dla natywnego klienta, który nie musi interpretować reguł RFC 5545.
 Parametry `from` i `to` są wymagane, w formacie `YYYY-MM-DD`; zakres jest półotwarty
 `[from, to)`: początek jest włączony, a koniec wyłączony jak `end.date`. Może mieć
-najwyżej 92 dni; równe daty dają pusty zakres. Opcjonalny `group` działa jak w
-`GET /api/calendars`, czyli bez parametru wybiera pierwszą skonfigurowaną grupę.
-Odczyt wymaga roli `viewer` i obsługuje natywną sesję `Authorization: Bearer`.
+najwyżej 92 dni; równe daty dają pusty zakres. Opcjonalny `tz` przyjmuje strefę IANA
+(domyślnie `UTC`) i określa lokalne północe graniczne, np. `tz=Europe/Warsaw`;
+aliasy są rozpoznawane przez istniejący mechanizm kanonizacji stref. Opcjonalny `group`
+działa jak w `GET /api/calendars`, czyli bez parametru wybiera pierwszą skonfigurowaną
+grupę. Odczyt wymaga roli `viewer` i obsługuje natywną sesję `Authorization: Bearer`.
 
 Odpowiedź `{"enabled": bool, "groups": [{"id": ...}], "truncated": bool,
 "instances": [...]}` jest posortowana według początku. `groups` jest identyczne jak
@@ -217,8 +219,9 @@ Rozwijane są `RRULE` i `RDATE`, pomijane `EXDATE` oraz wszystkie odwołane wyst
 zmieniony wyjątek zastępuje swoje pierwotne wystąpienie. Uwzględniane są także
 wystąpienia zaczynające się przed oknem, ale nachodzące na nie. Daty całodniowe
 pozostają datami, a godziny zachowują strefę IANA przez zmianę czasu. Odpowiedź jest
-ograniczona do 2000 najwcześniejszych wystąpień; dalsze pominięcie sygnalizuje
-`truncated: true`.
+ograniczona do 2000 najwcześniejszych wystąpień. `truncated: true` sygnalizuje także
+niepełne rozwinięcie po przekroczeniu budżetu pracy albo pominięcie niezgodnej reguły;
+takie zdarzenie jest raportowane w dzienniku serwera i nie blokuje pozostałych.
 
 Nieprawidłowa data, odwrócony zakres lub zakres dłuższy niż 92 dni zwraca `400`
 z `{"error": "invalid_calendar_event"}`. Nieznana grupa zwraca `400` z
