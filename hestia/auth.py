@@ -328,28 +328,42 @@ def save_user_json(username: str, password_hash: str, path: "Path | None" = None
 
 _USAGE = ("usage: python -m hestia.auth add <username> [--role admin|operator|viewer]\n"
           "       python -m hestia.auth role <username> <admin|operator|viewer>\n"
-          "       python -m hestia.auth disable|enable <username>")
+          "       python -m hestia.auth disable|enable <username>\n"
+          "       python -m hestia.auth activate-sessions-v2\n"
+          "       python -m hestia.auth budget-owner <username>")
+_PHASE_INCOMPATIBLE_ERROR = "refused: incompatible authorization bridge phase in database"
+
+
+def _call_sqlite_cli(fn) -> int:
+    """Execute a SQLite-backed CLI action and translate unsupported bridge phases to exit 1."""
+    from . import authz, store_sql
+
+    try:
+        return fn(store_sql)
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        print(_PHASE_INCOMPATIBLE_ERROR, file=sys.stderr)
+        return 1
 
 
 def _cli(argv: list, *, prompt=getpass.getpass, path: "Path | None" = None) -> int:
-    """``add <username> [--role …]`` — prompt a password (twice), hash it, and upsert the user into the
-    AUTHORITATIVE store: the SQLite DB when it owns users (HESTIA_PERSIST=sqlite and the users table is
-    cut over), else the JSON file. ``role <username> <role>`` — change an existing user's role (SQLite
-    only). A test ``path`` forces the JSON file (and keeps this module import-clean of the DB layer in
-    JSON mode — ``store_sql`` is imported only on the SQLite branches)."""
-    if argv[:1] == ["role"]:
+    """CLI entry point for local user management and authorization bridge controls."""
+    cmd = argv[:1]
+    if cmd == ["role"]:
         return _cli_role(argv[1:])
-    if argv[:1] == ["disable"] or argv[:1] == ["enable"]:
+    if cmd == ["disable"] or cmd == ["enable"]:
         return _cli_disable(argv[0], argv[1:])
-    if argv[:1] != ["add"]:
+    if cmd == ["activate-sessions-v2"]:
+        return _cli_activate_sessions_v2(argv[1:])
+    if cmd == ["budget-owner"]:
+        return _cli_budget_owner(argv[1:])
+    if cmd != ["add"]:
         print(_USAGE, file=sys.stderr)
         return 2
     return _cli_add(argv[1:], prompt=prompt, path=path)
 
 
 def _cli_disable(command: str, args: list) -> int:
-    """``disable|enable <username>`` — flip a user's account on/off (SQLite users-authoritative only).
-    Refuses to disable the only enabled admin (lockout guard)."""
+    """``disable|enable <username>`` — flip a user's account on/off (SQLite users-authoritative only)."""
     if len(args) != 1:
         print(f"usage: python -m hestia.auth {command} <username>", file=sys.stderr)
         return 2
@@ -357,19 +371,22 @@ def _cli_disable(command: str, args: list) -> int:
     if os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
         print("disable/enable require the SQLite backend (HESTIA_PERSIST=sqlite)", file=sys.stderr)
         return 1
-    from . import store_sql
-    if not store_sql.users_db_authoritative():
-        print("disable/enable require the SQLite users store (users not yet cut over)", file=sys.stderr)
-        return 1
-    outcome = store_sql.set_user_disabled(username, command == "disable")
-    if outcome == "not_found":
-        print(f"no such user {username!r}", file=sys.stderr)
-        return 1
-    if outcome == "last_admin":
-        print(f"refused: {username!r} is the only enabled admin (would lock everyone out)", file=sys.stderr)
-        return 1
-    print(f"{command}d user {username!r}")
-    return 0
+
+    def _run(store_sql) -> int:
+        if not store_sql.users_db_authoritative():
+            print("disable/enable require the SQLite users store (users not yet cut over)", file=sys.stderr)
+            return 1
+        outcome = store_sql.set_user_disabled(username, command == "disable")
+        if outcome == "not_found":
+            print(f"no such user {username!r}", file=sys.stderr)
+            return 1
+        if outcome == "last_admin":
+            print(f"refused: {username!r} is the only enabled admin (would lock everyone out)", file=sys.stderr)
+            return 1
+        print(f"{command}d user {username!r}")
+        return 0
+
+    return _call_sqlite_cli(_run)
 
 
 def _parse_add_args(args: list) -> "tuple[str | None, str | None, str | None]":
@@ -409,17 +426,19 @@ def _cli_add(args: list, *, prompt, path: "Path | None") -> int:
         return 1
     password_hash = hash_password(first)
     if path is None and os.environ.get("HESTIA_PERSIST", "json").lower() == "sqlite":
-        from . import store_sql
-        if store_sql.users_db_authoritative():
+        def _run(store_sql) -> "int | None":
+            if not store_sql.users_db_authoritative():
+                return None
             if role is not None and role not in store_sql.ROLE_RANK:
                 print(f"invalid role {role!r} (use admin, operator or viewer)", file=sys.stderr)
                 return 2
-            # explicit --role wins; a bare password reset preserves the existing role; a brand-new
-            # account defaults to the least-privilege viewer.
-            effective = role or store_sql.get_user_db_role(username) or store_sql.DEFAULT_NEW_ROLE
-            store_sql.set_user_db(username, password_hash, effective)
+            effective = store_sql.set_user_db(username, password_hash, role)
             print(f"saved user {username!r} (role {effective!r}) to the SQLite DB")
             return 0
+
+        result = _call_sqlite_cli(_run)
+        if result is not None:
+            return result
     target = save_user_json(username, password_hash, path)
     note = " (roles need the SQLite backend; saved without one)" if role is not None else ""
     print(f"saved user {username!r} to {target}{note}")
@@ -434,23 +453,88 @@ def _cli_role(args: list) -> int:
     if os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
         print("roles require the SQLite backend (HESTIA_PERSIST=sqlite)", file=sys.stderr)
         return 1
-    from . import store_sql
-    if not store_sql.users_db_authoritative():
-        print("roles require the SQLite users store (users not yet cut over)", file=sys.stderr)
-        return 1
-    if role not in store_sql.ROLE_RANK:
-        print(f"invalid role {role!r} (use admin, operator or viewer)", file=sys.stderr)
+
+    def _run(store_sql) -> int:
+        if not store_sql.users_db_authoritative():
+            print("roles require the SQLite users store (users not yet cut over)", file=sys.stderr)
+            return 1
+        if role not in store_sql.ROLE_RANK:
+            print(f"invalid role {role!r} (use admin, operator or viewer)", file=sys.stderr)
+            return 2
+        outcome = store_sql.set_user_role(username, role)
+        if outcome == "not_found":
+            print(f"no such user {username!r}", file=sys.stderr)
+            return 1
+        if outcome == "last_admin":
+            print(f"refused: {username!r} is the only enabled admin (demoting it would lock everyone out)",
+                  file=sys.stderr)
+            return 1
+        print(f"set {username!r} role to {role!r}")
+        return 0
+
+    return _call_sqlite_cli(_run)
+
+
+def _cli_activate_sessions_v2(args: list) -> int:
+    """``activate-sessions-v2`` — persist ``auth_session_phase=v2`` under a write lock."""
+    if args:
+        print("usage: python -m hestia.auth activate-sessions-v2", file=sys.stderr)
         return 2
-    outcome = store_sql.set_user_role(username, role)
-    if outcome == "not_found":
-        print(f"no such user {username!r}", file=sys.stderr)
+    if os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
+        print("activate-sessions-v2 requires the SQLite backend (HESTIA_PERSIST=sqlite)", file=sys.stderr)
         return 1
-    if outcome == "last_admin":
-        print(f"refused: {username!r} is the only enabled admin (demoting it would lock everyone out)",
+    if not os.environ.get("HESTIA_SESSION_SECRET"):
+        print("activate-sessions-v2 requires configured session authentication (HESTIA_SESSION_SECRET)",
               file=sys.stderr)
         return 1
-    print(f"set {username!r} role to {role!r}")
-    return 0
+
+    def _run(store_sql) -> int:
+        outcome = store_sql.activate_sessions_v2()
+        if outcome == "users_not_authoritative":
+            print("activate-sessions-v2 requires the SQLite users store (users not yet cut over)",
+                  file=sys.stderr)
+            return 1
+        if outcome == "already_active":
+            print("sessions v2 already active")
+            return 0
+        print("activated sessions v2")
+        return 0
+
+    return _call_sqlite_cli(_run)
+
+
+def _cli_budget_owner(args: list) -> int:
+    """``budget-owner <username>`` — provision an enabled admin as a budget owner."""
+    if len(args) != 1:
+        print("usage: python -m hestia.auth budget-owner <username>", file=sys.stderr)
+        return 2
+    username = args[0]
+    if not username or "|" in username or "/" in username:
+        print("invalid username (no empty, '|' or '/')", file=sys.stderr)
+        return 2
+    if os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
+        print("budget-owner requires the SQLite backend (HESTIA_PERSIST=sqlite)", file=sys.stderr)
+        return 1
+
+    def _run(store_sql) -> int:
+        outcome = store_sql.provision_budget_owner(username)
+        errors = {
+            "users_not_authoritative": "budget-owner requires the SQLite users store (users not yet cut over)",
+            "not_found": f"no such user {username!r}",
+            "disabled": f"refused: user {username!r} is disabled",
+            "not_admin": f"refused: user {username!r} must have the admin role",
+            "conflict": f"refused: user {username!r} already targets another budget owner",
+        }
+        if outcome in errors:
+            print(errors[outcome], file=sys.stderr)
+            return 1
+        if outcome == "already_provisioned":
+            print(f"user {username!r} is already a budget owner")
+            return 0
+        print(f"provisioned {username!r} as budget owner")
+        return 0
+
+    return _call_sqlite_cli(_run)
 
 
 if __name__ == "__main__":  # pragma: no cover

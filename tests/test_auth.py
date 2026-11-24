@@ -452,6 +452,63 @@ class CliSqliteTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"HESTIA_DB": str(other)}):
             self.assertEqual(auth._cli(["disable", "tata"]), 1)
 
+    def test_add_falls_back_to_json_when_sqlite_users_not_cut_over(self):
+        other = self.dir / "fresh_add.db"
+        json_users = self.dir / "users.json"
+        with mock.patch.dict(
+            os.environ,
+            {"HESTIA_DB": str(other), "HESTIA_AUTH_USERS_FILE": str(json_users)},
+        ):
+            db.init_db(other)
+            self.assertEqual(auth._cli(["add", "kid"], prompt=_Prompt("pw", "pw")), 0)
+        self.assertIn("kid", json.loads(json_users.read_text(encoding="utf-8")))
+
+    def test_activate_sessions_v2_cli(self):
+        self.assertEqual(auth._cli(["activate-sessions-v2", "extra"]), 2)
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json"}):
+            self.assertEqual(auth._cli(["activate-sessions-v2"]), 1)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HESTIA_SESSION_SECRET", None)
+            self.assertEqual(auth._cli(["activate-sessions-v2"]), 1)
+        other = self.dir / "fresh_v2.db"
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(other), "HESTIA_SESSION_SECRET": "secret"}):
+            self.assertEqual(auth._cli(["activate-sessions-v2"]), 1)
+        with mock.patch.dict(os.environ, {"HESTIA_SESSION_SECRET": "secret"}):
+            self.assertEqual(auth._cli(["activate-sessions-v2"]), 0)
+            self.assertEqual(auth._cli(["activate-sessions-v2"]), 0)  # idempotent repeat
+
+    def test_budget_owner_cli(self):
+        self.assertEqual(auth._cli(["budget-owner"]), 2)
+        self.assertEqual(auth._cli(["budget-owner", "bad|name"]), 2)
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json"}):
+            self.assertEqual(auth._cli(["budget-owner", "tata"]), 1)
+        other = self.dir / "fresh_owner.db"
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(other)}):
+            self.assertEqual(auth._cli(["budget-owner", "tata"]), 1)
+        self.assertEqual(auth._cli(["add", "kid", "--role", "viewer"], prompt=_Prompt("pw", "pw")), 0)
+        self.assertEqual(auth._cli(["budget-owner", "ghost"]), 1)
+        self.assertEqual(auth._cli(["budget-owner", "kid"]), 1)
+        self.assertEqual(auth._cli(["budget-owner", "tata"]), 0)
+        self.assertEqual(auth._cli(["budget-owner", "tata"]), 0)  # idempotent repeat
+
+    def test_cli_fails_closed_with_fixed_error_on_unsupported_policy_phase(self):
+        import io
+        engine, _ = db.init_db(self.db)
+        with engine.begin() as conn:
+            conn.exec_driver_sql("INSERT INTO app_meta (key, value) VALUES ('authz_policy_phase', 'catalog_custom')")
+        engine.dispose()
+        with mock.patch.dict(os.environ, {"HESTIA_SESSION_SECRET": "secret"}):
+            for argv, kw in (
+                (["role", "tata", "viewer"], {}),
+                (["disable", "tata"], {}),
+                (["add", "newu"], {"prompt": _Prompt("pw", "pw")}),
+                (["activate-sessions-v2"], {}),
+                (["budget-owner", "tata"], {}),
+            ):
+                with self.subTest(argv=argv), mock.patch("sys.stderr", new_callable=io.StringIO) as buf:
+                    self.assertEqual(auth._cli(argv, **kw), 1)
+                    self.assertIn("incompatible authorization bridge phase", buf.getvalue())
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

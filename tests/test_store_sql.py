@@ -17,8 +17,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from hestia import db, proxy, store_sql
+from hestia import auth, authz, db, proxy, store_sql
 from hestia.automations import AutomationStore, Rule
 from hestia.registry import Registry
 
@@ -940,6 +941,443 @@ class RolesTests(unittest.TestCase):
         self.assertIsNotNone(revoked["disabled"])
         self.assertIsNone(revoked["unchanged"])
         self.assertEqual(consumed, revoked)
+
+
+class AuthorizationBridgeTests(unittest.TestCase):
+    """Tests for PR 1 bridge: session/policy phases, auth state, login snapshot/finish,
+    credential generation & scoped revocation, sync_legacy_grants, and owner provisioning."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.addCleanup(db.reset_engine_cache)
+        self.db = self.dir / "hestia.db"
+        self.users_json = self.dir / "users.json"
+
+    def _set_meta(self, key: str, value: str) -> None:
+        engine, _ = db.init_db(self.db)
+        with Session(engine) as session, session.begin():
+            row = session.get(db.AppMeta, key)
+            if row is None:
+                session.add(db.AppMeta(key=key, value=value))
+            else:
+                row.value = value
+
+    def _grants_of(self, username: str) -> dict[tuple[str, str | None], int]:
+        engine, _ = db.init_db(self.db)
+        with Session(engine) as session:
+            rows = session.execute(
+                select(db.PermissionGrant).where(db.PermissionGrant.username == username)
+            ).scalars().all()
+            return {(r.permission_id, r.target_owner): r.id for r in rows}
+
+    def test_auth_session_phase_and_unsupported_checks(self):
+        engine, _ = db.init_db(self.db)
+        with Session(engine) as session:
+            self.assertEqual(store_sql.auth_session_phase(session), "legacy")
+        self._set_meta("auth_session_phase", "v2")
+        with Session(engine) as session:
+            self.assertEqual(store_sql.auth_session_phase(session), "v2")
+        self._set_meta("auth_session_phase", "v99")
+        with Session(engine) as session:
+            with self.assertRaises(store_sql.SessionPhaseUnsupported):
+                store_sql.auth_session_phase(session)
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            with self.assertRaises(store_sql.SessionPhaseUnsupported):
+                store_sql.check_supported_policy_phase()
+        self._set_meta("auth_session_phase", "v2")
+        self._set_meta("authz_policy_phase", "catalog_compat")
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            self.assertEqual(store_sql.check_supported_policy_phase(), "catalog_compat")
+            self.assertFalse(store_sql.users_db_authoritative())
+            self.assertEqual(store_sql.current_users(users_path=self.users_json), {})
+
+    def test_load_auth_state_backends_and_unsupported_phase(self):
+        self.users_json.write_text(json.dumps({"tata": "hj"}), encoding="utf-8")
+        # Pure JSON mode must never open SQLite.
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json", "HESTIA_AUTH_USERS_FILE": str(self.users_json)}), \
+             mock.patch("hestia.store_sql.init_db", side_effect=AssertionError("opened DB in JSON mode")):
+            state = store_sql.load_auth_state("tata")
+            self.assertEqual(
+                state,
+                store_sql.AuthState(
+                    backend="json",
+                    session_phase="legacy",
+                    policy_phase="legacy",
+                    enabled=True,
+                    role="admin",
+                    generation=0,
+                ),
+            )
+            missing = store_sql.load_auth_state("ghost")
+            self.assertEqual(missing.enabled, False)
+            self.assertIsNone(missing.role)
+
+        # SQLite before users_authoritative falls back to JSON unless phase is unsupported.
+        db.init_db(self.db)
+        with mock.patch.dict(
+            os.environ,
+            {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db), "HESTIA_AUTH_USERS_FILE": str(self.users_json)},
+        ):
+            self._set_meta("auth_session_phase", "v2")
+            fallback = store_sql.load_auth_state("tata")
+            self.assertEqual(fallback.backend, "sqlite_json")
+            self.assertEqual(fallback.session_phase, "legacy")
+            self.assertTrue(fallback.enabled)
+            self.assertEqual(fallback.role, "admin")
+
+            self._set_meta("authz_policy_phase", "catalog_custom")
+            with self.assertRaises(authz.PolicyPhaseUnsupported):
+                store_sql.load_auth_state("tata")
+            self._set_meta("authz_policy_phase", "catalog_compat")
+
+            # Cut over to authoritative SQLite users.
+            engine, _ = db.init_db(self.db)
+            store_sql.cutover_users(engine, {"tata": "h1", "bob": "h2"})
+            store_sql.set_user_db("bob", "h2", "operator")
+            store_sql.set_user_disabled("bob", True)
+            disabled_state = store_sql.load_auth_state("bob")
+            self.assertFalse(disabled_state.enabled)
+            self.assertIsNone(disabled_state.role)
+            self.assertEqual(disabled_state.generation, 0)
+            enabled_state = store_sql.load_auth_state("tata")
+            self.assertTrue(enabled_state.enabled)
+            self.assertEqual(enabled_state.backend, "sqlite")
+            self.assertEqual(enabled_state.session_phase, "v2")
+            self.assertEqual(enabled_state.policy_phase, "catalog_compat")
+            self.assertEqual(enabled_state.role, "admin")
+            self.assertEqual(enabled_state.generation, 0)
+
+    def test_load_login_snapshot_and_finish_sqlite_login_paths(self):
+        self.users_json.write_text(json.dumps({"tata": "json-hash"}), encoding="utf-8")
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json", "HESTIA_AUTH_USERS_FILE": str(self.users_json)}), \
+             mock.patch("hestia.store_sql.init_db", side_effect=AssertionError("opened DB in JSON mode")):
+            snap = store_sql.load_login_snapshot("tata")
+            self.assertEqual(snap.backend, "json")
+            self.assertEqual(snap.password_hash, "json-hash")
+            self.assertIsNone(store_sql.load_login_snapshot(None).password_hash)
+            self.assertIsNone(store_sql.finish_sqlite_login(snap, native=False, now=10.0, secret=b"s"))
+
+        db.init_db(self.db)
+        env = {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db), "HESTIA_AUTH_USERS_FILE": str(self.users_json)}
+        with mock.patch.dict(os.environ, env):
+            fallback_snap = store_sql.load_login_snapshot("tata")
+            self.assertEqual(fallback_snap.backend, "sqlite_json")
+            self.assertEqual(fallback_snap.password_hash, "json-hash")
+
+            engine, _ = db.init_db(self.db)
+            store_sql.cutover_users(engine, {"tata": "db-hash", "admin2": "db-hash2"})
+
+            # Phase off: issues v1 tokens regardless of native flag.
+            snap = store_sql.load_login_snapshot("tata")
+            self.assertIsNone(store_sql.load_login_snapshot("ghost").password_hash)
+            issued_v1 = store_sql.finish_sqlite_login(snap, native=True, now=100.0, secret=b"sec")
+            self.assertEqual(issued_v1.session_phase, "legacy")
+            self.assertEqual(auth.decode_session(issued_v1.token, now=100.0, secret=b"sec").version, 1)
+
+            # Activate sessions v2: issues v2 browser or native token.
+            self.assertEqual(store_sql.activate_sessions_v2(), "activated")
+            self.assertEqual(store_sql.activate_sessions_v2(), "already_active")
+            snap_v2 = store_sql.load_login_snapshot("tata")
+            issued_browser = store_sql.finish_sqlite_login(snap_v2, native=False, now=100.0, secret=b"sec")
+            issued_native = store_sql.finish_sqlite_login(snap_v2, native=True, now=100.0, secret=b"sec")
+            self.assertEqual(issued_browser.session_phase, "v2")
+            self.assertEqual(auth.decode_session(issued_browser.token, now=100.0, secret=b"sec").purpose, "browser")
+            self.assertEqual(auth.decode_session(issued_native.token, now=100.0, secret=b"sec").purpose, "native")
+
+            # Concurrent hash change during scrypt invalidates finish_sqlite_login.
+            snap_stale_hash = store_sql.load_login_snapshot("tata")
+            self.assertTrue(store_sql.set_user_password("tata", "db-hash-new"))
+            self.assertIsNone(store_sql.finish_sqlite_login(snap_stale_hash, native=False, now=100.0, secret=b"sec"))
+
+            # Same hash rewritten (generation bumped) also invalidates snapshot.
+            snap_stale_gen = store_sql.load_login_snapshot("tata")
+            self.assertTrue(store_sql.set_user_password("tata", "db-hash-new"))
+            self.assertIsNone(store_sql.finish_sqlite_login(snap_stale_gen, native=False, now=100.0, secret=b"sec"))
+
+            # Disable during scrypt invalidates finish_sqlite_login.
+            snap_disabled = store_sql.load_login_snapshot("tata")
+            self.assertEqual(store_sql.set_user_disabled("tata", True), "ok")
+            self.assertIsNone(store_sql.finish_sqlite_login(snap_disabled, native=False, now=100.0, secret=b"sec"))
+
+            # Re-enable retains bumped generation and lets fresh login succeed.
+            self.assertEqual(store_sql.set_user_disabled("tata", False), "ok")
+            snap_re = store_sql.load_login_snapshot("tata")
+            self.assertEqual(snap_re.generation, 3)
+
+            # Removal of users_authoritative during scrypt invalidates login.
+            with Session(engine) as session, session.begin():
+                session.delete(session.get(db.AppMeta, "users_authoritative"))
+            self.assertIsNone(store_sql.finish_sqlite_login(snap_re, native=False, now=100.0, secret=b"sec"))
+
+        # Backend switched away from sqlite during scrypt invalidates login.
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json"}):
+            self.assertIsNone(store_sql.finish_sqlite_login(snap_v2, native=False, now=100.0, secret=b"sec"))
+
+    def test_generation_bump_cas_and_scoped_revocation(self):
+        engine, sessions = db.init_db(self.db)
+        store_sql.cutover_users(engine, {"alice": "h1", "bob": "h2", "carol": "h3"})
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            store_sql.set_user_db("bob", "h2", "viewer")
+            store_sql.set_user_db("carol", "h3", "admin")
+
+            # Phase off: password reset and disable leave credential_generation at 0.
+            self.assertTrue(store_sql.set_user_password("bob", "h2b"))
+            self.assertEqual(store_sql.set_user_disabled("bob", True), "ok")
+            self.assertEqual(store_sql.set_user_disabled("bob", False), "ok")
+            with sessions() as s:
+                self.assertEqual(s.get(db.User, "bob").credential_generation, 0)
+
+            # Activate v2 and populate device tokens, pair codes, and native login codes.
+            self.assertEqual(store_sql.activate_sessions_v2(), "activated")
+            now = time.time()
+            with sessions.begin() as s:
+                s.add(db.BudgetReceiptDeviceToken(
+                    id="legacy-self", owner="alice", actor=None, device_name="Old", token_hmac="a" * 64,
+                    created_at=now, sliding_written_at=now, expires_at=now + 60, hard_expires_at=now + 120,
+                ))
+                s.add(db.BudgetReceiptDeviceToken(
+                    id="delegate-bob", owner="alice", actor="bob", device_name="BobVesta", token_hmac="b" * 64,
+                    created_at=now, sliding_written_at=now, expires_at=now + 60, hard_expires_at=now + 120,
+                ))
+                s.add(db.BudgetReceiptDeviceToken(
+                    id="other-alice-delegate", owner="carol", actor="alice", device_name="Ali", token_hmac="c" * 64,
+                    created_at=now, sliding_written_at=now, expires_at=now + 60, hard_expires_at=now + 120,
+                ))
+                s.add(db.BudgetReceiptPairCode(
+                    id="pair-alice", owner="alice", code_hmac="d" * 64, created_at=now, expires_at=now + 60,
+                ))
+                s.add(db.NativeLoginCode(
+                    id="qr-alice", username="alice", code_hmac="e" * 64, generation=0,
+                    created_at=now, expires_at=now + 60,
+                ))
+                s.add(db.NativeLoginCode(
+                    id="qr-bob", username="bob", code_hmac="f" * 64, generation=0,
+                    created_at=now, expires_at=now + 60,
+                ))
+
+            # CAS checks on set_user_password
+            self.assertFalse(store_sql.set_user_password("alice", "hx", expected_hash="wrong"))
+            self.assertFalse(store_sql.set_user_password("alice", "hx", expected_generation=99))
+            self.assertTrue(
+                store_sql.set_user_password("alice", "h1b", expected_hash="h1", expected_generation=0)
+            )
+
+            with sessions() as s:
+                self.assertEqual(s.get(db.User, "alice").credential_generation, 1)
+                self.assertIsNotNone(s.get(db.BudgetReceiptDeviceToken, "legacy-self").revoked_at)
+                self.assertIsNotNone(s.get(db.BudgetReceiptDeviceToken, "other-alice-delegate").revoked_at)
+                # Delegate token on alice's budget owned by bob is preserved on alice password reset!
+                self.assertIsNone(s.get(db.BudgetReceiptDeviceToken, "delegate-bob").revoked_at)
+                self.assertIsNotNone(s.get(db.BudgetReceiptPairCode, "pair-alice").consumed_at)
+                self.assertIsNotNone(s.get(db.NativeLoginCode, "qr-alice").consumed_at)
+                self.assertIsNone(s.get(db.NativeLoginCode, "qr-bob").consumed_at)
+
+            # Disabling alice bumps generation and revokes all owner=alice tokens (including delegate-bob!).
+            self.assertEqual(store_sql.set_user_disabled("alice", True), "ok")
+            with sessions() as s:
+                self.assertEqual(s.get(db.User, "alice").credential_generation, 2)
+                self.assertIsNotNone(s.get(db.BudgetReceiptDeviceToken, "delegate-bob").revoked_at)
+            # Re-disabling an already-disabled user does not bump again; re-enable preserves generation=2.
+            self.assertEqual(store_sql.set_user_disabled("alice", True), "ok")
+            self.assertEqual(store_sql.set_user_disabled("alice", False), "ok")
+            with sessions() as s:
+                self.assertEqual(s.get(db.User, "alice").credential_generation, 2)
+
+    def test_sync_legacy_grants_and_immediate_add_user(self):
+        engine, _ = db.init_db(self.db)
+        store_sql.cutover_users(engine, {"owner": "h1", "op": "h2", "view": "h3"})
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            store_sql.set_user_db("op", "h2", "operator")
+            store_sql.set_user_db("view", "h3", "viewer")
+
+            # Before catalog_compat: sync_legacy_grants and provision leave permission_grants untouched.
+            self.assertEqual(store_sql.provision_budget_owner("owner"), "ok")
+            self.assertEqual(self._grants_of("owner"), {})
+
+            # Populate unrelated custom grant + household row before switching to catalog_compat.
+            with Session(engine) as s, s.begin():
+                s.add(db.PermissionGrant(username="op", permission_id="budget.receipts.add", target_owner="owner"))
+                s.add(db.PermissionGrant(username="view", permission_id="household.view", target_owner="owner"))
+                s.add(db.BudgetHouseholdMember(member_username="op", owner="owner", grant_id="1" * 64))
+
+            self._set_meta("authz_policy_phase", "catalog_compat")
+            # Immediate add_user reconciles grants in catalog_compat and rejects duplicate without overwrite.
+            self.assertEqual(store_sql.add_user("newv", "h4", "viewer"), "ok")
+            self.assertEqual(store_sql.add_user("newv", "h-other", "admin"), "exists")
+            self.assertEqual(set(self._grants_of("newv")), {
+                ("ioc.view", None), ("calendar.view", None), ("system.audit.view", None),
+            })
+
+            # Owner receives 7 installation + 6 self-budget grants; operator receives 5 + unrelated + household.
+            owner_grants = self._grants_of("owner")
+            self.assertEqual(
+                set(owner_grants),
+                {
+                    ("ioc.view", None), ("ioc.control", None), ("ioc.configure", None),
+                    ("calendar.view", None), ("calendar.edit", None),
+                    ("system.audit.view", None), ("system.manage_users", None),
+                    ("budget.view", "owner"), ("budget.edit", "owner"),
+                    ("budget.receipts.add", "owner"), ("budget.receipts.view", "owner"),
+                    ("budget.receipts.edit", "owner"), ("budget.receipts.match", "owner"),
+                },
+            )
+            op_grants = self._grants_of("op")
+            self.assertEqual(
+                set(op_grants),
+                {
+                    ("ioc.view", None), ("ioc.control", None),
+                    ("calendar.view", None), ("calendar.edit", None),
+                    ("system.audit.view", None),
+                    ("budget.receipts.add", "owner"),
+                    ("household.view", "owner"),
+                },
+            )
+            # Stale managed household row for "view" (no BudgetHouseholdMember) was removed!
+            self.assertNotIn(("household.view", "owner"), self._grants_of("view"))
+            # Unrelated delegated grant ID and kept installation IDs stay stable across reconcile/add.
+            kept_receipt_id = op_grants[("budget.receipts.add", "owner")]
+            kept_ioc_id = op_grants[("ioc.control", None)]
+
+            # Disabling keeps stored-role grant projections.
+            self.assertEqual(store_sql.set_user_disabled("op", True), "ok")
+            self.assertEqual(store_sql.set_user_disabled("op", False), "ok")
+            self.assertEqual(self._grants_of("op")[("household.view", "owner")], op_grants[("household.view", "owner")])
+
+            # Role reversal on member ("op" -> "admin") suppresses household.view while preserving metadata & grant_id.
+            self.assertEqual(store_sql.set_user_role("op", "admin"), "ok")
+            self.assertNotIn(("household.view", "owner"), self._grants_of("op"))
+            self.assertNotIn(("budget.view", "op"), self._grants_of("op"))  # role promotion alone does NOT provision!
+            with Session(engine) as s:
+                self.assertEqual(s.get(db.BudgetHouseholdMember, "op").grant_id, "1" * 64)
+            # Restoring member role restores household.view, still preserving unrelated & kept IDs.
+            self.assertEqual(store_sql.set_user_role("op", "operator"), "ok")
+            self.assertEqual(store_sql.set_user_role("op", "operator"), "ok")  # no-op same role
+            self.assertIn(("household.view", "owner"), self._grants_of("op"))
+            self.assertEqual(self._grants_of("op")[("budget.receipts.add", "owner")], kept_receipt_id)
+            self.assertEqual(self._grants_of("op")[("ioc.control", None)], kept_ioc_id)
+
+            # Role reversal on owner ("owner" -> "operator") suppresses owner self-grants and household.view,
+            # leaving owner.budget_owner=True marker suppressed until restored.
+            self.assertEqual(store_sql.add_user("adm2", "h5", "admin"), "ok")
+            self.assertEqual(store_sql.set_user_role("owner", "operator"), "ok")
+            self.assertNotIn(("budget.view", "owner"), self._grants_of("owner"))
+            self.assertNotIn(("household.view", "owner"), self._grants_of("op"))
+            with Session(engine) as s:
+                self.assertEqual(
+                    authz.effective_permissions(s, "owner", owner="owner"),
+                    frozenset(),
+                )
+            # Explicit-role set_user_db restores admin and re-projects grants (with same role no-op branch too).
+            self.assertEqual(store_sql.set_user_db("owner", "h1", "admin"), "admin")
+            self.assertIn(("budget.view", "owner"), self._grants_of("owner"))
+            self.assertIn(("household.view", "owner"), self._grants_of("op"))
+            self.assertEqual(store_sql.set_user_db("owner", "h1b", "admin"), "admin")
+
+    def test_provision_budget_owner_guards_conflicts_and_idempotency(self):
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            db.init_db(self.db)
+            self.assertEqual(store_sql.provision_budget_owner("alice"), "users_not_authoritative")
+            engine, _ = db.init_db(self.db)
+            store_sql.cutover_users(
+                engine,
+                {"alice": "h1", "admin2": "h2", "dis_adm": "h3", "op": "h4", "dorm": "h5", "del": "h6"},
+            )
+            store_sql.set_user_db("dis_adm", "h3", "admin")
+            store_sql.set_user_disabled("dis_adm", True)
+            store_sql.set_user_db("op", "h4", "operator")
+            with Session(engine) as s, s.begin():
+                # "dorm" has admin role but dormant BudgetHouseholdMember pointing to alice.
+                s.add(db.BudgetHouseholdMember(member_username="dorm", owner="alice", grant_id="2" * 64))
+                # "del" has admin role but a non-self PermissionGrant targeting alice.
+                s.add(db.PermissionGrant(username="del", permission_id="budget.receipts.add", target_owner="alice"))
+
+            self.assertEqual(store_sql.provision_budget_owner("ghost"), "not_found")
+            self.assertEqual(store_sql.provision_budget_owner("dis_adm"), "disabled")
+            self.assertEqual(store_sql.provision_budget_owner("op"), "not_admin")
+            self.assertEqual(store_sql.provision_budget_owner("dorm"), "conflict")
+            self.assertEqual(store_sql.provision_budget_owner("del"), "conflict")
+
+            self._set_meta("authz_policy_phase", "catalog_compat")
+            self.assertEqual(store_sql.provision_budget_owner("alice"), "ok")
+            # Simulate a later custom grant edit under alice; repeat provision must leave edits intact!
+            with Session(engine) as s, s.begin():
+                row = s.execute(
+                    select(db.PermissionGrant).where(
+                        db.PermissionGrant.username == "alice",
+                        db.PermissionGrant.permission_id == "budget.edit",
+                    )
+                ).scalar_one()
+                s.delete(row)
+            self.assertEqual(store_sql.provision_budget_owner("alice"), "already_provisioned")
+            self.assertNotIn(("budget.edit", "alice"), self._grants_of("alice"))
+
+    def test_bridge_refuses_custom_phase_and_protects_authoritative_users_in_mirrors(self):
+        engine, _ = db.init_db(self.db)
+        store_sql.cutover_users(engine, {"sqlite_only": "h-db"})
+        reg = Registry(self.dir / "r.json")
+        store = AutomationStore(self.dir / "a.json")
+
+        # Authoritative SQLite users are never overwritten or deleted by mirror_json_to_db / shadow_import.
+        self._set_meta("authz_policy_phase", "catalog_compat")
+        with Session(engine) as s, s.begin():
+            s.get(db.User, "sqlite_only").budget_owner = True
+            store_sql.sync_legacy_grants(s)
+        self.assertTrue(store_sql.shadow_import(reg, store, {"json_only": "h-j"}, path=self.db))
+        with Session(engine) as s:
+            self.assertIsNotNone(s.get(db.User, "sqlite_only"))
+            self.assertIsNone(s.get(db.User, "json_only"))
+            self.assertIn(("budget.view", "sqlite_only"), self._grants_of("sqlite_only"))
+
+        # Setting catalog_custom causes all PR 1 bridge entry points and mirrors to refuse cleanly.
+        self._set_meta("authz_policy_phase", "catalog_custom")
+        reg.nodes = {"9": dict(RICH_NODE)}
+        self.assertFalse(store_sql.shadow_import(reg, store, {"json_only": "h-j"}, path=self.db))
+        with Session(engine) as s:
+            self.assertIsNone(s.get(db.Node, "9"))
+
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            store_sql.cutover_import(engine, reg, store, {"json_only": "h-j"})
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            store_sql.cutover_users(engine, {"json_only": "h-j"})
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            with Session(engine) as s, s.begin():
+                store_sql.sync_legacy_grants(s)
+
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.db)}):
+            for fn in (
+                lambda: store_sql.check_supported_policy_phase(),
+                lambda: store_sql.users_db_authoritative(),
+                lambda: store_sql.current_users(),
+                lambda: store_sql.load_auth_state("sqlite_only"),
+                lambda: store_sql.load_login_snapshot("sqlite_only"),
+                lambda: store_sql.open_stores(
+                    registry_path=self.dir / "r.json",
+                    automations_path=self.dir / "a.json",
+                    users_path=self.users_json,
+                ),
+                lambda: store_sql.set_user_db("sqlite_only", "new"),
+                lambda: store_sql.set_user_role("sqlite_only", "viewer"),
+                lambda: store_sql.set_user_disabled("sqlite_only", True),
+                lambda: store_sql.add_user("other", "h", "viewer"),
+                lambda: store_sql.set_user_password("sqlite_only", "new"),
+                lambda: store_sql.activate_sessions_v2(),
+                lambda: store_sql.provision_budget_owner("sqlite_only"),
+            ):
+                with self.assertRaises(authz.PolicyPhaseUnsupported):
+                    fn()
+            # finish_sqlite_login raises if phase flips to custom while scrypt ran.
+            snap = store_sql.LoginSnapshot(
+                username="sqlite_only",
+                backend="sqlite",
+                password_hash="h-db",
+                generation=0,
+                policy_phase="legacy",
+                session_phase="legacy",
+                db_path=self.db,
+            )
+            with self.assertRaises(authz.PolicyPhaseUnsupported):
+                store_sql.finish_sqlite_login(snap, native=False, now=1.0, secret=b"sec")
 
 
 if __name__ == "__main__":  # pragma: no cover
