@@ -94,9 +94,11 @@ _TMOBILE_AMOUNT = re.compile(r"A\+C[ \t]+Prosimy o wpłatę\b[ \t]*(.*?)(?:[ \t]
 
 _PLAY_NUMBER_LABEL = re.compile(r"Numer faktury", re.IGNORECASE)
 _PLAY_ISSUE_LABEL = re.compile(r"Data wystawienia\b:?[ \t]*(.*)", re.IGNORECASE)
-_PLAY_DUE_LABEL = re.compile(r"TERMIN PŁATNOŚCI:?[ \t]*(.*)", re.IGNORECASE)
+_PLAY_DUE_LABEL = re.compile(r"TERMIN PŁATNOŚCI\b:?[ \t]*(.*)", re.IGNORECASE)
+# The value sits inline or on the next line, optionally followed by the bank
+# account label or the payment request. Anything else fails closed.
 _PLAY_DUE = re.compile(
-    rf"({_DATE_VALUE})(?:[ \t]*(?:Numer konta bankowego:?|PROSIMY O WPŁATĘ:.*))?", re.IGNORECASE,
+    rf"({_DATE_VALUE})(?:[ \t]*Numer konta bankowego:?|[ \t]+PROSIMY O WPŁATĘ\b.*)?", re.IGNORECASE,
 )
 # Capture the amount on either supported payment line. The second alternative
 # reports a payment label with a malformed due-date prefix as an invalid amount.
@@ -319,10 +321,12 @@ def _extract_play(raw: list[str], clean: list[str]) -> ImportedInvoice | None:
         (value, value) for label, value in _line_pairs(raw)
         if _PLAY_NUMBER_LABEL.fullmatch(label) and value not in ("", _SKIPPED_LINE)
     ))
-    due_values = (
-        match[1] or value for label, value in _line_pairs(clean) if (match := _PLAY_DUE_LABEL.fullmatch(label))
+    due_values = [
+        match[1] or value for label, value in _line_pairs(raw) if (match := _PLAY_DUE_LABEL.fullmatch(label))
+    ]
+    due_date = _one_value(
+        _parse_date(match[1]) if (match := _PLAY_DUE.fullmatch(value)) else None for value in due_values
     )
-    due_date = _parse_date(_one(_PLAY_DUE, due_values) or "")
     issue_values = [
         match[1] or value for label, value in _line_pairs(raw) if (match := _PLAY_ISSUE_LABEL.fullmatch(label))
     ]

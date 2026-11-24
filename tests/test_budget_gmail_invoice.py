@@ -132,6 +132,17 @@ class IssuerInvoiceFixtureTests(unittest.TestCase):
         split_marker = "faktura\n" + " " * 513 + "\nkorygująca\n"
         self.assertIsNone(extract_invoice(invoice + split_marker))
 
+    def test_play_due_date_labels_fail_closed(self):
+        original = _fixture("play_invoice.txt")
+        for extra in ("TERMIN PŁATNOŚCI: 23.11.2026\n", "Termin płatności\n23.11.2026\n",
+                      "TERMIN PŁATNOŚCI: 23.11.2026 PROSIMY O WPŁATĘ: 150,37 zł\n"):
+            with self.subTest(accept=extra):
+                self.assertEqual(extract_invoice(original + extra), extract_invoice(original))
+        for extra in ("TERMIN PŁATNOŚCI: 24.11.2026 PROSIMY O WPŁATĘ\n", "TERMIN PŁATNOŚCI: 24.11.2026 dopisek\n",
+                      "TERMIN PŁATNOŚCI:\nnie podano\n", "TERMIN PŁATNOŚCI: 23.11.2026 dopisek\n"):
+            with self.subTest(reject=extra):
+                self.assertIsNone(extract_invoice(original + extra))
+
     def test_label_words_in_prose_do_not_take_part_in_agreement(self):
         prose = {
             "tmobile_invoice.txt": "Termin płatności\nTermin płatności do zapłaty sprawdzisz w aplikacji\n",
