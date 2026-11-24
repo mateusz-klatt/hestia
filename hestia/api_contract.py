@@ -4071,14 +4071,14 @@ def build_openapi() -> dict:
                 "get": {
                     "operationId": "getCalendarInstances",
                     "summary": "Concrete calendar occurrences in a half-open date window",
-                    "description": "Requires viewer. Expands RRULE/RDATE, applies moved or modified exceptions, and omits EXDATE and every cancelled occurrence. The window is [from, to) at local midnights in tz (default UTC), from is inclusive, to is exclusive, and its duration cannot exceed 92 days. Instances are sorted by start and capped at 2000. Disabled synchronization returns 200 with enabled=false and empty groups and instances.",
+                    "description": "Requires viewer. Expands RRULE/RDATE, applies moved or modified exceptions, and omits EXDATE and every cancelled occurrence. SECONDLY and MINUTELY rules return only DTSTART with truncated=true. The window is [from, to) at local midnights in tz (default UTC), from is inclusive, to is exclusive, and its duration cannot exceed 92 days. Instances are sorted by start and capped at 2000. Disabled synchronization returns 200 with enabled=false and empty groups and instances.",
                     "parameters": [
                         {"name": "from", "in": "query", "required": True, "schema": {"type": "string", "format": "date"},
                          "description": "Inclusive window start date (YYYY-MM-DD)."},
                         {"name": "to", "in": "query", "required": True, "schema": {"type": "string", "format": "date"},
                          "description": "Exclusive window end date (YYYY-MM-DD), matching exclusive CalendarDate end semantics."},
                         {"name": "tz", "in": "query", "schema": {"type": "string", "default": "UTC"},
-                         "description": "IANA time zone used to interpret from/to as local midnights. Defaults to UTC; aliases resolve through the server's canonical timezone helpers."},
+                         "description": "IANA time zone used to interpret from/to as local midnights. Defaults to UTC; aliases resolve through the server's canonical timezone helpers. Host keys such as localtime, posixrules, posix/* and right/* are rejected."},
                         {"name": "group", "in": "query", "schema": {"type": "string"},
                          "description": "Selected configured group; defaults to the first group."},
                     ],

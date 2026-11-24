@@ -2,7 +2,7 @@
 
 `.github/dependabot.yml` opens at most two pull requests per ecosystem, on a weekly schedule. Minor and patch updates are grouped. A library listed here is ignored for the next major (SQLAlchemy also ignores the 2.1 minor line) so Dependabot does not propose a bump this tree would reject.
 
-Versions below were checked on 2026-11-22.
+Versions below were checked on 2026-11-24.
 
 ## npm (`ui/`)
 
@@ -23,6 +23,7 @@ These majors were taken in the same refresh, with no application source changes:
 | alembic | `>=1.20.1,<2` | no 2.x release | Floor raised inside 1.x. Migrations stay on alembic 1. |
 | pydantic | `>=2.14.4,<3` | no 3.x release | Floor raised inside 2.x. The public DTO models stay on pydantic 2. |
 | icalendar | `>=7.3.2,<8` | 8.0.0a1 only | The previous `<8` range already resolved to 7.x. The floor now matches 7.3.2. 8.x is still a prerelease, so the major stays ignored. |
+| recurring-ical-events | `>=3.8.2,<4` | no 4.x release | 3.8.2 supports `icalendar>=6.1,<8`, including the pinned 7.3.2 runtime, and provides the maintained RFC 5545 expansion core. |
 
 ## GitHub Actions
 

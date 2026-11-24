@@ -56,6 +56,8 @@ def _window(query):
         if first > last or (last - first).days > 92:
             raise ValueError("Calendar window cannot exceed 92 days")
         zone_name = query.get("tz", "UTC")
+        if zone_name in ("localtime", "posixrules") or zone_name.startswith(("posix/", "right/")):
+            raise ValueError("Host timezone keys are not accepted")
         ZoneInfo(zone_name)
         zone_name = canonical_zone(zone_name)
         ZoneInfo(zone_name)

@@ -1,31 +1,26 @@
-"""Bounded expansion of validated calendar payloads into concrete occurrences."""
+"""Bounded expansion of validated calendar payloads using recurring-ical-events."""
 from __future__ import annotations
 
 from bisect import insort
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 import logging
 from zoneinfo import ZoneInfo
 
-from dateutil.rrule import rrulestr
-from icalendar import Calendar, vRecur
+from icalendar import Calendar, vDDDTypes
+from recurring_ical_events import of
 
-from .events import default_instance, original_start_key
+from .events import default_instance, original_start_key, to_ical
 
 
 INSTANCE_LIMIT = 2000
-WORK_LIMIT = 20000
+WORK_LIMIT = INSTANCE_LIMIT + 1
 _UTC = timezone.utc
 _MIN_UTC = datetime.min.replace(tzinfo=_UTC)
 _MAX_UTC = datetime.max.replace(tzinfo=_UTC)
 _TIME_SELECTORS = {"BYHOUR", "BYMINUTE", "BYSECOND"}
-_SEEK_STEPS = {
-    "DAILY": timedelta(days=1),
-    "WEEKLY": timedelta(weeks=1),
-    "HOURLY": timedelta(hours=1),
-    "MINUTELY": timedelta(minutes=1),
-    "SECONDLY": timedelta(seconds=1),
-}
+_HIGH_FREQUENCIES = {"SECONDLY", "MINUTELY"}
 _LOG = logging.getLogger(__name__)
 
 
@@ -33,44 +28,9 @@ _LOG = logging.getLogger(__name__)
 class _Window:
     start: date
     end: date
-    zone_name: str
     zone: ZoneInfo
     lower: datetime
     upper: datetime
-
-
-@dataclass(frozen=True)
-class _Rule:
-    rule: object
-    wall_start: datetime
-    frequency: str
-    interval: int
-    count: int | None
-    until: date | datetime | None
-
-
-@dataclass
-class _Series:
-    payload: dict
-    all_day: bool
-    zone_name: str | None
-    zone: ZoneInfo | None
-    explicit: set
-    exdates: set
-    rules: list[_Rule]
-
-
-class _Work:
-    def __init__(self):
-        self.remaining = WORK_LIMIT
-        self.exhausted = False
-
-    def take(self) -> bool:
-        if self.remaining <= 0:
-            self.exhausted = True
-            return False
-        self.remaining -= 1
-        return True
 
 
 class _Collector:
@@ -111,162 +71,74 @@ def _midnight_utc(day: date, zone: ZoneInfo, lower: bool) -> datetime:
 
 def _make_window(start: date, end: date, zone_name: str) -> _Window:
     zone = ZoneInfo(zone_name)
-    return _Window(start, end, zone_name, zone, _midnight_utc(start, zone, True),
-                   _midnight_utc(end, zone, False))
+    return _Window(start, end, zone, _midnight_utc(start, zone, True), _midnight_utc(end, zone, False))
 
 
-def _subtract(value, delta):
-    try:
-        return value - delta
-    except OverflowError:
-        if isinstance(value, datetime):
-            return datetime.min.replace(tzinfo=value.tzinfo)
-        return date.min
+def _dt_value(value: dict):
+    if "date" in value:
+        return date.fromisoformat(value["date"])
+    return datetime.fromisoformat(value["dateTime"]).astimezone(ZoneInfo(value["timeZone"]))
 
 
-def _wall(value: datetime, zone: ZoneInfo) -> datetime:
-    try:
-        return value.astimezone(zone).replace(tzinfo=None)
-    except OverflowError:
-        return datetime.min if value.year == 1 else datetime.max
-
-
-def _wall_key(value: datetime, all_day: bool, zone: ZoneInfo | None):
-    if all_day:
-        return value.date()
-    early = value.replace(tzinfo=zone, fold=0)
-    late = value.replace(tzinfo=zone, fold=1)
-    if early.utcoffset() < late.utcoffset():
-        return None
-    try:
-        return early.astimezone(_UTC)
-    except OverflowError:
-        return None
-
-
-def _property_keys(line: str, kind: str, all_day: bool) -> set:
+def _property_keys(line: str, kind: str) -> set:
     event = Calendar.from_ical(
         "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\n" + line + "\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
     ).walk("VEVENT")[0]
-    result = set()
-    for item in event[kind].dts:
-        value = item.dt
-        result.add(value.astimezone(_UTC) if isinstance(value, datetime) else value)
-    return result
+    return {item.dt.astimezone(_UTC) if isinstance(item.dt, datetime) else item.dt for item in event[kind].dts}
 
 
-def _series(payload: dict) -> _Series:
-    all_day = "date" in payload["start"]
-    zone_name = payload["start"].get("timeZone")
-    zone = None if all_day else ZoneInfo(zone_name)
-    starting = _key(payload["start"], all_day)
-    wall_start = (datetime.combine(starting, time.min) if all_day
-                  else starting.astimezone(zone).replace(tzinfo=None))
-    explicit = {starting}
-    exdates = set()
-    rules = []
-    for line in payload.get("recurrence", []):
+def _library_payload(payload: dict) -> dict:
+    content = deepcopy(payload)
+    if "date" not in content["start"]:
+        return content
+    recurrence = []
+    for line in content.get("recurrence", []):
         name, body = line.split(":", 1)
-        kind = name.split(";", 1)[0]
-        if kind in {"RDATE", "EXDATE"}:
-            values = _property_keys(line, kind, all_day)
-            if kind == "RDATE":
-                explicit.update(values)
-            else:
-                exdates.update(values)
-            continue
-        parts = dict(part.split("=", 1) for part in body.split(";"))
-        count = int(parts["COUNT"]) if "COUNT" in parts else None
-        until_values = vRecur.from_ical(body).get("UNTIL")
-        until = until_values[0] if until_values else None
-        frequency = parts["FREQ"]
-        interval = int(parts.get("INTERVAL", "1"))
-        clean = [part for part in body.split(";")
-                 if part.split("=", 1)[0] not in ({"COUNT", "UNTIL"} | (_TIME_SELECTORS if all_day else set()))]
-        rules.append(_Rule(rrulestr(";".join(clean), dtstart=wall_start), wall_start,
-                           frequency, interval, count, until))
-    return _Series(payload, all_day, zone_name, zone, explicit, exdates, rules)
+        if name.split(";", 1)[0] == "RRULE":
+            body = ";".join(part for part in body.split(";") if part.split("=", 1)[0] not in _TIME_SELECTORS)
+        recurrence.append(name + ":" + body)
+    content["recurrence"] = recurrence
+    return content
 
 
-def _shift(rule: _Rule, periods: int) -> datetime | None:
-    try:
-        if rule.frequency in _SEEK_STEPS:
-            return rule.wall_start + periods * rule.interval * _SEEK_STEPS[rule.frequency]
-        if rule.frequency == "MONTHLY":
-            months = rule.wall_start.year * 12 + rule.wall_start.month - 1 + periods * rule.interval
-            year, month = divmod(months, 12)
-            return rule.wall_start.replace(year=year, month=month + 1)
-        if rule.frequency == "YEARLY":
-            return rule.wall_start.replace(year=rule.wall_start.year + periods * rule.interval)
-    except (OverflowError, ValueError):
-        return None
-    return None
+def _calendar(payload: dict, uid: str) -> Calendar:
+    content = _library_payload(payload)
+    calendar = Calendar.from_ical(to_ical(content, uid, explicit_end=True))
+    components = calendar.walk("VEVENT")
+    for component, exception in zip(components[1:], content.get("exceptions", [])):
+        if "DTSTART" not in component:
+            default = default_instance(content, exception["originalStartTime"])
+            component.add("dtstart", _dt_value(default["start"]))
+            component.add("dtend", _dt_value(default["end"]))
+        if "dateTime" in exception["originalStartTime"]:
+            original = datetime.fromisoformat(exception["originalStartTime"]["dateTime"]).astimezone(_UTC)
+            component["RECURRENCE-ID"] = vDDDTypes(original)
+    return calendar
 
 
-def _seek_rule(rule: _Rule, lower, all_day: bool, zone: ZoneInfo | None):
-    if rule.count is not None:
-        return rule.rule
-    lower_wall = datetime.combine(lower, time.min) if all_day else _wall(lower, zone)
-    if lower_wall <= rule.wall_start:
-        return rule.rule
-    if rule.frequency in _SEEK_STEPS:
-        step = rule.interval * _SEEK_STEPS[rule.frequency]
-        periods = (lower_wall - rule.wall_start) // step - 1
-    elif rule.frequency == "MONTHLY":
-        months = (lower_wall.year - rule.wall_start.year) * 12 + lower_wall.month - rule.wall_start.month
-        periods = months // rule.interval - 1
-    elif rule.frequency == "YEARLY":
-        periods = (lower_wall.year - rule.wall_start.year) // rule.interval - 1
+def _time_dict(prop, default_zone: str | None, force_zone: str | None = None) -> dict:
+    value = prop.dt
+    if not isinstance(value, datetime):
+        return {"date": value.isoformat()}
+    if force_zone:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=ZoneInfo(default_zone or "UTC"))
+        zone_name = force_zone
+        normalized = value.astimezone(_UTC).astimezone(ZoneInfo(force_zone))
+        return {"dateTime": normalized.isoformat(timespec="seconds"), "timeZone": zone_name}
+    zone_name = prop.params.get("TZID") or getattr(value.tzinfo, "key", None)
+    if zone_name:
+        zone = ZoneInfo(str(zone_name))
+        zone_name = str(zone_name)
+    elif value.tzinfo is not None and value.utcoffset() == timezone.utc.utcoffset(None):
+        zone = _UTC
+        zone_name = "UTC"
     else:
-        return rule.rule
-    while periods > 0:
-        candidate = _shift(rule, periods)
-        if candidate is not None and rule.wall_start <= candidate < lower_wall:
-            return rule.rule.replace(dtstart=candidate)
-        periods -= 1
-    return rule.rule
-
-
-def _rule_slots(rule: _Rule, series: _Series, lower, upper, work: _Work):
-    lower_wall = datetime.combine(lower, time.min) if series.all_day else _wall(lower, series.zone)
-    upper_wall = datetime.combine(upper, time.min) if series.all_day else _wall(upper, series.zone)
-    until_wall = None
-    if rule.until is not None:
-        until_wall = (datetime.combine(rule.until, time.min) if series.all_day
-                      else _wall(rule.until.astimezone(_UTC), series.zone))
-    generated = _seek_rule(rule, lower, series.all_day, series.zone)
-    produced = 0
-    seen_dates = set()
-    for wall in generated:
-        if not work.take():
-            return
-        key = _wall_key(wall, series.all_day, series.zone)
-        if wall > upper_wall or until_wall is not None and wall > until_wall:
-            return
-        if key is None or rule.until is not None and not series.all_day and key > rule.until:
-            continue
-        if series.all_day and key in seen_dates:
-            continue
-        seen_dates.add(key)
-        produced += 1
-        if lower <= key <= upper:
-            yield key
-        if rule.count is not None and produced >= rule.count:
-            return
-
-
-def _contains(series: _Series, key, known: set, work: _Work) -> bool:
-    if key in series.exdates:
-        return False
-    if key in series.explicit or key in known:
-        return True
-    for rule in series.rules:
-        for candidate in _rule_slots(rule, series, key, key, work):
-            if candidate == key:
-                return True
-        if work.exhausted:
-            return False
-    return False
+        zone_name = default_zone or "UTC"
+        zone = ZoneInfo(zone_name)
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=zone)
+    return {"dateTime": value.astimezone(zone).isoformat(timespec="seconds"), "timeZone": zone_name}
 
 
 def _overlaps(content: dict, window: _Window) -> bool:
@@ -298,90 +170,42 @@ def _instance(event: dict, content: dict, recurrence_id: dict | None) -> dict:
     }
 
 
-def _content_at(series: _Series, key) -> dict | None:
-    try:
-        if series.all_day:
-            value = {"date": key.isoformat()}
-        else:
-            value = {"dateTime": key.astimezone(series.zone).isoformat(), "timeZone": series.zone_name}
-        return default_instance(series.payload, value)
-    except OverflowError:
+def _component_instance(event: dict, component, window: _Window, override: bool) -> dict | None:
+    default_zone = event["payload"]["start"].get("timeZone")
+    start_zone = None if override else event["payload"]["start"].get("timeZone")
+    end_zone = None if override else event["payload"]["end"].get("timeZone")
+    content = {
+        "summary": str(component.get("SUMMARY", "")),
+        "location": str(component.get("LOCATION", "")),
+        "start": _time_dict(component["DTSTART"], default_zone, start_zone),
+        "end": _time_dict(component["DTEND"], default_zone, end_zone),
+        "status": str(component.get("STATUS", "CONFIRMED")).lower(),
+    }
+    if not _overlaps(content, window):
         return None
+    recurrence_id = (_time_dict(component["RECURRENCE-ID"], default_zone, default_zone)
+                     if event["payload"].get("recurrence") else None)
+    return _instance(event, content, recurrence_id)
 
 
-def _candidate_bounds(series: _Series, window: _Window):
-    if series.all_day:
-        duration = date.fromisoformat(series.payload["end"]["date"]) - date.fromisoformat(series.payload["start"]["date"])
-        return _subtract(window.start, duration), window.end
-    starting = datetime.fromisoformat(series.payload["start"]["dateTime"]).astimezone(_UTC)
-    ending = datetime.fromisoformat(series.payload["end"]["dateTime"]).astimezone(_UTC)
-    return _subtract(window.lower, ending - starting), window.upper
-
-
-def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
-    payload = event["payload"]
-    if payload.get("status") == "cancelled":
-        return [], False
-    if not payload.get("recurrence"):
-        return ([_instance(event, payload, None)] if _overlaps(payload, window) else []), False
-
-    series = _series(payload)
-    exceptions = {_key(item["originalStartTime"], series.all_day): item for item in payload.get("exceptions", [])}
-    lower, upper = _candidate_bounds(series, window)
-    collector = _Collector(window)
-    work = _Work()
-    known = set()
-    seen = set()
-
-    def process(key) -> bool:
-        if key in seen:
-            return False
-        seen.add(key)
-        if key in series.exdates:
-            return False
-        known.add(key)
-        if key in exceptions:
-            return False
-        content = _content_at(series, key)
-        if content is None or not _overlaps(content, window):
-            return False
-        collector.add(_instance(event, content, content["start"]))
-        return True
-
-    for key in sorted(series.explicit):
-        if lower <= key <= upper:
-            process(key)
-    for rule in series.rules:
-        matches = 0
-        for key in _rule_slots(rule, series, lower, upper, work):
-            matches += process(key)
-            if matches > INSTANCE_LIMIT:
-                break
-        if work.exhausted:
-            break
-
-    for key, exception in exceptions.items():
-        if exception.get("status") == "cancelled" or not _overlaps(exception, window):
+def _high_frequency(payload: dict) -> bool:
+    for line in payload.get("recurrence", []):
+        name, body = line.split(":", 1)
+        if name.split(";", 1)[0] != "RRULE":
             continue
-        if not _contains(series, key, known, work):
-            continue
-        original = _content_at(series, key)
-        if original is not None:
-            collector.add(_instance(event, exception, original["start"]))
-    if work.exhausted:
-        _LOG.warning("Calendar event %s reached the instance expansion work budget", event.get("id", "unknown"))
-    return collector.values(), collector.overflow or work.exhausted
+        parts = dict(part.split("=", 1) for part in body.split(";"))
+        if parts.get("FREQ") in _HIGH_FREQUENCIES:
+            return True
+    return False
 
 
 def _first_instance(event: dict, window: _Window) -> dict | None:
     payload = event["payload"]
-    if payload.get("status") == "cancelled":
-        return None
     all_day = "date" in payload["start"]
     starting = _key(payload["start"], all_day)
     for line in payload.get("recurrence", []):
         name = line.split(":", 1)[0].split(";", 1)[0]
-        if name == "EXDATE" and starting in _property_keys(line, name, all_day):
+        if name == "EXDATE" and starting in _property_keys(line, name):
             return None
     content = payload
     for exception in payload.get("exceptions", []):
@@ -390,10 +214,79 @@ def _first_instance(event: dict, window: _Window) -> dict | None:
                 return None
             content = exception
             break
+    else:
+        if payload.get("status") == "cancelled":
+            return None
     if not _overlaps(content, window):
         return None
     recurrence_id = payload["start"] if payload.get("recurrence") else None
     return _instance(event, content, recurrence_id)
+
+
+def _second_fold_start(payload: dict) -> datetime | None:
+    if "date" in payload["start"] or not payload.get("recurrence"):
+        return None
+    zone = ZoneInfo(payload["start"]["timeZone"])
+    local = datetime.fromisoformat(payload["start"]["dateTime"]).astimezone(zone)
+    if local.fold == 1 and local.replace(fold=0).utcoffset() != local.utcoffset():
+        return local.astimezone(_UTC)
+    return None
+
+
+def _query_bounds(window: _Window) -> tuple[datetime, datetime]:
+    try:
+        lower = window.lower - timedelta(days=1)
+    except OverflowError:
+        lower = _MIN_UTC
+    try:
+        upper = window.upper + timedelta(days=1)
+    except OverflowError:
+        upper = _MAX_UTC
+    return lower, upper
+
+
+def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
+    payload = event["payload"]
+    if not payload.get("recurrence"):
+        return ([_instance(event, payload, None)] if _overlaps(payload, window) else []), False
+    if _high_frequency(payload):
+        _LOG.warning("Calendar event %s uses SECONDLY or MINUTELY recurrence; using DTSTART only", event["id"])
+        first = _first_instance(event, window)
+        return ([first] if first is not None else []), True
+
+    collector = _Collector(window)
+    second_fold = _second_fold_start(payload)
+    iterations = 0
+    incomplete = False
+    query_start, query_end = _query_bounds(window)
+    for series in of(_calendar(payload, event["uid"])).series:
+        for occurrence in series.between(query_start, query_end):
+            component = occurrence.as_component(False)
+            instance = _component_instance(event, component, window, bool(occurrence.recurrence_ids))
+            if instance is None and payload.get("status") == "cancelled":
+                continue
+            iterations += 1
+            if instance is not None:
+                if second_fold is not None:
+                    recurrence_id = _key(instance["recurrence_id"], False)
+                    zone = ZoneInfo(payload["start"]["timeZone"])
+                    original_wall = datetime.fromisoformat(payload["start"]["dateTime"]).astimezone(zone).replace(tzinfo=None)
+                    candidate_wall = recurrence_id.astimezone(zone).replace(tzinfo=None)
+                    if recurrence_id != second_fold and candidate_wall == original_wall:
+                        continue
+                collector.add(instance)
+            if iterations >= WORK_LIMIT:
+                incomplete = True
+                break
+        if incomplete:
+            break
+    if second_fold is not None:
+        first = _first_instance(event, window)
+        if first is not None:
+            collector.add(first)
+    if incomplete:
+        _LOG.warning("Calendar event %s reached the instance expansion work budget", event["id"])
+    return collector.values(), collector.overflow or incomplete
 
 
 def _sort_key(instance: dict, window: _Window) -> tuple:
@@ -412,6 +305,8 @@ def expand_events(events: list[dict], window_start: date, window_end: date, zone
     if window_start >= window_end:
         return {"instances": [], "truncated": False}
     window = _make_window(window_start, window_end, zone_name)
+    if window.lower >= window.upper:
+        return {"instances": [], "truncated": False}
     collector = _Collector(window)
     incomplete = False
     for event in events:

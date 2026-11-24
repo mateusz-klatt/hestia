@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 import uuid
+from zoneinfo import ZoneInfo
 
 from aiohttp.test_utils import TestClient, TestServer
 from pydantic import ValidationError
@@ -423,27 +425,20 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(state["truncated"])
         self.assertIn("work budget", "\n".join(logs.output))
 
-    async def test_instances_filter_exceptions_before_membership_checks(self):
-        await self.create({"summary": "Base", "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
-                           "recurrence": ["RRULE:FREQ=DAILY;COUNT=1"], "exceptions": [
-                               {"originalStartTime": {"date": "2000-01-01"}, "status": "cancelled"},
-                               {"originalStartTime": {"date": "2000-01-02"}, "summary": "Outside",
-                                "start": {"date": "2025-01-01"}, "end": {"date": "2025-01-02"}}]})
-        with mock.patch.object(instance_expander, "_contains", side_effect=AssertionError("membership replay")):
-            response = await self.instances("from=2026-01-01&to=2026-01-02")
+    async def test_instances_cancelled_master_keeps_active_override(self):
+        event = await self.create({"summary": "Cancelled", "status": "cancelled",
+                                   "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
+                                   "recurrence": ["RRULE:FREQ=DAILY;COUNT=2"], "exceptions": [
+                                       {"originalStartTime": {"date": "2026-01-02"}, "summary": "Active override",
+                                        "status": "confirmed", "start": {"date": "2026-01-03"}, "end": {"date": "2026-01-04"}}]})
+        response = await self.instances("from=2026-01-01&to=2026-01-05")
         self.assertEqual(response.status, 200)
-        self.assertEqual([item["summary"] for item in (await response.json())["instances"]], ["Base"])
+        instances = (await response.json())["instances"]
+        self.assertEqual([item["summary"] for item in instances], ["Active override"])
+        self.assertEqual(instances[0]["recurrence_id"], {"date": "2026-01-02"})
+        self.assertEqual(instances[0]["instance_id"], event["id"] + "/2026-01-02")
 
-    async def test_instances_cancelled_master_skips_rule_iteration(self):
-        await self.create({"summary": "Cancelled", "status": "cancelled",
-                           "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
-                           "recurrence": ["RRULE:FREQ=SECONDLY"]})
-        with mock.patch.object(instance_expander, "rrulestr", side_effect=AssertionError("rule replay")):
-            response = await self.instances("from=2026-01-01&to=2026-01-02")
-        self.assertEqual(response.status, 200)
-        self.assertEqual((await response.json())["instances"], [])
-
-    async def test_instances_skip_spring_gaps_and_deduplicate_instants(self):
+    async def test_instances_shift_spring_gaps_and_deduplicate_instants(self):
         await self.create({"summary": "Gap",
                            "start": {"dateTime": "2026-03-28T02:30:00+01:00", "timeZone": "Europe/Warsaw"},
                            "end": {"dateTime": "2026-03-28T03:30:00+01:00", "timeZone": "Europe/Warsaw"},
@@ -451,15 +446,15 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         await self.create({"summary": "Until gap",
                            "start": {"dateTime": "2026-03-29T01:30:00+01:00", "timeZone": "Europe/Warsaw"},
                            "end": {"dateTime": "2026-03-29T01:45:00+01:00", "timeZone": "Europe/Warsaw"},
-                           "recurrence": ["RRULE:FREQ=MINUTELY;INTERVAL=30;UNTIL=20260329T011500Z"]})
+                           "recurrence": ["RRULE:FREQ=HOURLY;INTERVAL=1;UNTIL=20260329T013000Z"]})
         response = await self.instances("from=2026-03-28&to=2026-04-01")
         instances = (await response.json())["instances"]
         by_summary = {}
         for item in instances:
             by_summary.setdefault(item["summary"], []).append(item["start"]["dateTime"])
         self.assertEqual(by_summary["Gap"], ["2026-03-28T02:30:00+01:00", "2026-03-29T03:30:00+02:00",
-                                             "2026-03-30T02:30:00+02:00", "2026-03-31T02:30:00+02:00"])
-        self.assertEqual(by_summary["Until gap"], ["2026-03-29T01:30:00+01:00", "2026-03-29T03:00:00+02:00"])
+                                             "2026-03-30T02:30:00+02:00"])
+        self.assertEqual(by_summary["Until gap"], ["2026-03-29T01:30:00+01:00", "2026-03-29T03:30:00+02:00"])
         identifiers = [item["instance_id"] for item in instances]
         self.assertEqual(len(identifiers), len(set(identifiers)))
 
@@ -480,6 +475,51 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(instances[0]["recurrence_id"],
                          {"dateTime": "2026-10-25T02:30:00+01:00", "timeZone": "Europe/Warsaw"})
         self.assertEqual(instances[0]["instance_id"], event["id"] + "/2026-10-25T01:30:00+00:00")
+
+    async def test_instances_second_fold_cutoff_keeps_first_fold_occurrence(self):
+        event = await self.create({"summary": "First fold",
+                                   "start": {"dateTime": "2026-10-24T02:30:00+02:00", "timeZone": "Europe/Warsaw"},
+                                   "end": {"dateTime": "2026-10-24T03:30:00+02:00", "timeZone": "Europe/Warsaw"},
+                                   "recurrence": ["RRULE:FREQ=DAILY;COUNT=2"]})
+        window = instance_expander._Window(date(2026, 10, 25), date(2026, 10, 26), ZoneInfo("UTC"),
+                                           datetime(2026, 10, 25, 0, 0, tzinfo=timezone.utc),
+                                           datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc))
+        instances, incomplete = instance_expander._expand_event(event, window)
+        self.assertFalse(incomplete)
+        self.assertEqual([item["start"]["dateTime"] for item in instances], ["2026-10-25T02:30:00+02:00"])
+
+    async def test_instances_second_fold_dtstart_count_one_emits_only_actual_start(self):
+        event = await self.create({"summary": "Second fold",
+                                   "start": {"dateTime": "2026-10-25T02:30:00+01:00", "timeZone": "Europe/Warsaw"},
+                                   "end": {"dateTime": "2026-10-25T03:30:00+01:00", "timeZone": "Europe/Warsaw"},
+                                   "recurrence": ["RRULE:FREQ=DAILY;COUNT=1"]})
+        response = await self.instances("from=2026-10-25&to=2026-10-26")
+        instances = (await response.json())["instances"]
+        self.assertEqual(len(instances), 1)
+        self.assertEqual(instances[0]["start"],
+                         {"dateTime": "2026-10-25T02:30:00+01:00", "timeZone": "Europe/Warsaw"})
+        self.assertEqual(instances[0]["instance_id"], event["id"] + "/2026-10-25T01:30:00+00:00")
+
+    async def test_instances_apia_skipped_civil_date_has_empty_utc_window(self):
+        await self.create({"summary": "Spanning skipped date",
+                           "start": {"dateTime": "2011-12-29T00:00:00Z", "timeZone": "UTC"},
+                           "end": {"dateTime": "2011-12-31T00:00:00Z", "timeZone": "UTC"}})
+        response = await self.instances("from=2011-12-30&to=2011-12-31&tz=Pacific/Apia")
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["instances"], [])
+
+    async def test_instances_sparse_secondly_rule_uses_dtstart_without_expansion(self):
+        event = await self.create({"summary": "Sparse secondly",
+                                   "start": {"dateTime": "2026-01-01T00:00:00Z", "timeZone": "UTC"},
+                                   "end": {"dateTime": "2026-01-01T01:00:00Z", "timeZone": "UTC"},
+                                   "recurrence": ["RRULE:FREQ=SECONDLY;BYMONTH=12;BYMONTHDAY=31;BYHOUR=23;BYMINUTE=59;BYSECOND=59"]})
+        with mock.patch.object(instance_expander, "of", side_effect=AssertionError("library expansion")):
+            with self.assertLogs("hestia.calendar_sync.instances", level="WARNING"):
+                response = await self.instances("from=2026-01-01&to=2026-04-03")
+        self.assertEqual(response.status, 200)
+        state = await response.json()
+        self.assertEqual([item["event_id"] for item in state["instances"]], [event["id"]])
+        self.assertTrue(state["truncated"])
 
     async def test_instances_date_rules_ignore_time_selectors_before_count(self):
         await self.create({"summary": "Dates", "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
@@ -532,9 +572,11 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.instances("from=2026-01-02&to=2026-01-03&tz=Europe/Warsaw")
         self.assertEqual(response.status, 200)
         self.assertEqual([item["event_id"] for item in (await response.json())["instances"]], [event["id"]])
-        response = await self.instances("from=2026-01-02&to=2026-01-03&tz=Invalid/Unknown")
-        self.assertEqual(response.status, 400)
-        self.assertEqual(await response.json(), {"error": "invalid_calendar_event"})
+        for zone_name in ("Invalid/Unknown", "localtime", "posixrules", "right/UTC", "posix/UTC"):
+            with self.subTest(zone_name=zone_name):
+                response = await self.instances("from=2026-01-02&to=2026-01-03&tz=" + zone_name)
+                self.assertEqual(response.status, 400)
+                self.assertEqual(await response.json(), {"error": "invalid_calendar_event"})
 
 
 class CalendarApiContractTests(unittest.TestCase):

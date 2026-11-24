@@ -197,7 +197,8 @@ Parametry `from` i `to` są wymagane, w formacie `YYYY-MM-DD`; zakres jest pół
 `[from, to)`: początek jest włączony, a koniec wyłączony jak `end.date`. Może mieć
 najwyżej 92 dni; równe daty dają pusty zakres. Opcjonalny `tz` przyjmuje strefę IANA
 (domyślnie `UTC`) i określa lokalne północe graniczne, np. `tz=Europe/Warsaw`;
-aliasy są rozpoznawane przez istniejący mechanizm kanonizacji stref. Opcjonalny `group`
+aliasy są rozpoznawane przez istniejący mechanizm kanonizacji stref. Klucze hosta,
+takie jak `localtime`, `posixrules`, `posix/*` i `right/*`, są odrzucane. Opcjonalny `group`
 działa jak w `GET /api/calendars`, czyli bez parametru wybiera pierwszą skonfigurowaną
 grupę. Odczyt wymaga roli `viewer` i obsługuje natywną sesję `Authorization: Bearer`.
 
@@ -215,8 +216,12 @@ wyjątek zachowuje identyfikator pierwotnego miejsca w serii.
 `start` i `end` używają tej samej reprezentacji `date` albo `dateTime`/`timeZone` co
 zwykły odczyt kalendarza. Godzina jest zawsze bezwzględna i ma przesunięcie UTC;
 czas floating jest rozwiązywany przez strefę wydarzenia lub regułę strefy źródła.
-Rozwijane są `RRULE` i `RDATE`, pomijane `EXDATE` oraz wszystkie odwołane wystąpienia;
-zmieniony wyjątek zastępuje swoje pierwotne wystąpienie. Uwzględniane są także
+Rozwijane są `RRULE` i `RDATE` przez bibliotekę `recurring-ical-events`, pomijane
+`EXDATE` oraz wszystkie odwołane wystąpienia. Nieistniejąca godzina przy wiosennej
+zmianie czasu jest przesuwana z użyciem wcześniejszego przesunięcia UTC i liczy się
+do `COUNT` zgodnie z erratą RFC 5545. Reguły `SECONDLY` i `MINUTELY` nie są rozwijane:
+zwracany jest tylko `DTSTART` z `truncated: true` i wpisem do dziennika. Zmieniony
+wyjątek zastępuje swoje pierwotne wystąpienie. Uwzględniane są także
 wystąpienia zaczynające się przed oknem, ale nachodzące na nie. Daty całodniowe
 pozostają datami, a godziny zachowują strefę IANA przez zmianę czasu. Odpowiedź jest
 ograniczona do 2000 najwcześniejszych wystąpień. `truncated: true` sygnalizuje także

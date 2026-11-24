@@ -66,6 +66,10 @@ updates:
       - dependency-name: icalendar
         update-types:
           - version-update:semver-major
+      # No 4.x release. The maintained RFC 5545 expander stays on 3.x.
+      - dependency-name: recurring-ical-events
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: github-actions
     directory: /
