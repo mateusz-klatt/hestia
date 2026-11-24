@@ -59,7 +59,13 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.47.0")
+        self.assertEqual(document["info"]["version"], "0.48.0")
+        instances_get = document["paths"]["/api/calendars/instances"]["get"]
+        self.assertEqual(instances_get["x-required-role"], "viewer")
+        del document["paths"]["/api/calendars/instances"]
+        for name in ("CalendarInstances", "CalendarExpandedInstance"):
+            del schemas[name]
+        document["info"]["version"] = "0.47.0"
         schemas["BudgetReceiptGmailStatus"]["properties"].pop("parse_failed_reasons")
         schemas["BudgetReceiptGmailStatus"]["required"].remove("parse_failed_reasons")
         schemas["BudgetReceiptGmailSyncRequest"]["properties"].pop("retry_parse_failed")

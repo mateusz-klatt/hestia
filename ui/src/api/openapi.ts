@@ -1764,6 +1764,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/calendars/instances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Concrete calendar occurrences in an inclusive date window
+         * @description Requires viewer. Expands RRULE/RDATE, removes EXDATE and cancelled exceptions, and applies moved or modified exceptions. Both dates are inclusive and the window cannot exceed 92 days. Instances are sorted by start and capped at 2000.
+         */
+        get: operations["getCalendarInstances"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/control": {
         parameters: {
             query?: never;
@@ -6477,6 +6497,35 @@ export interface components {
             /** Uid */
             uid: string;
         };
+        /** CalendarExpandedInstance */
+        CalendarExpandedInstance: {
+            /** All Day */
+            all_day: boolean;
+            /** End */
+            end: components["schemas"]["CalendarDate"] | components["schemas"]["CalendarDateTime"];
+            /** Event Id */
+            event_id: string;
+            /** Group */
+            group: string;
+            /** Location */
+            location: string;
+            /**
+             * Recurrence Id
+             * @description Original series slot; null for a non-recurring event.
+             */
+            recurrence_id: components["schemas"]["CalendarDate"] | components["schemas"]["CalendarDateTime"] | null;
+            /** Revision */
+            revision: number;
+            /** Start */
+            start: components["schemas"]["CalendarDate"] | components["schemas"]["CalendarDateTime"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "confirmed" | "tentative" | "cancelled";
+            /** Summary */
+            summary: string;
+        };
         /** CalendarGroup */
         CalendarGroup: {
             /** Id */
@@ -6528,6 +6577,16 @@ export interface components {
              * @enum {string}
              */
             visibility: "default" | "public" | "private" | "confidential";
+        };
+        /** CalendarInstances */
+        CalendarInstances: {
+            /** Instances */
+            instances: components["schemas"]["CalendarExpandedInstance"][];
+            /**
+             * Truncated
+             * @description True when additional matching instances were omitted at the 2000-instance cap.
+             */
+            truncated: boolean;
         };
         /**
          * CalendarPayload
@@ -15830,6 +15889,51 @@ export interface operations {
                 };
             };
             /** @description disabled or invalid configuration */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarError"];
+                };
+            };
+        };
+    };
+    getCalendarInstances: {
+        parameters: {
+            query: {
+                /** @description First date in the window (YYYY-MM-DD). */
+                from: string;
+                /** @description Last date in the window (YYYY-MM-DD). */
+                to: string;
+                /** @description Selected configured group; defaults to the first group. */
+                group?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description expanded calendar instances */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarInstances"];
+                };
+            };
+            /** @description invalid window (invalid_calendar_event) or unknown group (unknown_calendar_group) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarError"];
+                };
+            };
+            /** @description invalid configuration */
             503: {
                 headers: {
                     [name: string]: unknown;

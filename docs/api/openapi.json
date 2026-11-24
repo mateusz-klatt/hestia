@@ -13032,6 +13032,95 @@
         "title": "CalendarEvent",
         "type": "object"
       },
+      "CalendarExpandedInstance": {
+        "properties": {
+          "all_day": {
+            "title": "All Day",
+            "type": "boolean"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalendarDate"
+              },
+              {
+                "$ref": "#/components/schemas/CalendarDateTime"
+              }
+            ],
+            "title": "End"
+          },
+          "event_id": {
+            "title": "Event Id",
+            "type": "string"
+          },
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "location": {
+            "title": "Location",
+            "type": "string"
+          },
+          "recurrence_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalendarDate"
+              },
+              {
+                "$ref": "#/components/schemas/CalendarDateTime"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Original series slot; null for a non-recurring event.",
+            "title": "Recurrence Id"
+          },
+          "revision": {
+            "minimum": 1,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalendarDate"
+              },
+              {
+                "$ref": "#/components/schemas/CalendarDateTime"
+              }
+            ],
+            "title": "Start"
+          },
+          "status": {
+            "enum": [
+              "confirmed",
+              "tentative",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "revision",
+          "group",
+          "summary",
+          "location",
+          "start",
+          "end",
+          "all_day",
+          "status",
+          "recurrence_id"
+        ],
+        "title": "CalendarExpandedInstance",
+        "type": "object"
+      },
       "CalendarGroup": {
         "properties": {
           "id": {
@@ -13136,6 +13225,29 @@
           "end"
         ],
         "title": "CalendarInstance",
+        "type": "object"
+      },
+      "CalendarInstances": {
+        "properties": {
+          "instances": {
+            "items": {
+              "$ref": "#/components/schemas/CalendarExpandedInstance"
+            },
+            "maxItems": 2000,
+            "title": "Instances",
+            "type": "array"
+          },
+          "truncated": {
+            "description": "True when additional matching instances were omitted at the 2000-instance cap.",
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "instances",
+          "truncated"
+        ],
+        "title": "CalendarInstances",
         "type": "object"
       },
       "CalendarPayload": {
@@ -15856,7 +15968,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.47.0"
+    "version": "0.48.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -25906,6 +26018,76 @@
         },
         "summary": "Permanently tombstone an event and enqueue deletion of remote copies",
         "x-required-role": "operator"
+      }
+    },
+    "/api/calendars/instances": {
+      "get": {
+        "description": "Requires viewer. Expands RRULE/RDATE, removes EXDATE and cancelled exceptions, and applies moved or modified exceptions. Both dates are inclusive and the window cannot exceed 92 days. Instances are sorted by start and capped at 2000.",
+        "operationId": "getCalendarInstances",
+        "parameters": [
+          {
+            "description": "First date in the window (YYYY-MM-DD).",
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Last date in the window (YYYY-MM-DD).",
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Selected configured group; defaults to the first group.",
+            "in": "query",
+            "name": "group",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarInstances"
+                }
+              }
+            },
+            "description": "expanded calendar instances"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarError"
+                }
+              }
+            },
+            "description": "invalid window (invalid_calendar_event) or unknown group (unknown_calendar_group)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarError"
+                }
+              }
+            },
+            "description": "invalid configuration"
+          }
+        },
+        "summary": "Concrete calendar occurrences in an inclusive date window",
+        "x-required-role": "viewer"
       }
     },
     "/api/control": {

@@ -189,6 +189,30 @@ na odświeżonej liście i edytuj je z aktualną rewizją. Zwykłe edycje i usun
 używają `id` i `revision`, bez `idempotency_key`.
 CLI tworzy nowe wydarzenie przy każdym osobnym wywołaniu `put` bez `--event`.
 
+### Rozwinięta agenda HTTP
+
+`GET /api/calendars/instances?from=2026-11-01&to=2026-11-30` zwraca konkretne
+wystąpienia dla natywnego klienta, który nie musi interpretować reguł RFC 5545.
+Parametry `from` i `to` są wymagane, w formacie `YYYY-MM-DD`; zakres obejmuje oba
+dni i może mieć najwyżej 92 dni. Opcjonalny `group` działa jak w `GET /api/calendars`,
+czyli bez parametru wybiera pierwszą skonfigurowaną grupę. Odczyt wymaga roli `viewer`
+i obsługuje natywną sesję `Authorization: Bearer`.
+
+Odpowiedź `{"instances": [...], "truncated": bool}` jest posortowana według początku.
+Każde wystąpienie zawiera `event_id`, `revision`, `group`, `summary`, `location`,
+`start`, `end`, `all_day`, `status` oraz `recurrence_id` (`null` dla wydarzenia
+niecyklicznego). `start` i `end` używają tej samej reprezentacji `date` albo
+`dateTime`/`timeZone` co zwykły odczyt kalendarza. Rozwijane są `RRULE` i `RDATE`,
+pomijane `EXDATE` oraz odwołane wyjątki; zmieniony wyjątek zastępuje swoje pierwotne
+wystąpienie. Uwzględniane są także wystąpienia zaczynające się przed oknem, ale
+nachodzące na nie. Daty całodniowe pozostają datami, a godziny zachowują strefę IANA
+przez zmianę czasu. Odpowiedź jest ograniczona do 2000 najwcześniejszych wystąpień;
+dalsze pominięcie sygnalizuje `truncated: true`.
+
+Nieprawidłowa data, odwrócony zakres lub zakres dłuższy niż 92 dni zwraca `400`
+z `{"error": "invalid_calendar_event"}`. Nieznana grupa zwraca `400` z
+`unknown_calendar_group`, a błąd konfiguracji `503` z `calendar_configuration_invalid`.
+
 ## Reguły i odporność
 
 Lokalne identyfikatory, UID, identyfikatory kopii, ETagi, kursory synchronizacji,

@@ -112,7 +112,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 #         (migration 0029, down_revision 0028), resolved display fields and admin bulk import.
 # 0.46.0: additive 409 device_token_limit_reached response for new password-login device names at the active cap.
 # 0.47.0: additive parse_failed_reasons on BudgetReceiptGmailStatus and retry_parse_failed on BudgetReceiptGmailSyncRequest (zero migration).
-CONTRACT_VERSION = "0.47.0"
+# 0.48.0: read-only bounded expansion of recurring calendar events into concrete instances.
+CONTRACT_VERSION = "0.48.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -124,6 +125,7 @@ _P_AUTOMATIONS = "/api/automations"
 _P_USERS = "/api/users"
 _P_WHOLE_HOME = "/api/whole-home"
 _P_CALENDARS = "/api/calendars"
+_P_CALENDAR_INSTANCES = _P_CALENDARS + "/instances"
 _P_CALENDAR_EVENTS = _P_CALENDARS + "/events"
 _P_CALENDAR_DELETE = _P_CALENDAR_EVENTS + "/delete"
 _P_BUDGET = "/api/budget/"
@@ -1040,6 +1042,26 @@ class Calendars(BaseModel):
     status: CalendarSyncStatus
 
 
+class CalendarExpandedInstance(BaseModel):
+    model_config = _READ
+    event_id: str
+    revision: Annotated[int, Field(ge=1)]
+    group: str
+    summary: str
+    location: str
+    start: CalendarTime
+    end: CalendarTime
+    all_day: bool
+    status: Literal["confirmed", "tentative", "cancelled"]
+    recurrence_id: CalendarTime | None = Field(description="Original series slot; null for a non-recurring event.")
+
+
+class CalendarInstances(BaseModel):
+    model_config = _READ
+    instances: list[CalendarExpandedInstance] = Field(max_length=2000)
+    truncated: bool = Field(description="True when additional matching instances were omitted at the 2000-instance cap.")
+
+
 class CalendarSaved(BaseModel):
     model_config = _READ
     ok: Literal[True]
@@ -1052,7 +1074,7 @@ class CalendarError(BaseModel):
 
 
 _CALENDAR_MODELS = (CalendarCreateRequest, CalendarUpdateRequest, CalendarDeleteRequest,
-                    Calendars, CalendarSaved, CalendarError)
+                    Calendars, CalendarInstances, CalendarSaved, CalendarError)
 
 
 BudgetId = Annotated[str, Field(min_length=1, max_length=128)]
@@ -3574,6 +3596,7 @@ _PATH_ROLES = {
     ("GET", "/api/rf433"): "admin",
     ("GET", "/api/db/stats"): "admin",
     ("GET", _P_CALENDARS): "viewer",
+    ("GET", _P_CALENDAR_INSTANCES): "viewer",
     ("POST", _P_CALENDAR_EVENTS): "operator",
     ("POST", _P_CALENDAR_DELETE): "operator",
     ("GET", _P_BUDGET_CONNECTIONS): "admin",
@@ -4037,6 +4060,26 @@ def build_openapi() -> dict:
                     "responses": {
                         "200": {"description": "calendar state", "content": {_APP_JSON: {"schema": _ref("Calendars")}}},
                         "400": {"description": "unknown group", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
+                        "503": {"description": "invalid configuration", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
+                    },
+                },
+            },
+            _P_CALENDAR_INSTANCES: {
+                "get": {
+                    "operationId": "getCalendarInstances",
+                    "summary": "Concrete calendar occurrences in an inclusive date window",
+                    "description": "Requires viewer. Expands RRULE/RDATE, removes EXDATE and cancelled exceptions, and applies moved or modified exceptions. Both dates are inclusive and the window cannot exceed 92 days. Instances are sorted by start and capped at 2000.",
+                    "parameters": [
+                        {"name": "from", "in": "query", "required": True, "schema": {"type": "string", "format": "date"},
+                         "description": "First date in the window (YYYY-MM-DD)."},
+                        {"name": "to", "in": "query", "required": True, "schema": {"type": "string", "format": "date"},
+                         "description": "Last date in the window (YYYY-MM-DD)."},
+                        {"name": "group", "in": "query", "schema": {"type": "string"},
+                         "description": "Selected configured group; defaults to the first group."},
+                    ],
+                    "responses": {
+                        "200": {"description": "expanded calendar instances", "content": {_APP_JSON: {"schema": _ref("CalendarInstances")}}},
+                        "400": {"description": "invalid window (invalid_calendar_event) or unknown group (unknown_calendar_group)", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
                         "503": {"description": "invalid configuration", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
                     },
                 },
