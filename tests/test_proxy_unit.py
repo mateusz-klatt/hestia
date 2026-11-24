@@ -2164,6 +2164,23 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rt.state.outdoor_temp, -5.0)              # state set before the failing inject
         self.assertEqual(len(stream.calls), 1)                     # stream NOT relaunched → still alive
 
+    async def test_crib_reading_error_does_not_drop_stream(self):
+        rt = proxy.ProxyRuntime()
+        rt.engine.set_rule(Rule.from_dict(CRIB_RULE))
+        rt.sessions.append(FakeSession())
+        stream = _FakeStream(crib_readings=[sensor433.Reading(25.6, 50.0)])
+        with mock.patch.object(rt.engine, "on_global", side_effect=ValueError("boom")):
+            with self.assertLogs("hestia.proxy", level="ERROR") as logs:
+                task = asyncio.create_task(proxy._sensor433_poller(
+                    rt, stream=stream, enabled=False,
+                    crib_model="Nexus-TH", crib_id="*", crib_channel="2", backoff=0.0))
+                await asyncio.sleep(0.05)
+                task.cancel()
+                await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1.0)
+        self.assertTrue(any("sensor433 reading failed" in m for m in logs.output))
+        self.assertEqual(rt.state.crib_temp, 25.6)                 # state set before the failing inject
+        self.assertEqual(len(stream.calls), 1)                     # stream NOT relaunched → still alive
+
     async def test_stream_exit_relaunches(self):
         stream = _FakeStream([sensor433.Reading(-5.0, 44.0)], behavior="return")
         _, _, stream, _ = await self._run(stream=stream, backoff=0.01)

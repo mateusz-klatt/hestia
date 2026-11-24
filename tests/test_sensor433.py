@@ -50,6 +50,19 @@ class _FakeStderr:
         return chunk
 
 
+class _BlockingStderr:
+    """A stderr stream stand-in whose ``read`` blocks until cancelled."""
+    def __init__(self):
+        self.cancelled = False
+
+    async def read(self, _n: int = -1) -> bytes:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
 class _FakeProc:
     """A ``create_subprocess_exec`` result: records terminate/kill/wait so reaping can be asserted."""
     def __init__(self, lines=(), stdout=True, stderr=None, returncode=None, exit_code=0):
@@ -212,6 +225,17 @@ class StreamReadingsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("exited with code 2: ...", logs.output[0])
         self.assertIn("final fatal error", logs.output[0])
         self.assertLessEqual(len(logs.output[0]), sensor433._STDERR_LIMIT + 128)
+
+    async def test_nonzero_exit_with_empty_stderr_logs_code_only(self):
+        for empty in (b"", b"   \n" * 400):
+            with self.subTest(stderr_len=len(empty)):
+                proc = _FakeProc([], stderr=empty, returncode=1)
+                with self.assertLogs("hestia.sensor433", level="WARNING") as logs:
+                    await _drain(_make_create(proc))
+                self.assertEqual(logs.output, ["WARNING:hestia.sensor433:rtl_433 exited with code 1"])
+
+    async def test_drain_stderr_none_returns_empty(self):
+        self.assertEqual(await sensor433._drain_stderr(None), "")
 
     async def test_zero_exit_with_stderr_logs_no_warning(self):
         proc = _FakeProc([_line(temperature_C=1.0)], stderr=b"rtl_433 version 25.12\n", returncode=0)
@@ -437,6 +461,58 @@ class StreamReadingsTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await sensor433.stream_readings(on_reading, create=create)
         self.assertTrue(proc.terminated and proc.waited)    # child reaped before cancellation propagated
+
+    async def test_cancel_mid_stream_with_stderr_cancels_stderr_task(self):
+        stderr = _BlockingStderr()
+        proc = _FakeProc([_line(temperature_C=1.0)], stderr=stderr)
+
+        async def on_reading(_r):
+            await asyncio.sleep(0)                         # let stderr_task enter read() before cancel
+            raise asyncio.CancelledError
+
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(
+                sensor433.stream_readings(on_reading, create=_make_create(proc)),
+                timeout=2.0,
+            )
+        self.assertTrue(proc.terminated and proc.waited)
+        self.assertTrue(stderr.cancelled)
+
+    async def test_terminate_failure_cleans_up_stderr_task_with_and_without_stderr(self):
+        for use_stderr in (True, False):
+            with self.subTest(use_stderr=use_stderr):
+                stderr = _BlockingStderr() if use_stderr else None
+                proc = _FakeProc([], stderr=stderr)
+
+                async def on_reading(_r):
+                    pass
+
+                async def failing_terminate(_proc):
+                    await asyncio.sleep(0)                 # let stderr_task enter read()
+                    raise RuntimeError("term boom")
+
+                with mock.patch.object(sensor433, "_terminate", side_effect=failing_terminate):
+                    with self.assertRaises(RuntimeError):
+                        await asyncio.wait_for(
+                            sensor433.stream_readings(on_reading, create=_make_create(proc)),
+                            timeout=2.0,
+                        )
+                if stderr is not None:
+                    self.assertTrue(stderr.cancelled)
+
+    async def test_stderr_wait_timeout_cancels_drain_and_logs_exit_code(self):
+        stderr = _BlockingStderr()
+        proc = _FakeProc([], stderr=stderr, returncode=1)
+        real_wait_for = asyncio.wait_for
+
+        async def fast_wait_for(aw, timeout):
+            return await real_wait_for(aw, 0.01 if timeout == 1.0 else timeout)
+
+        with mock.patch.object(sensor433.asyncio, "wait_for", side_effect=fast_wait_for):
+            with self.assertLogs("hestia.sensor433", level="WARNING") as logs:
+                await asyncio.wait_for(_drain(_make_create(proc)), timeout=2.0)
+        self.assertTrue(stderr.cancelled)
+        self.assertEqual(logs.output, ["WARNING:hestia.sensor433:rtl_433 exited with code 1"])
 
     async def test_terminate_tolerates_already_reaped_child(self):
         class _RacyProc(_FakeProc):

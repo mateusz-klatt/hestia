@@ -249,7 +249,7 @@ async def stream_readings(
             else:
                 try:
                     err_text = await asyncio.wait_for(stderr_task, 1.0)
-                except (TimeoutError, Exception):
+                except Exception:
                     stderr_task.cancel()
                     with contextlib.suppress(BaseException):
                         await stderr_task
