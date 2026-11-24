@@ -134,6 +134,10 @@ def _text(value, limit=80, *, translation=False):
     return normalized
 
 
+def _name_key(name):
+    return unicodedata.normalize("NFC", name.replace("\u200c", "").replace("\u200d", "")).casefold()
+
+
 def _version(current, expected):
     if type(expected) is not int or expected < 0:
         raise AnalyticsError()
@@ -309,7 +313,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
 
     def create_category(self, owner, name, parent_id=None):
         name = " ".join(_text(name).split())
-        key = name.casefold()
+        key = _name_key(name)
         with self.transaction() as session:
             self._owner(session, owner)
             prior = session.scalar(select(Category).where(Category.owner == owner, Category.name_key == key))
@@ -341,6 +345,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
 
     def update_category(self, owner, identifier, *, name, archived, expected_version, parent_id=_UNSET, color_hue=_UNSET):
         name = " ".join(_text(name).split())
+        key = _name_key(name)
         if type(archived) is not bool:
             raise AnalyticsError()
         if color_hue is not _UNSET:
@@ -349,12 +354,12 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             self._owner(session, owner)
             row = self._owned(session, Category, owner, identifier)
             _version(row.version, expected_version)
-            other = session.scalar(select(Category).where(Category.owner == owner, Category.name_key == name.casefold(),
+            other = session.scalar(select(Category).where(Category.owner == owner, Category.name_key == key,
                                                           Category.id != row.id))
             if other is not None:
                 raise AnalyticsError("budget_analytics_conflict", 409)
             translated = session.scalar(select(CategoryTranslation.category_id).where(
-                CategoryTranslation.owner == owner, CategoryTranslation.name_key == name.casefold(),
+                CategoryTranslation.owner == owner, CategoryTranslation.name_key == key,
                 CategoryTranslation.category_id != row.id).limit(1))
             if translated is not None:
                 raise AnalyticsError("budget_analytics_conflict", 409)
@@ -374,7 +379,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 return {**before, "changed": False}
             if archived and self._has_children(session, owner, row.id):
                 raise AnalyticsError()
-            row.name, row.name_key, row.archived, row.parent_id = name, name.casefold(), archived, new_parent
+            row.name, row.name_key, row.archived, row.parent_id = name, key, archived, new_parent
             row.color_hue = new_hue
             row.version += 1
             row.updated_at = self._now()
@@ -416,7 +421,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         lang = self._translation_language(lang)
         name = " ".join(_text(name, translation=True).split())
         self._owned(session, Category, owner, category_id)
-        key = name.casefold()
+        key = _name_key(name)
         canonical = session.scalar(select(Category.id).where(
             Category.owner == owner, Category.name_key == key, Category.id != category_id).limit(1))
         if canonical is not None:

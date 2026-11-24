@@ -228,6 +228,45 @@ class TranslationStoreTests(AnalyticsCase):
         self.assertEqual([row["ok"] for row in results], [True, False, False])
         self.assertEqual([row["error"] for row in results[1:]], ["budget_analytics_conflict"] * 2)
 
+    def test_translation_joiner_keys_collide_with_other_canonical_and_translated_names(self):
+        with self.assertRaises(AnalyticsError) as canonical:
+            self.store.set_category_translation(
+                "owner", category_id=self.food["id"], lang="fa", name="Synthetic Ot\u200cher")
+        self.assertEqual(canonical.exception.status, 409)
+
+        translated = self.store.set_category_translation(
+            "owner", category_id=self.other["id"], lang="bn", name="Joined\u200dName")
+        self.assertEqual(translated["name"], "Joined\u200dName")
+        with self.assertRaises(AnalyticsError) as other_translation:
+            self.store.set_category_translation(
+                "owner", category_id=self.food["id"], lang="hi", name="JoinedName")
+        self.assertEqual(other_translation.exception.status, 409)
+        with self.sessions() as session:
+            row = session.get(db.BudgetCategoryTranslation, (self.other["id"], "bn"))
+            self.assertEqual((row.name, row.name_key), ("Joined\u200dName", "joinedname"))
+
+    def test_translation_joiner_key_collision_is_an_indexed_bulk_row_error(self):
+        results = self.store.import_translations("owner", entries=[
+            {"kind": "category", "category_id": self.food["id"], "lang": "fa", "name": "BulkName"},
+            {"kind": "category", "category_id": self.other["id"], "lang": "fa", "name": "Bulk\u200cName"},
+        ])
+        self.assertEqual(results[0], {"index": 0, "ok": True, "changed": True})
+        self.assertEqual(results[1], {"index": 1, "ok": False, "error": "budget_analytics_conflict"})
+
+    def test_same_category_allows_names_with_and_without_a_joiner(self):
+        with_joiner = self.store.set_category_translation(
+            "owner", category_id=self.food["id"], lang="fa", name="Synthetic F\u200cood")
+        without_joiner = self.store.set_category_translation(
+            "owner", category_id=self.food["id"], lang="en", name="Synthetic Food")
+        self.assertEqual(with_joiner["name"], "Synthetic F\u200cood")
+        self.assertTrue(without_joiner["changed"])
+        with self.sessions() as session:
+            canonical = session.get(db.BudgetCategory, self.food["id"])
+            rows = [session.get(db.BudgetCategoryTranslation, (self.food["id"], lang)) for lang in ("fa", "en")]
+            self.assertEqual(canonical.name_key, "synthetic food")
+            self.assertEqual({row.name_key for row in rows}, {"synthetic food"})
+            self.assertEqual({row.name for row in rows}, {"Synthetic F\u200cood", "Synthetic Food"})
+
     def test_translations_allow_joiners_between_letters_or_marks_in_direct_and_bulk_writes(self):
         persian = "می\u200cخواهم"
         translated = self.store.set_category_translation(
