@@ -502,20 +502,19 @@ class DeviceTokenStore:
                     BudgetAnalyticsAudit.action == NEW_DEVICE_LOGIN,
                 ).exists(),
             ).limit(1)) is not None
-            replacing = session.scalar(select(DeviceToken.id).where(
+            replacing = session.scalar(select(DeviceToken).where(
                 DeviceToken.owner == owner, DeviceToken.device_name == name, DeviceToken.revoked_at.is_(None),
                 DeviceToken.expires_at > moment, DeviceToken.hard_expires_at > moment,
-            ).limit(1)) is not None
-            if not replacing:
+            ).order_by(DeviceToken.created_at.desc(), DeviceToken.id.desc()).limit(1))
+            if replacing is None:
                 active = session.scalar(select(func.count()).select_from(DeviceToken).where(
                     DeviceToken.owner == owner, DeviceToken.revoked_at.is_(None),
                     DeviceToken.expires_at > moment, DeviceToken.hard_expires_at > moment,
                 ))
                 if active >= MAX_ACTIVE_TOKENS:
                     raise DeviceTokenError(409, "device_token_limit_reached")
-            session.execute(update(DeviceToken).where(
-                DeviceToken.owner == owner, DeviceToken.device_name == name, DeviceToken.revoked_at.is_(None),
-            ).values(revoked_at=moment))
+            else:
+                replacing.revoked_at = moment
         overflow = session.scalars(select(DeviceToken).where(
             DeviceToken.owner == owner, DeviceToken.revoked_at.is_(None),
             DeviceToken.expires_at > moment, DeviceToken.hard_expires_at > moment,

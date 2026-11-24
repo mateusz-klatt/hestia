@@ -588,6 +588,25 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         stored = json.dumps(self._stored_text())
         self.assertTrue(all(secret not in stored for secret in (LOGIN_PASSWORD, first["token"], second["token"])))
 
+    async def test_password_login_rotates_only_the_newest_active_token_with_the_same_name(self):
+        self._set_login_passwords("alice")
+        start = int(web._now())
+        with mock.patch.object(device_token, "now", side_effect=range(start, start + 10)):
+            paired = []
+            for _ in range(2):
+                code = await self._pair()
+                response = await self._redeem(code["code"], name="Shared")
+                _status(response, 200)
+                paired.append(await response.json())
+            replacement = await self._logged_in_device(name="Shared")
+
+        records = {row.id: row for row in self.rows(db.BudgetReceiptDeviceToken)}
+        self.assertIsNone(records[paired[0]["token_id"]].revoked_at)
+        self.assertIsNotNone(records[paired[1]["token_id"]].revoked_at)
+        self.assertIsNone(records[replacement["token_id"]].revoked_at)
+        active = {token_id for token_id, row in records.items() if row.revoked_at is None}
+        self.assertEqual(active, {paired[0]["token_id"], replacement["token_id"]})
+
     async def test_new_device_inbox_item_is_owner_private_and_can_be_marked_read(self):
         self._set_login_passwords("alice")
         grant = household.grant_member("viewer", "alice")["grant_id"]
