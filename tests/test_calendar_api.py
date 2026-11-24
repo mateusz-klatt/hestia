@@ -196,6 +196,9 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
                 response = await self.client.get(api.PATH, headers=self.headers())
                 self.assertEqual(response.status, 503)
                 self.assertNotIn("never-leak", await response.text())
+                response = await self.instances("from=2026-01-01&to=2026-01-02")
+                self.assertEqual(response.status, 503)
+                self.assertNotIn("never-leak", await response.text())
         with mock.patch.object(api, "_write", side_effect=TypeError("never-leak-token")):
             response = await self.post(create_request())
             self.assertEqual(response.status, 400)
@@ -445,6 +448,43 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(state["truncated"])
         self.assertIn("HOURLY", "\n".join(logs.output))
 
+    async def test_instances_fallback_handles_dtstart_exdate_and_exceptions(self):
+        active = await self.create({"summary": "Master",
+                                    "start": {"dateTime": "2026-01-01T00:00:00Z", "timeZone": "UTC"},
+                                    "end": {"dateTime": "2026-01-01T01:00:00Z", "timeZone": "UTC"},
+                                    "recurrence": ["RRULE:FREQ=HOURLY"], "exceptions": [
+                                        {"originalStartTime": {"dateTime": "2025-12-31T00:00:00Z"}, "status": "cancelled"},
+                                        {"originalStartTime": {"dateTime": "2026-01-01T00:00:00Z"},
+                                         "summary": "Active", "start": {"dateTime": "2026-01-01T02:00:00Z", "timeZone": "UTC"},
+                                         "end": {"dateTime": "2026-01-01T03:00:00Z", "timeZone": "UTC"}}]})
+        await self.create({"summary": "Cancelled exception",
+                           "start": {"dateTime": "2026-01-01T00:00:00Z", "timeZone": "UTC"},
+                           "end": {"dateTime": "2026-01-01T01:00:00Z", "timeZone": "UTC"},
+                           "recurrence": ["RRULE:FREQ=HOURLY"], "exceptions": [
+                               {"originalStartTime": {"dateTime": "2026-01-01T00:00:00Z"}, "status": "cancelled"}]})
+        await self.create({"summary": "Cancelled", "status": "cancelled",
+                           "start": {"dateTime": "2026-01-01T00:00:00Z", "timeZone": "UTC"},
+                           "end": {"dateTime": "2026-01-01T01:00:00Z", "timeZone": "UTC"},
+                           "recurrence": ["RRULE:FREQ=HOURLY"]})
+        await self.create({"summary": "Excluded", "start": {"dateTime": "2026-01-01T00:00:00Z", "timeZone": "UTC"},
+                           "end": {"dateTime": "2026-01-01T01:00:00Z", "timeZone": "UTC"},
+                           "recurrence": ["RRULE:FREQ=HOURLY", "EXDATE:20260101T000000Z"]})
+        with self.assertLogs("hestia.calendar_sync.instances", level="WARNING"):
+            response = await self.instances("from=2026-01-01&to=2026-01-02")
+        instances = (await response.json())["instances"]
+        self.assertEqual([(item["event_id"], item["summary"]) for item in instances], [(active["id"], "Active")])
+        self.assertEqual(instances[0]["start"]["dateTime"], "2026-01-01T02:00:00+00:00")
+
+    async def test_instances_override_moved_outside_window_is_not_returned(self):
+        await self.create({"summary": "Base", "start": {"dateTime": "2026-01-05T09:00:00Z", "timeZone": "UTC"},
+                           "end": {"dateTime": "2026-01-05T10:00:00Z", "timeZone": "UTC"},
+                           "recurrence": ["RRULE:FREQ=DAILY;COUNT=1"], "exceptions": [
+                               {"originalStartTime": {"dateTime": "2026-01-05T09:00:00Z"},
+                                "start": {"dateTime": "2026-02-01T09:00:00Z", "timeZone": "UTC"},
+                                "end": {"dateTime": "2026-02-01T10:00:00Z", "timeZone": "UTC"}}]})
+        response = await self.instances("from=2026-01-05&to=2026-01-06")
+        self.assertEqual((await response.json())["instances"], [])
+
     async def test_instances_cancelled_master_keeps_active_override(self):
         event = await self.create({"summary": "Cancelled", "status": "cancelled",
                                    "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
@@ -510,16 +550,16 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(incomplete)
         self.assertEqual([item["start"]["dateTime"] for item in instances], ["2026-10-25T02:30:00+02:00"])
 
-    async def test_instances_second_fold_dtstart_count_one_emits_only_actual_start(self):
+    async def test_instances_second_fold_dtstart_keeps_actual_start_and_later_rules(self):
         event = await self.create({"summary": "Second fold",
                                    "start": {"dateTime": "2026-10-25T02:30:00+01:00", "timeZone": "Europe/Warsaw"},
                                    "end": {"dateTime": "2026-10-25T03:30:00+01:00", "timeZone": "Europe/Warsaw"},
-                                   "recurrence": ["RRULE:FREQ=DAILY;COUNT=1"]})
-        response = await self.instances("from=2026-10-25&to=2026-10-26")
+                                   "recurrence": ["RRULE:FREQ=DAILY;COUNT=2"]})
+        response = await self.instances("from=2026-10-25&to=2026-10-27")
         instances = (await response.json())["instances"]
-        self.assertEqual(len(instances), 1)
-        self.assertEqual(instances[0]["start"],
-                         {"dateTime": "2026-10-25T02:30:00+01:00", "timeZone": "Europe/Warsaw"})
+        self.assertEqual(len(instances), 2)
+        self.assertEqual([item["start"]["dateTime"] for item in instances],
+                         ["2026-10-25T02:30:00+01:00", "2026-10-26T02:30:00+01:00"])
         self.assertEqual(instances[0]["instance_id"], event["id"] + "/2026-10-25T01:30:00+00:00")
 
     async def test_instances_fold_straddling_master_preserves_anchor_and_offsets(self):
@@ -553,6 +593,23 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         instances = (await response.json())["instances"]
         self.assertEqual([item["summary"] for item in instances], ["Monday master", "Monday master"])
         self.assertIn("orphan override", "\n".join(logs.output))
+
+    async def test_instances_moved_override_membership_is_checked_against_series(self):
+        await self.create({"summary": "Base",
+                           "start": {"dateTime": "2026-01-01T09:00:00Z", "timeZone": "UTC"},
+                           "end": {"dateTime": "2026-01-03T09:00:00Z", "timeZone": "UTC"},
+                           "recurrence": ["RRULE:FREQ=DAILY;UNTIL=20260110T000000Z"], "exceptions": [
+                               {"originalStartTime": {"dateTime": "2026-01-01T09:00:00Z"}, "summary": "Moved explicit",
+                                "start": {"dateTime": "2026-01-20T09:00:00Z", "timeZone": "UTC"},
+                                "end": {"dateTime": "2026-01-20T10:00:00Z", "timeZone": "UTC"}},
+                               {"originalStartTime": {"dateTime": "2026-01-02T09:00:00Z"}, "summary": "Moved series",
+                                "start": {"dateTime": "2026-01-21T09:00:00Z", "timeZone": "UTC"},
+                                "end": {"dateTime": "2026-01-21T10:00:00Z", "timeZone": "UTC"}}]})
+        response = await self.instances("from=2026-01-20&to=2026-01-22")
+        instances = (await response.json())["instances"]
+        self.assertEqual([item["summary"] for item in instances], ["Moved explicit", "Moved series"])
+        self.assertEqual(instances[0]["recurrence_id"]["dateTime"], "2026-01-01T09:00:00+00:00")
+        self.assertEqual(instances[1]["recurrence_id"]["dateTime"], "2026-01-02T09:00:00+00:00")
 
     async def test_instances_first_fold_rdate_survives_second_fold_dtstart(self):
         await self.create({"summary": "Both folds",
@@ -662,6 +719,12 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.instances("from=9999-12-30&to=9999-12-31")
         self.assertEqual(response.status, 200)
         self.assertEqual([item["summary"] for item in (await response.json())["instances"]], ["Maximum"])
+        response = await self.instances("from=0001-01-01&to=0001-01-02&tz=Europe/Warsaw")
+        self.assertEqual(response.status, 200)
+        response = await self.instances("from=9999-12-30&to=9999-12-31&tz=America/New_York")
+        self.assertEqual(response.status, 200)
+        self.assertIsNone(instance_expander._base_end({"start": {"date": "9999-12-30"}, "end": {"date": "9999-12-31"}},
+                                                       {"date": "9999-12-31"}))
 
     async def test_instances_incompatible_rule_does_not_fail_group(self):
         incompatible = await self.create({"summary": "Leap second",
@@ -739,6 +802,19 @@ class CalendarApiContractTests(unittest.TestCase):
         self.assertIn("stable across calls", schema["properties"]["instance_id"]["description"])
         self.assertIn("moved exceptions", schema["properties"]["instance_id"]["description"])
         self.assertEqual(document["components"]["schemas"]["CalendarInstances"]["properties"]["instances"]["maxItems"], 2000)
+
+    def test_override_membership_guards_and_double_failure_fallback(self):
+        event = {"id": "event", "uid": "event", "payload": {"start": {"timeZone": "UTC"}}}
+        self.assertFalse(instance_expander._override_member(event, [], set(), datetime.max.replace(tzinfo=timezone.utc)))
+        until = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        original = datetime(2021, 1, 1, tzinfo=timezone.utc)
+        self.assertFalse(instance_expander._override_member(event, [({}, until)], set(), original))
+        event["payload"] = {"start": {"date": "2026-01-01"}}
+        with mock.patch.object(instance_expander, "_expand_event", side_effect=ValueError("bad rule")):
+            with mock.patch.object(instance_expander, "_first_instance", side_effect=ValueError("bad start")):
+                with self.assertLogs("hestia.calendar_sync.instances", level="WARNING"):
+                    result = instance_expander.expand_events([event], date(2026, 1, 1), date(2026, 1, 2))
+        self.assertEqual(result, {"instances": [], "truncated": True})
 
     def test_parallel_web_and_runtime_db_initialization_has_one_migration(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -46,19 +46,13 @@ class _Collector:
     def __init__(self, window: _Window):
         self.window = window
         self.entries = []
-        self.ids = set()
         self.overflow = False
 
     def add(self, instance: dict):
-        identifier = instance["instance_id"]
-        if identifier in self.ids:
-            return
-        entry = (_sort_key(instance, self.window), identifier, instance)
+        entry = (_sort_key(instance, self.window), instance["instance_id"], instance)
         insort(self.entries, entry)
-        self.ids.add(identifier)
         if len(self.entries) > INSTANCE_LIMIT + 1:
-            removed = self.entries.pop()[2]["instance_id"]
-            self.ids.remove(removed)
+            self.entries.pop()
             self.overflow = True
 
     def values(self) -> list[dict]:
@@ -81,12 +75,6 @@ def _midnight_utc(day: date, zone: ZoneInfo, lower: bool) -> datetime:
 def _make_window(start: date, end: date, zone_name: str) -> _Window:
     zone = ZoneInfo(zone_name)
     return _Window(start, end, zone, _midnight_utc(start, zone, True), _midnight_utc(end, zone, False))
-
-
-def _dt_value(value: dict):
-    if "date" in value:
-        return date.fromisoformat(value["date"])
-    return datetime.fromisoformat(value["dateTime"]).astimezone(ZoneInfo(value["timeZone"]))
 
 
 def _property_keys(line: str, kind: str) -> set:
@@ -125,11 +113,8 @@ def _calendar(payload: dict, uid: str) -> Calendar:
     for component, exception in zip(components[1:], content.get("exceptions", [])):
         if "DTSTART" not in component:
             default = default_instance(content, exception["originalStartTime"])
-            component.add("dtstart", _dt_value(default["start"]))
-            component.add("dtend", _dt_value(default["end"]))
-        if "dateTime" in exception["originalStartTime"]:
-            original = datetime.fromisoformat(exception["originalStartTime"]["dateTime"]).astimezone(_UTC)
-            component["RECURRENCE-ID"] = vDDDTypes(original)
+            component.add("dtstart", date.fromisoformat(default["start"]["date"]))
+            component.add("dtend", date.fromisoformat(default["end"]["date"]))
     return calendar
 
 
@@ -171,24 +156,9 @@ def _time_dict(prop, default_zone: str | None, force_zone: str | None = None) ->
     value = prop.dt
     if not isinstance(value, datetime):
         return {"date": value.isoformat()}
-    if force_zone:
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=ZoneInfo(default_zone or "UTC"))
-        normalized = value.astimezone(_UTC).astimezone(ZoneInfo(force_zone))
-        return {"dateTime": normalized.isoformat(timespec="seconds"), "timeZone": force_zone}
-    zone_name = prop.params.get("TZID") or getattr(value.tzinfo, "key", None)
-    if zone_name:
-        zone = ZoneInfo(str(zone_name))
-        zone_name = str(zone_name)
-    elif value.tzinfo is not None and value.utcoffset() == timezone.utc.utcoffset(None):
-        zone = _UTC
-        zone_name = "UTC"
-    else:
-        zone_name = default_zone or "UTC"
-        zone = ZoneInfo(zone_name)
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=zone)
-    return {"dateTime": value.astimezone(zone).isoformat(timespec="seconds"), "timeZone": zone_name}
+    zone_name = force_zone or default_zone or "UTC"
+    normalized = value.astimezone(_UTC).astimezone(ZoneInfo(zone_name))
+    return {"dateTime": normalized.isoformat(timespec="seconds"), "timeZone": zone_name}
 
 
 def _overlaps(content: dict, window: _Window) -> bool:
@@ -329,11 +299,8 @@ def _occurrence_upper_bound(payload: dict, start: datetime, end: datetime) -> in
             continue
         _, body = line.split(":", 1)
         parts = dict(part.split("=", 1) for part in body.split(";"))
-        frequency = parts["FREQ"]
-        if frequency in _HIGH_FREQUENCIES:
-            return OCCURRENCE_BOUND + 1
         interval = int(parts.get("INTERVAL", "1"))
-        estimated = ceil(seconds / (_FREQUENCY_SECONDS[frequency] * interval)) + 1
+        estimated = ceil(seconds / (_FREQUENCY_SECONDS[parts["FREQ"]] * interval)) + 1
         bound += min(int(parts["COUNT"]), estimated) if "COUNT" in parts else estimated
     return bound
 
@@ -359,8 +326,8 @@ def _replay_upper_bound(payload: dict, end: datetime) -> int:
     return bound
 
 
-def _override_member(event: dict, queries: list, explicit: set, slots: set, original: datetime) -> bool:
-    if original in explicit or original in slots:
+def _override_member(event: dict, queries: list, explicit: set, original: datetime) -> bool:
+    if original in explicit:
         return True
     try:
         stop = original + timedelta(seconds=1)
@@ -403,7 +370,6 @@ def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
     overrides = ({_key(item["originalStartTime"], False): item for item in payload.get("exceptions", [])}
                  if timed else {})
     seen_overrides = set()
-    series_slots = set()
     second_fold = _second_fold_start(payload)
     matches = []
     identifiers = set()
@@ -423,7 +389,6 @@ def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
                     recurrence_id = _time_dict(component["RECURRENCE-ID"], payload["start"]["timeZone"],
                                                payload["start"]["timeZone"])
                     original = _key(recurrence_id, False)
-                    series_slots.add(original)
                     if until is not None and original not in explicit and original > until:
                         continue
                     if original in exdates:
@@ -446,7 +411,7 @@ def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
     for original, exception in overrides.items():
         if original in seen_overrides or original in exdates:
             continue
-        if not _override_member(event, queries, explicit, series_slots, original):
+        if not _override_member(event, queries, explicit, original):
             _LOG.debug("Skipping orphan override for calendar event %s at %s", event["id"], original.isoformat())
             continue
         add(_stored_override(event, exception, original, window))
