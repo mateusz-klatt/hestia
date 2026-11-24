@@ -23,17 +23,14 @@ _MAX_INTERVAL = 1000
 _UTC = timezone.utc
 _MIN_UTC = datetime.min.replace(tzinfo=_UTC)
 _MAX_UTC = datetime.max.replace(tzinfo=_UTC)
-# Design principle: allow an RRULE shape only if it is provably productive —
-# either every visited period yields at least 1 candidate (and at least |pos|
-# candidates when BYSETPOS is used), or INTERVAL=1 and gaps between matches are
-# bounded by the 400-year Gregorian cycle (e.g., Feb 29 on a Monday).
+# Enumerated allowlist of simple Google/Outlook RRULE shapes; anything outside S1-S7 falls back to DTSTART.
 _ALLOWED_FREQUENCIES = {"DAILY", "WEEKLY", "MONTHLY", "YEARLY"}
 _ALLOWED_RULE_KEYS = {
     "FREQ", "INTERVAL", "COUNT", "UNTIL", "WKST",
     "BYDAY", "BYMONTHDAY", "BYMONTH", "BYSETPOS",
 }
-_WEEKDAY_INDEX = {"MO": 0, "TU": 1, "WE": 2, "TH": 3, "FR": 4, "SA": 5, "SU": 6}
-_WEEKDAYS = set(_WEEKDAY_INDEX)
+_BY_KEYS = {"BYDAY", "BYMONTHDAY", "BYMONTH", "BYSETPOS"}
+_WEEKDAYS = {"MO", "TU", "WE", "TH", "FR", "SA", "SU"}
 _BYDAY_RE = re.compile(r"([+-]?\d+)?(MO|TU|WE|TH|FR|SA|SU)\Z")
 _MONTH_DAY_LIMITS = {2: 29, 4: 30, 6: 30, 9: 30, 11: 30}
 _FREQUENCY_SECONDS = {
@@ -268,67 +265,91 @@ def _start_date(payload: dict) -> date:
     return datetime.fromisoformat(start["dateTime"]).astimezone(ZoneInfo(zone_name)).date()
 
 
-def _byday_state(raw: str, frequency: str, limit: int) -> tuple[set[str], bool] | str:
-    weekdays: set[str] = set()
-    has_ordinal = False
+def _parse_byday(raw: str) -> tuple[set[str], int | None] | None:
+    plain: set[str] = set()
+    ordinals: list[int] = []
     for token in raw.split(","):
         match = _BYDAY_RE.fullmatch(token)
         if match is None:
-            return "uses invalid BYDAY parameter"
+            return None
         ordinal, weekday = match.groups()
-        weekdays.add(weekday)
-        if ordinal is not None:
-            has_ordinal = True
-            if frequency not in {"MONTHLY", "YEARLY"} or not (1 <= abs(int(ordinal)) <= limit):
-                return "uses unsupported BYDAY ordinal"
-    return weekdays, has_ordinal
+        if ordinal is None:
+            plain.add(weekday)
+        else:
+            value = int(ordinal)
+            if value == 0:
+                return None
+            ordinals.append(value)
+    if ordinals:
+        if plain or len(ordinals) != 1:
+            return None
+        return set(), ordinals[0]
+    return plain, None
 
 
-def _bysetpos_rejection_reason(
-    raw: str, frequency: str, months: list[int] | None, month_days: list[int] | None,
-    weekdays: set[str], has_ordinal_byday: bool,
+def _shape_rejection_reason(
+    frequency: str, interval: int, parts: dict[str, str], start_date: date
 ) -> str | None:
-    if frequency not in {"MONTHLY", "YEARLY"} or not weekdays or has_ordinal_byday or month_days is not None:
-        return "uses unsupported BYSETPOS combination"
-    if frequency == "MONTHLY" and months is not None:
-        return "uses unsupported BYSETPOS with BYMONTH under MONTHLY"
-    if frequency == "YEARLY" and months is not None and len(set(months)) != 1:
-        return "uses unsupported multi-month BYSETPOS under YEARLY"
-    per_month = frequency == "MONTHLY" or months is not None
-    pos_limit = (4 if per_month else 52) * len(weekdays)
-    if _parse_int_list(raw, 1, pos_limit, allow_negative=True) is None:
+    months = _parse_int_list(parts["BYMONTH"], 1, 12) if "BYMONTH" in parts else None
+    if "BYMONTH" in parts and months is None:
+        return "uses invalid BYMONTH parameter"
+    month_days = _parse_int_list(parts["BYMONTHDAY"], 1, 31, allow_negative=True) if "BYMONTHDAY" in parts else None
+    if "BYMONTHDAY" in parts and month_days is None:
+        return "uses invalid BYMONTHDAY parameter"
+    plain_days, ordinal_day = set(), None
+    if "BYDAY" in parts:
+        parsed_byday = _parse_byday(parts["BYDAY"])
+        if parsed_byday is None:
+            return "uses unsupported BYDAY parameter"
+        plain_days, ordinal_day = parsed_byday
+    setpos = _parse_int_list(parts["BYSETPOS"], 1, 28, allow_negative=True) if "BYSETPOS" in parts else None
+    if "BYSETPOS" in parts and setpos is None:
         return "uses out-of-range BYSETPOS parameter"
-    return None
 
-
-def _reachability_rejection_reason(
-    frequency: str, interval: int, months: list[int] | None, month_days: list[int] | None,
-    weekdays: set[str], start_date: date,
-) -> str | None:
-    if interval > 1:
-        if frequency in {"DAILY", "WEEKLY"} and (months is not None or month_days is not None):
-            return "uses unsupported month or day selector with INTERVAL > 1"
-        if frequency == "DAILY" and weekdays:
-            reachable = {(start_date.weekday() + step * interval) % 7 for step in range(7)}
-            if not (reachable & {_WEEKDAY_INDEX[day] for day in weekdays}):
-                return "uses unreachable BYDAY with DAILY INTERVAL > 1"
-        if frequency == "MONTHLY" and months is not None:
-            visited = {((start_date.month - 1 + step * interval) % 12) + 1 for step in range(12)}
-            if not (visited & set(months)):
-                return "uses unreachable BYMONTH with MONTHLY INTERVAL > 1"
-        if month_days is not None and any(abs(day) >= 29 for day in month_days):
-            return "uses day 29-31 selector with INTERVAL > 1"
-        if weekdays and month_days is not None:
-            return "uses BYDAY and BYMONTHDAY intersection with INTERVAL > 1"
-        if frequency in {"MONTHLY", "YEARLY"} and month_days is None and not weekdays and start_date.day >= 29:
+    by_keys = set(parts) & _BY_KEYS
+    if not by_keys:
+        # S1: no BY*; implicit DTSTART day recurs within 2 months (8 years for Feb 29) at INTERVAL=1.
+        if frequency in {"MONTHLY", "YEARLY"} and interval > 1 and start_date.day >= 29:
             return "uses DTSTART day 29-31 with INTERVAL > 1"
-    effective_days = (month_days if month_days is not None
-                      else ([start_date.day] if frequency in {"MONTHLY", "YEARLY"} and not weekdays else None))
-    if months is not None and effective_days is not None and not all(
-        1 <= abs(day) <= _MONTH_DAY_LIMITS.get(month, 31) for month in months for day in effective_days
-    ):
-        return "has impossible month/day recurrence selectors"
-    return None
+        return None
+    if frequency == "WEEKLY" and by_keys == {"BYDAY"} and ordinal_day is None:
+        # S2: WEEKLY plain BYDAY; every week contains every weekday.
+        return None
+    if frequency == "DAILY" and by_keys == {"BYDAY"} and ordinal_day is None and interval == 1:
+        # S3: DAILY plain BYDAY at INTERVAL=1; every 7 days hits every weekday.
+        return None
+    if frequency == "MONTHLY":
+        if by_keys == {"BYMONTHDAY"} and len(month_days) == 1:
+            # S4: MONTHLY single BYMONTHDAY; <=28 exists every month, 29-31 recurs within 2 months at INTERVAL=1.
+            if abs(month_days[0]) >= 29 and interval > 1:
+                return "uses day 29-31 selector with INTERVAL > 1"
+            return None
+        if by_keys == {"BYDAY"}:
+            if ordinal_day is None:
+                # S5(a): MONTHLY plain BYDAY; every month contains every weekday.
+                return None
+            # S5(b): MONTHLY single ordinal BYDAY; +-1..+-4 exist every month, +-5 recurs at INTERVAL=1.
+            if abs(ordinal_day) <= (4 if interval > 1 else 5):
+                return None
+        if by_keys == {"BYDAY", "BYSETPOS"} and ordinal_day is None and len(setpos) == 1:
+            # S6: MONTHLY plain BYDAY with single BYSETPOS; every month has >=4 of each weekday.
+            if abs(setpos[0]) <= 4 * len(plain_days):
+                return None
+    if frequency == "YEARLY" and months is not None and len(months) == 1:
+        month = months[0]
+        if by_keys == {"BYMONTH", "BYMONTHDAY"} and len(month_days) == 1:
+            # S7(a): YEARLY single BYMONTH+BYMONTHDAY; valid day hits yearly (Feb 29 within 8 years at INTERVAL=1).
+            day = abs(month_days[0])
+            if day <= _MONTH_DAY_LIMITS.get(month, 31) and not (month == 2 and day == 29 and interval > 1):
+                return None
+        if by_keys == {"BYMONTH", "BYDAY"}:
+            if ordinal_day is None:
+                # S7(c): YEARLY single BYMONTH with plain BYDAY; every visited month contains every weekday.
+                return None
+            # S7(b): YEARLY single BYMONTH with single ordinal BYDAY; +-1..+-4 exist yearly, +-5 recurs at INTERVAL=1.
+            if abs(ordinal_day) <= (4 if interval > 1 else 5):
+                return None
+    return "uses unsupported recurrence shape"
 
 
 def _rrule_rejection_reason(parts: dict[str, str] | None, start_date: date) -> str | None:
@@ -354,27 +375,7 @@ def _rrule_rejection_reason(parts: dict[str, str] | None, start_date: date) -> s
             return "uses invalid COUNT parameter"
     if "WKST" in parts and parts["WKST"] not in _WEEKDAYS:
         return "uses invalid WKST parameter"
-    months = _parse_int_list(parts["BYMONTH"], 1, 12) if "BYMONTH" in parts else None
-    if "BYMONTH" in parts and months is None:
-        return "uses invalid BYMONTH parameter"
-    month_days = _parse_int_list(parts["BYMONTHDAY"], 1, 31, allow_negative=True) if "BYMONTHDAY" in parts else None
-    if "BYMONTHDAY" in parts and month_days is None:
-        return "uses invalid BYMONTHDAY parameter"
-    weekdays: set[str] = set()
-    has_ordinal_byday = False
-    if "BYDAY" in parts:
-        byday_limit = 4 if interval > 1 else (5 if frequency == "MONTHLY" or months is not None else 53)
-        byday = _byday_state(parts["BYDAY"], frequency, byday_limit)
-        if isinstance(byday, str):
-            return byday
-        weekdays, has_ordinal_byday = byday
-    if "BYSETPOS" in parts:
-        reason = _bysetpos_rejection_reason(
-            parts["BYSETPOS"], frequency, months, month_days, weekdays, has_ordinal_byday
-        )
-        if reason is not None:
-            return reason
-    return _reachability_rejection_reason(frequency, interval, months, month_days, weekdays, start_date)
+    return _shape_rejection_reason(frequency, interval, parts, start_date)
 
 
 def _unsupported_rule_reason(payload: dict) -> str | None:
@@ -470,10 +471,7 @@ def _replay_upper_bound(payload: dict, end: datetime) -> int:
         parts = _rrule_parts(line)
         frequency = parts["FREQ"]
         periods = ceil(seconds / (_FREQUENCY_SECONDS[frequency] * int(parts.get("INTERVAL", "1")))) + 1
-        if _DAY_SELECTORS.intersection(parts) or (frequency == "YEARLY" and "BYMONTH" in parts):
-            per_period = _DAY_CANDIDATES[frequency]
-        else:
-            per_period = 1
+        per_period = _DAY_CANDIDATES[frequency] if _DAY_SELECTORS.intersection(parts) else 1
         bound += periods * per_period
     return bound
 

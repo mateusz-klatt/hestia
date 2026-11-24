@@ -220,34 +220,36 @@ Rozwijane są `RRULE` i `RDATE` przez bibliotekę `recurring-ical-events`, pomij
 `EXDATE` oraz wszystkie odwołane wystąpienia. Nieistniejąca godzina przy wiosennej
 zmianie czasu jest przesuwana z użyciem wcześniejszego przesunięcia UTC i liczy się
 do `COUNT` zgodnie z erratą RFC 5545. Przed wywołaniem biblioteki każda reguła `RRULE`
-musi pasować do konserwatywnej białej listy kształtów **dowiedliwie produktywnych**:
-każdy odwiedzany okres musi dawać co najmniej jednego kandydata (oraz co najmniej `|pos|`
-kandydatów przy użyciu `BYSETPOS`) albo reguła musi mieć `INTERVAL=1` z przerwą między
-dopasowaniami ograniczoną 400-letnim cyklem gregoriańskim (np. 29 lutego w poniedziałek).
-Dozwolone jest `FREQ` z zestawu `DAILY`, `WEEKLY`, `MONTHLY`, `YEARLY`, `INTERVAL`
-do 1000, `COUNT`, `UNTIL`, `WKST`, `BYDAY`, `BYMONTHDAY` oraz `BYMONTH`.
-`BYSETPOS` jest dozwolone wyłącznie dla `MONTHLY` lub `YEARLY` z `BYDAY` bez liczebników
-porządkowych i bez `BYMONTHDAY` (dla `MONTHLY` także bez `BYMONTH`, a dla `YEARLY` bez
-`BYMONTH` albo z jednym miesiącem): każde `|pos|` musi mieścić się w gwarantowanej
-liczbie wystąpień dni tygodnia (`4 * len(BYDAY)` w miesiącu lub jednym miesiącu roku,
-`52 * len(BYDAY)` w całym roku). Przy `INTERVAL > 1` odrzucane są ponadto: `DAILY` i
-`WEEKLY` z `BYMONTH`/`BYMONTHDAY`, `DAILY` z nieosiągalnym `BYDAY` względem kroku mod 7,
-`MONTHLY` z `BYMONTH` nieosiągalnym w cyklu `(m0 - 1 + k*I) mod 12`, `BYMONTHDAY`
-`>= 29` lub `<= -29`, porządkowe `BYDAY` `>= 5` lub `<= -5`, każde przecięcie
-`BYDAY`+`BYMONTHDAY` oraz `DTSTART` w dniach 29–31 bez `BYMONTHDAY` i `BYDAY` dla
-`MONTHLY`/`YEARLY` (w tym 29 lutego w `YEARLY`). Przy `INTERVAL=1` dozwolone są
-przecięcia `BYDAY`+`BYMONTHDAY`, reguły przestępne oraz `BYMONTH` z `BYMONTHDAY` (lub
-domyślnym dniem `DTSTART`), gdy każdy wskazany miesiąc ma ten dzień; dla `YEARLY` z
-`BYMONTH` liczebnik porządkowy `BYDAY` jest ograniczony do 5. Reguły spoza białej listy
-— m.in. `SECONDLY`, `MINUTELY`, `HOURLY`, `BYYEARDAY`, `BYWEEKNO`, `BYHOUR`, `BYMINUTE`,
-`BYSECOND`, porządkowe `BYDAY` przy `DAILY`/`WEEKLY` oraz reguły nieproduktywne —
-korzystają z fallbacku zwracającego tylko `DTSTART` z `truncated: true` i wpisem do dziennika.
+musi pasować do zamkniętej listy prostych kształtów (`S1`–`S7`), z których każdy ma
+prosty dowód produktywności. Poza parametrami z tabeli dozwolone są wyłącznie
+`INTERVAL` (1..1000), `COUNT`, `UNTIL` oraz `WKST`:
+
+| Kształt | Wymagania i ograniczenia | Uzasadnienie produktywności |
+| --- | --- | --- |
+| `S1` | Dowolne `FREQ` (`DAILY`/`WEEKLY`/`MONTHLY`/`YEARLY`), brak selektorów `BY*`; dla `MONTHLY`/`YEARLY` z `DTSTART` w dniach 29–31 tylko `INTERVAL=1` | Domyślny dzień z `DTSTART` wraca co najwyżej co 2 miesiące (29 lutego co najwyżej co 8 lat) |
+| `S2` | `WEEKLY`, lista `BYDAY` bez liczebników porządkowych | Każdy tydzień zawiera każdy dzień tygodnia |
+| `S3` | `DAILY`, lista `BYDAY` bez liczebników porządkowych, tylko `INTERVAL=1` | Co każde 7 dni występują wszystkie dni tygodnia |
+| `S4` | `MONTHLY`, dokładnie jedna wartość `BYMONTHDAY` `d`; `29 <= \|d\| <= 31` tylko przy `INTERVAL=1` | Dni `1..28` istnieją w każdym miesiącu; `29..31` wracają co najwyżej co 2 miesiące przy `INTERVAL=1` |
+| `S5(a)` | `MONTHLY`, lista `BYDAY` bez liczebników porządkowych | Każdy miesiąc zawiera każdy dzień tygodnia |
+| `S5(b)` | `MONTHLY`, dokładnie jeden porządkowy `BYDAY` `nXX`; `1 <= \|n\| <= 4` dla dowolnego `INTERVAL`, `\|n\| = 5` tylko przy `INTERVAL=1` | Co najmniej 4 wystąpienia każdego dnia w miesiącu; 5. wystąpienie wraca przy `INTERVAL=1` |
+| `S6` | `MONTHLY`, lista `BYDAY` bez liczebników porządkowych oraz dokładnie jedno `BYSETPOS` `p` z `1 <= \|p\| <= 4 * len(BYDAY)` | Każdy miesiąc ma co najmniej 4 wystąpienia każdego wybranego dnia tygodnia |
+| `S7(a)` | `YEARLY`, dokładnie jeden `BYMONTH` `m` i dokładnie jeden poprawny `BYMONTHDAY` `d` dla `m`; `m=2, \|d\|=29` tylko przy `INTERVAL=1` | Dzień istnieje w każdym odwiedzanym roku (29 lutego co najwyżej co 8 lat przy `INTERVAL=1`) |
+| `S7(b)` | `YEARLY`, dokładnie jeden `BYMONTH` `m` i dokładnie jeden porządkowy `BYDAY` `nXX`; `1 <= \|n\| <= 4` dla dowolnego `INTERVAL`, `\|n\| = 5` tylko przy `INTERVAL=1` | Wskazany miesiąc ma co najmniej 4 wystąpienia każdego dnia tygodnia; 5. wraca przy `INTERVAL=1` |
+| `S7(c)` | `YEARLY`, dokładnie jeden `BYMONTH` `m` oraz lista `BYDAY` bez liczebników porządkowych | Każdy odwiedzany miesiąc zawiera każdy dzień tygodnia |
+
+**Wszystko inne korzysta z fallbacku do samego `DTSTART`**: w szczególności mieszane
+listy `BYDAY` (zwykłe z porządkowymi), wielokrotne `BYMONTH`/`BYMONTHDAY`/`BYSETPOS`,
+przecięcia `BYDAY`+`BYMONTHDAY`, `BYSETPOS` przy `YEARLY`/`DAILY`/`WEEKLY`,
+`SECONDLY`/`MINUTELY`/`HOURLY`, `BYYEARDAY`, `BYWEEKNO`, `BYHOUR`, `BYMINUTE`,
+`BYSECOND`, niemożliwe pary miesiąca i dnia oraz `INTERVAL > 1000`. Taki przypadek
+zwraca wyłącznie `DTSTART` (z obsługą `EXDATE` i wyjątków dla `DTSTART`) z
+`truncated: true` i wpisem ostrzeżenia do dziennika serwera.
 Jeśli górne oszacowanie liczby wystąpień w poszerzonym oknie przekracza 5000 albo
 szacowana liczba badanych kroków replay od `DTSTART` do końca poszerzonego okna
 przekracza 200000, stosowany jest ten sam fallback bez wywoływania biblioteki. Szacunek
 okresów przyjmuje konserwatywnie do 366 dni w roku, 31 w miesiącu, 7 w tygodniu i 1
-dziennie przy selektorach `BYDAY`/`BYMONTHDAY` (oraz `BYMONTH` dla `YEARLY`), a `COUNT`
-nie zmniejsza budżetu badanych okresów. Zmieniony wyjątek zastępuje swoje pierwotne wystąpienie.
+dziennie przy selektorach `BYDAY`/`BYMONTHDAY`, a `COUNT` nie zmniejsza budżetu badanych
+okresów. Zmieniony wyjątek zastępuje swoje pierwotne wystąpienie.
 Odległy `RECURRENCE-ID` nie poszerza generowania, ale zapisany wyjątek trafiający w
 żądane okno może zostać zwrócony jako samodzielne wystąpienie. Uwzględniane są także
 wystąpienia zaczynające się przed oknem, ale nachodzące na nie. Daty całodniowe
