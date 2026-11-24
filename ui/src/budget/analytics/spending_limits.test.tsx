@@ -3,11 +3,12 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocale } from "../../i18n";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account } from "../fixtures";
 import { categoryList, spendingLimit, spendingLimitSaved, spendingLimitsOf, spendingLimitStatus } from "./fixtures";
 import type { AnalyticsSpendingLimits } from "./model";
-import { SpendingLimitsView, spendingLimitsLabels } from "./spending_limits";
+import { SpendingLimitsView } from "./spending_limits";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
 
@@ -50,6 +51,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  await loadLocale("en");
   vi.restoreAllMocks();
 });
 
@@ -98,7 +100,7 @@ describe("SpendingLimitsView", () => {
     )));
 
     await act(async () => {
-      root.render(<SpendingLimitsView api={api} accounts={accounts} text={spendingLimitsLabels.en}
+      root.render(<SpendingLimitsView api={api} accounts={accounts}
         locale="en-US" revision={1} onAccessLoss={() => false} today={fixedToday} />);
       await Promise.resolve();
     });
@@ -115,8 +117,9 @@ describe("SpendingLimitsView", () => {
     expect(setItem).not.toHaveBeenCalled();
     expect(window.location.search).toBe("");
 
+    await loadLocale("pl");
     await act(async () => {
-      root.render(<SpendingLimitsView api={api} accounts={accounts} text={spendingLimitsLabels.pl}
+      root.render(<SpendingLimitsView api={api} accounts={accounts}
         locale="pl-PL" revision={2} onAccessLoss={() => false} today={fixedToday} />);
       await Promise.resolve();
     });
@@ -129,7 +132,7 @@ describe("SpendingLimitsView", () => {
   it("creates, edits, toggles with strict CAS expected_version, disables buttons in-flight and reloads on 409/413", async () => {
     const api = fakeApi();
     await act(async () => {
-      root.render(<SpendingLimitsView api={api} accounts={accounts} text={spendingLimitsLabels.en}
+      root.render(<SpendingLimitsView api={api} accounts={accounts}
         locale="en-US" revision={1} onAccessLoss={() => false} today={fixedToday} />);
       await Promise.resolve();
     });
@@ -201,7 +204,7 @@ describe("SpendingLimitsView", () => {
     const onAccessLoss = vi.fn((result: { ok: boolean; status?: number; error?: string }) => !result.ok && result.status === 401);
 
     await act(async () => {
-      root.render(<SpendingLimitsView api={api} accounts={accounts} text={spendingLimitsLabels.en}
+      root.render(<SpendingLimitsView api={api} accounts={accounts}
         locale="en-US" revision={1} onAccessLoss={onAccessLoss} today={fixedToday} />);
       await Promise.resolve();
     });
@@ -262,7 +265,7 @@ describe("SpendingLimitsView", () => {
     api.spendingLimits.mockImplementationOnce((period) => ok(spendingLimitsOf(period, [], [])));
 
     await act(async () => {
-      root.render(<SpendingLimitsView api={api} accounts={accounts} text={spendingLimitsLabels.en}
+      root.render(<SpendingLimitsView api={api} accounts={accounts}
         locale="en-US" revision={1} onAccessLoss={() => false} onOpenRules={onOpenRules} today={fixedToday} />);
       await Promise.resolve();
     });
@@ -275,7 +278,7 @@ describe("SpendingLimitsView", () => {
     // Error state
     api.spendingLimits.mockImplementationOnce(() => fail(500, "budget_internal_error"));
     await act(async () => {
-      root.render(<SpendingLimitsView api={api} accounts={accounts} text={spendingLimitsLabels.en}
+      root.render(<SpendingLimitsView api={api} accounts={accounts}
         locale="en-US" revision={2} onAccessLoss={() => false} today={fixedToday} />);
       await Promise.resolve();
     });
@@ -289,7 +292,7 @@ describe("SpendingLimitsView", () => {
     ] }));
     api.spendingLimits.mockImplementationOnce((period) => ok(spendingLimitsOf(period, [], [])));
     await act(async () => {
-      root.render(<SpendingLimitsView api={api} accounts={accounts} text={spendingLimitsLabels.en}
+      root.render(<SpendingLimitsView api={api} accounts={accounts}
         locale="en-US" revision={3} onAccessLoss={() => false} today={fixedToday} />);
       await Promise.resolve();
     });

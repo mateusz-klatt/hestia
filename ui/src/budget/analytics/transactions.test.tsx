@@ -3,11 +3,12 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocale, t, tPlural } from "../../i18n";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account } from "../fixtures";
 import { annotationOf, categoryList, decisionOf, entriesOf, entry } from "./fixtures";
 import type { AnalyticsTransaction, AnalyticsTransactions, AnnotationSaved, TransferDecisionResult } from "./model";
-import { TRANSACTION_ROW_CAP, TransactionsPanel, transactionLabels } from "./transactions";
+import { TRANSACTION_ROW_CAP, TransactionsPanel } from "./transactions";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
 function fail<T>(status: number, error: string): Promise<BudgetResult<T>> { return Promise.resolve({ ok: false, status, error }); }
@@ -49,7 +50,8 @@ const accounts = [
 
 let host: HTMLElement;
 let root: Root;
-beforeEach(() => {
+beforeEach(async () => {
+  await loadLocale("en");
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -57,20 +59,22 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  await loadLocale("en");
 });
 
 async function settle(): Promise<void> {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
 
-interface Options { period?: string; revision?: number; lost?: boolean; rowCap?: number; text?: typeof transactionLabels.en; locale?: string }
+interface Options { period?: string; revision?: number; lost?: boolean; rowCap?: number; locale?: string }
 async function show(api: ReturnType<typeof fakeApi>, options: Options = {}) {
+  if (options.locale !== undefined) await loadLocale(options.locale.startsWith("pl") ? "pl" : "en");
   const onAccessLoss = vi.fn((result: { ok: boolean }) => options.lost === true && !result.ok);
   const onChanged = vi.fn();
   const onCreateRule = vi.fn();
   await act(async () => {
     root.render(<TransactionsPanel api={api} period={options.period ?? "2026-11"} currencies={["EUR", "PLN"]}
-      accounts={accounts} text={options.text ?? transactionLabels.en} locale={options.locale ?? "en"} revision={options.revision ?? 0}
+      accounts={accounts} locale={options.locale ?? "en"} revision={options.revision ?? 0}
       onAccessLoss={onAccessLoss} onChanged={onChanged} rowCap={options.rowCap} onCreateRule={onCreateRule} />);
     await Promise.resolve();
   });
@@ -158,7 +162,7 @@ describe("period entries", () => {
     const syntheticIban = `PL${"0".repeat(22)}1234`;
     const key = "a".repeat(64);
     const api = fakeApi([entry("account-row", { counterparty_account_key: key, counterparty_account: "PL** … 1234" })]);
-    const { onCreateRule } = await show(api, { text: transactionLabels.pl, locale: "pl" });
+    const { onCreateRule } = await show(api, { locale: "pl" });
     const expected = {
       rule_id: null, expected_version: 0, field: "counterparty_account", operator: "equals", value: "PL** … 1234",
       counterparty_account_key: key, category_id: null, kind: "expense", priority: 100, enabled: true,
@@ -235,7 +239,7 @@ describe("period entries", () => {
     const api = fakeApi([annotated]);
     await show(api);
     expect(host.querySelector(".budget-one-off")?.textContent).toBe(phrase);
-    expect(host.textContent).toContain(transactionLabels.en.stale);
+    expect(host.textContent).toContain(t("budget.transactions.stale"));
     await click(button("Change"));
     const editor = host.querySelector(".budget-entry-editor");
     const input = editor?.querySelector<HTMLInputElement>('input[name="one_off_label"]');
@@ -250,7 +254,7 @@ describe("period entries", () => {
 
   it("uses the Polish one-off label and clears it when the field is blank", async () => {
     const api = fakeApi();
-    await show(api, { text: transactionLabels.pl, locale: "pl" });
+    await show(api, { locale: "pl" });
     await click(button("Zmień"));
     const editor = host.querySelector(".budget-entry-editor");
     const input = editor?.querySelector<HTMLInputElement>('input[name="one_off_label"]');
@@ -619,10 +623,10 @@ describe("period entries", () => {
     ];
     const api = fakeApi(rows);
     api.categories.mockImplementation(() => ok({ categories: plCategories }));
-    await show(api, { text: transactionLabels.pl, locale: "pl" });
+    await show(api, { locale: "pl" });
     expect(host.querySelector(".budget-entry-list")?.getAttribute("aria-label")).toBe("Transakcje");
     expect(host.querySelector('.budget-sort[role="group"]')?.getAttribute("aria-label")).toBe("Sortowanie");
-    await click(sortButton(transactionLabels.pl.category));
+    await click(sortButton(t("budget.transactions.category")));
     expect(names()).toEqual([
       "Synthetic shop cebula",
       "Synthetic shop cma",
@@ -632,7 +636,7 @@ describe("period entries", () => {
       "Synthetic shop zrebak",
       "Synthetic shop zolw",
     ]);
-    await click(sortButton(transactionLabels.pl.category));
+    await click(sortButton(t("budget.transactions.category")));
     expect(names()).toEqual([
       "Synthetic shop zolw",
       "Synthetic shop zrebak",
@@ -656,13 +660,14 @@ describe("period entries", () => {
     });
     await show(api);
     expect(host.textContent).toContain("Synthetic shop p1");
-    expect(host.textContent).toContain(transactionLabels.en.loadingMore(1));
-    expect(transactionLabels.pl.loadingMore(4)).toBe("Wczytywanie… 4");
+    expect(host.textContent).toContain(t("budget.transactions.loadingMore", { count: 1 }));
     await act(async () => { release({ ok: true, data: pageOf([entry("p2")], "c2") }); await Promise.resolve(); });
     await drain();
     expect(cursors).toEqual([undefined, "c1", "c2"]);
     expect(names()).toEqual(["Synthetic shop p1", "Synthetic shop p2", "Synthetic shop p3"]);
     expect(host.textContent).not.toContain("Loading…");
+    await loadLocale("pl");
+    expect(t("budget.transactions.loadingMore", { count: 4 })).toBe("Wczytywanie… 4");
   });
 
   it("drops a background page that resolves after the period changes", async () => {
@@ -674,7 +679,7 @@ describe("period entries", () => {
       return ok(pageOf([entry("october")]));
     });
     await show(api);
-    expect(host.textContent).toContain(transactionLabels.en.loadingMore(1));
+    expect(host.textContent).toContain(t("budget.transactions.loadingMore", { count: 1 }));
     await show(api, { period: "2026-10" });
     expect(names()).toEqual(["Synthetic shop october"]);
     await act(async () => { late({ ok: true, data: pageOf([entry("late")]) }); await Promise.resolve(); });
@@ -733,11 +738,13 @@ describe("period entries", () => {
     await drain();
     expect(calls).toEqual([undefined, "c1"]);
     expect(names()).toEqual(["Synthetic shop p1"]);
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain(transactionLabels.en.error);
-    expect(transactionLabels.pl.retry).toBe("Ponów");
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(t("budget.transactions.error"));
+    await loadLocale("pl");
+    expect(t("budget.transactions.retry")).toBe("Ponów");
+    await loadLocale("en");
 
     failSecond = false;
-    await click(button(transactionLabels.en.retry));
+    await click(button(t("budget.transactions.retry")));
     await drain();
     expect(calls).toEqual([undefined, "c1", "c1", "c2"]);
     expect(names()).toEqual(["Synthetic shop p1", "Synthetic shop p2", "Synthetic shop p3"]);
@@ -746,7 +753,9 @@ describe("period entries", () => {
 
   it("stops background loading at the row cap, shows a truncation notice, and continues via load more", async () => {
     expect(TRANSACTION_ROW_CAP).toBe(5000);
-    expect(transactionLabels.pl.more).toBe("Wczytaj więcej");
+    await loadLocale("pl");
+    expect(t("budget.transactions.more")).toBe("Wczytaj więcej");
+    await loadLocale("en");
     const calls: Array<string | undefined> = [];
     const api = fakeApi();
     api.analyticsTransactions.mockImplementation((_period, _filter, cursor) => {
@@ -760,9 +769,9 @@ describe("period entries", () => {
     expect(calls).toEqual([undefined, "c1"]);
     expect(names()).toEqual(["Synthetic shop p1a", "Synthetic shop p1b", "Synthetic shop p2a", "Synthetic shop p2b"]);
     expect(host.textContent).not.toContain("Loading…");
-    expect(host.querySelector('[role="note"]')?.textContent).toContain(transactionLabels.en.truncated(4, 6));
+    expect(host.querySelector('[role="note"]')?.textContent).toContain(t("budget.transactions.truncated", { shown: 4, total: 6 }));
 
-    await click(button(transactionLabels.en.more));
+    await click(button(t("budget.transactions.more")));
     await drain();
     expect(calls).toEqual([undefined, "c1", "c2"]);
     expect(names()).toEqual([
@@ -788,9 +797,9 @@ describe("period entries", () => {
     await drain();
     // Initial attempt + at most 2 automatic reloads = 3 pairs of (undefined, c1).
     expect(calls).toEqual([undefined, "c1", undefined, "c1", undefined, "c1"]);
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain(transactionLabels.en.error);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(t("budget.transactions.error"));
 
-    await click(button(transactionLabels.en.retry));
+    await click(button(t("budget.transactions.retry")));
     await drain();
     expect(names()).toEqual(["Synthetic shop p1", "Synthetic shop dup", "Synthetic shop p2"]);
     expect(host.querySelector('[role="alert"]')).toBeNull();
@@ -811,7 +820,7 @@ describe("period entries", () => {
     await click(sortButton("Amount"));
     expect(names()).toEqual(["Synthetic shop mid", "Synthetic shop high"]);
 
-    await click(button(transactionLabels.en.edit, host.querySelectorAll(".budget-entry")[0]));
+    await click(button(t("budget.transactions.edit"), host.querySelectorAll(".budget-entry")[0]));
     expect(host.querySelector(".budget-entry-editor")).not.toBeNull();
 
     // Background page arrives with a smaller amount while editor is open: existing rows must not jump.
@@ -836,7 +845,7 @@ describe("period entries", () => {
     expect(names()).toEqual(["Synthetic shop high", "Synthetic shop mid", "Synthetic shop low", "Synthetic shop huge"]);
 
     // Closing the editor restores live sorting across all loaded rows.
-    await click(button(transactionLabels.en.cancel));
+    await click(button(t("budget.transactions.cancel")));
     expect(names()).toEqual(["Synthetic shop huge", "Synthetic shop high", "Synthetic shop mid", "Synthetic shop low"]);
   });
 
@@ -876,7 +885,7 @@ describe("period entries", () => {
     await click(sortButton("Amount"));
     expect(listNames()).toEqual(["Synthetic shop mid", "Synthetic shop high"]);
 
-    await click(button(transactionLabels.en.pair, host.querySelectorAll(".budget-entry")[0]));
+    await click(button(t("budget.transactions.pair"), host.querySelectorAll(".budget-entry")[0]));
     expect(host.querySelector(".budget-pair-picker")).not.toBeNull();
 
     // Background page arrives with a smaller amount while picker is open: existing rows must not jump.
@@ -901,7 +910,7 @@ describe("period entries", () => {
     expect(listNames()).toEqual(["Synthetic shop high", "Synthetic shop mid", "Synthetic shop low", "Synthetic shop huge"]);
 
     // Closing the picker restores live sorting across all loaded rows.
-    await click(button(transactionLabels.en.cancel));
+    await click(button(t("budget.transactions.cancel")));
     expect(listNames()).toEqual(["Synthetic shop huge", "Synthetic shop high", "Synthetic shop mid", "Synthetic shop low"]);
 
     // Confirming a pair also releases the frozen order.
@@ -916,23 +925,26 @@ describe("period entries", () => {
     });
     await show(api, { revision: 1 });
     await click(sortButton("Amount"));
-    await click(button(transactionLabels.en.pair, host.querySelectorAll(".budget-entry")[0]));
+    await click(button(t("budget.transactions.pair"), host.querySelectorAll(".budget-entry")[0]));
     await act(async () => {
       releaseConfirmPage2({ ok: true, data: pageOf([pairDebit("low", { amount: "5.00" })]) });
       await Promise.resolve();
     });
     await settle();
     expect(listNames()).toEqual(["Synthetic shop mid", "Synthetic shop high", "Synthetic shop low"]);
-    await click(button(transactionLabels.en.pairConfirm));
+    await click(button(t("budget.transactions.pairConfirm")));
     expect(host.querySelector(".budget-pair-picker")).toBeNull();
     expect(listNames()).toEqual(["Synthetic shop low", "Synthetic shop mid", "Synthetic shop high"]);
   });
 });
 
 describe("manual own-transfer pairing", () => {
-  it("localizes same-day, singular and plural day distances", () => {
-    expect([0, 1, 2].map(transactionLabels.en.pairDays)).toEqual(["same day", "1 day apart", "2 days apart"]);
-    expect([0, 1, 2].map(transactionLabels.pl.pairDays)).toEqual(["ten sam dzień", "1 dzień różnicy", "2 dni różnicy"]);
+  it("localizes same-day, singular and plural day distances", async () => {
+    const daysText = (days: number) => (days === 0 ? t("budget.transactions.pairDaysSame") : tPlural("budget.transactions.pairDays", days));
+    await loadLocale("en");
+    expect([0, 1, 2].map(daysText)).toEqual(["same day", "1 day apart", "2 days apart"]);
+    await loadLocale("pl");
+    expect([0, 1, 2].map(daysText)).toEqual(["ten sam dzień", "1 dzień różnicy", "2 dni różnicy"]);
   });
 
   it("shows the action only on eligible debit rows", async () => {
@@ -949,7 +961,7 @@ describe("manual own-transfer pairing", () => {
     const rendered = [...host.querySelectorAll<HTMLElement>(".budget-entry")];
     expect(rendered).toHaveLength(rows.length);
     for (const [index, row] of rendered.entries()) {
-      expect([...row.querySelectorAll("button")].some((item) => item.textContent === transactionLabels.en.pair)).toBe(index === 0);
+      expect([...row.querySelectorAll("button")].some((item) => item.textContent === t("budget.transactions.pair"))).toBe(index === 0);
     }
   });
 
@@ -964,12 +976,12 @@ describe("manual own-transfer pairing", () => {
       if (period === "2026-10" && cursor === undefined) return ok(entriesOf(period, [], "october-next"));
       return ok(entriesOf(period, period === "2026-10" ? [credit] : []));
     });
-    await click(button(transactionLabels.en.pair));
+    await click(button(t("budget.transactions.pair")));
     const filter = { currency: "PLN", category: "", kind: "", query: "" };
     expect(api.analyticsTransactions.mock.calls.slice(1)).toEqual([
       ["2026-10", filter, undefined, 200], ["2026-10", filter, "october-next", 200], ["2026-11", filter, undefined, 200],
     ]);
-    expect(host.textContent).toContain(transactionLabels.en.pairTitle);
+    expect(host.textContent).toContain(t("budget.transactions.pairTitle"));
     expect(host.textContent).toContain("Synthetic Card Repayment");
     expect(host.textContent).toContain("Synthetic Savings ••0002");
     expect(host.textContent).toContain("100.00 PLN");
@@ -987,10 +999,10 @@ describe("manual own-transfer pairing", () => {
       searchPage += 1;
       return ok(entriesOf(period, [], `search-${String(searchPage)}`));
     });
-    await click(button(transactionLabels.en.pair));
+    await click(button(t("budget.transactions.pair")));
     expect(api.analyticsTransactions.mock.calls.filter((args) => args[3] === 200)).toHaveLength(10);
-    expect(host.textContent).toContain(transactionLabels.en.pairLimited);
-    expect(host.textContent).toContain(transactionLabels.en.pairEmpty);
+    expect(host.textContent).toContain(t("budget.transactions.pairLimited"));
+    expect(host.textContent).toContain(t("budget.transactions.pairEmpty"));
   });
 
   it("restarts a stale search once, then reports a second stale cursor as a failure", async () => {
@@ -1003,10 +1015,10 @@ describe("manual own-transfer pairing", () => {
       searchPage += 1;
       return searchPage % 2 === 1 ? ok(entriesOf(period, [], "stale")) : fail(409, "budget_analytics_stale_cursor");
     });
-    await click(button(transactionLabels.en.pair));
+    await click(button(t("budget.transactions.pair")));
     expect(api.analyticsTransactions.mock.calls.filter((args) => args[3] === 200)).toHaveLength(4);
-    expect(host.textContent).toContain(transactionLabels.en.pairError);
-    expect(host.textContent).not.toContain(transactionLabels.en.pairLoading);
+    expect(host.textContent).toContain(t("budget.transactions.pairError"));
+    expect(host.textContent).not.toContain(t("budget.transactions.pairLoading"));
   });
 
   it("renders an explicit empty state when the search has no acceptable credit", async () => {
@@ -1014,8 +1026,8 @@ describe("manual own-transfer pairing", () => {
     const api = fakeApi([debit]);
     await show(api);
     mockPairSearch(api, debit, [pairCredit("wrong", { amount: "100.01" })]);
-    await click(button(transactionLabels.en.pair));
-    expect(host.textContent).toContain(transactionLabels.en.pairEmpty);
+    await click(button(t("budget.transactions.pair")));
+    expect(host.textContent).toContain(t("budget.transactions.pairEmpty"));
     expect(host.querySelectorAll(".budget-pair-picker .budget-entry")).toHaveLength(0);
   });
 
@@ -1025,8 +1037,8 @@ describe("manual own-transfer pairing", () => {
     const api = fakeApi([debit]);
     const { onChanged } = await show(api);
     mockPairSearch(api, debit, [credit]);
-    await click(button(transactionLabels.en.pair));
-    await click(button(transactionLabels.en.pairConfirm));
+    await click(button(t("budget.transactions.pair")));
+    await click(button(t("budget.transactions.pairConfirm")));
     expect(api.decideTransfer).toHaveBeenCalledWith({
       action: "accept", source: "manual", decision_id: null, expected_version: 0,
       debit: { account_id: "acc-1", entry_reference: "out" },
@@ -1038,12 +1050,12 @@ describe("manual own-transfer pairing", () => {
   });
 
   it.each([
-    { code: "budget_analytics_source_changed", notice: transactionLabels.en.changed, reload: true },
-    { code: "budget_analytics_leg_reserved", notice: transactionLabels.en.pairReserved, reload: true },
-    { code: "budget_analytics_conflict", notice: transactionLabels.en.pairExisting, reload: true },
-    { code: "budget_analytics_invalid_request", notice: transactionLabels.en.pairInvalid, reload: false },
-    { code: "budget_analytics_stale_cursor", notice: transactionLabels.en.conflict, reload: true },
-    { code: "budget_internal_error", notice: transactionLabels.en.saveError, reload: false },
+    { code: "budget_analytics_source_changed", notice: "budget.transactions.changed" as const, reload: true },
+    { code: "budget_analytics_leg_reserved", notice: "budget.transactions.pairReserved" as const, reload: true },
+    { code: "budget_analytics_conflict", notice: "budget.transactions.pairExisting" as const, reload: true },
+    { code: "budget_analytics_invalid_request", notice: "budget.transactions.pairInvalid" as const, reload: false },
+    { code: "budget_analytics_stale_cursor", notice: "budget.transactions.conflict" as const, reload: true },
+    { code: "budget_internal_error", notice: "budget.transactions.saveError" as const, reload: false },
   ])("maps $code to its pairing notice and reload behavior", async ({ code, notice, reload }) => {
     const debit = pairDebit();
     const credit = pairCredit();
@@ -1051,9 +1063,9 @@ describe("manual own-transfer pairing", () => {
     const { onChanged } = await show(api);
     mockPairSearch(api, debit, [credit]);
     api.decideTransfer.mockImplementationOnce(() => fail(409, code));
-    await click(button(transactionLabels.en.pair));
-    await click(button(transactionLabels.en.pairConfirm));
-    expect(host.textContent).toContain(notice);
+    await click(button(t("budget.transactions.pair")));
+    await click(button(t("budget.transactions.pairConfirm")));
+    expect(host.textContent).toContain(t(notice));
     expect(api.analyticsTransactions.mock.calls.filter((args) => args[3] !== 200)).toHaveLength(reload ? 2 : 1);
     expect(host.querySelector(".budget-pair-picker") === null).toBe(reload);
     expect(onChanged).not.toHaveBeenCalled();
@@ -1065,10 +1077,10 @@ describe("manual own-transfer pairing", () => {
     const { onAccessLoss } = await show(api, { lost: true });
     api.analyticsTransactions.mockImplementation((...args) =>
       args[3] === 200 ? fail(401, "budget_http_401") : ok(pageOf([debit])));
-    await click(button(transactionLabels.en.pair));
+    await click(button(t("budget.transactions.pair")));
     expect(onAccessLoss).toHaveBeenCalledWith({ ok: false, status: 401, error: "budget_http_401" });
     expect(api.analyticsTransactions.mock.calls.filter((args) => args[3] === 200)).toHaveLength(1);
-    expect(host.textContent).not.toContain(transactionLabels.en.pairError);
+    expect(host.textContent).not.toContain(t("budget.transactions.pairError"));
   });
 
   it("hands confirmation to the access barrier first and releases its busy state", async () => {
@@ -1077,12 +1089,12 @@ describe("manual own-transfer pairing", () => {
     const { onAccessLoss, onChanged } = await show(api, { lost: true });
     mockPairSearch(api, debit, [pairCredit()]);
     api.decideTransfer.mockImplementationOnce(() => fail(401, "budget_http_401"));
-    await click(button(transactionLabels.en.pair));
-    await click(button(transactionLabels.en.pairConfirm));
+    await click(button(t("budget.transactions.pair")));
+    await click(button(t("budget.transactions.pairConfirm")));
     expect(onAccessLoss).toHaveBeenCalledWith({ ok: false, status: 401, error: "budget_http_401" });
     expect(onChanged).not.toHaveBeenCalled();
-    expect(host.textContent).not.toContain(transactionLabels.en.saveError);
-    expect(button(transactionLabels.en.pairConfirm).disabled).toBe(false);
+    expect(host.textContent).not.toContain(t("budget.transactions.saveError"));
+    expect(button(t("budget.transactions.pairConfirm")).disabled).toBe(false);
   });
 
   it("ignores a search answer that arrives after cancellation", async () => {
@@ -1094,9 +1106,9 @@ describe("manual own-transfer pairing", () => {
       if (args[3] !== 200) return ok(pageOf([debit]));
       return new Promise((resolve) => { loaded = resolve; });
     });
-    await click(button(transactionLabels.en.pair));
-    expect(host.textContent).toContain(transactionLabels.en.pairLoading);
-    await click(button(transactionLabels.en.cancel));
+    await click(button(t("budget.transactions.pair")));
+    expect(host.textContent).toContain(t("budget.transactions.pairLoading"));
+    await click(button(t("budget.transactions.cancel")));
     await act(async () => { loaded({ ok: true, data: entriesOf("2026-11", [pairCredit()]) }); await Promise.resolve(); });
     await settle();
     expect(host.querySelector(".budget-pair-picker")).toBeNull();
@@ -1112,9 +1124,9 @@ describe("manual own-transfer pairing", () => {
       if (args[3] !== 200) return ok(pageOf([debit]));
       return new Promise((resolve) => { loaded = resolve; });
     });
-    await click(button(transactionLabels.en.pair));
-    expect(host.textContent).toContain(transactionLabels.en.pairLoading);
-    await click(button(transactionLabels.en.edit));
+    await click(button(t("budget.transactions.pair")));
+    expect(host.textContent).toContain(t("budget.transactions.pairLoading"));
+    await click(button(t("budget.transactions.edit")));
     expect(host.querySelector(".budget-pair-picker")).toBeNull();
     expect(host.querySelector(".budget-entry-editor")).not.toBeNull();
     await act(async () => { loaded({ ok: true, data: entriesOf("2026-11", [pairCredit()]) }); await Promise.resolve(); });
@@ -1130,7 +1142,7 @@ describe("manual own-transfer pairing", () => {
     await show(api);
     let loaded: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
     api.analyticsTransactions.mockImplementationOnce(() => new Promise((resolve) => { loaded = resolve; }));
-    await click(button(transactionLabels.en.pair));
+    await click(button(t("budget.transactions.pair")));
     api.analyticsTransactions.mockImplementation(() => ok(pageOf([debit])));
     await show(api, { revision: 1 });
     await act(async () => { loaded({ ok: true, data: entriesOf("2026-11", [pairCredit()]) }); await Promise.resolve(); });
@@ -1146,8 +1158,8 @@ describe("manual own-transfer pairing", () => {
     mockPairSearch(api, debit, [pairCredit()]);
     let decided: (value: BudgetResult<{ decision: TransferDecisionResult }>) => void = () => undefined;
     api.decideTransfer.mockImplementationOnce(() => new Promise((resolve) => { decided = resolve; }));
-    await click(button(transactionLabels.en.pair));
-    await click(button(transactionLabels.en.pairConfirm));
+    await click(button(t("budget.transactions.pair")));
+    await click(button(t("budget.transactions.pairConfirm")));
     await show(api, { revision: 1 });
     await act(async () => { decided({ ok: true, data: { decision: decisionOf() } }); await Promise.resolve(); });
     await settle();
@@ -1162,8 +1174,8 @@ describe("manual own-transfer pairing", () => {
     mockPairSearch(api, debit, [pairCredit()]);
     let decided: (value: BudgetResult<{ decision: TransferDecisionResult }>) => void = () => undefined;
     api.decideTransfer.mockImplementationOnce(() => new Promise((resolve) => { decided = resolve; }));
-    await click(button(transactionLabels.en.pair));
-    await click(button(transactionLabels.en.pairConfirm));
+    await click(button(t("budget.transactions.pair")));
+    await click(button(t("budget.transactions.pairConfirm")));
     await applyCurrencyFilter();
     await act(async () => { decided({ ok: true, data: { decision: decisionOf() } }); await Promise.resolve(); });
     await settle();
@@ -1179,8 +1191,8 @@ describe("manual own-transfer pairing", () => {
     mockPairSearch(api, debit, [pairCredit()]);
     let decided: (value: BudgetResult<{ decision: TransferDecisionResult }>) => void = () => undefined;
     api.decideTransfer.mockImplementationOnce(() => new Promise((resolve) => { decided = resolve; }));
-    await click(button(transactionLabels.en.pair));
-    await click(button(transactionLabels.en.pairConfirm));
+    await click(button(t("budget.transactions.pair")));
+    await click(button(t("budget.transactions.pairConfirm")));
     await applyCurrencyFilter();
     await act(async () => { decided({ ok: false, status: 500, error: "budget_internal_error" }); await Promise.resolve(); });
     await settle();
@@ -1195,16 +1207,16 @@ describe("manual own-transfer pairing", () => {
     mockPairSearch(api, debit, [pairCredit()]);
     let decided: (value: BudgetResult<{ decision: TransferDecisionResult }>) => void = () => undefined;
     api.decideTransfer.mockImplementationOnce(() => new Promise((resolve) => { decided = resolve; }));
-    await click(button(transactionLabels.en.pair));
-    await click(button(transactionLabels.en.pairConfirm));
-    expect(button(transactionLabels.en.pairConfirm).disabled).toBe(true);
-    expect(button(transactionLabels.en.cancel).disabled).toBe(true);
-    expect([...host.querySelectorAll("button")].some((item) => item.textContent === transactionLabels.en.pair)).toBe(false);
-    expect(button(transactionLabels.en.edit).disabled).toBe(true);
+    await click(button(t("budget.transactions.pair")));
+    await click(button(t("budget.transactions.pairConfirm")));
+    expect(button(t("budget.transactions.pairConfirm")).disabled).toBe(true);
+    expect(button(t("budget.transactions.cancel")).disabled).toBe(true);
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === t("budget.transactions.pair"))).toBe(false);
+    expect(button(t("budget.transactions.edit")).disabled).toBe(true);
     await act(async () => { decided({ ok: true, data: { decision: decisionOf() } }); await Promise.resolve(); });
     await settle();
     expect(onChanged).toHaveBeenCalledTimes(1);
-    expect(button(transactionLabels.en.pair).disabled).toBe(false);
+    expect(button(t("budget.transactions.pair")).disabled).toBe(false);
   });
 
   it("cancels an open picker without changing anything", async () => {
@@ -1212,11 +1224,11 @@ describe("manual own-transfer pairing", () => {
     const api = fakeApi([debit]);
     const { onChanged } = await show(api);
     mockPairSearch(api, debit, [pairCredit()]);
-    await click(button(transactionLabels.en.pair));
-    expect([...host.querySelectorAll("button")].some((item) => item.textContent === transactionLabels.en.pair)).toBe(false);
-    await click(button(transactionLabels.en.cancel));
+    await click(button(t("budget.transactions.pair")));
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === t("budget.transactions.pair"))).toBe(false);
+    await click(button(t("budget.transactions.cancel")));
     expect(host.querySelector(".budget-pair-picker")).toBeNull();
-    expect(button(transactionLabels.en.pair)).toBeDefined();
+    expect(button(t("budget.transactions.pair"))).toBeDefined();
     expect(api.decideTransfer).not.toHaveBeenCalled();
     expect(onChanged).not.toHaveBeenCalled();
   });
@@ -1226,9 +1238,9 @@ describe("manual own-transfer pairing", () => {
     const api = fakeApi([debit]);
     await show(api);
     mockPairSearch(api, debit, [pairCredit()]);
-    await click(button(transactionLabels.en.edit));
+    await click(button(t("budget.transactions.edit")));
     expect(host.querySelector(".budget-entry-editor")).not.toBeNull();
-    await click(button(transactionLabels.en.pair));
+    await click(button(t("budget.transactions.pair")));
     expect(host.querySelector(".budget-entry-editor")).toBeNull();
     expect(host.querySelector(".budget-pair-picker")).not.toBeNull();
   });
@@ -1240,9 +1252,9 @@ describe("manual own-transfer pairing", () => {
     let loaded: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
     api.analyticsTransactions.mockImplementationOnce(() => new Promise((resolve) => { loaded = resolve; }));
     const rendered = [...host.querySelectorAll<HTMLElement>(".budget-entry")];
-    await click(button(transactionLabels.en.pair, rendered[0] ?? host));
+    await click(button(t("budget.transactions.pair"), rendered[0] ?? host));
     api.analyticsTransactions.mockImplementation(() => ok(entriesOf("2026-11", [pairCredit()])));
-    await click(button(transactionLabels.en.pair, rendered[1] ?? host));
+    await click(button(t("budget.transactions.pair"), rendered[1] ?? host));
     await act(async () => { loaded({ ok: true, data: entriesOf("2026-11", [pairCredit("late")]) }); await Promise.resolve(); });
     await settle();
     expect(host.querySelectorAll(".budget-pair-picker")).toHaveLength(1);
@@ -1289,7 +1301,7 @@ describe("manual own-transfer pairing", () => {
       await act(async () => {
         root.render(
           <TransactionsPanel api={api} period="2026-11" currencies={["EUR", "PLN"]}
-            accounts={[...accounts, confirmedCard]} text={transactionLabels.en} locale="en" revision={0}
+            accounts={[...accounts, confirmedCard]} locale="en" revision={0}
             onAccessLoss={() => false} onChanged={() => undefined}
             initialCurrency="PLN"
             initialProvisionalKeys={keys}
@@ -1347,7 +1359,7 @@ describe("manual own-transfer pairing", () => {
     await act(async () => {
       root.render(
         <TransactionsPanel api={api} period="2026-11" currencies={["PLN"]} accounts={accounts}
-          text={transactionLabels.en} locale="en" revision={0} onAccessLoss={() => false}
+          locale="en" revision={0} onAccessLoss={() => false}
           onChanged={() => undefined} initialProvisionalKeys={[]} />,
       );
       await Promise.resolve();
@@ -1363,7 +1375,7 @@ describe("manual own-transfer pairing", () => {
     await act(async () => {
       root.render(
         <TransactionsPanel api={api} period="2026-11" currencies={["PLN"]} accounts={accounts}
-          text={transactionLabels.en} locale="en" revision={0} onAccessLoss={() => false}
+          locale="en" revision={0} onAccessLoss={() => false}
           onChanged={() => undefined} />,
       );
       await Promise.resolve();

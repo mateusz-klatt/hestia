@@ -2,156 +2,19 @@
 // GET /analytics/inbox evaluates owner alerts in one SQLite snapshot.
 // Read/unread updates use strict anti-ABA expected_reads_version CAS.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { t, tPlural } from "../../i18n";
 import type { BudgetApi, BudgetResult } from "../api";
-import { consentHealthLabels } from "../consent_health";
 import { when } from "../model";
 import type { BudgetConnection } from "../model";
 import { CategorySwatch } from "./category_badge";
 import { buildCategoryColors } from "./category_colors";
 import type { CategoryColorResolver } from "./category_colors";
-import { ANALYTICS_ERROR, INBOX_MARK_BATCH_MAX, RELOAD_ERRORS, inboxItemKey, inboxRowKey, labelOf,
-  pluralPl } from "./model";
+import { ANALYTICS_ERROR, CONSENT_ATTENTION_KEYS, INBOX_CONSENT_STATUS_KEYS, INBOX_KIND_KEYS,
+  INBOX_LIMIT_STATUS_KEYS, INBOX_MARK_BATCH_MAX, INBOX_MORTGAGE_STATUS_KEYS, RELOAD_ERRORS, inboxItemKey,
+  inboxRowKey, labelOf } from "./model";
 import type { AnalyticsCategory, AnalyticsInbox, AnalyticsInboxConsentItem, AnalyticsInboxItem,
   AnalyticsInboxKey, AnalyticsInboxMarkSaved, AnalyticsInboxMortgageItem, AnalyticsInboxSpendingLimitItem,
   AnalyticsMortgageSchedule } from "./model";
-
-export const inboxLabels = {
-  en: {
-    title: "Owner inbox",
-    intro: "New devices and active alerts for bank consents, mortgages and monthly spending limits.",
-    evaluatedFor: (date: string, tz: string) => `Evaluated for ${date} (${tz})`,
-    unreadCount: (count: number) => `Unread: ${String(count)}`,
-    capacity: (used: number, cap: number) => `Saved read markers: ${String(used)} / ${String(cap)}`,
-    loading: "Loading inbox…",
-    error: "Inbox could not be loaded. Try again.",
-    empty: "No active alerts right now.",
-    emptyUnread: "No unread active alerts right now.",
-    filterLabel: "Alert filter",
-    filterAll: "All active",
-    filterUnread: "Unread only",
-    markAllRead: "Mark all unread read",
-    markedPartial: (marked: number, total: number) =>
-      `Marked ${String(marked)} of ${String(total)} unread alerts. Click again to mark the rest.`,
-    markRead: "Mark read",
-    markUnread: "Mark unread",
-    readAt: (formatted: string) => `Read ${formatted}`,
-    unreadBadge: "Unread",
-    readBadge: "Read",
-    openConsent: "Open Consent status",
-    openAccounts: "Open Accounts",
-    openMortgages: "Open Mortgages",
-    openLimits: "Open Spending limits",
-    kinds: {
-      consent_renewal: "Bank consent",
-      mortgage_due: "Mortgage",
-      spending_limit: "Spending limit",
-      device_added: "Device",
-    },
-    newDevice: (name: string, date: string) => `New device: ${name}, ${date}`,
-    consentStatuses: {
-      attention_required: "Attention required",
-      expired: "Expired",
-      due_soon: "Renewal due soon",
-    },
-    mortgageStatuses: {
-      overdue: "Overdue",
-      due_today: "Due today",
-      due_soon: "Due soon",
-    },
-    limitStatuses: {
-      exceeded: "Exceeded",
-      at_limit: "At limit",
-      approaching: "Approaching limit",
-    },
-    attentions: consentHealthLabels.en.attentions,
-    attentionFallback: consentHealthLabels.en.attentionFallback,
-    validUntil: (formatted: string) => `Valid until ${formatted}`,
-    daysLeft: (days: number) => `${String(days)} ${days === 1 ? "day" : "days"} left`,
-    expired: "Expired",
-    paused: "Paused",
-    dueOn: (date: string) => `Due ${date}`,
-    daysOverdue: (days: number) => `${String(days)} ${days === 1 ? "day" : "days"} overdue`,
-    daysUntil: (days: number) => `In ${String(days)} ${days === 1 ? "day" : "days"}`,
-    freshnessStale: "Ledger data may be outdated — verify payment status separately.",
-    limitUsage: (period: string, percent: number, warning: number, currency: string) =>
-      `${period} · ${String(percent)}% used (warning at ${String(warning)}%) · ${currency}`,
-    unknownBank: "Bank connection",
-    unknownMortgage: "Mortgage schedule",
-    unknownCategory: "Spending category",
-    conflict: "Inbox read state changed elsewhere; the latest alerts were loaded.",
-    sourceChanged: "One or more alerts resolved or changed before saving; the latest active alerts were loaded.",
-    limitCap: "Read marker limit (500) reached. Mark an existing read alert as unread to free a slot.",
-    saveError: "Could not update alert status. Try again.",
-  },
-  pl: {
-    title: "Skrzynka właściciela",
-    intro: "Nowe urządzenia i aktywne alerty o zgodach bankowych, hipotekach i miesięcznych limitach wydatków.",
-    evaluatedFor: (date: string, tz: string) => `Stan na ${date} (${tz})`,
-    unreadCount: (count: number) => `Nieprzeczytane: ${String(count)}`,
-    capacity: (used: number, cap: number) => `Zapisane znaczniki przeczytania: ${String(used)} / ${String(cap)}`,
-    loading: "Wczytywanie skrzynki…",
-    error: "Nie udało się wczytać skrzynki. Spróbuj ponownie.",
-    empty: "Brak aktywnych alertów.",
-    emptyUnread: "Brak nieprzeczytanych aktywnych alertów.",
-    filterLabel: "Filtr alertów",
-    filterAll: "Wszystkie aktywne",
-    filterUnread: "Tylko nieprzeczytane",
-    markAllRead: "Oznacz wszystkie jako przeczytane",
-    markedPartial: (marked: number, total: number) =>
-      `Oznaczono ${String(marked)} z ${String(total)} nieprzeczytanych alertów. Kliknij ponownie, aby oznaczyć pozostałe.`,
-    markRead: "Oznacz jako przeczytane",
-    markUnread: "Oznacz jako nieprzeczytane",
-    readAt: (formatted: string) => `Przeczytano ${formatted}`,
-    unreadBadge: "Nieprzeczytane",
-    readBadge: "Przeczytane",
-    openConsent: "Otwórz Stan zgód",
-    openAccounts: "Otwórz Konta",
-    openMortgages: "Otwórz Hipotekę",
-    openLimits: "Otwórz Limity wydatków",
-    kinds: {
-      consent_renewal: "Zgoda bankowa",
-      mortgage_due: "Hipoteka",
-      spending_limit: "Limit wydatków",
-      device_added: "Urządzenie",
-    },
-    newDevice: (name: string, date: string) => `Nowe urządzenie: ${name}, ${date}`,
-    consentStatuses: {
-      attention_required: "Wymaga uwagi",
-      expired: "Wygasła",
-      due_soon: "Wkrótce odnowienie",
-    },
-    mortgageStatuses: {
-      overdue: "Po terminie",
-      due_today: "Termin dziś",
-      due_soon: "Wkrótce termin",
-    },
-    limitStatuses: {
-      exceeded: "Przekroczony",
-      at_limit: "Osiągnięty limit",
-      approaching: "Blisko limitu",
-    },
-    attentions: consentHealthLabels.pl.attentions,
-    attentionFallback: consentHealthLabels.pl.attentionFallback,
-    validUntil: (formatted: string) => `Ważna do ${formatted}`,
-    daysLeft: (days: number) => `Pozostało ${String(days)} ${pluralPl(days, "dzień", "dni", "dni")}`,
-    expired: "Wygasła",
-    paused: "Wstrzymane",
-    dueOn: (date: string) => `Termin ${date}`,
-    daysOverdue: (days: number) => `${String(days)} ${pluralPl(days, "dzień", "dni", "dni")} po terminie`,
-    daysUntil: (days: number) => `Za ${String(days)} ${pluralPl(days, "dzień", "dni", "dni")}`,
-    freshnessStale: "Dane księgowe mogą być nieaktualne — potwierdź status płatności osobno.",
-    limitUsage: (period: string, percent: number, warning: number, currency: string) =>
-      `${period} · wykorzystano ${String(percent)}% (ostrzeżenie od ${String(warning)}%) · ${currency}`,
-    unknownBank: "Połączenie z bankiem",
-    unknownMortgage: "Harmonogram hipoteczny",
-    unknownCategory: "Kategoria wydatków",
-    conflict: "Stan skrzynki zmienił się w innym miejscu; wczytano aktualne alerty.",
-    sourceChanged: "Co najmniej jeden alert zmienił się lub zniknął przed zapisem; wczytano aktualne aktywne alerty.",
-    limitCap: "Osiągnięto limit znaczników przeczytania (500). Oznacz wybrany alert jako nieprzeczytany, aby zwolnić miejsce.",
-    saveError: "Nie udało się zapisać statusu alertu. Spróbuj ponownie.",
-  },
-};
-export type InboxLabels = typeof inboxLabels.en;
 
 type Loss = (result: { ok: boolean; status?: number; error?: string }) => boolean;
 type Shown = { state: "loading" } | { state: "error" } | { state: "ready"; data: AnalyticsInbox };
@@ -161,7 +24,6 @@ export interface InboxViewProps {
   api: Pick<BudgetApi, "inbox" | "markInbox" | "mortgages" | "categories">;
   connections: readonly BudgetConnection[];
   consentEnabled: boolean;
-  text: InboxLabels;
   locale: string;
   revision: number;
   onAccessLoss: Loss;
@@ -177,53 +39,63 @@ interface LookupMaps {
   categoryColors: CategoryColorResolver;
 }
 
-function saveFailure(text: InboxLabels, error: string): string {
-  if (error === ANALYTICS_ERROR.sourceChanged) return text.sourceChanged;
-  if (RELOAD_ERRORS.has(error)) return text.conflict;
-  if (error === ANALYTICS_ERROR.limit) return text.limitCap;
-  return text.saveError;
+function saveFailure(error: string): string {
+  if (error === ANALYTICS_ERROR.sourceChanged) return t("budget.inbox.sourceChanged");
+  if (RELOAD_ERRORS.has(error)) return t("budget.inbox.conflict");
+  if (error === ANALYTICS_ERROR.limit) return t("budget.inbox.limitCap");
+  return t("budget.inbox.saveError");
 }
 
-function attentionText(text: InboxLabels, code: string): string {
-  return (text.attentions as Readonly<Record<string, string>>)[code] ?? text.attentionFallback;
+function attentionText(code: string): string {
+  const key = CONSENT_ATTENTION_KEYS[code];
+  return key !== undefined ? t(key) : t("budget.consent.attentionFallback");
 }
 
-function mortgageTiming(params: AnalyticsInboxMortgageItem["params"], text: InboxLabels): string {
-  if (params.days_until_due < 0) return text.daysOverdue(-params.days_until_due);
-  if (params.days_until_due === 0) return text.mortgageStatuses.due_today;
-  return text.daysUntil(params.days_until_due);
+function mortgageTiming(params: AnalyticsInboxMortgageItem["params"]): string {
+  if (params.days_until_due < 0) return tPlural("budget.inbox.daysOverdue", -params.days_until_due);
+  if (params.days_until_due === 0) return t("budget.inbox.mortgageStatuses.due_today");
+  return tPlural("budget.inbox.daysUntil", params.days_until_due);
 }
 
-function ConsentFacts({ item, text, locale }: { item: AnalyticsInboxConsentItem; text: InboxLabels; locale: string }) {
+function ConsentFacts({ item, locale }: { item: AnalyticsInboxConsentItem; locale: string }) {
   const { params } = item;
   const expiry = when(params.valid_until, locale);
   return (
     <>
-      {expiry === null ? null : <span>{text.validUntil(expiry)}</span>}
+      {expiry === null ? null : <span>{t("budget.consent.validUntil", { date: expiry })}</span>}
       {params.days_remaining === null ? null : (
         <span>{params.days_remaining < 0 || params.status === "expired"
-          ? text.expired : text.daysLeft(params.days_remaining)}</span>
+          ? t("budget.consent.expired") : tPlural("budget.consent.daysLeft", params.days_remaining)}</span>
       )}
-      {params.paused ? <span className="budget-warn">{text.paused}</span> : null}
-      {params.attention === null ? null : <span className="budget-warn">{attentionText(text, params.attention)}</span>}
+      {params.paused ? <span className="budget-warn">{t("budget.consent.paused")}</span> : null}
+      {params.attention === null ? null : <span className="budget-warn">{attentionText(params.attention)}</span>}
     </>
   );
 }
 
-function MortgageFacts({ item, text }: { item: AnalyticsInboxMortgageItem; text: InboxLabels }) {
+function MortgageFacts({ item }: { item: AnalyticsInboxMortgageItem }) {
   const { params } = item;
   return (
     <>
-      <span>{text.dueOn(params.due_date)}</span>
-      <span>{mortgageTiming(params, text)}</span>
+      <span>{t("budget.inbox.dueOn", { date: params.due_date })}</span>
+      <span>{mortgageTiming(params)}</span>
       <span>{params.currency}</span>
     </>
   );
 }
 
-function SpendingLimitFacts({ item, text }: { item: AnalyticsInboxSpendingLimitItem; text: InboxLabels }) {
+function SpendingLimitFacts({ item }: { item: AnalyticsInboxSpendingLimitItem }) {
   const { params } = item;
-  return <span>{text.limitUsage(params.period, params.percent_used_floor, params.warning_percent, params.currency)}</span>;
+  return (
+    <span>
+      {t("budget.inbox.limitUsage", {
+        period: params.period,
+        percent: params.percent_used_floor,
+        warning: params.warning_percent,
+        currency: params.currency,
+      })}
+    </span>
+  );
 }
 
 interface RowProps {
@@ -231,7 +103,6 @@ interface RowProps {
   lookups: LookupMaps;
   consentEnabled: boolean;
   busy: boolean;
-  text: InboxLabels;
   locale: string;
   onToggleRead: (item: AnalyticsInboxItem) => void;
   onOpenAccounts: (openConsentHealth: boolean) => void;
@@ -239,38 +110,38 @@ interface RowProps {
   onOpenLimits: () => void;
 }
 
-function subjectLabel(item: AnalyticsInboxItem, lookups: LookupMaps, text: InboxLabels): string {
-  if (item.kind === "device_added") return text.newDevice(item.params.device_name, item.params.date);
-  if (item.kind === "consent_renewal") return lookups.banks.get(item.ref.connection_id) ?? text.unknownBank;
-  if (item.kind === "mortgage_due") return lookups.schedules.get(item.ref.schedule_id) ?? text.unknownMortgage;
-  return lookups.categories.get(item.ref.category_id) ?? text.unknownCategory;
+function subjectLabel(item: AnalyticsInboxItem, lookups: LookupMaps): string {
+  if (item.kind === "device_added") return t("budget.inbox.newDevice", { name: item.params.device_name, date: item.params.date });
+  if (item.kind === "consent_renewal") return lookups.banks.get(item.ref.connection_id) ?? t("budget.inbox.unknownBank");
+  if (item.kind === "mortgage_due") return lookups.schedules.get(item.ref.schedule_id) ?? t("budget.inbox.unknownMortgage");
+  return lookups.categories.get(item.ref.category_id) ?? t("budget.inbox.unknownCategory");
 }
 
-function statusLabel(item: AnalyticsInboxItem, text: InboxLabels): string | null {
+function statusLabel(item: AnalyticsInboxItem): string | null {
   if (item.kind === "device_added") return null;
-  if (item.kind === "consent_renewal") return labelOf(text.consentStatuses, item.params.status);
-  if (item.kind === "mortgage_due") return labelOf(text.mortgageStatuses, item.params.status);
-  return labelOf(text.limitStatuses, item.params.status);
+  if (item.kind === "consent_renewal") return labelOf(INBOX_CONSENT_STATUS_KEYS, item.params.status);
+  if (item.kind === "mortgage_due") return labelOf(INBOX_MORTGAGE_STATUS_KEYS, item.params.status);
+  return labelOf(INBOX_LIMIT_STATUS_KEYS, item.params.status);
 }
 
 function InboxRow({
-  item, lookups, consentEnabled, busy, text, locale,
+  item, lookups, consentEnabled, busy, locale,
   onToggleRead, onOpenAccounts, onOpenMortgages, onOpenLimits,
 }: RowProps) {
   const readStamp = when(item.read_at, locale);
-  const title = subjectLabel(item, lookups, text);
-  const status = statusLabel(item, text);
+  const title = subjectLabel(item, lookups);
+  const status = statusLabel(item);
   const openAction = item.kind === "device_added" ? null : item.kind === "consent_renewal"
-    ? { label: consentEnabled ? text.openConsent : text.openAccounts, run: () => { onOpenAccounts(consentEnabled); } }
+    ? { label: consentEnabled ? t("budget.inbox.openConsent") : t("budget.inbox.openAccounts"), run: () => { onOpenAccounts(consentEnabled); } }
     : item.kind === "mortgage_due"
-      ? { label: text.openMortgages, run: onOpenMortgages }
-      : { label: text.openLimits, run: onOpenLimits };
+      ? { label: t("budget.inbox.openMortgages"), run: onOpenMortgages }
+      : { label: t("budget.inbox.openLimits"), run: onOpenLimits };
 
   return (
     <li className={item.read ? "budget-entry budget-inbox-item is-read" : "budget-entry budget-inbox-item"}>
       <div className="budget-limit-main">
         <span className="budget-entry-text">
-          <span className="budget-chip">{labelOf(text.kinds, item.kind)}</span>{" "}
+          <span className="budget-chip">{labelOf(INBOX_KIND_KEYS, item.kind)}</span>{" "}
           {item.kind === "spending_limit" ? (
             <CategorySwatch color={lookups.categoryColors.get(item.ref.category_id)} />
           ) : null}
@@ -280,21 +151,21 @@ function InboxRow({
           {status === null ? null : (
             <span className="budget-chip budget-inbox-status" data-status={item.params.status}>{status}</span>
           )}
-          <span className="budget-chip">{item.read ? text.readBadge : text.unreadBadge}</span>
+          <span className="budget-chip">{item.read ? t("budget.inbox.readBadge") : t("budget.inbox.unreadBadge")}</span>
         </div>
       </div>
       <div className="budget-entry-facts">
-        {item.kind === "consent_renewal" ? <ConsentFacts item={item} text={text} locale={locale} /> : null}
-        {item.kind === "mortgage_due" ? <MortgageFacts item={item} text={text} /> : null}
-        {item.kind === "spending_limit" ? <SpendingLimitFacts item={item} text={text} /> : null}
-        {readStamp === null ? null : <span>{text.readAt(readStamp)}</span>}
+        {item.kind === "consent_renewal" ? <ConsentFacts item={item} locale={locale} /> : null}
+        {item.kind === "mortgage_due" ? <MortgageFacts item={item} /> : null}
+        {item.kind === "spending_limit" ? <SpendingLimitFacts item={item} /> : null}
+        {readStamp === null ? null : <span>{t("budget.inbox.readAt", { date: readStamp })}</span>}
       </div>
       {item.kind === "mortgage_due" && item.params.freshness_stale ? (
-        <p className="budget-muted">{text.freshnessStale}</p>
+        <p className="budget-muted">{t("budget.inbox.freshnessStale")}</p>
       ) : null}
       <div className="budget-entry-facts">
         <button type="button" disabled={busy} onClick={() => { onToggleRead(item); }}>
-          {item.read ? text.markUnread : text.markRead}
+          {item.read ? t("budget.inbox.markUnread") : t("budget.inbox.markRead")}
         </button>
         {openAction === null ? null : (
           <button type="button" disabled={busy} onClick={openAction.run}>{openAction.label}</button>
@@ -305,7 +176,7 @@ function InboxRow({
 }
 
 export function InboxView({
-  api, connections, consentEnabled, text, locale, revision, onAccessLoss,
+  api, connections, consentEnabled, locale, revision, onAccessLoss,
   onOpenAccounts, onOpenMortgages, onOpenLimits,
 }: InboxViewProps) {
   const [shown, setShown] = useState<Shown>({ state: "loading" });
@@ -357,14 +228,17 @@ export function InboxView({
     setBusy(false);
     if (!result.ok) {
       if (RELOAD_ERRORS.has(result.error)) reload();
-      setNotice({ kind: "error", text: saveFailure(text, result.error) });
+      setNotice({ kind: "error", text: saveFailure(result.error) });
       return;
     }
     if (partialTotal !== undefined && partialTotal > items.length) {
-      setNotice({ kind: "info", text: text.markedPartial(result.data.inbox.changed_count, partialTotal) });
+      setNotice({
+        kind: "info",
+        text: t("budget.inbox.markedPartial", { marked: result.data.inbox.changed_count, total: partialTotal }),
+      });
     }
     reload();
-  }, [api, onAccessLoss, reload, text]);
+  }, [api, onAccessLoss, reload]);
 
   const lookups: LookupMaps = {
     banks: new Map(connections.map((item) => [item.id, item.bank_name])),
@@ -377,47 +251,48 @@ export function InboxView({
   const visible = data === null ? [] : filter === "unread" ? data.items.filter((item) => !item.read) : data.items;
   const unreadBatch = data === null ? [] : data.items.filter((item) => !item.read).slice(0, INBOX_MARK_BATCH_MAX);
   const atCap = data !== null && data.reads_count >= data.reads_cap;
+  const title = t("budget.inbox.title");
 
   return (
-    <section className="budget-month" aria-label={text.title}>
-      <p className="budget-muted">{text.intro}</p>
+    <section className="budget-month" aria-label={title}>
+      <p className="budget-muted">{t("budget.inbox.intro")}</p>
       {data === null ? null : (
         <div className="budget-entry-facts">
-          <span>{text.evaluatedFor(data.evaluation_date, data.evaluation_timezone)}</span>
+          <span>{t("budget.inbox.evaluatedFor", { date: data.evaluation_date, tz: data.evaluation_timezone })}</span>
           <strong className={data.unread_count > 0 ? "budget-warn" : undefined}>
-            {text.unreadCount(data.unread_count)}
+            {t("budget.inbox.unreadCount", { count: data.unread_count })}
           </strong>
           <span className={atCap ? "budget-warn" : undefined}>
-            {text.capacity(data.reads_count, data.reads_cap)}
+            {t("budget.inbox.capacity", { used: data.reads_count, cap: data.reads_cap })}
           </span>
         </div>
       )}
       {notice === null ? null : (
         <p className="budget-notice" role={notice.kind === "error" ? "alert" : "status"}>{notice.text}</p>
       )}
-      {shown.state === "loading" ? <p className="budget-muted" role="status">{text.loading}</p> : null}
-      {shown.state === "error" ? <p className="budget-notice" role="alert">{text.error}</p> : null}
+      {shown.state === "loading" ? <p className="budget-muted" role="status">{t("budget.inbox.loading")}</p> : null}
+      {shown.state === "error" ? <p className="budget-notice" role="alert">{t("budget.inbox.error")}</p> : null}
       {data === null ? null : (
-        <section className="budget-entries" aria-label={text.title}>
+        <section className="budget-entries" aria-label={title}>
           <div className="budget-limit-main">
-            <div className="budget-views" role="group" aria-label={text.filterLabel}>
+            <div className="budget-views" role="group" aria-label={t("budget.inbox.filterLabel")}>
               <button type="button" aria-pressed={filter === "all"} disabled={busy}
-                onClick={() => { setFilter("all"); }}>{text.filterAll}</button>
+                onClick={() => { setFilter("all"); }}>{t("budget.inbox.filterAll")}</button>
               <button type="button" aria-pressed={filter === "unread"} disabled={busy}
-                onClick={() => { setFilter("unread"); }}>{text.filterUnread}</button>
+                onClick={() => { setFilter("unread"); }}>{t("budget.inbox.filterUnread")}</button>
             </div>
             <button type="button" className="budget-primary" disabled={busy || unreadBatch.length === 0}
               onClick={() => { void mutate(unreadBatch.map(inboxItemKey), true, data.reads_version, data.unread_count); }}>
-              {text.markAllRead}
+              {t("budget.inbox.markAllRead")}
             </button>
           </div>
           {visible.length === 0 ? (
-            <p className="budget-muted">{filter === "unread" ? text.emptyUnread : text.empty}</p>
+            <p className="budget-muted">{filter === "unread" ? t("budget.inbox.emptyUnread") : t("budget.inbox.empty")}</p>
           ) : (
             <ul className="budget-entry-list">
               {visible.map((item) => (
                 <InboxRow key={inboxRowKey(item)} item={item} lookups={lookups} consentEnabled={consentEnabled}
-                  busy={busy} text={text} locale={locale}
+                  busy={busy} locale={locale}
                   onToggleRead={(entry) => { void mutate([inboxItemKey(entry)], !entry.read, data.reads_version); }}
                   onOpenAccounts={onOpenAccounts} onOpenMortgages={onOpenMortgages} onOpenLimits={onOpenLimits} />
               ))}

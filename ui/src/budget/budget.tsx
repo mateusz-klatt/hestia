@@ -2,7 +2,7 @@
 // under the server's quotas and never talks to a bank from the browser. Data live only in component state.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { currentLocale } from "../i18n";
+import { currentLocale, t, tPlural } from "../i18n";
 import { budgetApi } from "./api";
 import type { BudgetApi, BudgetResult } from "./api";
 import { ACTIVE_JOB, KINDS, accountLabel, effectiveState, formatAmount, freshness, hasActiveJob, idempotencyKey,
@@ -11,133 +11,29 @@ import { ACTIVE_JOB, KINDS, accountLabel, effectiveState, formatAmount, freshnes
 import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnection, BudgetJob, BudgetKind,
   BudgetConsent, BudgetConsentFlow, BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange,
   LimitState } from "./model";
-import { ConsentHealthPanel, consentHealthLabels } from "./consent_health";
+import { ConsentHealthPanel } from "./consent_health";
 import { ForecastView } from "./analytics/forecast";
-import { InboxView, inboxLabels } from "./analytics/inbox";
-import { MonthView, monthLabels } from "./analytics/month";
-import { MonthBudgetView, monthBudgetLabels } from "./analytics/month_budget";
-import { MortgagesView, mortgagesLabels } from "./analytics/mortgages";
-import { QuarantineView, quarantineLabels } from "./analytics/quarantine";
-import { RecurringView, recurringLabels } from "./analytics/recurring";
-import { CategoriesView, rulesLabels } from "./analytics/rules";
-import { SpendingLimitsView, spendingLimitsLabels } from "./analytics/spending_limits";
-import { YearView, yearLabels } from "./analytics/year";
-import { hasAnalytics } from "./analytics/model";
+import { InboxView } from "./analytics/inbox";
+import { MonthView } from "./analytics/month";
+import { MonthBudgetView } from "./analytics/month_budget";
+import { MortgagesView } from "./analytics/mortgages";
+import { QuarantineView } from "./analytics/quarantine";
+import { RecurringView } from "./analytics/recurring";
+import { CategoriesView } from "./analytics/rules";
+import { SpendingLimitsView } from "./analytics/spending_limits";
+import { YearView } from "./analytics/year";
+import { MAIN_BALANCE_TYPE_KEYS, MAIN_FRESHNESS_KEYS, MAIN_JOB_STATUS_KEYS, MAIN_KIND_KEYS, MAIN_SCOPE_KEYS,
+  MAIN_VIEW_KEYS, hasAnalytics, labelOf } from "./analytics/model";
 import type { RuleCandidate } from "./analytics/model";
 import { ReceiptDevices } from "./devices";
 import "./budget.css";
 
-const labels = {
-  en: {
-    title: "Budget", subtitle: "Your private household finances.", reload: "Reload", loading: "Loading budget…",
-    views: { monthly_budget: "Monthly budget", accounts: "Accounts", inbox: "Inbox", month: "Month", year: "Year", limits: "Spending limits", recurring: "Recurring", mortgages: "Mortgages", forecast: "Forecast", quarantine: "Quarantine", rules: "Categories and rules" }, viewsLabel: "Budget view",
-    disabled: "The budget is not enabled on this server.", denied: "Only the budget's owner can view it.",
-    error: "The budget could not be loaded. Try again.", empty: "No bank connections are configured.",
-    account: "Account", refresh: "Refresh from bank", refreshing: "Refresh queued…",
-    refreshOff: "Refreshing is disabled on the server.", pause: "Pause", resume: "Resume", paused: "Paused",
-    background: "Automatic refresh", backgroundOff: "automatic refresh is disabled on the server",
-    attention: "Attention: unattended refresh stopped — refresh manually; reconnecting may be needed.",
-    renewal: "Bank consent expires soon", validUntil: "Consent valid until", lastSuccess: "Last full refresh",
-    never: "never", selected: "Include in budget", kind: "Account type", kindUnknown: "Choose type…",
-    kinds: { current: "Current", savings: "Savings", credit_card: "Credit card", other: "Other" },
-    freshness: { never: "not downloaded yet", fresh: "up to date", stale: "outdated", suspended: "suspended" },
-    transactions: "Transactions", balances: "Balances", from: "From", to: "To", filter: "Apply",
-    more: "Load more", noTransactions: "No transactions in this range.", noBalances: "No balances stored yet.",
-    uncertain: "uncertain entries kept separately", archived: "archived balance imports", close: "Close",
-    job: { queued: "queued", running: "running", updated: "updated", partial: "partly updated", failed: "failed",
-      deferred: "not due yet", interrupted: "interrupted" },
-    next: "next possible", conflict: "This changed elsewhere; the latest state was loaded.",
-    busy: "A refresh is already in progress for this connection.", pausedError: "Resume the connection first.",
-    unavailable: "Refresh is unavailable right now.", saveError: "Could not save. Try again.",
-    connect: "Connect bank", renew: "Renew bank consent", connecting: "Opening the bank…",
-    consentHelp: "You will sign in on your bank's page; Hestia never sees your banking password.",
-    consentActive: "Consent from Hestia valid until", consentWaiting: "A new consent is waiting to be finished",
-    pendingTitle: "Unfinished bank connection", finish: "Finish", cancel: "Cancel", atBank: "started at the bank",
-    consentError: "Could not start the bank connection. Try again later.",
-    consentInProgress: "Another bank connection is already in progress. Finish or cancel it below, or try again in 15 minutes.",
-    consentRateLimited: "Too many connection attempts for this bank. Try again later, within an hour at most.",
-    consentContext: "The connection cannot be started safely from this address; open Hestia at its usual address.",
-    consentUrl: "The bank returned an invalid address; nothing was opened.",
-    limits: "Download limits", limitsHide: "Hide limits", limitsLoading: "Loading limits…",
-    consentHealth: "Consent status", consentHealthHide: "Hide consent status", devices: "Devices (Vesta)",
-    limitsError: "Limits could not be loaded.",
-    limitsIntro: "Each account and data type is downloaded at most twice a day, at least 12 hours apart; a bank can ask for a longer pause. These are read-only.",
-    scopes: { application: "All banks", provider: "This bank", connection: "This connection" },
-    sharedFree: "Shared limits: no restriction", limitReady: "available now", limitFrom: "from",
-    limitRunning: "download in progress", limitSuspended: "suspended — needs the operator",
-    limitRetry: "bank asked for a pause until", lastTry: "last attempt", excluded: "excluded",
-    lastRefresh: "Last refresh", observed: "balances seen in", badRange: "The start date must not be after the end date.",
-    presets: { "30": "Last 30 days", "90": "Last 90 days", year: "This year", all: "All" },
-    archivedHelp: "Earlier imported balance snapshots (metadata only, not current funds)",
-    fetched: "downloaded", imported: "imported", entries: "balances",
-    balanceTypes: { CLBD: "Booked (closing)", ITBD: "Booked (interim)", OPBD: "Booked (opening)",
-      ITAV: "Available (interim)", CLAV: "Available (closing)", OPAV: "Available (opening)", FWAV: "Forward available",
-      XPCD: "Expected", PRCD: "Previously closed" },
-  },
-  pl: {
-    title: "Budżet", subtitle: "Prywatne finanse domowe.", reload: "Wczytaj ponownie", loading: "Wczytywanie budżetu…",
-    views: { monthly_budget: "Budżet miesiąca", accounts: "Konta", inbox: "Skrzynka", month: "Miesiąc", year: "Rok", limits: "Limity wydatków", recurring: "Cykliczne", mortgages: "Hipoteka", forecast: "Prognoza", quarantine: "Kwarantanna", rules: "Kategorie i reguły" }, viewsLabel: "Widok budżetu",
-    disabled: "Budżet nie jest włączony na tym serwerze.", denied: "Budżet widzi tylko jego właściciel.",
-    error: "Nie udało się wczytać budżetu. Spróbuj ponownie.", empty: "Brak skonfigurowanych połączeń z bankiem.",
-    account: "Konto", refresh: "Odśwież z banku", refreshing: "Odświeżanie w kolejce…",
-    refreshOff: "Odświeżanie jest wyłączone na serwerze.", pause: "Wstrzymaj", resume: "Wznów", paused: "Wstrzymane",
-    background: "Automatyczne odświeżanie", backgroundOff: "automatyczne odświeżanie jest wyłączone na serwerze",
-    attention: "Uwaga: automatyczne odświeżanie zatrzymane — odśwież ręcznie; może być potrzebne ponowne połączenie.",
-    renewal: "Zgoda banku wkrótce wygaśnie", validUntil: "Zgoda ważna do", lastSuccess: "Ostatnie pełne odświeżenie",
-    never: "nigdy", selected: "Uwzględnij w budżecie", kind: "Rodzaj konta", kindUnknown: "Wybierz rodzaj…",
-    kinds: { current: "Osobiste", savings: "Oszczędnościowe", credit_card: "Karta kredytowa", other: "Inne" },
-    freshness: { never: "jeszcze nie pobrano", fresh: "aktualne", stale: "nieaktualne", suspended: "wstrzymane" },
-    transactions: "Transakcje", balances: "Salda", from: "Od", to: "Do", filter: "Pokaż",
-    more: "Pokaż więcej", noTransactions: "Brak transakcji w tym zakresie.", noBalances: "Brak zapisanych sald.",
-    uncertain: "niepewnych wpisów trzymanych osobno", archived: "zarchiwizowanych importów sald", close: "Zamknij",
-    job: { queued: "w kolejce", running: "w toku", updated: "zaktualizowano", partial: "częściowo zaktualizowano",
-      failed: "błąd", deferred: "jeszcze nie teraz", interrupted: "przerwane" },
-    next: "następne najwcześniej", conflict: "Zmieniono to w innym miejscu; wczytano aktualny stan.",
-    busy: "Dla tego połączenia trwa już odświeżanie.", pausedError: "Najpierw wznów połączenie.",
-    unavailable: "Odświeżanie jest teraz niedostępne.", saveError: "Nie udało się zapisać. Spróbuj ponownie.",
-    connect: "Połącz z bankiem", renew: "Odnów zgodę w banku", connecting: "Otwieram stronę banku…",
-    consentHelp: "Zalogujesz się na stronie swojego banku; Hestia nie widzi Twojego hasła do banku.",
-    consentActive: "Zgoda z Hestii ważna do", consentWaiting: "Nowa zgoda czeka na dokończenie",
-    pendingTitle: "Niedokończone połączenie z bankiem", finish: "Dokończ", cancel: "Anuluj", atBank: "rozpoczęte w banku",
-    consentError: "Nie udało się rozpocząć połączenia z bankiem. Spróbuj później.",
-    consentInProgress: "Trwa już inne połączenie z bankiem. Dokończ je lub anuluj poniżej albo spróbuj ponownie za 15 minut.",
-    consentRateLimited: "Zbyt wiele prób połączenia z tym bankiem. Spróbuj ponownie później, najpóźniej za godzinę.",
-    consentContext: "Nie można bezpiecznie rozpocząć połączenia z tego adresu; otwórz Hestię pod jej zwykłym adresem.",
-    consentUrl: "Bank zwrócił nieprawidłowy adres; niczego nie otwarto.",
-    limits: "Limity pobrań", limitsHide: "Ukryj limity", limitsLoading: "Wczytywanie limitów…",
-    consentHealth: "Stan zgód", consentHealthHide: "Ukryj stan zgód", devices: "Urządzenia (Vesta)",
-    limitsError: "Nie udało się wczytać limitów.",
-    limitsIntro: "Każde konto i rodzaj danych pobieramy najwyżej 2 razy na dobę, co najmniej co 12 godzin; bank może zażądać dłuższej przerwy. To tylko podgląd.",
-    scopes: { application: "Wszystkie banki", provider: "Ten bank", connection: "To połączenie" },
-    sharedFree: "Wspólne limity: bez ograniczeń", limitReady: "dostępne teraz", limitFrom: "od",
-    limitRunning: "pobieranie w toku", limitSuspended: "wstrzymane — wymaga decyzji operatora",
-    limitRetry: "bank prosi o przerwę do", lastTry: "ostatnia próba", excluded: "wykluczone",
-    lastRefresh: "Ostatnie odświeżenie", observed: "salda widziane w", badRange: "Data początkowa nie może być późniejsza niż końcowa.",
-    presets: { "30": "Ostatnie 30 dni", "90": "Ostatnie 90 dni", year: "Ten rok", all: "Wszystko" },
-    archivedHelp: "Wcześniej zaimportowane migawki sald (tylko metadane, nie bieżące środki)",
-    fetched: "pobrano", imported: "zaimportowano", entries: "sald",
-    balanceTypes: { CLBD: "Zaksięgowane (na koniec dnia)", ITBD: "Zaksięgowane (bieżące)", OPBD: "Zaksięgowane (otwarcie)",
-      ITAV: "Dostępne (bieżące)", CLAV: "Dostępne (na koniec dnia)", OPAV: "Dostępne (otwarcie)", FWAV: "Dostępne w przyszłości",
-      XPCD: "Oczekiwane", PRCD: "Poprzednie zamknięcie" },
-  },
-};
-type Labels = typeof labels.en;
-
-function pick(): { text: Labels; consentHealth: typeof consentHealthLabels.en; inbox: typeof inboxLabels.en;
-  monthBudget: typeof monthBudgetLabels.en; month: typeof monthLabels.en; year: typeof yearLabels.en;
-  limits: typeof spendingLimitsLabels.en; recurring: typeof recurringLabels.en;
-  mortgages: typeof mortgagesLabels.en; quarantine: typeof quarantineLabels.en; rules: typeof rulesLabels.en; locale: string } {
-  const locale = currentLocale();
-  const pl = locale.startsWith("pl");
-  return { text: pl ? labels.pl : labels.en, consentHealth: pl ? consentHealthLabels.pl : consentHealthLabels.en,
-    inbox: pl ? inboxLabels.pl : inboxLabels.en,
-    monthBudget: pl ? monthBudgetLabels.pl : monthBudgetLabels.en,
-    month: pl ? monthLabels.pl : monthLabels.en, year: pl ? yearLabels.pl : yearLabels.en,
-    limits: pl ? spendingLimitsLabels.pl : spendingLimitsLabels.en,
-    recurring: pl ? recurringLabels.pl : recurringLabels.en,
-    mortgages: pl ? mortgagesLabels.pl : mortgagesLabels.en,
-    quarantine: pl ? quarantineLabels.pl : quarantineLabels.en, rules: pl ? rulesLabels.pl : rulesLabels.en, locale };
-}
+const PRESET_KEYS = {
+  "30": "budget.main.presets.30",
+  "90": "budget.main.presets.90",
+  year: "budget.main.presets.year",
+  all: "budget.main.presets.all",
+} as const;
 
 type View = "monthly_budget" | "accounts" | "inbox" | "month" | "year" | "limits" | "recurring" | "mortgages" | "forecast" | "quarantine" | "rules";
 
@@ -151,25 +47,29 @@ function serverMonthToToday(month: string): (() => Date) | undefined {
 
 type Load = "loading" | "ready" | "disabled" | "denied" | "error";
 
-function failureText(text: Labels, error: string): string {
+function failureText(error: string): string {
   switch (error) {
-    case "budget_version_conflict": return text.conflict;
-    case "budget_refresh_in_progress": return text.busy;
-    case "budget_connection_paused": return text.pausedError;
-    case "budget_refresh_unavailable": return text.unavailable;
-    default: return text.saveError;
+    case "budget_version_conflict": return t("budget.main.conflict");
+    case "budget_refresh_in_progress": return t("budget.main.busy");
+    case "budget_connection_paused": return t("budget.main.pausedError");
+    case "budget_refresh_unavailable": return t("budget.main.unavailable");
+    default: return t("budget.main.saveError");
   }
 }
 
-function balanceLabel(text: Labels, type: string, name: string): string {
-  return (text.balanceTypes as Record<string, string>)[type] ?? (name || type);
+function balanceLabel(type: string, name: string): string {
+  const key = MAIN_BALANCE_TYPE_KEYS[type];
+  return key === undefined ? (name || type) : t(key);
 }
 
-function jobText(text: Labels, job: BudgetJob, locale: string): string {
-  const status = (text.job as Record<string, string>)[job.status] ?? job.status;
+function jobText(job: BudgetJob, locale: string): string {
+  const status = labelOf(MAIN_JOB_STATUS_KEYS, job.status);
   const next = job.next_attempt !== null && !ACTIVE_JOB.has(job.status) ? when(job.next_attempt, locale) : null;
-  return [`${text.lastRefresh}: ${status}`, job.error, next === null ? null : `${text.next} ${next}`]
-    .filter((part) => part !== null && part !== "").join(" · ");
+  return [
+    t("budget.main.lastRefresh", { status }),
+    job.error,
+    next === null ? null : t("budget.main.nextPossible", { when: next }),
+  ].filter((part) => part !== null && part !== "").join(" · ");
 }
 
 export interface BudgetProps {
@@ -184,9 +84,7 @@ export interface BudgetProps {
 
 export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
-  const { text, consentHealth: consentHealthText, inbox: inboxText, monthBudget: monthBudgetText, month: monthText,
-    year: yearText, limits: limitsText, recurring: recurringText, mortgages: mortgagesText, quarantine: quarantineText,
-    rules: rulesText, locale } = pick();
+  const locale = currentLocale();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
   const [capabilities, setCapabilities] = useState<BudgetCapabilities | null>(null);
@@ -315,11 +213,11 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     if (!alive.current || started !== epoch.current || barrier(result)) return null;
     setBusy((current) => { const next = new Set(current); next.delete(key); return next; });
     if (!result.ok) {
-      setNotice(failureText(text, result.error));
+      setNotice(failureText(result.error));
       if (result.error === "budget_version_conflict") await reload();
     }
     return result;
-  }, [reload, barrier, text]);
+  }, [reload, barrier]);
 
   const refresh = useCallback(async (connection: BudgetConnection) => {
     // Reuse the key only to retry a request whose outcome is unknown (network failure).
@@ -388,17 +286,17 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     // Leave for the bank only if this is still the same visible budget for the same principal.
     if (result === null || !activeRef.current || lifecycle.current !== ticket) return;
     if (!result.ok) {
-      setNotice(consentFailureText(text, result.error));
+      setNotice(consentFailureText(result.error));
       // An unfinished flow already exists: reload so its banner (finish / cancel) appears.
       if (result.error === "budget_consent_in_progress") await reload();
       return;
     }
     const target = safeAuthorizationUrl(result.data.authorization_url);
-    if (target === null) { setNotice(text.consentUrl); return; }
+    if (target === null) { setNotice(t("budget.main.consentUrl")); return; }
     // Keep the button disabled while the browser leaves for the bank.
     setBusy((current) => new Set(current).add(`consent:${connection.id}`));
     navigate(target);
-  }, [api, run, navigate, reload, text]);
+  }, [api, run, navigate, reload]);
 
   const cancelConsent = useCallback(async (flow: BudgetConsentFlow) => {
     const result = await run(`cancel:${flow.id}`, () => api.consentCancel(flow.id));
@@ -421,29 +319,29 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   if (!active) return null;
   const header = (
     <header className="budget-header">
-      <div><h2>{text.title}</h2><p>{text.subtitle}</p></div>
+      <div><h2>{t("budget.main.title")}</h2><p>{t("budget.main.subtitle")}</p></div>
       <div className="budget-actions">
         {load === "ready" && consentEnabled ? (
           <button type="button" aria-pressed={showConsentHealth} onClick={() => { setShowConsentHealth((current) => !current); }}>
-            {showConsentHealth ? text.consentHealthHide : text.consentHealth}
+            {showConsentHealth ? t("budget.main.consentHealthHide") : t("budget.main.consentHealth")}
           </button>
         ) : null}
         {load === "ready" ? (
           <button type="button" onClick={() => { setView("accounts"); setDevicesFocus((current) => current + 1); }}>
-            {text.devices}
+            {t("budget.main.devices")}
           </button>
         ) : null}
         {load === "ready" ? (
           <button type="button" aria-pressed={showLimits} onClick={() => { setShowLimits((current) => !current); }}>
-            {showLimits ? text.limitsHide : text.limits}
+            {showLimits ? t("budget.main.limitsHide") : t("budget.main.limits")}
           </button>
         ) : null}
-        <button type="button" onClick={() => { void reload(); }}>{text.reload}</button>
+        <button type="button" onClick={() => { void reload(); }}>{t("budget.main.reload")}</button>
       </div>
     </header>
   );
   if (load !== "ready") {
-    const message = { loading: text.loading, disabled: text.disabled, denied: text.denied, error: text.error }[load];
+    const message = { loading: t("budget.main.loading"), disabled: t("budget.main.disabled"), denied: t("budget.main.denied"), error: t("budget.main.error") }[load];
     return <section className="budget-app">{header}<p className="budget-status" role="status">{message}</p></section>;
   }
   const opened = accounts.find((account) => account.id === detail) ?? null;
@@ -454,38 +352,38 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     <section className="budget-app">
       {header}
       {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
-      {showLimits ? <p className="budget-muted">{text.limitsIntro}</p> : null}
+      {showLimits ? <p className="budget-muted">{t("budget.main.limitsIntro")}</p> : null}
       {showConsentHealth && consentEnabled ? (
-        <ConsentHealthPanel api={api} connections={connections} text={consentHealthText} locale={locale}
+        <ConsentHealthPanel api={api} connections={connections} locale={locale}
           revision={revision} onAccessLoss={barrier} />
       ) : null}
       {pending.length === 0 ? null : (
-        <section className="budget-pending" aria-label={text.pendingTitle}>
-          <h3>{text.pendingTitle}</h3>
+        <section className="budget-pending" aria-label={t("budget.main.pendingTitle")}>
+          <h3>{t("budget.main.pendingTitle")}</h3>
           <ul>
             {pending.map((flow) => (
               <li key={flow.id}>
-                <span>{connections.find((item) => item.id === flow.connection_id)?.bank_name ?? text.account}</span>
+                <span>{connections.find((item) => item.id === flow.connection_id)?.bank_name ?? t("budget.main.account")}</span>
                 {READY_FLOW.has(flow.status)
-                  ? <a className="budget-primary" href={completeUrl}>{text.finish}</a>
-                  : <span className="budget-muted">{text.atBank}</span>}
+                  ? <a className="budget-primary" href={completeUrl}>{t("budget.main.finish")}</a>
+                  : <span className="budget-muted">{t("budget.main.atBank")}</span>}
                 <button type="button" disabled={busy.has(`cancel:${flow.id}`)}
-                  onClick={() => { void cancelConsent(flow); }}>{text.cancel}</button>
+                  onClick={() => { void cancelConsent(flow); }}>{t("budget.main.cancel")}</button>
               </li>
             ))}
           </ul>
         </section>
       )}
       {analysis ? (
-        <div className="budget-views" role="group" aria-label={text.viewsLabel}>
+        <div className="budget-views" role="group" aria-label={t("budget.main.viewsLabel")}>
           {(["monthly_budget", "accounts", "inbox", "month", "year", "limits", "recurring", "mortgages", "forecast", "quarantine", "rules"] as const).map((item) => (
             <button type="button" key={item} aria-pressed={shownView === item}
-              onClick={() => { setView(item); if (item === "month") { setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); } if (item === "rules") setFocusRule(undefined); }}>{text.views[item]}</button>
+              onClick={() => { setView(item); if (item === "month") { setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); } if (item === "rules") setFocusRule(undefined); }}>{labelOf(MAIN_VIEW_KEYS, item)}</button>
           ))}
         </div>
       ) : null}
       {shownView === "monthly_budget" ? (
-        <MonthBudgetView api={api} accounts={accounts} text={monthBudgetText} locale={locale} revision={revision}
+        <MonthBudgetView api={api} accounts={accounts} locale={locale} revision={revision}
           onAccessLoss={barrier} onOpenMonth={(month, serverCurrentMonth, options) => {
             setFocusMonth(month);
             setFocusToday(() => serverMonthToToday(serverCurrentMonth));
@@ -498,7 +396,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
             setView("month");
           }} />
       ) : shownView === "inbox" ? (
-        <InboxView api={api} connections={connections} consentEnabled={consentEnabled} text={inboxText} locale={locale}
+        <InboxView api={api} connections={connections} consentEnabled={consentEnabled} locale={locale}
           revision={revision} onAccessLoss={barrier}
           onOpenAccounts={(openConsentHealth) => {
             setView("accounts");
@@ -508,7 +406,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
           onOpenLimits={() => { setView("limits"); }} />
       ) : shownView === "month" ? (
         <MonthView key={`${focusMonth ?? "current"}-${focusCurrency ?? "all"}-${focusProvisional === undefined ? "full" : `provisional:${String(focusProvisional.keys.length)}:${focusProvisional.truncated ? "1" : "0"}`}`}
-          api={api} accounts={accounts} connections={connections} text={monthText} locale={locale} revision={revision}
+          api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} initialMonth={focusMonth} initialCurrency={focusCurrency}
           initialProvisionalKeys={focusProvisional?.keys}
           initialProvisionalTotal={focusProvisional?.total}
@@ -516,31 +414,31 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
           {...(focusToday === undefined ? {} : { today: focusToday })}
           onCreateRule={(candidate) => { setFocusRule(candidate); setView("rules"); }} />
       ) : shownView === "year" ? (
-        <YearView api={api} accounts={accounts} connections={connections} text={yearText} locale={locale} revision={revision} onAccessLoss={barrier}
+        <YearView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision} onAccessLoss={barrier}
           onOpenMonth={(month) => { setFocusMonth(month); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setView("month"); }} />
       ) : shownView === "limits" ? (
-        <SpendingLimitsView api={api} accounts={accounts} text={limitsText} locale={locale} revision={revision}
+        <SpendingLimitsView api={api} accounts={accounts} locale={locale} revision={revision}
           onAccessLoss={barrier} onOpenRules={() => { setView("rules"); }} />
       ) : shownView === "recurring" ? (
-        <RecurringView api={api} accounts={accounts} connections={connections} text={recurringText} locale={locale} revision={revision}
+        <RecurringView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} />
       ) : shownView === "mortgages" ? (
-        <MortgagesView api={api} accounts={accounts} text={mortgagesText} locale={locale} revision={revision}
+        <MortgagesView api={api} accounts={accounts} locale={locale} revision={revision}
           onAccessLoss={barrier} />
       ) : shownView === "forecast" ? (
         <ForecastView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} onOpenMortgages={() => { setView("mortgages"); }} />
       ) : shownView === "quarantine" ? (
-        <QuarantineView api={api} accounts={accounts} connections={connections} text={quarantineText} revision={revision}
+        <QuarantineView api={api} accounts={accounts} connections={connections} revision={revision}
           onAccessLoss={barrier} />
       ) : shownView === "rules" ? (
-        <CategoriesView api={api} accounts={accounts} connections={connections} text={rulesText} locale={locale} revision={revision}
+        <CategoriesView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} initialRule={focusRule ?? null} />
       ) : (
         <>
         <ReceiptDevices key={principal ?? ""} api={api} locale={locale} revision={revision} onAccessLoss={barrier}
           focusRevision={devicesFocus} />
-        {connections.length === 0 ? <p className="budget-status">{text.empty}</p> : null}
+        {connections.length === 0 ? <p className="budget-status">{t("budget.main.empty")}</p> : null}
         {connections.map((connection) => {
           const job = latestJob(jobs, connection.id);
           const owned = accounts.filter((account) => account.connection === connection.id);
@@ -552,58 +450,58 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
                 <div className="budget-actions">
                   {capabilities?.refresh === true ? (
                     <button type="button" className="budget-primary" disabled={refreshing || connection.paused}
-                      onClick={() => { void refresh(connection); }}>{refreshing ? text.refreshing : text.refresh}</button>
-                  ) : <span className="budget-muted">{text.refreshOff}</span>}
+                      onClick={() => { void refresh(connection); }}>{refreshing ? t("budget.main.refreshing") : t("budget.main.refresh")}</button>
+                  ) : <span className="budget-muted">{t("budget.main.refreshOff")}</span>}
                   <button type="button" disabled={busy.has(`pause:${connection.id}`)}
                     onClick={() => { void saveConnection(`pause:${connection.id}`, () => api.setPaused(connection, !connection.paused)); }}>
-                    {connection.paused ? text.resume : text.pause}
+                    {connection.paused ? t("budget.main.resume") : t("budget.main.pause")}
                   </button>
                 </div>
               </header>
               <ul className="budget-facts">
-                {connection.paused ? <li className="budget-warn">{text.paused}</li> : null}
-                {connection.attention === null ? null : <li className="budget-warn">{text.attention}</li>}
-                {connection.renewal_due ? <li className="budget-warn">{text.renewal}</li> : null}
-                {connection.valid_until === null ? null : <li>{text.validUntil}: {when(connection.valid_until, locale)}</li>}
-                <li>{text.lastSuccess}: {when(connection.last_success, locale) ?? text.never}</li>
-                {job === null ? null : <li>{jobText(text, job, locale)}</li>}
-                {consentEnabled ? consentFacts(text, consents, connection.id, locale) : null}
+                {connection.paused ? <li className="budget-warn">{t("budget.main.paused")}</li> : null}
+                {connection.attention === null ? null : <li className="budget-warn">{t("budget.main.attention")}</li>}
+                {connection.renewal_due ? <li className="budget-warn">{t("budget.main.renewal")}</li> : null}
+                {connection.valid_until === null ? null : <li>{t("budget.main.validUntil", { date: when(connection.valid_until, locale) ?? "" })}</li>}
+                <li>{t("budget.main.lastSuccess", { when: when(connection.last_success, locale) ?? t("budget.main.never") })}</li>
+                {job === null ? null : <li>{jobText(job, locale)}</li>}
+                {consentEnabled ? consentFacts(consents, connection.id, locale) : null}
               </ul>
               {consentEnabled ? (
                 <div className="budget-consent">
                   <button type="button" disabled={busy.has(`consent:${connection.id}`)}
                     onClick={() => { void startConsent(connection); }}>
-                    {busy.has(`consent:${connection.id}`) ? text.connecting
-                      : consentIntent(connection) === "renew" ? text.renew : text.connect}
+                    {busy.has(`consent:${connection.id}`) ? t("budget.main.connecting")
+                      : consentIntent(connection) === "renew" ? t("budget.main.renew") : t("budget.main.connect")}
                   </button>
-                  <span className="budget-muted">{text.consentHelp}</span>
+                  <span className="budget-muted">{t("budget.main.consentHelp")}</span>
                 </div>
               ) : null}
               {capabilities?.background_selection === true ? (
                 <label className="budget-toggle">
                   <input name="background_enabled" type="checkbox" checked={connection.background_enabled} disabled={busy.has(`background:${connection.id}`)}
                     onChange={(event) => { const enabled = event.currentTarget.checked; void saveConnection(`background:${connection.id}`, () => api.setBackground(connection, enabled)); }} />
-                  {text.background}
-                  {capabilities.background_polling ? null : <span className="budget-muted"> ({text.backgroundOff})</span>}
+                  {t("budget.main.background")}
+                  {capabilities.background_polling ? null : <span className="budget-muted"> ({t("budget.main.backgroundOff")})</span>}
                 </label>
               ) : null}
               <ul className="budget-accounts">
                 {owned.map((account, index) => (
-                  <AccountRow key={account.id} account={account} index={index} text={text} busy={busy}
+                  <AccountRow key={account.id} account={account} index={index} busy={busy}
                     onOpen={() => { setDetail(account.id); }}
                     onSelect={(selected) => { void saveAccount(`select:${account.id}`, () => api.setSelected(account, selected)); }}
                     onKind={(kind) => { void saveAccount(`kind:${account.id}`, () => api.setKind(account, kind)); }} />
                 ))}
               </ul>
               {showLimits ? (
-                <LimitsPanel connectionId={connection.id} accounts={owned} limits={limits} text={text} locale={locale} />
+                <LimitsPanel connectionId={connection.id} accounts={owned} limits={limits} locale={locale} />
               ) : null}
             </article>
           );
         })}
         {opened === null ? null : (
-          <AccountDetail account={opened} label={accountLabel(opened, accounts.filter((a) => a.connection === opened.connection).indexOf(opened), text.account)}
-            api={api} text={text} locale={locale} revision={revision} onAccessLoss={barrier}
+          <AccountDetail account={opened} label={accountLabel(opened, accounts.filter((a) => a.connection === opened.connection).indexOf(opened), t("budget.main.account"))}
+            api={api} locale={locale} revision={revision} onAccessLoss={barrier}
               onClose={() => { setDetail(null); }} />
           )}
         </>
@@ -612,45 +510,48 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   );
 }
 
-function consentFailureText(text: Labels, error: string): string {
+function consentFailureText(error: string): string {
   switch (error) {
-    case "budget_version_conflict": return text.conflict;
-    case "budget_consent_in_progress": return text.consentInProgress;
-    case "budget_consent_rate_limited": return text.consentRateLimited;
-    case "budget_consent_psu_context_required": return text.consentContext;
-    default: return text.consentError;
+    case "budget_version_conflict": return t("budget.main.conflict");
+    case "budget_consent_in_progress": return t("budget.main.consentInProgress");
+    case "budget_consent_rate_limited": return t("budget.main.consentRateLimited");
+    case "budget_consent_psu_context_required": return t("budget.main.consentContext");
+    default: return t("budget.main.consentError");
   }
 }
 
-function consentFacts(text: Labels, consents: readonly BudgetConsent[], connectionId: string, locale: string) {
+function consentFacts(consents: readonly BudgetConsent[], connectionId: string, locale: string) {
   const own = consents.filter((consent) => consent.connection_id === connectionId);
   const active = own.find((consent) => consent.status === "ACTIVE");
   const waiting = own.some((consent) => consent.status === "UNADOPTED");
   return (
     <>
-      {active === undefined ? null : <li>{text.consentActive}: {when(active.valid_until, locale) ?? "—"}</li>}
-      {waiting ? <li className="budget-warn">{text.consentWaiting}</li> : null}
+      {active === undefined ? null : <li>{t("budget.main.consentActive", { when: when(active.valid_until, locale) ?? "—" })}</li>}
+      {waiting ? <li className="budget-warn">{t("budget.main.consentWaiting")}</li> : null}
     </>
   );
 }
 
-function stateText(text: Labels, state: LimitState, locale: string): string {
+function stateText(state: LimitState, locale: string): string {
   switch (state.kind) {
-    case "suspended": return text.limitSuspended;
-    case "running": return text.limitRunning;
-    case "waiting": return `${state.retry ? text.limitRetry : text.limitFrom} ${when(state.until, locale) ?? ""}`;
-    default: return text.limitReady;
+    case "suspended": return t("budget.main.limitSuspended");
+    case "running": return t("budget.main.limitRunning");
+    case "waiting": {
+      const until = when(state.until, locale) ?? "";
+      return state.retry ? t("budget.main.limitRetry", { when: until }) : t("budget.main.limitFrom", { when: until });
+    }
+    default: return t("budget.main.limitReady");
   }
 }
 
 interface LimitsProps {
-  connectionId: string; accounts: BudgetAccount[]; limits: BudgetLimit[] | null | "error"; text: Labels; locale: string;
+  connectionId: string; accounts: BudgetAccount[]; limits: BudgetLimit[] | null | "error"; locale: string;
 }
 
 /** Read-only view of stored limits for one connection; there is deliberately no way to lift any of them here. */
-function LimitsPanel({ connectionId, accounts, limits, text, locale }: LimitsProps) {
-  if (limits === null) return <p className="budget-muted" role="status">{text.limitsLoading}</p>;
-  if (limits === "error") return <p className="budget-notice" role="alert">{text.limitsError}</p>;
+function LimitsPanel({ connectionId, accounts, limits, locale }: LimitsProps) {
+  if (limits === null) return <p className="budget-muted" role="status">{t("budget.main.limitsLoading")}</p>;
+  if (limits === "error") return <p className="budget-notice" role="alert">{t("budget.main.limitsError")}</p>;
   const now = Date.now() / 1000;
   const own = limits.filter((limit) => limit.connection === connectionId);
   const shared = own.filter((limit): limit is BudgetSharedLimit => !isComponentLimit(limit));
@@ -658,22 +559,22 @@ function LimitsPanel({ connectionId, accounts, limits, text, locale }: LimitsPro
   const component = (accountId: string, operation: "transactions" | "balances") =>
     own.find((limit) => isComponentLimit(limit) && limit.account === accountId && limit.operation === operation);
   return (
-    <section className="budget-limits" aria-label={text.limits}>
+    <section className="budget-limits" aria-label={t("budget.main.limits")}>
       <ul className="budget-facts">
-        {blocked.length === 0 ? <li>{text.sharedFree}</li> : blocked.map(([limit, state]) => (
+        {blocked.length === 0 ? <li>{t("budget.main.sharedFree")}</li> : blocked.map(([limit, state]) => (
           <li key={limit.scope} className="budget-warn">
-            {(text.scopes as Record<string, string>)[limit.scope] ?? limit.scope}: {stateText(text, state, locale)}
+            {t("budget.main.scopeWithState", { scope: labelOf(MAIN_SCOPE_KEYS, limit.scope), state: stateText(state, locale) })}
           </li>
         ))}
       </ul>
       <table className="budget-limits-table">
-        <thead><tr><th scope="col">{text.account}</th><th scope="col">{text.transactions}</th><th scope="col">{text.balances}</th></tr></thead>
+        <thead><tr><th scope="col">{t("budget.main.account")}</th><th scope="col">{t("budget.main.transactions")}</th><th scope="col">{t("budget.main.balances")}</th></tr></thead>
         <tbody>
           {accounts.map((account, index) => (
             <tr key={account.id} className={account.selected ? undefined : "is-excluded"}>
               <th scope="row">
-                {accountLabel(account, index, text.account)}
-                {account.selected ? null : <small> ({text.excluded})</small>}
+                {accountLabel(account, index, t("budget.main.account"))}
+                {account.selected ? null : <small> ({t("budget.main.excluded")})</small>}
               </th>
               {(["transactions", "balances"] as const).map((operation) => {
                 const limit = component(account.id, operation);
@@ -682,8 +583,8 @@ function LimitsPanel({ connectionId, accounts, limits, text, locale }: LimitsPro
                 const last = when(limit.last_attempt, locale);
                 return (
                   <td key={operation} data-state={state.kind}>
-                    {stateText(text, state, locale)}
-                    {last === null ? null : <small className="budget-muted"><br />{text.lastTry}: {last}</small>}
+                    {stateText(state, locale)}
+                    {last === null ? null : <small className="budget-muted"><br />{t("budget.main.lastTry", { when: last })}</small>}
                   </td>
                 );
               })}
@@ -696,33 +597,33 @@ function LimitsPanel({ connectionId, accounts, limits, text, locale }: LimitsPro
 }
 
 interface RowProps {
-  account: BudgetAccount; index: number; text: Labels; busy: ReadonlySet<string>;
+  account: BudgetAccount; index: number; busy: ReadonlySet<string>;
   onOpen: () => void; onSelect: (selected: boolean) => void; onKind: (kind: BudgetKind) => void;
 }
 
-function AccountRow({ account, index, text, busy, onOpen, onSelect, onKind }: RowProps) {
+function AccountRow({ account, index, busy, onOpen, onSelect, onKind }: RowProps) {
   const kind = account.kind_confirmed_at === null ? "" : account.kind;
-  const state = (name: "transactions" | "balances") => text.freshness[freshness(account.components[name])];
+  const state = (name: "transactions" | "balances") => labelOf(MAIN_FRESHNESS_KEYS, freshness(account.components[name]));
   return (
     <li className={account.selected ? "budget-account" : "budget-account is-excluded"}>
       <button type="button" className="budget-account-name" onClick={onOpen}>
-        {accountLabel(account, index, text.account)}
+        {accountLabel(account, index, t("budget.main.account"))}
         {account.display?.currency ? <small> {account.display.currency}</small> : null}
       </button>
       {otherObservedCurrencies(account).length === 0 ? null
-        : <span className="budget-muted">{text.observed}: {otherObservedCurrencies(account).join(", ")}</span>}
-      <span className="budget-muted">{text.transactions}: {state("transactions")} · {text.balances}: {state("balances")}</span>
+        : <span className="budget-muted">{t("budget.main.observed", { currencies: otherObservedCurrencies(account).join(", ") })}</span>}
+      <span className="budget-muted">{t("budget.main.componentFreshness", { transactions: state("transactions"), balances: state("balances") })}</span>
       <label className="budget-toggle">
         <input name="selected" type="checkbox" checked={account.selected} disabled={!account.configured || busy.has(`select:${account.id}`)}
           onChange={(event) => { onSelect(event.currentTarget.checked); }} />
-        {text.selected}
+        {t("budget.main.selected")}
       </label>
       <label className="budget-kind">
-        <span>{text.kind}</span>
+        <span>{t("budget.main.kind")}</span>
         <select name="account_kind" value={kind} disabled={busy.has(`kind:${account.id}`)}
           onChange={(event) => { if (event.currentTarget.value !== "") onKind(event.currentTarget.value as BudgetKind); }}>
-          <option value="" disabled>{text.kindUnknown}</option>
-          {KINDS.map((item) => <option key={item} value={item}>{text.kinds[item]}</option>)}
+          <option value="" disabled>{t("budget.main.kindUnknown")}</option>
+          {KINDS.map((item) => <option key={item} value={item}>{labelOf(MAIN_KIND_KEYS, item)}</option>)}
         </select>
       </label>
     </li>
@@ -730,7 +631,7 @@ function AccountRow({ account, index, text, busy, onOpen, onSelect, onKind }: Ro
 }
 
 interface DetailProps {
-  account: BudgetAccount; label: string; api: BudgetApi; text: Labels; locale: string; revision: number;
+  account: BudgetAccount; label: string; api: BudgetApi; locale: string; revision: number;
   /** Reports a lost principal/disabled response so the whole view clears, not just this panel. */
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
   onClose: () => void;
@@ -740,7 +641,7 @@ interface Ledger { rows: BudgetTransaction[]; cursor: string | null; uncertain: 
 
 const EMPTY_LEDGER: Ledger = { rows: [], cursor: null, uncertain: 0, failed: false, loading: true };
 
-function AccountDetail({ account, label, api, text, locale, revision, onAccessLoss, onClose }: DetailProps) {
+function AccountDetail({ account, label, api, locale, revision, onAccessLoss, onClose }: DetailProps) {
   const panel = useRef<HTMLElement>(null);
   useEffect(() => {
     // The detail renders below every connection; bring it into view when another account is opened.
@@ -789,13 +690,13 @@ function AccountDetail({ account, label, api, text, locale, revision, onAccessLo
   const apply = (next: DateRange) => { setDraft(next); if (validRange(next)) setRange(next); };
   return (
     <aside className="budget-detail" aria-label={label} ref={panel}>
-      <header><h3>{label}</h3><button type="button" onClick={onClose}>{text.close}</button></header>
-      <h4>{text.balances}</h4>
-      {balances === null || balances.balances.length === 0 ? <p className="budget-muted">{text.noBalances}</p> : (
+      <header><h3>{label}</h3><button type="button" onClick={onClose}>{t("budget.main.close")}</button></header>
+      <h4>{t("budget.main.balances")}</h4>
+      {balances === null || balances.balances.length === 0 ? <p className="budget-muted">{t("budget.main.noBalances")}</p> : (
         <ul className="budget-balances">
           {balances.balances.map((balance, index) => (
             <li key={`${balance.balance_type}-${String(index)}`}>
-              <span title={balance.name || balance.balance_type}>{balanceLabel(text, balance.balance_type, balance.name)}</span>
+              <span title={balance.name || balance.balance_type}>{balanceLabel(balance.balance_type, balance.name)}</span>
               <strong>{formatAmount(balance.balance_amount.amount, balance.balance_amount.currency, locale)}</strong>
             </li>
           ))}
@@ -803,34 +704,37 @@ function AccountDetail({ account, label, api, text, locale, revision, onAccessLo
       )}
       {balances !== null && balances.archived_imports.length > 0 ? (
         <details className="budget-archived">
-          <summary>{text.archivedHelp}</summary>
+          <summary>{t("budget.main.archivedHelp")}</summary>
           <ul>
             {balances.archived_imports.map((item) => (
               <li key={item.id}>
-                {text.fetched} {when(item.fetched_at, locale)} · {text.imported} {when(item.imported_at, locale)}
-                {" · "}{item.balance_count} {text.entries}
+                {t("budget.main.archivedImport", {
+                  fetched: when(item.fetched_at, locale) ?? "",
+                  imported: when(item.imported_at, locale) ?? "",
+                  count: tPlural("budget.main.balanceCount", item.balance_count),
+                })}
               </li>
             ))}
           </ul>
         </details>
       ) : null}
-      <h4>{text.transactions}</h4>
-      <div className="budget-presets" role="group" aria-label={text.transactions}>
+      <h4>{t("budget.main.transactions")}</h4>
+      <div className="budget-presets" role="group" aria-label={t("budget.main.transactions")}>
         {(["30", "90", "year", "all"] as const).map((preset) => (
-          <button type="button" key={preset} onClick={() => { apply(presetRange(preset)); }}>{text.presets[preset]}</button>
+          <button type="button" key={preset} onClick={() => { apply(presetRange(preset)); }}>{t(PRESET_KEYS[preset])}</button>
         ))}
       </div>
       <form className="budget-range" onSubmit={(event) => { event.preventDefault(); apply(draft); }}>
-        <label>{text.from}<input name="date_from" type="date" value={draft.from} max={draft.to || undefined}
+        <label>{t("budget.main.from")}<input name="date_from" type="date" value={draft.from} max={draft.to || undefined}
           onChange={(event) => { setDraft({ ...draft, from: event.currentTarget.value }); }} /></label>
-        <label>{text.to}<input name="date_to" type="date" value={draft.to} min={draft.from || undefined}
+        <label>{t("budget.main.to")}<input name="date_to" type="date" value={draft.to} min={draft.from || undefined}
           onChange={(event) => { setDraft({ ...draft, to: event.currentTarget.value }); }} /></label>
-        <button type="submit">{text.filter}</button>
+        <button type="submit">{t("budget.main.filter")}</button>
       </form>
-      {validRange(draft) ? null : <p className="budget-notice" role="alert">{text.badRange}</p>}
-      {ledger.failed ? <p className="budget-notice" role="alert">{text.error}</p> : null}
-      {ledger.loading && ledger.rows.length === 0 ? <p className="budget-muted" role="status">{text.loading}</p> : null}
-      {!ledger.loading && ledger.rows.length === 0 && !ledger.failed ? <p className="budget-muted">{text.noTransactions}</p> : null}
+      {validRange(draft) ? null : <p className="budget-notice" role="alert">{t("budget.main.badRange")}</p>}
+      {ledger.failed ? <p className="budget-notice" role="alert">{t("budget.main.error")}</p> : null}
+      {ledger.loading && ledger.rows.length === 0 ? <p className="budget-muted" role="status">{t("budget.main.loading")}</p> : null}
+      {!ledger.loading && ledger.rows.length === 0 && !ledger.failed ? <p className="budget-muted">{t("budget.main.noTransactions")}</p> : null}
       {ledger.rows.length === 0 ? null : (
         <table className="budget-transactions">
           <tbody>
@@ -846,9 +750,9 @@ function AccountDetail({ account, label, api, text, locale, revision, onAccessLo
           </tbody>
         </table>
       )}
-      {ledger.uncertain > 0 ? <p className="budget-muted">{ledger.uncertain} {text.uncertain}</p> : null}
+      {ledger.uncertain > 0 ? <p className="budget-muted">{tPlural("budget.main.uncertainEntries", ledger.uncertain)}</p> : null}
       {ledger.cursor === null ? null
-        : <button type="button" disabled={ledger.loading} onClick={() => { void more(); }}>{text.more}</button>}
+        : <button type="button" disabled={ledger.loading} onClick={() => { void more(); }}>{t("budget.main.more")}</button>}
     </aside>
   );
 }

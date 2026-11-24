@@ -2,11 +2,12 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocale } from "../../i18n";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account, connection } from "../fixtures";
 import { recurringHint, recurringOf } from "./fixtures";
 import type { AnalyticsRecurring } from "./model";
-import { RecurringView, recurringLabels } from "./recurring";
+import { RecurringView } from "./recurring";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
 
@@ -29,6 +30,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  await loadLocale("en");
   vi.restoreAllMocks();
 });
 
@@ -65,7 +67,7 @@ describe("RecurringView", () => {
 
     // English rendering
     await act(async () => {
-      root.render(<RecurringView api={api} accounts={accounts} connections={[connection]} text={recurringLabels.en}
+      root.render(<RecurringView api={api} accounts={accounts} connections={[connection]}
         locale="en-US" revision={1} onAccessLoss={onAccessLoss} />);
       await Promise.resolve();
     });
@@ -92,8 +94,9 @@ describe("RecurringView", () => {
       recurringHint({ label: "Synthetic Quint", occurrence_count: 5, distinct_months: 5, min_gap_days: 29, max_gap_days: 31 }),
     ];
     const apiPl: Pick<BudgetApi, "recurring"> = { recurring: vi.fn(() => ok(recurringOf(plHints))) };
+    await loadLocale("pl");
     await act(async () => {
-      root.render(<RecurringView api={apiPl} accounts={accounts} connections={[connection]} text={recurringLabels.pl}
+      root.render(<RecurringView api={apiPl} accounts={accounts} connections={[connection]}
         locale="pl-PL" revision={2} onAccessLoss={onAccessLoss} />);
       await Promise.resolve();
     });
@@ -126,7 +129,7 @@ describe("RecurringView", () => {
     const onAccessLoss = vi.fn((result: { ok: boolean; status?: number; error?: string }) => !result.ok && result.status === 401);
 
     await act(async () => {
-      root.render(<RecurringView api={{ recurring }} accounts={accounts} connections={[connection]} text={recurringLabels.en}
+      root.render(<RecurringView api={{ recurring }} accounts={accounts} connections={[connection]}
         locale="en-US" revision={1} onAccessLoss={onAccessLoss} />);
       await Promise.resolve();
     });
@@ -178,7 +181,7 @@ describe("RecurringView", () => {
   it("renders empty and error states cleanly without throwing", async () => {
     const emptyApi: Pick<BudgetApi, "recurring"> = { recurring: vi.fn(() => ok(recurringOf([]))) };
     await act(async () => {
-      root.render(<RecurringView api={emptyApi} accounts={accounts} connections={[connection]} text={recurringLabels.en}
+      root.render(<RecurringView api={emptyApi} accounts={accounts} connections={[connection]}
         locale="en-US" revision={1} onAccessLoss={() => false} />);
       await Promise.resolve();
     });
@@ -189,7 +192,7 @@ describe("RecurringView", () => {
       recurring: vi.fn(() => fail<AnalyticsRecurring>(500, "budget_internal_error")),
     };
     await act(async () => {
-      root.render(<RecurringView api={errApi} accounts={accounts} connections={[connection]} text={recurringLabels.en}
+      root.render(<RecurringView api={errApi} accounts={accounts} connections={[connection]}
         locale="en-US" revision={2} onAccessLoss={() => false} />);
       await Promise.resolve();
     });

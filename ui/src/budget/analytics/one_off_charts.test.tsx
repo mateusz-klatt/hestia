@@ -3,9 +3,9 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { loadLocale } from "../../i18n";
 import { monthlyBudgetOf, monthlyBudgetSeriesOf } from "./fixtures";
 import type { AnalyticsMonthlyBudgetSeriesMonth } from "./model";
-import { monthBudgetLabels } from "./month_budget";
 import { MonthBudgetCharts, buildCategoryChartModel } from "./month_budget_charts";
 
 type SeriesCategory = AnalyticsMonthlyBudgetSeriesMonth["categories"][number];
@@ -95,6 +95,7 @@ describe("one-off chart entries", () => {
   afterEach(async () => {
     await act(async () => { root.unmount(); await Promise.resolve(); });
     host.remove();
+    await loadLocale("en");
   });
 
   it("marks the labelled bar in the legend and the data table", async () => {
@@ -110,8 +111,9 @@ describe("one-off chart entries", () => {
         ],
       }],
     });
+    await loadLocale("pl");
     await act(async () => {
-      root.render(<MonthBudgetCharts budget={monthlyBudgetOf()} series={series} paceProjection={null} locale="pl" text={monthBudgetLabels.pl} />);
+      root.render(<MonthBudgetCharts budget={monthlyBudgetOf()} series={series} paceProjection={null} locale="pl" />);
       await Promise.resolve();
     });
     const legend = host.querySelector("li.budget-one-off");

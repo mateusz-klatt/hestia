@@ -2,46 +2,11 @@
 // and a parent path is never built. Amounts stay dot-decimal strings for the workbook; CSV rewrites the amount
 // column with a decimal comma. A debit indicator supplies the sign. The booking column follows effective_date.
 // The last column is the annotation's one-off label, blank when it is unset.
+import { t } from "../../i18n";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { transactionText } from "../model";
-import { accountName, counterparty } from "./model";
+import { EXPORT_TYPE_KEYS, accountName, counterparty, labelOf } from "./model";
 import type { AnalyticsCategory, AnalyticsTransaction } from "./model";
-
-export const exportLabels = {
-  en: {
-    open: "Export", xlsx: "XLSX", csv: "CSV", sheet: "Transactions",
-    fetching: (count: number) => `Fetching… ${String(count)}`,
-    cancel: "Cancel", retry: "Retry", error: "Transactions could not be downloaded.",
-    accountFallback: "Account", uncategorised: "Uncategorised",
-    columns: {
-      bookingDate: "Booking date", transactionDate: "Transaction date", account: "Account", description: "Description",
-      counterparty: "Counterparty", amount: "Amount", currency: "Currency", category: "Category", type: "Type",
-      status: "Status", oneOffLabel: "One-off label",
-    },
-    types: {
-      expense: "expense", income: "income", excluded: "excluded", refund: "refund", transfer: "own transfer",
-      unclassified: "to classify",
-    },
-    statusBooked: "confirmed", statusPreliminary: "preliminary",
-  },
-  pl: {
-    open: "Eksportuj", xlsx: "XLSX", csv: "CSV", sheet: "Transakcje",
-    fetching: (count: number) => `Pobieranie… ${String(count)}`,
-    cancel: "Anuluj", retry: "Ponów", error: "Nie udało się pobrać transakcji.",
-    accountFallback: "Konto", uncategorised: "Bez kategorii",
-    columns: {
-      bookingDate: "Data", transactionDate: "Data transakcji", account: "Konto", description: "Opis",
-      counterparty: "Kontrahent", amount: "Kwota", currency: "Waluta", category: "Kategoria", type: "Typ",
-      status: "Status", oneOffLabel: "Etykieta jednorazowa",
-    },
-    types: {
-      expense: "wydatek", income: "przychód", excluded: "wykluczone", refund: "zwrot", transfer: "przelew własny",
-      unclassified: "do sklasyfikowania",
-    },
-    statusBooked: "potwierdzone", statusPreliminary: "wstępne",
-  },
-};
-export type ExportLabels = typeof exportLabels.en;
 
 export const EXPORT_PAGE_SIZE = 200;
 
@@ -58,30 +23,24 @@ export function monthsOfYear(year: string): string[] {
   return Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, "0")}`);
 }
 
-export function exportHeaders(text: ExportLabels): string[] {
-  const columns = text.columns;
+export function exportHeaders(): string[] {
   return [
-    columns.bookingDate, columns.transactionDate, columns.account, columns.description, columns.counterparty,
-    columns.amount, columns.currency, columns.category, columns.type, columns.status, columns.oneOffLabel,
+    t("budget.export.colBookingDate"), t("budget.export.colTransactionDate"), t("budget.export.colAccount"),
+    t("budget.export.colDescription"), t("budget.export.colCounterparty"), t("budget.export.colAmount"),
+    t("budget.export.colCurrency"), t("budget.export.colCategory"), t("budget.export.colType"),
+    t("budget.export.colStatus"), t("budget.export.colOneOffLabel"),
   ];
 }
 
 /** Booked entries are confirmed; every other bank status is preliminary. */
-export function exportStatus(status: string, text: ExportLabels): string {
-  return status === "BOOK" ? text.statusBooked : text.statusPreliminary;
+export function exportStatus(status: string): string {
+  return status === "BOOK" ? t("budget.export.statusBooked") : t("budget.export.statusPreliminary");
 }
 
 /** Effective kind as an export label. Unknown kinds stay as the server sent them. */
-export function exportTypeLabel(kind: string, text: ExportLabels): string {
-  switch (kind) {
-    case "expense": return text.types.expense;
-    case "income": return text.types.income;
-    case "excluded": return text.types.excluded;
-    case "refund": return text.types.refund;
-    case "transfer": return text.types.transfer;
-    case "unclassified_credit": return text.types.unclassified;
-    default: return kind;
-  }
+export function exportTypeLabel(kind: string): string {
+  if (kind === "unclassified_credit") return t("budget.export.types.unclassified");
+  return labelOf(EXPORT_TYPE_KEYS, kind);
 }
 
 export interface ExportRecord {
@@ -107,7 +66,6 @@ export interface ExportContext {
   connections: readonly BudgetConnection[];
   /** Leaf names keyed by category id. Built once per export. */
   categories: ReadonlyMap<string, string>;
-  text: ExportLabels;
 }
 
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -162,14 +120,14 @@ export function mapExportRow(row: AnalyticsTransaction, context: ExportContext):
   const amount = signedAmount(row.amount, row.credit_debit_indicator);
   return {
     bookingDate, transactionDate,
-    account: accountName(context.accounts, context.connections, row.account_id, context.text.accountFallback),
+    account: accountName(context.accounts, context.connections, row.account_id, t("budget.export.accountFallback")),
     description: transactionText(row),
     counterparty: counterparty(row) ?? "",
     amount: amount.text,
     currency: row.currency,
-    category: leafCategory(context.categories, row.effective.category_id, context.text.uncategorised),
-    type: exportTypeLabel(row.effective.kind, context.text),
-    status: exportStatus(row.status, context.text),
+    category: leafCategory(context.categories, row.effective.category_id, t("budget.export.uncategorised")),
+    type: exportTypeLabel(row.effective.kind),
+    status: exportStatus(row.status),
     oneOffLabel: exportOneOffLabel(row),
     bookingIsDate: isExcelDate(bookingDate),
     transactionIsDate: isExcelDate(transactionDate),

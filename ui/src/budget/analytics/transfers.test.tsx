@@ -4,10 +4,11 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetApi, BudgetResult } from "../api";
+import { loadLocale } from "../../i18n";
 import { account } from "../fixtures";
 import { decisionOf, leg, pair, transfersOf } from "./fixtures";
 import type { TransferList, TransferPair } from "./model";
-import { TransfersPanel, transferLabels } from "./transfers";
+import { TransfersPanel } from "./transfers";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
 function fail<T>(status: number, error: string): Promise<BudgetResult<T>> { return Promise.resolve({ ok: false, status, error }); }
@@ -28,7 +29,8 @@ const accounts = [
 
 let host: HTMLElement;
 let root: Root;
-beforeEach(() => {
+beforeEach(async () => {
+  await loadLocale("en");
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -36,6 +38,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  await loadLocale("en");
 });
 
 async function settle(): Promise<void> {
@@ -45,7 +48,7 @@ async function show(api: ReturnType<typeof fakeApi>, options: { period?: string;
   const onAccessLoss = vi.fn((result: { ok: boolean }) => options.lost === true && !result.ok);
   const onChanged = vi.fn();
   await act(async () => {
-    root.render(<TransfersPanel api={api} period={options.period ?? "2026-11"} accounts={accounts} text={transferLabels.en}
+    root.render(<TransfersPanel api={api} period={options.period ?? "2026-11"} accounts={accounts}
       locale="en" revision={0} onAccessLoss={onAccessLoss} onChanged={onChanged} />);
     await Promise.resolve();
   });

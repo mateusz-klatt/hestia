@@ -2,11 +2,13 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocale, t, tPlural } from "../../i18n";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account, connection } from "../fixtures";
 import { quarantineAccount, quarantineItem, quarantineOf } from "./fixtures";
+import { QUARANTINE_BUCKET_KEYS, QUARANTINE_REASON_KEYS, QUARANTINE_STATUS_KEYS } from "./model";
 import type { AnalyticsQuarantine, AnalyticsQuarantineItem } from "./model";
-import { QuarantineView, quarantineLabels } from "./quarantine";
+import { QuarantineView } from "./quarantine";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
 type QuarantineApi = Pick<BudgetApi, "quarantine">;
@@ -43,6 +45,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  await loadLocale("en");
   vi.restoreAllMocks();
 });
 
@@ -51,12 +54,13 @@ async function settle(): Promise<void> {
 }
 async function renderView(
   api: QuarantineApi,
-  text = quarantineLabels.en,
+  locale: "en" | "pl" = "en",
   revision = 1,
   onAccessLoss: AccessLoss = keepAccess,
 ): Promise<void> {
+  await loadLocale(locale);
   await act(async () => {
-    root.render(<QuarantineView api={api} accounts={accounts} connections={[connection]} text={text}
+    root.render(<QuarantineView api={api} accounts={accounts} connections={[connection]}
       revision={revision} onAccessLoss={onAccessLoss} />);
     await Promise.resolve();
   });
@@ -91,19 +95,19 @@ describe("QuarantineView", () => {
     expect(details?.hasAttribute("open")).toBe(false);
     expect(details?.querySelectorAll("li")).toHaveLength(8);
     const english = details?.textContent ?? "";
-    for (const label of Object.values(quarantineLabels.en.buckets)) expect(english).toContain(label);
-    for (const label of Object.values(quarantineLabels.en.reasons)) expect(english).toContain(label);
-    for (const label of Object.values(quarantineLabels.en.statuses)) expect(english).toContain(label);
+    for (const key of Object.values(QUARANTINE_BUCKET_KEYS)) expect(english).toContain(t(key));
+    for (const key of Object.values(QUARANTINE_REASON_KEYS)) expect(english).toContain(t(key));
+    for (const key of Object.values(QUARANTINE_STATUS_KEYS)) expect(english).toContain(t(key));
     expect(english).toContain("No date");
     expect(english).toContain("No status");
     expect(english).toContain("Synthetic Bank · Synthetic Main ••0001");
     expect(english).toContain("Synthetic Bank · Synthetic Savings ••0002");
 
-    await renderView({ quarantine: vi.fn(() => ok(quarantineOf(allItems, { accounts: [] }))) }, quarantineLabels.pl, 2);
+    await renderView({ quarantine: vi.fn(() => ok(quarantineOf(allItems, { accounts: [] }))) }, "pl", 2);
     const polish = host.querySelector("details")?.textContent ?? "";
-    for (const label of Object.values(quarantineLabels.pl.buckets)) expect(polish).toContain(label);
-    for (const label of Object.values(quarantineLabels.pl.reasons)) expect(polish).toContain(label);
-    for (const label of Object.values(quarantineLabels.pl.statuses)) expect(polish).toContain(label);
+    for (const key of Object.values(QUARANTINE_BUCKET_KEYS)) expect(polish).toContain(t(key));
+    for (const key of Object.values(QUARANTINE_REASON_KEYS)) expect(polish).toContain(t(key));
+    for (const key of Object.values(QUARANTINE_STATUS_KEYS)) expect(polish).toContain(t(key));
     expect(polish).toContain("Brak daty");
     expect(polish).toContain("Brak statusu");
   });
@@ -137,15 +141,18 @@ describe("QuarantineView", () => {
     expect(host.textContent).not.toContain("acc-2");
   });
 
-  it("uses correct Polish plural forms, including teen and 2–4 edge cases", () => {
-    expect(quarantineLabels.pl.entries(1)).toBe("1 wpis");
-    expect(quarantineLabels.pl.entries(2)).toBe("2 wpisy");
-    expect(quarantineLabels.pl.entries(5)).toBe("5 wpisów");
-    expect(quarantineLabels.pl.entries(12)).toBe("12 wpisów");
-    expect(quarantineLabels.pl.entries(22)).toBe("22 wpisy");
-    expect(quarantineLabels.pl.entries(25)).toBe("25 wpisów");
-    expect(quarantineLabels.pl.truncated(2, 5)).toBe("Pokazano 2 najnowsze wpisy z 5 wpisów.");
-    expect(quarantineLabels.pl.truncated(1, 2)).toBe("Pokazano 1 najnowszy wpis z 2 wpisów.");
+  it("uses correct Polish plural forms, including teen and 2–4 edge cases", async () => {
+    await loadLocale("pl");
+    expect(tPlural("budget.quarantine.entries", 1)).toBe("1 wpis");
+    expect(tPlural("budget.quarantine.entries", 2)).toBe("2 wpisy");
+    expect(tPlural("budget.quarantine.entries", 5)).toBe("5 wpisów");
+    expect(tPlural("budget.quarantine.entries", 12)).toBe("12 wpisów");
+    expect(tPlural("budget.quarantine.entries", 22)).toBe("22 wpisy");
+    expect(tPlural("budget.quarantine.entries", 25)).toBe("25 wpisów");
+    expect(tPlural("budget.quarantine.truncatedShown", 2, { total: tPlural("budget.quarantine.ofTotal", 5) }))
+      .toBe("Pokazano 2 najnowsze wpisy z 5 wpisów.");
+    expect(tPlural("budget.quarantine.truncatedShown", 1, { total: tPlural("budget.quarantine.ofTotal", 2) }))
+      .toBe("Pokazano 1 najnowszy wpis z 2 wpisów.");
   });
 
   it("refetches with account_id for an account and without it for all accounts", async () => {
@@ -195,7 +202,7 @@ describe("QuarantineView", () => {
       .mockImplementationOnce(() => first.promise)
       .mockImplementationOnce(() => second.promise);
     const onAccessLoss = vi.fn((result: { ok: boolean; status?: number; error?: string }) => !result.ok && result.status === 401);
-    await renderView({ quarantine }, quarantineLabels.en, 1, onAccessLoss);
+    await renderView({ quarantine }, "en", 1, onAccessLoss);
     await click(button("Synthetic Bank · Synthetic Savings ••0002"));
     await act(async () => {
       second.settle({ ok: true, data: quarantineOf([quarantineItem({ account_id: "acc-2", date: "2026-11-01" })]) });
@@ -219,7 +226,7 @@ describe("QuarantineView", () => {
 
     await click(button("Synthetic Bank · Synthetic Savings ••0002"));
     expect(quarantine).toHaveBeenLastCalledWith("acc-2");
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe(quarantineLabels.en.error);
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(t("budget.quarantine.error"));
     expect(host.querySelector(".budget-total")).toBeNull();
     expect(host.querySelector("details")).toBeNull();
     expect(host.textContent).not.toContain("2026-11-20");
@@ -238,7 +245,7 @@ describe("QuarantineView", () => {
     await renderView({ quarantine: vi.fn(() => ok(quarantineOf([]))) });
     expect(host.textContent).toContain("All entries are included in totals.");
     expect(host.querySelector("details")).toBeNull();
-    await renderView({ quarantine: vi.fn(() => ok(quarantineOf([]))) }, quarantineLabels.pl, 2);
+    await renderView({ quarantine: vi.fn(() => ok(quarantineOf([]))) }, "pl", 2);
     expect(host.textContent).toContain("Wszystkie wpisy są uwzględnione w sumach.");
   });
 

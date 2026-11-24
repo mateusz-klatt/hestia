@@ -1,57 +1,12 @@
 // Read-only recurring-charge hints (2D). Shows server-computed monthly patterns with their supporting
 // booked expenses. Never infers that a subscription is unwanted or unused; amounts stay exact strings.
 import { useEffect, useRef, useState } from "react";
+import { t, tPlural } from "../../i18n";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount } from "../model";
-import { accountName, labelOf, pluralPl, recurringCurrencies } from "./model";
+import { RECURRING_CADENCE_KEYS, RECURRING_LABEL_SOURCE_KEYS, accountName, labelOf, recurringCurrencies } from "./model";
 import type { AnalyticsRecurring, AnalyticsRecurringHint } from "./model";
-
-export const recurringLabels = {
-  en: {
-    title: "Recurring charges",
-    intro: "Monthly expenses observed at least three times on selected accounts. These are informational hints only and do not imply a subscription is unwanted or unused.",
-    allCurrencies: "All currencies",
-    currencyFilter: "Filter recurring charges by currency",
-    loading: "Loading recurring charges…",
-    error: "Recurring charges could not be loaded. Try again.",
-    empty: "No recurring monthly charges have been detected yet.",
-    emptyForCurrency: (currency: string) => `No recurring monthly charges detected in ${currency}.`,
-    truncated: (shown: number, total: number) => `Showing first ${String(shown)} of ${String(total)} recurring hints. Currency filter reflects currencies shown here.`,
-    cadences: { monthly: "Monthly" },
-    sources: { counterparty_name: "Counterparty", description: "Description" },
-    occurrences: (count: number) => `${String(count)} ${count === 1 ? "occurrence" : "occurrences"}`,
-    months: (count: number) => `${String(count)} ${count === 1 ? "month" : "months"}`,
-    gap: (min: number, max: number) => (min === max
-      ? `${String(min)} ${min === 1 ? "day" : "days"} apart`
-      : `${String(min)}–${String(max)} days apart`),
-    evidence: (count: number) => `Evidence (${String(count)})`,
-    evidenceTruncated: (shown: number) => `Showing latest ${String(shown)} entries.`,
-    account: "Account",
-  },
-  pl: {
-    title: "Powtarzalne wydatki",
-    intro: "Miesięczne wydatki zaobserwowane co najmniej trzy razy na wybranych kontach. To wyłącznie podpowiedzi informacyjne — nie oznaczają, że subskrypcja jest niechciana lub nieużywana.",
-    allCurrencies: "Wszystkie waluty",
-    currencyFilter: "Filtruj powtarzalne wydatki według waluty",
-    loading: "Wczytywanie powtarzalnych wydatków…",
-    error: "Nie udało się wczytać powtarzalnych wydatków. Spróbuj ponownie.",
-    empty: "Nie wykryto jeszcze powtarzalnych miesięcznych wydatków.",
-    emptyForCurrency: (currency: string) => `Nie wykryto powtarzalnych miesięcznych wydatków w walucie ${currency}.`,
-    truncated: (shown: number, total: number) => `Pokazano pierwsze ${String(shown)} z ${String(total)} podpowiedzi. Filtr walut obejmuje waluty widoczne w tych podpowiedziach.`,
-    cadences: { monthly: "Co miesiąc" },
-    sources: { counterparty_name: "Kontrahent", description: "Opis" },
-    occurrences: (count: number) => `${String(count)} ${pluralPl(count, "wystąpienie", "wystąpienia", "wystąpień")}`,
-    months: (count: number) => `${String(count)} ${pluralPl(count, "miesiąc", "miesiące", "miesięcy")}`,
-    gap: (min: number, max: number) => (min === max
-      ? `co ${String(min)} ${pluralPl(min, "dzień", "dni", "dni")}`
-      : `co ${String(min)}–${String(max)} dni`),
-    evidence: (count: number) => `Dowody (${String(count)})`,
-    evidenceTruncated: (shown: number) => `Pokazano najnowsze wpisy: ${String(shown)}.`,
-    account: "Konto",
-  },
-};
-export type RecurringLabels = typeof recurringLabels.en;
 
 type Shown = { state: "loading" } | { state: "error" } | { state: "ready"; data: AnalyticsRecurring };
 
@@ -59,7 +14,6 @@ export interface RecurringViewProps {
   api: Pick<BudgetApi, "recurring">;
   accounts: readonly BudgetAccount[];
   connections?: readonly BudgetConnection[] | undefined;
-  text: RecurringLabels;
   locale: string;
   revision: number;
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
@@ -70,7 +24,7 @@ function hintKey(hint: AnalyticsRecurringHint): string {
   return `${hint.currency}/${hint.label_source}/${hint.label}/${hint.amount}/${hint.first_date}/${hint.last_date}/${firstRef}`;
 }
 
-export function RecurringView({ api, accounts, connections = [], text, locale, revision, onAccessLoss }: RecurringViewProps) {
+export function RecurringView({ api, accounts, connections = [], locale, revision, onAccessLoss }: RecurringViewProps) {
   const [currency, setCurrency] = useState("");
   const [currencies, setCurrencies] = useState<string[]>([]);
   const [shown, setShown] = useState<Shown>({ state: "loading" });
@@ -97,17 +51,18 @@ export function RecurringView({ api, accounts, connections = [], text, locale, r
   }, [api, currency, revision, onAccessLoss]);
   useEffect(() => () => { generation.current += 1; }, []);
 
-  const name = (id: string) => accountName(accounts, connections, id, text.account);
+  const name = (id: string) => accountName(accounts, connections, id, t("budget.recurring.account"));
   const showCurrencies = currencies.length > 1 || currency !== "";
+  const title = t("budget.recurring.title");
 
   return (
-    <section className="budget-entries" aria-label={text.title}>
-      <h4>{text.title}</h4>
-      <p className="budget-muted">{text.intro}</p>
+    <section className="budget-entries" aria-label={title}>
+      <h4>{title}</h4>
+      <p className="budget-muted">{t("budget.recurring.intro")}</p>
       {showCurrencies ? (
-        <div className="budget-views" role="group" aria-label={text.currencyFilter}>
+        <div className="budget-views" role="group" aria-label={t("budget.recurring.currencyFilter")}>
           <button type="button" aria-pressed={currency === ""} onClick={() => { setCurrency(""); }}>
-            {text.allCurrencies}
+            {t("budget.recurring.allCurrencies")}
           </button>
           {currencies.map((code) => (
             <button type="button" key={code} aria-pressed={currency === code} onClick={() => { setCurrency(code); }}>
@@ -116,15 +71,19 @@ export function RecurringView({ api, accounts, connections = [], text, locale, r
           ))}
         </div>
       ) : null}
-      {shown.state === "loading" ? <p className="budget-muted" role="status">{text.loading}</p> : null}
-      {shown.state === "error" ? <p className="budget-notice" role="alert">{text.error}</p> : null}
+      {shown.state === "loading" ? <p className="budget-muted" role="status">{t("budget.recurring.loading")}</p> : null}
+      {shown.state === "error" ? <p className="budget-notice" role="alert">{t("budget.recurring.error")}</p> : null}
       {shown.state === "ready" ? (
         <>
           {shown.data.truncated ? (
-            <p className="budget-notice" role="note">{text.truncated(shown.data.hints.length, shown.data.total_hints)}</p>
+            <p className="budget-notice" role="note">
+              {t("budget.recurring.truncated", { shown: shown.data.hints.length, total: shown.data.total_hints })}
+            </p>
           ) : null}
           {shown.data.hints.length === 0 ? (
-            <p className="budget-muted">{currency === "" ? text.empty : text.emptyForCurrency(currency)}</p>
+            <p className="budget-muted">
+              {currency === "" ? t("budget.recurring.empty") : t("budget.recurring.emptyForCurrency", { currency })}
+            </p>
           ) : (
             <ul className="budget-entry-list">
               {shown.data.hints.map((hint) => (
@@ -134,17 +93,23 @@ export function RecurringView({ api, accounts, connections = [], text, locale, r
                     <strong className="budget-recurring-amount">{formatAmount(hint.amount, hint.currency, locale, "DBIT")}</strong>
                   </div>
                   <div className="budget-entry-facts">
-                    <span className="budget-chip">{labelOf(text.cadences, hint.cadence)}</span>
-                    <span className="budget-chip">{labelOf(text.sources, hint.label_source)}</span>
-                    <span>{text.occurrences(hint.occurrence_count)}</span>
-                    <span>{text.months(hint.distinct_months)}</span>
+                    <span className="budget-chip">{labelOf(RECURRING_CADENCE_KEYS, hint.cadence)}</span>
+                    <span className="budget-chip">{labelOf(RECURRING_LABEL_SOURCE_KEYS, hint.label_source)}</span>
+                    <span>{tPlural("budget.recurring.occurrences", hint.occurrence_count)}</span>
+                    <span>{tPlural("budget.recurring.months", hint.distinct_months)}</span>
                     <span>{hint.first_date} – {hint.last_date}</span>
-                    <span>{text.gap(hint.min_gap_days, hint.max_gap_days)}</span>
+                    <span>
+                      {hint.min_gap_days === hint.max_gap_days
+                        ? tPlural("budget.recurring.gapSingle", hint.min_gap_days)
+                        : t("budget.recurring.gapRange", { min: hint.min_gap_days, max: hint.max_gap_days })}
+                    </span>
                     {hint.account_ids.map((id) => <span key={id}>{name(id)}</span>)}
                   </div>
                   <details className="budget-recurring-evidence">
-                    <summary>{text.evidence(hint.evidence.length)}</summary>
-                    {hint.evidence_truncated ? <p className="budget-muted">{text.evidenceTruncated(hint.evidence.length)}</p> : null}
+                    <summary>{t("budget.recurring.evidence", { count: hint.evidence.length })}</summary>
+                    {hint.evidence_truncated ? (
+                      <p className="budget-muted">{t("budget.recurring.evidenceTruncated", { shown: hint.evidence.length })}</p>
+                    ) : null}
                     <ul>
                       {hint.evidence.map((item) => (
                         <li key={`${item.account_id}/${item.entry_reference}/${item.date}`}>

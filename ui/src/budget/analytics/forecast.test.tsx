@@ -2,6 +2,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocale } from "../../i18n";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account } from "../fixtures";
 import { categoryList, forecastCurrencyTotal, forecastDeduplication, forecastItem, forecastOf, mortgageSchedule, mortgagesOf } from "./fixtures";
@@ -84,6 +85,7 @@ beforeEach(() => {
 afterEach(async () => {
   await update(() => { root.unmount(); });
   host.remove();
+  await loadLocale("en");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -97,6 +99,7 @@ async function update(change: () => void): Promise<void> {
 
 async function show(api: ReturnType<typeof fakeApi>, locale = "en-US", onAccessLoss: (result: AccessResult) => boolean = () => false,
   onOpenMortgages: () => void = () => undefined): Promise<void> {
+  await loadLocale(locale.startsWith("pl") ? "pl" : "en");
   await update(() => {
     root.render(<ForecastView api={api} accounts={accounts} locale={locale} revision={0}
       onAccessLoss={onAccessLoss} onOpenMortgages={onOpenMortgages} />);

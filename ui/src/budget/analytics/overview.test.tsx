@@ -5,11 +5,12 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BudgetResult } from "../api";
 import { account, connection } from "../fixtures";
+import { loadLocale } from "../../i18n";
 import { NEUTRAL_CATEGORY_COLOR, buildCategoryColors, parseHexColor, relativeLuminance } from "./category_colors";
 import { overviewOf, staleFreshness, totals } from "./fixtures";
 import { oneOffRowKey } from "./model";
 import type { AnalyticsCategory, AnalyticsOverview, AnalyticsScope } from "./model";
-import { OverviewPanel, overviewLabels } from "./overview";
+import { OverviewPanel } from "./overview";
 
 const fsModule = "node:fs";
 const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as {
@@ -47,7 +48,8 @@ const accounts = [account({ id: "acc-1", display: { product: "Synthetic Card", c
 
 let host: HTMLElement;
 let root: Root;
-beforeEach(() => {
+beforeEach(async () => {
+  await loadLocale("en");
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -55,6 +57,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  await loadLocale("en");
 });
 
 async function settle(): Promise<void> {
@@ -62,14 +65,14 @@ async function settle(): Promise<void> {
 }
 
 async function show(overview: (period: string) => Promise<Answer>,
-  options: { period?: string; current?: boolean; revision?: number; lost?: boolean; text?: typeof overviewLabels.en;
+  options: { period?: string; current?: boolean; revision?: number; lost?: boolean;
     locale?: string; onCurrencies?: (currencies: string[]) => void;
     loadCategories?: () => Promise<BudgetResult<{ categories: AnalyticsCategory[] }>> } = {}) {
   const onAccessLoss = vi.fn(() => options.lost === true);
   const categories = options.loadCategories === undefined ? {} : { loadCategories: options.loadCategories };
   await act(async () => {
     root.render(<OverviewPanel overview={overview} period={options.period ?? "2026-11"} current={options.current ?? true}
-      accounts={accounts} text={options.text ?? overviewLabels.en} locale={options.locale ?? "en"} revision={options.revision ?? 0}
+      accounts={accounts} locale={options.locale ?? "en"} revision={options.revision ?? 0}
       onAccessLoss={onAccessLoss} onCurrencies={options.onCurrencies} {...categories} />);
     await Promise.resolve();
   });
@@ -103,7 +106,8 @@ describe("period overview", () => {
   });
 
   it("wraps each amount of a compound total so the line can break between them", async () => {
-    await show((period) => Promise.resolve<Answer>({ ok: true, data: rich(period) }), { text: overviewLabels.pl, locale: "pl" });
+    await loadLocale("pl");
+    await show((period) => Promise.resolve<Answer>({ ok: true, data: rich(period) }), { locale: "pl" });
     const card = host.querySelector('.budget-total[aria-label="PLN"]');
     const ddAfter = (label: string) => [...card?.querySelectorAll("dt") ?? []].find((item) => item.textContent === label)?.nextElementSibling;
     const transfer = ddAfter("Przelewy własne");
@@ -190,7 +194,8 @@ describe("period overview", () => {
     expect(row?.textContent).toContain("one-off");
     expect(row?.textContent).toContain("2,000.00 PLN");
     expect(row?.classList.contains("is-uncategorised")).toBe(false);
-    await show((period) => Promise.resolve<Answer>({ ok: true, data: { ...data, period } }), { text: overviewLabels.pl, locale: "pl" });
+    await loadLocale("pl");
+    await show((period) => Promise.resolve<Answer>({ ok: true, data: { ...data, period } }), { locale: "pl" });
     expect(host.querySelector(".budget-one-off")?.textContent).toContain("jednorazowe");
   });
 
@@ -307,7 +312,7 @@ describe("period overview", () => {
       freshness: [{ account_id: "acc-2", transactions: staleFreshness, balances: staleFreshness }] }) }) });
     await act(async () => {
       root.render(<OverviewPanel overview={overview} period="2026-11" current accounts={accounts} connections={[connection]}
-        text={overviewLabels.en} locale="en" revision={0} onAccessLoss={() => false} />);
+        locale="en" revision={0} onAccessLoss={() => false} />);
       await Promise.resolve();
     });
     await settle();

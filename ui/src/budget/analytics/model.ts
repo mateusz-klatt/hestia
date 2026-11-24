@@ -2,6 +2,8 @@
 // arithmetic. A category tree adds a parent's own amount to its descendants. Nothing is converted or mixed
 // across currencies. Periods are "YYYY-MM" or "YYYY".
 import type { components } from "../../api/openapi";
+import { t } from "../../i18n";
+import type { MessageKey } from "../../i18n/locales/en";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection } from "../model";
 import { accountLabel, formatAmount } from "../model";
 
@@ -155,9 +157,277 @@ export function currentChoice(row: AnalyticsTransaction): CategoryChoice {
   return annotation.mode === "manual" ? { mode: "manual", category_id: annotation.category_id } : { mode: "auto" };
 }
 
-/** A label for a server enum value; an unknown value is shown as it came. */
-export function labelOf(labels: Readonly<Record<string, string>>, value: string): string {
-  return labels[value] ?? value;
+export const CONSENT_ATTENTION_KEYS: Readonly<Record<string, MessageKey>> = {
+  authorization: "budget.consent.attentions.authorization",
+  invalid_session: "budget.consent.attentions.invalid_session",
+  expired_session: "budget.consent.attentions.expired_session",
+  consent_expired: "budget.consent.attentions.consent_expired",
+  session_mismatch: "budget.consent.attentions.session_mismatch",
+  configuration: "budget.consent.attentions.configuration",
+};
+
+export const CONSENT_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
+  attention_required: "budget.consent.statuses.attention_required",
+  expired: "budget.consent.statuses.expired",
+  due_soon: "budget.consent.statuses.due_soon",
+  healthy: "budget.consent.statuses.healthy",
+  unknown_expiry: "budget.consent.statuses.unknown_expiry",
+};
+
+export const CONSENT_PROVENANCE_KEYS: Readonly<Record<string, MessageKey>> = {
+  hestia_created: "budget.consent.provenances.hestia_created",
+  external_file: "budget.consent.provenances.external_file",
+  poc_retired: "budget.consent.provenances.poc_retired",
+};
+
+export const CONSENT_CLASSIFICATION_KEYS: Readonly<Record<string, MessageKey>> = {
+  external_read_only: "budget.consent.classifications.external_read_only",
+  active_pointer_mismatch: "budget.consent.classifications.active_pointer_mismatch",
+  uncertain_flow_evidence: "budget.consent.classifications.uncertain_flow_evidence",
+  stale_flow_evidence: "budget.consent.classifications.stale_flow_evidence",
+  active_current: "budget.consent.classifications.active_current",
+  active_expired: "budget.consent.classifications.active_expired",
+  unadopted_in_progress: "budget.consent.classifications.unadopted_in_progress",
+  unadopted_orphan: "budget.consent.classifications.unadopted_orphan",
+  unadopted_expired_retained: "budget.consent.classifications.unadopted_expired_retained",
+  unadopted_expired_prunable: "budget.consent.classifications.unadopted_expired_prunable",
+  retired_still_valid: "budget.consent.classifications.retired_still_valid",
+  retired_retained: "budget.consent.classifications.retired_retained",
+  retired_prunable: "budget.consent.classifications.retired_prunable",
+  uncertain_exchange_review: "budget.consent.classifications.uncertain_exchange_review",
+  stale_active_flow: "budget.consent.classifications.stale_active_flow",
+  flow_in_progress: "budget.consent.classifications.flow_in_progress",
+  terminal_retained: "budget.consent.classifications.terminal_retained",
+  terminal_prunable: "budget.consent.classifications.terminal_prunable",
+};
+
+export const INBOX_KIND_KEYS: Readonly<Record<string, MessageKey>> = {
+  consent_renewal: "budget.inbox.kinds.consent_renewal",
+  mortgage_due: "budget.inbox.kinds.mortgage_due",
+  spending_limit: "budget.inbox.kinds.spending_limit",
+  device_added: "budget.inbox.kinds.device_added",
+};
+
+export const INBOX_CONSENT_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
+  attention_required: "budget.inbox.consentStatuses.attention_required",
+  expired: "budget.inbox.consentStatuses.expired",
+  due_soon: "budget.inbox.consentStatuses.due_soon",
+};
+
+export const INBOX_MORTGAGE_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
+  overdue: "budget.inbox.mortgageStatuses.overdue",
+  due_today: "budget.inbox.mortgageStatuses.due_today",
+  due_soon: "budget.inbox.mortgageStatuses.due_soon",
+};
+
+export const INBOX_LIMIT_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
+  exceeded: "budget.inbox.limitStatuses.exceeded",
+  at_limit: "budget.inbox.limitStatuses.at_limit",
+  approaching: "budget.inbox.limitStatuses.approaching",
+};
+
+export const MORTGAGE_DESTINATION_KEYS: Readonly<Record<string, MessageKey>> = {
+  owner_inbox: "budget.mortgages.destinations.owner_inbox",
+  owner_push: "budget.mortgages.destinations.owner_push",
+  owner_email: "budget.mortgages.destinations.owner_email",
+};
+
+export const MORTGAGE_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
+  overdue: "budget.mortgages.statuses.overdue",
+  due_today: "budget.mortgages.statuses.due_today",
+  due_soon: "budget.mortgages.statuses.due_soon",
+  upcoming: "budget.mortgages.statuses.upcoming",
+  completed: "budget.mortgages.statuses.completed",
+};
+
+export const FORECAST_CONFIDENCE_KEYS: Readonly<Record<string, MessageKey>> = {
+  scheduled: "budget.forecast.confidence.scheduled",
+  high: "budget.forecast.confidence.high",
+  medium: "budget.forecast.confidence.medium",
+  estimated: "budget.forecast.confidence.estimated",
+};
+
+export const QUARANTINE_BUCKET_KEYS: Readonly<Record<string, MessageKey>> = {
+  uncertain: "budget.quarantine.buckets.uncertain",
+  unresolved: "budget.quarantine.buckets.unresolved",
+  import_unresolved: "budget.quarantine.buckets.import_unresolved",
+};
+
+export const QUARANTINE_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
+  BOOK: "budget.quarantine.statuses.BOOK",
+  PDNG: "budget.quarantine.statuses.PDNG",
+  HOLD: "budget.quarantine.statuses.HOLD",
+  CNCL: "budget.quarantine.statuses.CNCL",
+  RJCT: "budget.quarantine.statuses.RJCT",
+  SCHD: "budget.quarantine.statuses.SCHD",
+  OTHR: "budget.quarantine.statuses.OTHR",
+};
+
+export const QUARANTINE_REASON_KEYS: Readonly<Record<string, MessageKey>> = {
+  non_booked_status: "budget.quarantine.reasons.non_booked_status",
+  missing_reference: "budget.quarantine.reasons.missing_reference",
+  missing_date: "budget.quarantine.reasons.missing_date",
+  reference_conflict: "budget.quarantine.reasons.reference_conflict",
+  non_canonical: "budget.quarantine.reasons.non_canonical",
+  api_preserved: "budget.quarantine.reasons.api_preserved",
+  stale_conflict: "budget.quarantine.reasons.stale_conflict",
+  same_time_conflict: "budget.quarantine.reasons.same_time_conflict",
+};
+
+export const RECURRING_CADENCE_KEYS: Readonly<Record<string, MessageKey>> = {
+  monthly: "budget.recurring.cadences.monthly",
+};
+
+export const RECURRING_LABEL_SOURCE_KEYS: Readonly<Record<string, MessageKey>> = {
+  counterparty_name: "budget.recurring.sources.counterparty_name",
+  description: "budget.recurring.sources.description",
+};
+
+export const RULE_FIELD_KEYS: Readonly<Record<string, MessageKey>> = {
+  description: "budget.rules.fields.description",
+  counterparty_name: "budget.rules.fields.counterparty_name",
+  counterparty_account: "budget.rules.fields.counterparty_account",
+  mcc: "budget.rules.fields.mcc",
+};
+
+export const RULE_OPERATOR_KEYS: Readonly<Record<string, MessageKey>> = {
+  contains: "budget.rules.operators.contains",
+  equals: "budget.rules.operators.equals",
+};
+
+export const RULE_KIND_KEYS: Readonly<Record<string, MessageKey>> = {
+  auto: "budget.rules.kinds.auto",
+  expense: "budget.rules.kinds.expense",
+  income: "budget.rules.kinds.income",
+  refund: "budget.rules.kinds.refund",
+  excluded: "budget.rules.kinds.excluded",
+};
+
+export const LIMIT_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
+  within: "budget.limits.statuses.within",
+  approaching: "budget.limits.statuses.approaching",
+  at_limit: "budget.limits.statuses.at_limit",
+  exceeded: "budget.limits.statuses.exceeded",
+};
+
+export const MONTH_BUDGET_LIMIT_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
+  within: "budget.monthBudget.limitStatuses.within",
+  approaching: "budget.monthBudget.limitStatuses.approaching",
+  at_limit: "budget.monthBudget.limitStatuses.at_limit",
+  exceeded: "budget.monthBudget.limitStatuses.exceeded",
+};
+
+export const MONTH_BUDGET_CARD_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
+  unavailable: "budget.monthBudget.cardStatuses.unavailable",
+};
+
+export const TRANSACTION_KIND_KEYS: Readonly<Record<string, MessageKey>> = {
+  auto: "budget.transactions.kinds.auto",
+  expense: "budget.transactions.kinds.expense",
+  income: "budget.transactions.kinds.income",
+  refund: "budget.transactions.kinds.refund",
+  excluded: "budget.transactions.kinds.excluded",
+  unclassified_credit: "budget.transactions.kinds.unclassified_credit",
+  transfer: "budget.transactions.kinds.transfer",
+};
+
+export const TRANSACTION_TRANSFER_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
+  suggested: "budget.transactions.transfer.suggested",
+  accepted: "budget.transactions.transfer.accepted",
+  review: "budget.transactions.transfer.review",
+  boundary: "budget.transactions.transfer.boundary",
+};
+
+export const TRANSFER_QUEUE_KEYS: Readonly<Record<string, MessageKey>> = {
+  suggested: "budget.transfers.queues.suggested",
+  review: "budget.transfers.queues.review",
+  boundary: "budget.transfers.queues.boundary",
+  accepted: "budget.transfers.queues.accepted",
+  rejected: "budget.transfers.queues.rejected",
+  undone: "budget.transfers.queues.undone",
+};
+
+export const TRANSFER_ACTION_KEYS: Readonly<Record<string, MessageKey>> = {
+  accept: "budget.transfers.actions.accept",
+  reject: "budget.transfers.actions.reject",
+  undo: "budget.transfers.actions.undo",
+};
+
+export const TRANSFER_SOURCE_KEYS: Readonly<Record<string, MessageKey>> = {
+  account_identity: "budget.transfers.sources.account_identity",
+  heuristic: "budget.transfers.sources.heuristic",
+  manual: "budget.transfers.sources.manual",
+};
+
+export const EXPORT_TYPE_KEYS: Readonly<Record<string, MessageKey>> = {
+  expense: "budget.export.types.expense",
+  income: "budget.export.types.income",
+  excluded: "budget.export.types.excluded",
+  refund: "budget.export.types.refund",
+  transfer: "budget.export.types.transfer",
+  unclassified: "budget.export.types.unclassified",
+};
+
+export const MAIN_VIEW_KEYS: Readonly<Record<string, MessageKey>> = {
+  monthly_budget: "budget.main.views.monthly_budget",
+  accounts: "budget.main.views.accounts",
+  inbox: "budget.main.views.inbox",
+  month: "budget.main.views.month",
+  year: "budget.main.views.year",
+  limits: "budget.main.views.limits",
+  recurring: "budget.main.views.recurring",
+  mortgages: "budget.main.views.mortgages",
+  forecast: "budget.main.views.forecast",
+  quarantine: "budget.main.views.quarantine",
+  rules: "budget.main.views.rules",
+};
+
+export const MAIN_KIND_KEYS: Readonly<Record<string, MessageKey>> = {
+  current: "budget.main.kinds.current",
+  savings: "budget.main.kinds.savings",
+  credit_card: "budget.main.kinds.credit_card",
+  other: "budget.main.kinds.other",
+};
+
+export const MAIN_FRESHNESS_KEYS: Readonly<Record<string, MessageKey>> = {
+  never: "budget.main.freshness.never",
+  fresh: "budget.main.freshness.fresh",
+  stale: "budget.main.freshness.stale",
+  suspended: "budget.main.freshness.suspended",
+};
+
+export const MAIN_JOB_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
+  queued: "budget.main.job.queued",
+  running: "budget.main.job.running",
+  updated: "budget.main.job.updated",
+  partial: "budget.main.job.partial",
+  failed: "budget.main.job.failed",
+  deferred: "budget.main.job.deferred",
+  interrupted: "budget.main.job.interrupted",
+};
+
+export const MAIN_SCOPE_KEYS: Readonly<Record<string, MessageKey>> = {
+  application: "budget.main.scopes.application",
+  provider: "budget.main.scopes.provider",
+  connection: "budget.main.scopes.connection",
+};
+
+export const MAIN_BALANCE_TYPE_KEYS: Readonly<Record<string, MessageKey>> = {
+  CLBD: "budget.main.balanceTypes.CLBD",
+  ITBD: "budget.main.balanceTypes.ITBD",
+  OPBD: "budget.main.balanceTypes.OPBD",
+  ITAV: "budget.main.balanceTypes.ITAV",
+  CLAV: "budget.main.balanceTypes.CLAV",
+  OPAV: "budget.main.balanceTypes.OPAV",
+  FWAV: "budget.main.balanceTypes.FWAV",
+  XPCD: "budget.main.balanceTypes.XPCD",
+  PRCD: "budget.main.balanceTypes.PRCD",
+};
+
+/** A label for a server enum value via catalog key map; an unknown value is shown as it came. */
+export function labelOf(labels: Readonly<Record<string, MessageKey>>, value: string): string {
+  const mapped = labels[value];
+  return mapped === undefined ? value : t(mapped);
 }
 
 /** The kinds an entry can take by its direction: a payment out is never income or a refund, an incoming one never

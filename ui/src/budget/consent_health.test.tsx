@@ -3,8 +3,9 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocale } from "../i18n";
 import type { BudgetApi, BudgetResult } from "./api";
-import { ConsentHealthPanel, consentHealthLabels } from "./consent_health";
+import { ConsentHealthPanel } from "./consent_health";
 import { connection } from "./fixtures";
 import type { BudgetConsentReconcile, BudgetConsentRenewalReminders } from "./model";
 
@@ -47,6 +48,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  await loadLocale("en");
   vi.restoreAllMocks();
 });
 
@@ -76,7 +78,7 @@ describe("ConsentHealthPanel", () => {
     };
 
     await act(async () => {
-      root.render(<ConsentHealthPanel api={api} connections={[connection]} text={consentHealthLabels.en}
+      root.render(<ConsentHealthPanel api={api} connections={[connection]}
         locale="en-US" revision={1} onAccessLoss={() => false} />);
       await Promise.resolve();
     });
@@ -96,8 +98,9 @@ describe("ConsentHealthPanel", () => {
     expect(setItem).not.toHaveBeenCalled();
     expect(window.location.search).toBe("");
 
+    await loadLocale("pl");
     await act(async () => {
-      root.render(<ConsentHealthPanel api={api} connections={[connection]} text={consentHealthLabels.pl}
+      root.render(<ConsentHealthPanel api={api} connections={[connection]}
         locale="pl-PL" revision={2} onAccessLoss={() => false} />);
       await Promise.resolve();
     });
@@ -130,12 +133,12 @@ describe("ConsentHealthPanel", () => {
     };
 
     await act(async () => {
-      root.render(<ConsentHealthPanel api={api} connections={[connection]} text={consentHealthLabels.en}
+      root.render(<ConsentHealthPanel api={api} connections={[connection]}
         locale="en-US" revision={1} onAccessLoss={onAccessLoss} />);
       await Promise.resolve();
     });
     await act(async () => {
-      root.render(<ConsentHealthPanel api={api} connections={[connection]} text={consentHealthLabels.en}
+      root.render(<ConsentHealthPanel api={api} connections={[connection]}
         locale="en-US" revision={2} onAccessLoss={onAccessLoss} />);
       await Promise.resolve();
     });
@@ -168,7 +171,7 @@ describe("ConsentHealthPanel", () => {
       consentReconcile: vi.fn(() => fail<BudgetConsentReconcile>(500, "budget_consent_data_error")),
     };
     await act(async () => {
-      root.render(<ConsentHealthPanel api={errApi} connections={[connection]} text={consentHealthLabels.en}
+      root.render(<ConsentHealthPanel api={errApi} connections={[connection]}
         locale="en-US" revision={3} onAccessLoss={() => false} />);
       await Promise.resolve();
     });

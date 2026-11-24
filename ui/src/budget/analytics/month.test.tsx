@@ -3,9 +3,10 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocale } from "../../i18n";
 import type { BudgetApi, BudgetResult } from "../api";
 import { annotationOf, categoryList, entriesOf, entry, overviewOf, totals, transfersOf } from "./fixtures";
-import { MonthView, monthLabels } from "./month";
+import { MonthView } from "./month";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
 
@@ -25,7 +26,8 @@ function fakeApi() {
 
 let host: HTMLElement;
 let root: Root;
-beforeEach(() => {
+beforeEach(async () => {
+  await loadLocale("en");
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -33,6 +35,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  await loadLocale("en");
 });
 
 async function settle(): Promise<void> {
@@ -40,7 +43,7 @@ async function settle(): Promise<void> {
 }
 async function show(api: ReturnType<typeof fakeApi>, initialMonth?: string): Promise<void> {
   await act(async () => {
-    root.render(<MonthView api={api} accounts={[]} text={monthLabels.en} locale="en" revision={0}
+    root.render(<MonthView api={api} accounts={[]} locale="en" revision={0}
       onAccessLoss={() => false} initialMonth={initialMonth} today={() => new Date(2026, 10, 21, 12)} />);
     await Promise.resolve();
   });
@@ -127,7 +130,7 @@ describe("month view", () => {
       api.analyticsTransactions.mockImplementation((period) => ok(entriesOf(period, rows)));
       api.analyticsTransactionsByKeys.mockImplementation(() => ok(entriesOf("", [pendingRow])));
       await act(async () => {
-        root.render(<MonthView api={api} accounts={[]} text={monthLabels.en} locale="en" revision={0}
+        root.render(<MonthView api={api} accounts={[]} locale="en" revision={0}
           onAccessLoss={() => false} initialMonth="2026-03" initialCurrency="EUR"
           initialProvisionalKeys={["acc-1/pending-1"]} initialProvisionalTotal={505}
           initialProvisionalTruncated={true} today={() => new Date(2026, 10, 21, 12)} />);

@@ -3,11 +3,12 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocale } from "../../i18n";
 import type { BudgetApi, BudgetResult } from "../api";
 import { account } from "../fixtures";
 import { mortgagePaymentSaved, mortgageReminder, mortgageSaved, mortgageSchedule, mortgagesOf } from "./fixtures";
 import type { AnalyticsMortgages } from "./model";
-import { MortgagesView, mortgagesLabels } from "./mortgages";
+import { MortgagesView } from "./mortgages";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
 
@@ -46,6 +47,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  await loadLocale("en");
   vi.restoreAllMocks();
 });
 
@@ -98,7 +100,7 @@ describe("MortgagesView", () => {
     )));
 
     await act(async () => {
-      root.render(<MortgagesView api={api} accounts={accounts} text={mortgagesLabels.en}
+      root.render(<MortgagesView api={api} accounts={accounts}
         locale="en-US" revision={1} onAccessLoss={() => false} />);
       await Promise.resolve();
     });
@@ -115,8 +117,9 @@ describe("MortgagesView", () => {
     expect(setItem).not.toHaveBeenCalled();
     expect(window.location.search).toBe("");
 
+    await loadLocale("pl");
     await act(async () => {
-      root.render(<MortgagesView api={api} accounts={accounts} text={mortgagesLabels.pl}
+      root.render(<MortgagesView api={api} accounts={accounts}
         locale="pl-PL" revision={2} onAccessLoss={() => false} />);
       await Promise.resolve();
     });
@@ -134,7 +137,7 @@ describe("MortgagesView", () => {
   it("creates, edits, toggles and marks/unmarks payments with strict CAS, busy lock and 409/413/400 handling", async () => {
     const api = fakeApi();
     await act(async () => {
-      root.render(<MortgagesView api={api} accounts={accounts} text={mortgagesLabels.en}
+      root.render(<MortgagesView api={api} accounts={accounts}
         locale="en-US" revision={1} onAccessLoss={() => false} />);
       await Promise.resolve();
     });
@@ -223,12 +226,12 @@ describe("MortgagesView", () => {
     const onAccessLoss = vi.fn((result: { ok: boolean; status?: number; error?: string }) => !result.ok && result.status === 401);
 
     await act(async () => {
-      root.render(<MortgagesView api={api} accounts={accounts} text={mortgagesLabels.en}
+      root.render(<MortgagesView api={api} accounts={accounts}
         locale="en-US" revision={1} onAccessLoss={onAccessLoss} />);
       await Promise.resolve();
     });
     await act(async () => {
-      root.render(<MortgagesView api={api} accounts={accounts} text={mortgagesLabels.en}
+      root.render(<MortgagesView api={api} accounts={accounts}
         locale="en-US" revision={2} onAccessLoss={onAccessLoss} />);
       await Promise.resolve();
     });
@@ -248,7 +251,7 @@ describe("MortgagesView", () => {
 
     api.mortgages.mockImplementationOnce(() => fail(500, "budget_internal_error"));
     await act(async () => {
-      root.render(<MortgagesView api={api} accounts={accounts} text={mortgagesLabels.en}
+      root.render(<MortgagesView api={api} accounts={accounts}
         locale="en-US" revision={3} onAccessLoss={onAccessLoss} />);
       await Promise.resolve();
     });

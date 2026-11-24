@@ -2,6 +2,7 @@
 // and income vs. spending. Uses React inline SVG with bounded viewBox coordinates derived from BigInt scaling
 // plus keyboard-operable exact HTML data tables.
 import { useId } from "react";
+import { t, tPlural } from "../../i18n";
 import { formatAmount } from "../model";
 import { CategorySwatch } from "./category_badge";
 import { OTHER_CATEGORY_COLOR, buildCategoryColors, oneOffCategoryColor } from "./category_colors";
@@ -12,46 +13,6 @@ import { formatRatioHalfEven, formatScaledBigInt, isZero, parseScaledInt } from 
 import type { AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCategoryLabel, AnalyticsMonthlyBudgetDailyPoint,
   AnalyticsMonthlyBudgetSeries, AnalyticsMonthlyBudgetSeriesMonth } from "./model";
 import type { MonthPaceProjection, ScheduledPaceItem } from "./month_budget_pace";
-
-export interface MonthBudgetChartLabels {
-  chartsSectionTitle: string;
-  showData: string;
-  chartDailyTitle: string;
-  chartCategoriesTitle: string;
-  chartIncomeSpendTitle: string;
-  otherCategory: string;
-  dateLabel: string;
-  monthColumn: string;
-  cumulativeSpentLabel: string;
-  bookedBudgetLine: string;
-  expectedBudgetLine: string;
-  paceExtensionLine: string;
-  scheduledStepsColumn: string;
-  overdue: string;
-  upcoming: string;
-  scheduledPaymentsLoading: string;
-  withoutScheduledPayments: string;
-  exhaustionMarker: (day: number) => string;
-  incompleteMonth: string;
-  currentMonth: string;
-  expectedIncomeLegend: string;
-  statusColumn: string;
-  totalLabel: string;
-  noValue: string;
-  budgetReceived: string;
-  netSpending: string;
-  provisional: string;
-  partialIncome: string;
-  noStoredData: string;
-  uncategorised: string;
-  unknownCategory: string;
-  archived: string;
-  category: string;
-  oneOffTag?: string;
-  chartDailyDesc: (currency: string, start: string, cutoff: string) => string;
-  chartCategoriesDesc: (count: number, currency: string) => string;
-  chartIncomeSpendDesc: (count: number, currency: string) => string;
-}
 
 const CHART_WIDTH = 360;
 const CHART_HEIGHT = 210;
@@ -207,21 +168,19 @@ function scheduledItemLabel(
   item: ScheduledPaceItem,
   currency: string,
   locale: string,
-  text: Pick<MonthBudgetChartLabels, "overdue" | "upcoming">,
 ): string {
   const date = formatShortDate(item.expectedDate, locale);
-  const status = item.overdue ? text.overdue : text.upcoming;
+  const status = item.overdue ? t("budget.monthBudget.overdue") : t("budget.monthBudget.upcoming");
   return `${date} · ${item.label} · ${formatAmount(item.amount, currency, locale)} · ${status}`;
 }
 
-function CumulativeDailyChart({ budget, daily, paceProjection, schedulePending, scheduleError, locale, text }: {
+function CumulativeDailyChart({ budget, daily, paceProjection, schedulePending, scheduleError, locale }: {
   budget: AnalyticsMonthlyBudget;
   daily: readonly AnalyticsMonthlyBudgetDailyPoint[];
   paceProjection: MonthPaceProjection | null;
   schedulePending: boolean;
   scheduleError: boolean;
   locale: string;
-  text: MonthBudgetChartLabels;
 }) {
   const id = useId();
   const currency = budget.currency;
@@ -299,13 +258,18 @@ function CumulativeDailyChart({ budget, daily, paceProjection, schedulePending, 
   const showStepsColumn = (projection?.scheduledItems.length ?? 0) > 0;
 
   const ticks = [...new Set([1, 10, 20, daysInMonth].filter((day) => day <= daysInMonth && (day === daysInMonth || daysInMonth - day >= 3)))];
+  const chartAria = t("budget.monthBudget.chartDailyAria", { currency });
+  const cumulativeLabel = t("budget.monthBudget.cumulativeSpentLabel");
+  const paceLabel = t("budget.monthBudget.paceExtensionLine");
+  const withoutScheduledText = t("budget.monthBudget.withoutScheduledPayments");
+  const noValueText = t("budget.monthBudget.noValue");
 
   return (
-    <article className="budget-total budget-month-chart" aria-label={`${text.chartDailyTitle} · ${currency}`}>
-      <h4>{text.chartDailyTitle} · {currency}</h4>
+    <article className="budget-total budget-month-chart" aria-label={chartAria}>
+      <h4>{chartAria}</h4>
       <svg role="img" aria-labelledby={`${id}-title ${id}-desc`} viewBox={`0 0 ${String(CHART_WIDTH)} ${String(CHART_HEIGHT)}`}>
-        <title id={`${id}-title`}>{`${text.chartDailyTitle} (${currency})`}</title>
-        <desc id={`${id}-desc`}>{text.chartDailyDesc(currency, budget.start, budget.cutoff)}</desc>
+        <title id={`${id}-title`}>{t("budget.monthBudget.chartDailySvgTitle", { currency })}</title>
+        <desc id={`${id}-desc`}>{t("budget.monthBudget.chartDailyDesc", { currency, start: budget.start, cutoff: budget.cutoff })}</desc>
         <YAxisGrid scaleObj={yScale} scale={scale} denom={denom} locale={locale} />
         <line className="budget-chart-booked-line" x1={PLOT_LEFT} y1={bookedY} x2={PLOT_RIGHT} y2={bookedY}
           stroke="var(--chart-budget)" strokeWidth="1.6" strokeDasharray="6 3" />
@@ -329,7 +293,7 @@ function CumulativeDailyChart({ budget, daily, paceProjection, schedulePending, 
           const sy = yScale.toY(projectionCoeffs[index * 2 + 1] ?? 0n);
           return (
             <g key={point.date} className="budget-chart-scheduled-step" data-overdue={isOverdue}>
-              <title>{point.items.map((item) => scheduledItemLabel(item, currency, locale, text)).join("\n")}</title>
+              <title>{point.items.map((item) => scheduledItemLabel(item, currency, locale)).join("\n")}</title>
               <circle cx={sx} cy={sy} r={isOverdue ? "5" : "4"} fill="var(--surface)"
                 stroke={isOverdue ? "var(--err)" : "var(--chart-expected)"}
                 strokeDasharray={isOverdue ? "2 1.5" : undefined} strokeWidth="2" />
@@ -361,35 +325,35 @@ function CumulativeDailyChart({ budget, daily, paceProjection, schedulePending, 
       <ul className="budget-chart-legend">
         <li>
           <span className="budget-chart-line-swatch" style={{ color: "var(--chart-spend)" }} aria-hidden="true" />
-          <span>{text.cumulativeSpentLabel}: <strong>{money(lastCumulative)}</strong></span>
+          <span>{cumulativeLabel}: <strong>{money(lastCumulative)}</strong></span>
         </li>
         <li>
           <span className="budget-chart-line-swatch" style={{ color: "var(--chart-budget)", borderTopStyle: "dashed" }} aria-hidden="true" />
-          <span>{text.bookedBudgetLine}: <strong>{money(startBudget)}</strong></span>
+          <span>{t("budget.monthBudget.bookedBudgetLine")}: <strong>{money(startBudget)}</strong></span>
         </li>
         {hasExpectedBudget ? (
           <li>
             <span className="budget-chart-line-swatch" style={{ color: "var(--chart-expected)", borderTopStyle: "dotted" }} aria-hidden="true" />
-            <span>{text.expectedBudgetLine}: <strong>{money(expectedBudget)}</strong></span>
+            <span>{t("budget.monthBudget.expectedBudgetLine")}: <strong>{money(expectedBudget)}</strong></span>
           </li>
         ) : null}
         {showProjectedSummary && projected !== null ? (
           <li>
             <span className="budget-chart-line-swatch" style={{ color: "var(--chart-spend)", borderTopStyle: "dotted" }} aria-hidden="true" />
             <span>
-              {text.paceExtensionLine}: <strong>{formatRatioHalfEven(projected, currency, locale)}</strong>
-              {scheduleError ? ` (${text.withoutScheduledPayments})` : ""}
+              {paceLabel}: <strong>{formatRatioHalfEven(projected, currency, locale)}</strong>
+              {scheduleError ? ` (${withoutScheduledText})` : ""}
             </span>
           </li>
         ) : null}
         {schedulePending ? (
           <li role="status">
-            <span>{text.scheduledPaymentsLoading}</span>
+            <span>{t("budget.monthBudget.scheduledPaymentsLoading")}</span>
           </li>
         ) : null}
         {scheduleError && (!showProjectedSummary || projected === null) ? (
           <li className="budget-warn">
-            <span>{text.withoutScheduledPayments}</span>
+            <span>{withoutScheduledText}</span>
           </li>
         ) : null}
         {projection?.scheduledItems.map((item, index) => (
@@ -398,26 +362,26 @@ function CumulativeDailyChart({ budget, daily, paceProjection, schedulePending, 
               style={{ color: item.overdue ? "var(--err)" : "var(--chart-expected)" }} aria-hidden="true">
               {item.overdue ? "!" : null}
             </span>
-            <span>{scheduledItemLabel(item, currency, locale, text)}</span>
+            <span>{scheduledItemLabel(item, currency, locale)}</span>
           </li>
         ))}
         {exhaustionDay !== null ? (
           <li className="budget-warn">
-            <span>{text.exhaustionMarker(exhaustionDay)}</span>
+            <span>{t("budget.monthBudget.exhaustionMarker", { day: exhaustionDay })}</span>
           </li>
         ) : null}
       </ul>
       <details className="budget-recurring-evidence">
-        <summary>{text.showData}</summary>
-        <div className="budget-table-wrap" role="region" aria-label={`${text.chartDailyTitle} · ${currency}`} tabIndex={0}>
+        <summary>{t("budget.monthBudget.showData")}</summary>
+        <div className="budget-table-wrap" role="region" aria-label={chartAria} tabIndex={0}>
           <table className="budget-month-dashboard-table">
-            <caption>{text.chartDailyTitle} · {currency}</caption>
+            <caption>{chartAria}</caption>
             <thead>
               <tr>
-                <th scope="col">{text.dateLabel}</th>
-                <th scope="col">{text.cumulativeSpentLabel}</th>
-                {showProjectedColumn ? <th scope="col">{text.paceExtensionLine}</th> : null}
-                {showStepsColumn ? <th scope="col">{text.scheduledStepsColumn}</th> : null}
+                <th scope="col">{t("budget.monthBudget.dateLabel")}</th>
+                <th scope="col">{cumulativeLabel}</th>
+                {showProjectedColumn ? <th scope="col">{paceLabel}</th> : null}
+                {showStepsColumn ? <th scope="col">{t("budget.monthBudget.scheduledStepsColumn")}</th> : null}
               </tr>
             </thead>
             <tbody>
@@ -427,9 +391,9 @@ function CumulativeDailyChart({ budget, daily, paceProjection, schedulePending, 
                 return (
                   <tr key={date}>
                     <th scope="row">{date}</th>
-                    <td>{actual !== undefined ? money(actual) : text.noValue}</td>
+                    <td>{actual !== undefined ? money(actual) : noValueText}</td>
                     {showProjectedColumn ? (
-                      <td>{projPoint !== undefined ? formatRatioHalfEven(projPoint.value, currency, locale) : text.noValue}</td>
+                      <td>{projPoint !== undefined ? formatRatioHalfEven(projPoint.value, currency, locale) : noValueText}</td>
                     ) : null}
                     {showStepsColumn ? (
                       <td>
@@ -437,11 +401,11 @@ function CumulativeDailyChart({ budget, daily, paceProjection, schedulePending, 
                           <div className="budget-month-steps-cell">
                             {projPoint.items.map((item, index) => (
                               <div key={`${item.expectedDate}-${String(index)}`} className={item.overdue ? "budget-warn" : undefined}>
-                                {scheduledItemLabel(item, currency, locale, text)}
+                                {scheduledItemLabel(item, currency, locale)}
                               </div>
                             ))}
                           </div>
-                        ) : text.noValue}
+                        ) : noValueText}
                       </td>
                     ) : null}
                   </tr>
@@ -744,19 +708,19 @@ function monthTickSuffix(month: AnalyticsMonthlyBudgetSeriesMonth): string {
   return `${month.is_current_month ? "*" : ""}${month.provisional ? "~" : ""}`;
 }
 
-function CategorySpendingChart({ series, currency, locale, text, categories }: {
+function CategorySpendingChart({ series, currency, locale, categories }: {
   series: AnalyticsMonthlyBudgetSeries;
   currency: string;
   locale: string;
-  text: MonthBudgetChartLabels;
   categories?: readonly CategoryLink[] | undefined;
 }) {
   const id = useId();
   const money = (amount: string) => formatAmount(amount, currency, locale);
+  const otherCategoryLabel = t("budget.monthBudget.otherCategory");
   const model = buildCategoryChartModel(series.months, series.category_labels, {
-    uncategorised: text.uncategorised,
-    unknownCategory: text.unknownCategory,
-    otherCategory: text.otherCategory,
+    uncategorised: t("budget.monthBudget.uncategorised"),
+    unknownCategory: t("budget.monthBudget.unknownCategory"),
+    otherCategory: otherCategoryLabel,
   }, categories);
 
   const yScale = buildYScale(model.stacks.flatMap((stack) => [stack.posTotal, stack.negTotal]));
@@ -772,13 +736,18 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
       .filter((slice) => slice.hatched && !slice.key.startsWith("__other_"))
       .map((slice) => slice.color),
   )];
+  const chartAria = t("budget.monthBudget.chartCategoriesAria", { currency });
+  const archivedText = t("budget.monthBudget.archived");
+  const oneOffTagText = t("budget.monthBudget.oneOffTag");
+  const currentMonthText = t("budget.monthBudget.currentMonth");
+  const provisionalText = t("budget.monthBudget.provisional");
 
   return (
-    <article className="budget-total budget-month-chart" aria-label={`${text.chartCategoriesTitle} · ${currency}`}>
-      <h4>{text.chartCategoriesTitle} · {currency}</h4>
+    <article className="budget-total budget-month-chart" aria-label={chartAria}>
+      <h4>{chartAria}</h4>
       <svg role="img" aria-labelledby={`${id}-title ${id}-desc`} viewBox={`0 0 ${String(CHART_WIDTH)} ${String(CHART_HEIGHT)}`}>
-        <title id={`${id}-title`}>{`${text.chartCategoriesTitle} (${currency})`}</title>
-        <desc id={`${id}-desc`}>{text.chartCategoriesDesc(series.months.length, currency)}</desc>
+        <title id={`${id}-title`}>{t("budget.monthBudget.chartCategoriesSvgTitle", { currency })}</title>
+        <desc id={`${id}-desc`}>{tPlural("budget.monthBudget.chartCategoriesDesc", series.months.length, { currency })}</desc>
         <defs>
           <pattern id={`${id}-other-pattern`} width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
             <rect width="5" height="5" fill={OTHER_CATEGORY_COLOR.background} fillOpacity="0.25" />
@@ -834,7 +803,7 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
             <CategorySwatch color={{ background: cat.color, hatched: cat.hatched }} className="budget-chart-swatch" />
             <span>
               {cat.name}
-              {cat.archived ? <small className="budget-muted"> ({text.archived})</small> : null}
+              {cat.archived ? <small className="budget-muted"> ({archivedText})</small> : null}
             </span>
           </li>
         ))}
@@ -843,32 +812,32 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
             <CategorySwatch color={{ background: cat.color, hatched: cat.hatched }} className="budget-chart-swatch" />
             <span>
               {cat.name}
-              <small className="budget-one-off-tag">{text.oneOffTag ?? "one-off"}</small>
+              <small className="budget-one-off-tag">{oneOffTagText}</small>
             </span>
           </li>
         ))}
         {hasOther ? (
           <li>
             <CategorySwatch color={OTHER_CATEGORY_COLOR} className="budget-chart-swatch" />
-            <span>{text.otherCategory}</span>
+            <span>{otherCategoryLabel}</span>
           </li>
         ) : null}
-        {hasCurrent ? <li><span>* {text.currentMonth}</span></li> : null}
-        {hasProvisional ? <li><span>~ {text.provisional}</span></li> : null}
+        {hasCurrent ? <li><span>* {currentMonthText}</span></li> : null}
+        {hasProvisional ? <li><span>~ {provisionalText}</span></li> : null}
       </ul>
       <details className="budget-recurring-evidence">
-        <summary>{text.showData}</summary>
-        <div className="budget-table-wrap" role="region" aria-label={`${text.chartCategoriesTitle} · ${currency}`} tabIndex={0}>
+        <summary>{t("budget.monthBudget.showData")}</summary>
+        <div className="budget-table-wrap" role="region" aria-label={chartAria} tabIndex={0}>
           <table className="budget-month-dashboard-table">
-            <caption>{text.chartCategoriesTitle} · {currency}</caption>
+            <caption>{chartAria}</caption>
             <thead>
               <tr>
-                <th scope="col">{text.category}</th>
+                <th scope="col">{t("budget.monthBudget.category")}</th>
                 {series.months.map((month) => (
                   <th key={month.period} scope="col">
                     <div>{shortMonthTick(month.period, locale, false)} ({month.period})</div>
-                    {month.is_current_month ? <div><small className="budget-muted">{text.currentMonth}</small></div> : null}
-                    {month.provisional ? <div><small className="budget-warn">{text.provisional}</small></div> : null}
+                    {month.is_current_month ? <div><small className="budget-muted">{currentMonthText}</small></div> : null}
+                    {month.provisional ? <div><small className="budget-warn">{provisionalText}</small></div> : null}
                   </th>
                 ))}
               </tr>
@@ -879,19 +848,19 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
                   <th scope="row">
                     <CategorySwatch color={{ background: cat.color, hatched: cat.hatched }} />
                     {cat.name}
-                    {cat.oneOff ? <small className="budget-one-off-tag">{text.oneOffTag ?? "one-off"}</small> : null}
-                    {cat.archived ? <small className="budget-muted"> ({text.archived})</small> : null}
+                    {cat.oneOff ? <small className="budget-one-off-tag">{oneOffTagText}</small> : null}
+                    {cat.archived ? <small className="budget-muted"> ({archivedText})</small> : null}
                   </th>
                   {series.months.map((month) => {
                     const value = model.byMonthAndCategory.get(month.period)?.get(cat.oneOff ? cat.seriesKey : cat.id);
-                    return <td key={month.period}>{value === undefined ? text.noValue : money(value)}</td>;
+                    return <td key={month.period}>{value === undefined ? t("budget.monthBudget.noValue") : money(value)}</td>;
                   })}
                 </tr>
               ))}
             </tbody>
             <tfoot>
               <tr>
-                <th scope="row"><strong>{text.totalLabel}</strong></th>
+                <th scope="row"><strong>{t("budget.monthBudget.totalLabel")}</strong></th>
                 {series.months.map((month) => (
                   <td key={month.period}><strong>{money(month.spent)}</strong></td>
                 ))}
@@ -908,11 +877,10 @@ function CategorySpendingChart({ series, currency, locale, text, categories }: {
 // Chart 3: Income versus spend per month
 // ---------------------------------------------------------------------------
 
-function IncomeVsSpendChart({ budget, months, locale, text }: {
+function IncomeVsSpendChart({ budget, months, locale }: {
   budget: AnalyticsMonthlyBudget;
   months: readonly AnalyticsMonthlyBudgetSeriesMonth[];
   locale: string;
-  text: MonthBudgetChartLabels;
 }) {
   const id = useId();
   const currency = budget.currency;
@@ -959,13 +927,22 @@ function IncomeVsSpendChart({ budget, months, locale, text }: {
   const hasIncomplete = months.some((month) => month.is_current_month);
   const hasProvisional = months.some((month) => month.provisional);
   const hasPartialIncome = months.some((month) => month.income_estimate_partial);
+  const chartAria = t("budget.monthBudget.chartIncomeSpendAria", { currency });
+  const budgetReceivedText = t("budget.monthBudget.budgetReceived");
+  const expectedIncomeLegendText = t("budget.monthBudget.expectedIncomeLegend");
+  const netSpendingText = t("budget.monthBudget.netSpending");
+  const incompleteMonthText = t("budget.monthBudget.incompleteMonth");
+  const provisionalText = t("budget.monthBudget.provisional");
+  const partialIncomeText = t("budget.monthBudget.partialIncome");
+  const noStoredDataText = t("budget.monthBudget.noStoredData");
+  const noValueText = t("budget.monthBudget.noValue");
 
   return (
-    <article className="budget-total budget-month-chart" aria-label={`${text.chartIncomeSpendTitle} · ${currency}`}>
-      <h4>{text.chartIncomeSpendTitle} · {currency}</h4>
+    <article className="budget-total budget-month-chart" aria-label={chartAria}>
+      <h4>{chartAria}</h4>
       <svg role="img" aria-labelledby={`${id}-title ${id}-desc`} viewBox={`0 0 ${String(CHART_WIDTH)} ${String(CHART_HEIGHT)}`}>
-        <title id={`${id}-title`}>{`${text.chartIncomeSpendTitle} (${currency})`}</title>
-        <desc id={`${id}-desc`}>{text.chartIncomeSpendDesc(months.length, currency)}</desc>
+        <title id={`${id}-title`}>{t("budget.monthBudget.chartIncomeSpendSvgTitle", { currency })}</title>
+        <desc id={`${id}-desc`}>{tPlural("budget.monthBudget.chartIncomeSpendDesc", months.length, { currency })}</desc>
         <defs>
           <pattern id={`${id}-spend-pattern`} width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
             <rect width="5" height="5" fill="var(--chart-spend)" fillOpacity="0.22" />
@@ -1034,7 +1011,7 @@ function IncomeVsSpendChart({ budget, months, locale, text }: {
       <ul className="budget-chart-legend">
         <li>
           <span className="budget-chart-swatch" style={{ background: "var(--chart-income)", borderColor: "transparent" }} aria-hidden="true" />
-          <span>{text.budgetReceived}</span>
+          <span>{budgetReceivedText}</span>
         </li>
         {currentExpectedTotal !== null ? (
           <li>
@@ -1042,7 +1019,7 @@ function IncomeVsSpendChart({ budget, months, locale, text }: {
               background: `repeating-linear-gradient(-45deg, var(--chart-expected), var(--chart-expected) 2px, var(--surface) 2px, var(--surface) 4px)`,
               borderColor: "var(--chart-expected)",
             }} aria-hidden="true" />
-            <span>{text.expectedIncomeLegend}: <strong>{money(currentExpectedTotal)}</strong></span>
+            <span>{expectedIncomeLegendText}: <strong>{money(currentExpectedTotal)}</strong></span>
           </li>
         ) : null}
         <li>
@@ -1050,43 +1027,43 @@ function IncomeVsSpendChart({ budget, months, locale, text }: {
             background: `repeating-linear-gradient(45deg, var(--chart-spend), var(--chart-spend) 2px, var(--surface) 2px, var(--surface) 4px)`,
             borderColor: "var(--chart-spend)",
           }} aria-hidden="true" />
-          <span>{text.netSpending}</span>
+          <span>{netSpendingText}</span>
         </li>
-        {hasIncomplete ? <li><span>* {text.incompleteMonth}</span></li> : null}
-        {hasProvisional ? <li><span>~ {text.provisional}</span></li> : null}
-        {hasPartialIncome ? <li><span>{text.partialIncome}</span></li> : null}
-        {hasGaps ? <li><span>{text.noStoredData}</span></li> : null}
+        {hasIncomplete ? <li><span>* {incompleteMonthText}</span></li> : null}
+        {hasProvisional ? <li><span>~ {provisionalText}</span></li> : null}
+        {hasPartialIncome ? <li><span>{partialIncomeText}</span></li> : null}
+        {hasGaps ? <li><span>{noStoredDataText}</span></li> : null}
       </ul>
       <details className="budget-recurring-evidence">
-        <summary>{text.showData}</summary>
-        <div className="budget-table-wrap" role="region" aria-label={`${text.chartIncomeSpendTitle} · ${currency}`} tabIndex={0}>
+        <summary>{t("budget.monthBudget.showData")}</summary>
+        <div className="budget-table-wrap" role="region" aria-label={chartAria} tabIndex={0}>
           <table className="budget-month-dashboard-table">
-            <caption>{text.chartIncomeSpendTitle} · {currency}</caption>
+            <caption>{chartAria}</caption>
             <thead>
               <tr>
-                <th scope="col">{text.monthColumn}</th>
-                <th scope="col">{text.budgetReceived}</th>
-                {currentExpectedTotal !== null ? <th scope="col">{text.expectedIncomeLegend}</th> : null}
-                <th scope="col">{text.netSpending}</th>
-                <th scope="col">{text.statusColumn}</th>
+                <th scope="col">{t("budget.monthBudget.monthColumn")}</th>
+                <th scope="col">{budgetReceivedText}</th>
+                {currentExpectedTotal !== null ? <th scope="col">{expectedIncomeLegendText}</th> : null}
+                <th scope="col">{netSpendingText}</th>
+                <th scope="col">{t("budget.monthBudget.statusColumn")}</th>
               </tr>
             </thead>
             <tbody>
               {monthBars.map(({ month, gap }) => {
                 const markers: string[] = [];
-                if (gap) markers.push(text.noStoredData);
-                if (month.is_current_month) markers.push(text.incompleteMonth);
-                if (month.provisional) markers.push(text.provisional);
-                if (month.income_estimate_partial) markers.push(text.partialIncome);
+                if (gap) markers.push(noStoredDataText);
+                if (month.is_current_month) markers.push(incompleteMonthText);
+                if (month.provisional) markers.push(provisionalText);
+                if (month.income_estimate_partial) markers.push(partialIncomeText);
                 return (
                   <tr key={month.period}>
                     <th scope="row">{fullMonthLabel(month.period, locale)}</th>
-                    <td>{gap ? text.noValue : money(month.start_budget)}</td>
+                    <td>{gap ? noValueText : money(month.start_budget)}</td>
                     {currentExpectedTotal !== null ? (
-                      <td>{month.is_current_month ? money(currentExpectedTotal) : text.noValue}</td>
+                      <td>{month.is_current_month ? money(currentExpectedTotal) : noValueText}</td>
                     ) : null}
-                    <td>{gap ? text.noValue : money(month.spent)}</td>
-                    <td>{markers.length === 0 ? text.noValue : markers.join(" · ")}</td>
+                    <td>{gap ? noValueText : money(month.spent)}</td>
+                    <td>{markers.length === 0 ? noValueText : markers.join(" · ")}</td>
                   </tr>
                 );
               })}
@@ -1099,7 +1076,7 @@ function IncomeVsSpendChart({ budget, months, locale, text }: {
 }
 
 export function MonthBudgetCharts({
-  budget, series, paceProjection, schedulePending = false, scheduleError = false, locale, text, categories,
+  budget, series, paceProjection, schedulePending = false, scheduleError = false, locale, categories,
 }: {
   budget: AnalyticsMonthlyBudget;
   series: AnalyticsMonthlyBudgetSeries;
@@ -1107,15 +1084,14 @@ export function MonthBudgetCharts({
   schedulePending?: boolean;
   scheduleError?: boolean;
   locale: string;
-  text: MonthBudgetChartLabels;
   categories?: readonly CategoryLink[] | undefined;
 }) {
   return (
-    <section className="budget-month-charts" aria-label={text.chartsSectionTitle}>
+    <section className="budget-month-charts" aria-label={t("budget.monthBudget.chartsSectionTitle")}>
       <CumulativeDailyChart budget={budget} daily={series.daily} paceProjection={paceProjection}
-        schedulePending={schedulePending} scheduleError={scheduleError} locale={locale} text={text} />
-      <CategorySpendingChart series={series} currency={budget.currency} locale={locale} text={text} categories={categories} />
-      <IncomeVsSpendChart budget={budget} months={series.months} locale={locale} text={text} />
+        schedulePending={schedulePending} scheduleError={scheduleError} locale={locale} />
+      <CategorySpendingChart series={series} currency={budget.currency} locale={locale} categories={categories} />
+      <IncomeVsSpendChart budget={budget} months={series.months} locale={locale} />
     </section>
   );
 }

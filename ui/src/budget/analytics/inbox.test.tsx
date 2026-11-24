@@ -3,11 +3,12 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocale, t } from "../../i18n";
 import type { BudgetApi, BudgetResult } from "../api";
 import { connection } from "../fixtures";
 import { categoryList, inboxConsentItem, inboxMarkSaved, inboxMortgageItem, inboxOf,
   inboxSpendingLimitItem, mortgageSchedule, mortgagesOf } from "./fixtures";
-import { InboxView, inboxLabels } from "./inbox";
+import { InboxView } from "./inbox";
 import type { AnalyticsInbox, AnalyticsInboxItem } from "./model";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
@@ -40,6 +41,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  await loadLocale("en");
   vi.restoreAllMocks();
 });
 
@@ -64,14 +66,15 @@ describe("InboxView", () => {
     };
     const data = inboxOf([device]);
     const api = fakeApi(data);
+    await loadLocale("pl");
     await act(async () => {
-      root.render(<InboxView api={api} connections={[]} consentEnabled={false} text={inboxLabels.pl} locale="pl"
+      root.render(<InboxView api={api} connections={[]} consentEnabled={false} locale="pl"
         revision={0} onAccessLoss={() => false} onOpenAccounts={vi.fn()} onOpenMortgages={vi.fn()} onOpenLimits={vi.fn()} />);
       await Promise.resolve();
     });
     expect(host.querySelector("li strong")?.textContent).toBe("Nowe urządzenie: Vesta, 2026-11-21");
     expect(host.textContent).not.toContain(device.ref.token_id);
-    await click(button(inboxLabels.pl.markRead));
+    await click(button("Oznacz jako przeczytane"));
     expect(api.markInbox).toHaveBeenCalledWith({
       items: [{ kind: device.kind, subject_id: device.subject_id, milestone: device.milestone }],
       read: true, expected_reads_version: data.reads_version,
@@ -98,7 +101,7 @@ describe("InboxView", () => {
 
     await act(async () => {
       root.render(
-        <InboxView api={api} connections={[connection]} consentEnabled text={inboxLabels.en} locale="en-GB" revision={0}
+        <InboxView api={api} connections={[connection]} consentEnabled locale="en-GB" revision={0}
           onAccessLoss={() => false} onOpenAccounts={onOpenAccounts} onOpenMortgages={onOpenMortgages}
           onOpenLimits={onOpenLimits} />,
       );
@@ -143,9 +146,10 @@ describe("InboxView", () => {
     expect(host.textContent).not.toContain("Synthetic Food");
 
     // Polish copy & pluralization check.
+    await loadLocale("pl");
     await act(async () => {
       root.render(
-        <InboxView api={api} connections={[connection]} consentEnabled={false} text={inboxLabels.pl} locale="pl-PL" revision={1}
+        <InboxView api={api} connections={[connection]} consentEnabled={false} locale="pl-PL" revision={1}
           onAccessLoss={() => false} onOpenAccounts={onOpenAccounts} onOpenMortgages={onOpenMortgages}
           onOpenLimits={onOpenLimits} />,
       );
@@ -153,7 +157,7 @@ describe("InboxView", () => {
     });
     await settle();
     expect(host.querySelector('[role="group"]')?.getAttribute("aria-label")).toBe("Filtr alertów");
-    expect(inboxLabels.pl.markedPartial(100, 105)).toContain("Oznaczono 100 z 105");
+    expect(t("budget.inbox.markedPartial", { marked: 100, total: 105 })).toContain("Oznaczono 100 z 105");
     expect(host.textContent).toContain("Stan na 2026-11-21 (UTC)");
     expect(host.textContent).toContain("Nieprzeczytane: 2");
     expect(host.textContent).toContain("3 dni po terminie");
@@ -166,7 +170,7 @@ describe("InboxView", () => {
     const emptyApi = fakeApi(inboxOf([]));
     await act(async () => {
       root.render(
-        <InboxView api={emptyApi} connections={[]} consentEnabled text={inboxLabels.en} locale="en-GB" revision={0}
+        <InboxView api={emptyApi} connections={[]} consentEnabled locale="en-GB" revision={0}
           onAccessLoss={() => false} onOpenAccounts={vi.fn()} onOpenMortgages={vi.fn()} onOpenLimits={vi.fn()} />,
       );
       await Promise.resolve();
@@ -187,7 +191,7 @@ describe("InboxView", () => {
     fallbackApi.categories.mockImplementation(() => fail(500, "budget_internal_error"));
     await act(async () => {
       root.render(
-        <InboxView api={fallbackApi} connections={[]} consentEnabled text={inboxLabels.en} locale="en-GB" revision={1}
+        <InboxView api={fallbackApi} connections={[]} consentEnabled locale="en-GB" revision={1}
           onAccessLoss={() => false} onOpenAccounts={vi.fn()} onOpenMortgages={vi.fn()} onOpenLimits={vi.fn()} />,
       );
       await Promise.resolve();
@@ -209,7 +213,7 @@ describe("InboxView", () => {
 
     await act(async () => {
       root.render(
-        <InboxView api={api} connections={[connection]} consentEnabled text={inboxLabels.en} locale="en-GB" revision={0}
+        <InboxView api={api} connections={[connection]} consentEnabled locale="en-GB" revision={0}
           onAccessLoss={() => false} onOpenAccounts={vi.fn()} onOpenMortgages={vi.fn()} onOpenLimits={vi.fn()} />,
       );
       await Promise.resolve();
@@ -261,7 +265,7 @@ describe("InboxView", () => {
     api.inbox.mockImplementation(() => ok(inboxOf([cAlert], { reads_version: v1, reads_count: 500, reads_cap: 500, unread_count: 1 })));
     await act(async () => {
       root.render(
-        <InboxView api={api} connections={[connection]} consentEnabled text={inboxLabels.en} locale="en-GB" revision={2}
+        <InboxView api={api} connections={[connection]} consentEnabled locale="en-GB" revision={2}
           onAccessLoss={() => false} onOpenAccounts={vi.fn()} onOpenMortgages={vi.fn()} onOpenLimits={vi.fn()} />,
       );
       await Promise.resolve();
@@ -281,7 +285,7 @@ describe("InboxView", () => {
     api.markInbox.mockImplementationOnce(() => ok({ inbox: inboxMarkSaved({ changed_count: 100 }) }));
     await act(async () => {
       root.render(
-        <InboxView api={api} connections={[connection]} consentEnabled text={inboxLabels.en} locale="en-GB" revision={3}
+        <InboxView api={api} connections={[connection]} consentEnabled locale="en-GB" revision={3}
           onAccessLoss={() => false} onOpenAccounts={vi.fn()} onOpenMortgages={vi.fn()} onOpenLimits={vi.fn()} />,
       );
       await Promise.resolve();
@@ -301,7 +305,7 @@ describe("InboxView", () => {
 
     await act(async () => {
       root.render(
-        <InboxView api={api} connections={[connection]} consentEnabled text={inboxLabels.en} locale="en-GB" revision={0}
+        <InboxView api={api} connections={[connection]} consentEnabled locale="en-GB" revision={0}
           onAccessLoss={onAccessLoss} onOpenAccounts={vi.fn()} onOpenMortgages={vi.fn()} onOpenLimits={vi.fn()} />,
       );
       await Promise.resolve();

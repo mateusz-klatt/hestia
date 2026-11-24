@@ -2,6 +2,7 @@
 // Evaluates in Europe/Warsaw from one snapshot on the server; all amounts stay decimal strings end to end,
 // ratios divide via BigInt half-even rounding, and no raw IDs or remittance text ever enter the DOM.
 import { useEffect, useRef, useState } from "react";
+import { t, tPlural } from "../../i18n";
 import type { BudgetApi, BudgetResult } from "../api";
 import { formatAmount, when } from "../model";
 import type { BudgetAccount } from "../model";
@@ -9,307 +10,15 @@ import { CategorySwatch } from "./category_badge";
 import { buildCategoryColors, oneOffCategoryColor } from "./category_colors";
 import type { CategoryColorResolver } from "./category_colors";
 import { groupCategoryTotals, hasCategoryParents, visibleCategoryRows } from "./category_tree";
-import { clampPercentString, formatRatioHalfEven, isPositiveDecimal, isZero, labelOf,
-  monthLabel, monthlyBudgetCurrencies, oneOffRowKey, pluralPl, ratioPercentFloor, shiftMonth, validCurrency } from "./model";
+import { MONTH_BUDGET_CARD_STATUS_KEYS, MONTH_BUDGET_LIMIT_STATUS_KEYS, clampPercentString, formatRatioHalfEven,
+  isPositiveDecimal, isZero, labelOf, monthLabel, monthlyBudgetCurrencies, oneOffRowKey, ratioPercentFloor,
+  shiftMonth, validCurrency } from "./model";
 import type { AnalyticsCategory, AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCharts,
   AnalyticsMonthlyBudgetExpectedIncome, AnalyticsMonthlyBudgetIncomeWindow, AnalyticsMonthlyBudgetPace,
   AnalyticsMonthlyBudgetPassThrough, AnalyticsMonthlyBudgetSeries } from "./model";
 import { MonthBudgetCharts } from "./month_budget_charts";
 import { buildMonthPaceProjection } from "./month_budget_pace";
 import type { MonthPaceProjection, MonthPaceScheduleData } from "./month_budget_pace";
-
-export const monthBudgetLabels = {
-  en: {
-    title: "Monthly budget",
-    readOnly: "Read only",
-    month: "Month",
-    previousMonth: "Previous month",
-    nextMonth: "Next month",
-    currency: "Currency",
-    currencyCode: "Currency code (ISO 4217)",
-    applyCurrency: "Apply currency",
-    loading: "Loading monthly budget…",
-    categoriesLoading: "Loading categories before spending and charts…",
-    error: "Monthly budget could not be loaded. Try again.",
-    categoriesError: "Categories could not be loaded, so spending and charts are not shown.",
-    badRequest: "Invalid month or currency selection. Choose another month or currency.",
-    limit: "Monthly budget data exceed the response size limit. Choose another currency or month.",
-    unconfigured: "Monthly budget is not configured yet on this server. Income categories must be configured before monthly totals can be shown.",
-    noStoredData: "No stored data",
-    noStoredDataDetail: "No stored transactions for this month and currency.",
-    observedZero: "Transactions are stored for this month with zero net budget impact.",
-    evaluatedFor: (date: string, timezone: string) => `Evaluated for ${date} (${timezone})`,
-    ledgerAsOf: (formatted: string | null) =>
-      formatted === null ? "No synced ledger data yet" : `Ledger data as of ${formatted}`,
-    staleData: "Data may be out of date",
-    staleAccounts: (count: number) => `${String(count)} ${count === 1 ? "stale account" : "stale accounts"}`,
-    provisional: "Provisional totals",
-    pendingTransfers: (count: number) =>
-      `Provisional totals: ${String(count)} unverified transfer or classification ${count === 1 ? "candidate still affects" : "candidates still affect"} totals.`,
-    provisionalTruncated: (shown: number, total: number) => `Showing first ${String(shown)} of ${String(total)}.`,
-    transferScanLimited: "Own-transfer detection reached its scan limit; some transfer pairs may be missing.",
-    purchaseDateBasis: (cutoff: string) => `Through ${cutoff} · expenses by purchase date`,
-    purchaseDateFallback: (count: number) =>
-      `${String(count)} ${count === 1 ? "debit used" : "debits used"} posting date because purchase date was absent.`,
-    viewTransactions: "View transactions",
-    summaryTitle: "Monthly summary",
-    budgetReceived: "Budget received",
-    spentToDate: "Spent to date",
-    spentClosed: "Spent",
-    remaining: "Remaining",
-    remainingAtMonthEnd: "Remaining at month end",
-    scheduledPaymentsLoading: "Loading scheduled payments…",
-    withoutScheduledPayments: "without scheduled payments",
-    scheduledPaymentsError: "Scheduled payments could not be loaded — projection is shown without scheduled payments.",
-    spentVsBudget: "Spent compared to budget received",
-    expectedIncomeTitle: "Expected income",
-    expectedIncomeTotal: "Total expected",
-    partialIncome: "Partial income evidence",
-    partialIncomeMissing: "Partial income evidence — remaining expected income could not be estimated reliably.",
-    expectedIncomeUnavailable: "Unavailable (no prior-month income data).",
-    expectedIncomeNone: "No additional income expected this month.",
-    expectedIncomeHistorical: "Closed month — booked income only.",
-    expectedDate: (date: string | null) =>
-      date === null ? "Combined estimate (no expected date)" : `Expected ${date}`,
-    expectedDelayed: "Delayed",
-    expectedSourcePreviousMonth: "Previous month",
-    incomeCategoryFallback: "Income category",
-    paceTitle: "Spending pace",
-    paceBasisReceived: "Based on budget received",
-    paceBasisReceivedPlusExpected: "Based on budget received + expected",
-    paceBudget: "Pace budget",
-    dailyRate: "Daily rate",
-    perDay: (formatted: string) => `${formatted} / day`,
-    projectedSpend: "Projected month spend",
-    paceRunsOut: (day: number | null) =>
-      day === null
-        ? "At this pace the budget will run out before month end."
-        : `At this pace the budget runs out around day ${String(day)}.`,
-    paceWithinBudget: "At this pace spending stays within the budget.",
-    paceAlreadyReached: (day: number | null) =>
-      day === null
-        ? "Spending has already reached the budget."
-        : `Spending has already reached the budget (day ${String(day)}).`,
-    paceNoBudget: "No funded budget yet to calculate pace.",
-    paceNoPositivePace: "No positive spending pace yet.",
-    paceHistorical: "Closed month — forward pace is not calculated.",
-    passThroughTitle: "Rent and mortgage",
-    rentLabel: "Rent",
-    mortgageLabel: "Mortgage",
-    rentReceived: "Rent received",
-    mortgageDebits: "Mortgage payments",
-    mortgageRefunds: "Mortgage refunds",
-    matchedRent: "Covered by rent",
-    unappliedRent: "Reserved excess rent",
-    unappliedMortgageRefunds: "Unused mortgage refunds",
-    uncoveredMortgage: "Uncovered mortgage",
-    passThroughNote: "Uncovered mortgage is included in spending below; excess rent stays reserved.",
-    spendingAndLimits: "Spending and limits",
-    category: "Category",
-    expenses: "Expenses",
-    refunds: "Refunds",
-    netSpending: "Net spending",
-    limitColumn: "Limit",
-    noLimit: "—",
-    uncategorised: "Uncategorised",
-    unknownCategory: "Category",
-    archived: "archived",
-    collapseCategory: (name: string) => `Collapse ${name}`,
-    expandCategory: (name: string) => `Expand ${name}`,
-    noExpenses: "No category spending recorded in this month.",
-    limitStatuses: {
-      within: "Within limit",
-      approaching: "Approaching limit",
-      at_limit: "At limit",
-      exceeded: "Exceeded",
-    },
-    limitUsed: (limitFormatted: string, percent: string) => `of ${limitFormatted} (${percent}%)`,
-    limitRemaining: (amount: string) => `Remaining: ${amount}`,
-    limitOverBy: (amount: string) => `Over by: ${amount}`,
-    warningAt: (percent: number) => `Warning at ${String(percent)}%`,
-    cardExposureTitle: "Unpaid card spending",
-    cardStatuses: { unavailable: "Unavailable" },
-    unavailable: "Unavailable",
-    cardExposureNote: "Card exposure stays unavailable until bank sign and full transaction-window coverage are verified.",
-    chartsSectionTitle: "Charts",
-    chartHistory: "Chart history",
-    historyMonths: (count: number) => `${String(count)} months`,
-    showData: "Show data",
-    chartDailyTitle: "Cumulative spending",
-    chartCategoriesTitle: "Spending by category",
-    chartIncomeSpendTitle: "Income and spending",
-    otherCategory: "Other",
-    oneOffTag: "one-off",
-    dateLabel: "Date",
-    monthColumn: "Month",
-    cumulativeSpentLabel: "Cumulative spending",
-    bookedBudgetLine: "Booked budget",
-    expectedBudgetLine: "Budget + expected",
-    paceExtensionLine: "Pace projection",
-    scheduledStepsColumn: "Scheduled payments",
-    overdue: "overdue",
-    upcoming: "upcoming",
-    exhaustionMarker: (day: number) => `Exhaustion ~day ${String(day)}`,
-    incompleteMonth: "Incomplete month",
-    currentMonth: "Current month",
-    expectedIncomeLegend: "Expected income",
-    statusColumn: "Status",
-    totalLabel: "Total",
-    noValue: "—",
-    chartDailyDesc: (currency: string, start: string, cutoff: string) =>
-      `Cumulative net spending in ${currency} from ${start} through ${cutoff} compared against budget.`,
-    chartCategoriesDesc: (count: number, currency: string) =>
-      `Monthly stacked category net spending in ${currency} across ${String(count)} months.`,
-    chartIncomeSpendDesc: (count: number, currency: string) =>
-      `Monthly booked income and net spending in ${currency} across ${String(count)} months.`,
-  },
-  pl: {
-    title: "Budżet miesiąca",
-    readOnly: "Tylko do odczytu",
-    month: "Miesiąc",
-    previousMonth: "Poprzedni miesiąc",
-    nextMonth: "Następny miesiąc",
-    currency: "Waluta",
-    currencyCode: "Kod waluty (ISO 4217)",
-    applyCurrency: "Zastosuj walutę",
-    loading: "Wczytywanie budżetu miesiąca…",
-    categoriesLoading: "Wczytywanie kategorii przed wydatkami i wykresami…",
-    error: "Nie udało się wczytać budżetu miesiąca. Spróbuj ponownie.",
-    categoriesError: "Nie udało się wczytać kategorii, więc wydatki i wykresy nie są pokazane.",
-    badRequest: "Nieprawidłowy wybór miesiąca lub waluty. Wybierz inny miesiąc lub walutę.",
-    limit: "Dane budżetu miesiąca przekraczają limit rozmiaru odpowiedzi. Wybierz inną walutę lub miesiąc.",
-    unconfigured: "Budżet miesiąca nie jest jeszcze skonfigurowany na tym serwerze. Najpierw trzeba skonfigurować kategorie wpływów.",
-    noStoredData: "Brak zapisanych danych",
-    noStoredDataDetail: "Brak zapisanych transakcji dla tego miesiąca i waluty.",
-    observedZero: "W tym miesiącu zapisano transakcje o zerowym saldzie budżetowym.",
-    evaluatedFor: (date: string, timezone: string) => `Stan na ${date} (${timezone})`,
-    ledgerAsOf: (formatted: string | null) =>
-      formatted === null ? "Brak zsynchronizowanych danych księgowych" : `Dane księgowe na ${formatted}`,
-    staleData: "Dane mogą być nieaktualne",
-    staleAccounts: (count: number) =>
-      `${String(count)} ${pluralPl(count, "nieaktualne konto", "nieaktualne konta", "nieaktualnych kont")}`,
-    provisional: "Wynik wstępny",
-    pendingTransfers: (count: number) =>
-      `Wynik wstępny: ${String(count)} ${pluralPl(count, "niepotwierdzony wpis lub przelew nadal wpływa", "niepotwierdzone wpisy lub przelewy nadal wpływają", "niepotwierdzonych wpisów lub przelewów nadal wpływa")} na sumy.`,
-    provisionalTruncated: (shown: number, total: number) => `Pokazano pierwsze ${String(shown)} z ${String(total)}.`,
-    transferScanLimited: "Wyszukiwanie przelewów własnych osiągnęło limit; części par może brakować.",
-    purchaseDateBasis: (cutoff: string) => `Do ${cutoff} · wydatki według daty zakupu`,
-    purchaseDateFallback: (count: number) =>
-      `Dla ${String(count)} ${pluralPl(count, "wydatku", "wydatków", "wydatków")} użyto daty księgowania z powodu braku daty zakupu.`,
-    viewTransactions: "Zobacz transakcje",
-    summaryTitle: "Podsumowanie miesiąca",
-    budgetReceived: "Budżet z wpływów",
-    spentToDate: "Wydano do dziś",
-    spentClosed: "Wydano",
-    remaining: "Pozostało",
-    remainingAtMonthEnd: "Pozostało na koniec miesiąca",
-    scheduledPaymentsLoading: "Wczytywanie zaplanowanych płatności…",
-    withoutScheduledPayments: "bez zaplanowanych płatności",
-    scheduledPaymentsError: "Nie udało się wczytać zaplanowanych płatności — prognoza jest pokazana bez zaplanowanych płatności.",
-    spentVsBudget: "Wydano względem budżetu z wpływów",
-    expectedIncomeTitle: "Oczekiwane wpływy",
-    expectedIncomeTotal: "Łącznie oczekiwane",
-    partialIncome: "Niepełne dane o wpływach",
-    partialIncomeMissing: "Niepełne dane o wpływach — nie można wiarygodnie oszacować pozostałych wpływów.",
-    expectedIncomeUnavailable: "Niedostępne (brak wpływów z poprzedniego miesiąca).",
-    expectedIncomeNone: "Brak dalszych oczekiwanych wpływów w tym miesiącu.",
-    expectedIncomeHistorical: "Zamknięty miesiąc — tylko zaksięgowane wpływy.",
-    expectedDate: (date: string | null) =>
-      date === null ? "Szacunek łączny (brak przewidywanej daty)" : `Oczekiwano ${date}`,
-    expectedDelayed: "Opóźniony",
-    expectedSourcePreviousMonth: "Poprzedni miesiąc",
-    incomeCategoryFallback: "Kategoria wpływów",
-    paceTitle: "Tempo wydatków",
-    paceBasisReceived: "Podstawa: budżet z wpływów",
-    paceBasisReceivedPlusExpected: "Podstawa: budżet z wpływów + oczekiwane",
-    paceBudget: "Budżet do tempa",
-    dailyRate: "Tempo dzienne",
-    perDay: (formatted: string) => `${formatted} / dzień`,
-    projectedSpend: "Prognozowane wydatki miesiąca",
-    paceRunsOut: (day: number | null) =>
-      day === null
-        ? "Według obecnego tempa budżet wyczerpie się przed końcem miesiąca."
-        : `Według obecnego tempa budżet wyczerpie się około dnia ${String(day)}.`,
-    paceWithinBudget: "Według obecnego tempa wydatki zmieszczą się w budżecie.",
-    paceAlreadyReached: (day: number | null) =>
-      day === null
-        ? "Wydatki już osiągnęły budżet."
-        : `Wydatki już osiągnęły budżet (dzień ${String(day)}).`,
-    paceNoBudget: "Brak jeszcze budżetu z wpływów do oceny tempa.",
-    paceNoPositivePace: "Brak dodatniego tempa wydatków.",
-    paceHistorical: "Zamknięty miesiąc — nie wylicza się prognozy tempa.",
-    passThroughTitle: "Najem i rata",
-    rentLabel: "Najem",
-    mortgageLabel: "Rata hipoteczna",
-    rentReceived: "Wpływy z najmu",
-    mortgageDebits: "Płatności raty",
-    mortgageRefunds: "Zwroty raty",
-    matchedRent: "Pokryte najmem",
-    unappliedRent: "Niewykorzystany najem (rezerwa)",
-    unappliedMortgageRefunds: "Niewykorzystane zwroty raty",
-    uncoveredMortgage: "Niepokryta część raty",
-    passThroughNote: "Niepokryta część raty wlicza się do wydatków poniżej; nadwyżka najmu pozostaje zarezerwowana.",
-    spendingAndLimits: "Wydatki i limity",
-    category: "Kategoria",
-    expenses: "Wydatki",
-    refunds: "Zwroty",
-    netSpending: "Wydatki netto",
-    limitColumn: "Limit",
-    noLimit: "—",
-    uncategorised: "Bez kategorii",
-    unknownCategory: "Kategoria",
-    archived: "archiwalna",
-    collapseCategory: (name: string) => `Zwiń ${name}`,
-    expandCategory: (name: string) => `Rozwiń ${name}`,
-    noExpenses: "Brak wydatków w kategoriach w tym miesiącu.",
-    limitStatuses: {
-      within: "W limicie",
-      approaching: "Blisko limitu",
-      at_limit: "Na limicie",
-      exceeded: "Przekroczony",
-    },
-    limitUsed: (limitFormatted: string, percent: string) => `z ${limitFormatted} (${percent}%)`,
-    limitRemaining: (amount: string) => `Pozostało: ${amount}`,
-    limitOverBy: (amount: string) => `Przekroczono o: ${amount}`,
-    warningAt: (percent: number) => `Ostrzeżenie od ${String(percent)}%`,
-    cardExposureTitle: "Niespłacone wydatki kartą",
-    cardStatuses: { unavailable: "Niedostępne" },
-    unavailable: "Niedostępne",
-    cardExposureNote: "Ekspozycja kartowa pozostaje niedostępna do czasu potwierdzenia znaku salda i pełnego okna historii transakcji.",
-    chartsSectionTitle: "Wykresy",
-    chartHistory: "Zakres wykresów",
-    historyMonths: (count: number) => `${String(count)} ${pluralPl(count, "miesiąc", "miesiące", "miesięcy")}`,
-    showData: "Pokaż dane",
-    chartDailyTitle: "Wydatki narastająco",
-    chartCategoriesTitle: "Wydatki według kategorii",
-    chartIncomeSpendTitle: "Wpływy i wydatki",
-    otherCategory: "Pozostałe",
-    oneOffTag: "jednorazowe",
-    dateLabel: "Data",
-    monthColumn: "Miesiąc",
-    cumulativeSpentLabel: "Wydatki narastająco",
-    bookedBudgetLine: "Budżet z wpływów",
-    expectedBudgetLine: "Budżet + oczekiwane",
-    paceExtensionLine: "Prognoza tempa",
-    scheduledStepsColumn: "Zaplanowane płatności",
-    overdue: "zaległe",
-    upcoming: "nadchodzące",
-    exhaustionMarker: (day: number) => `Wyczerpanie ~dzień ${String(day)}`,
-    incompleteMonth: "Niepełny miesiąc",
-    currentMonth: "Bieżący miesiąc",
-    expectedIncomeLegend: "Oczekiwane wpływy",
-    statusColumn: "Status",
-    totalLabel: "Razem",
-    noValue: "—",
-    chartDailyDesc: (currency: string, start: string, cutoff: string) =>
-      `Skumulowane wydatki netto w walucie ${currency} od ${start} do ${cutoff} na tle budżetu.`,
-    chartCategoriesDesc: (count: number, currency: string) =>
-      `Miesięczne wydatki netto według kategorii w walucie ${currency} dla ${String(count)} ${pluralPl(count, "miesiąca", "miesięcy", "miesięcy")}.`,
-    chartIncomeSpendDesc: (count: number, currency: string) =>
-      `Miesięczne wpływy do budżetu i wydatki netto w walucie ${currency} dla ${String(count)} ${pluralPl(count, "miesiąca", "miesięcy", "miesięcy")}.`,
-  },
-};
-export type MonthBudgetLabels = typeof monthBudgetLabels.en;
 
 type Shown =
   | { state: "loading" | "badRequest" | "limit" | "error" }
@@ -332,7 +41,6 @@ type PaceScheduleState =
 export interface MonthBudgetViewProps {
   api: Pick<BudgetApi, "monthlyBudgetCharts" | "categories" | "forecast" | "mortgages" | "recurring">;
   accounts: readonly BudgetAccount[];
-  text: MonthBudgetLabels;
   locale: string;
   revision: number;
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
@@ -348,57 +56,65 @@ function incomeWindowLabel(incomeWindow: AnalyticsMonthlyBudgetIncomeWindow, loc
   return `${formatDay(incomeWindow.start)} – ${formatDay(incomeWindow.end)}`;
 }
 
-function paceSentence(pace: AnalyticsMonthlyBudgetPace, text: MonthBudgetLabels,
-  projection: MonthPaceProjection | null): string {
+function paceSentence(pace: AnalyticsMonthlyBudgetPace, projection: MonthPaceProjection | null): string {
   const status = projection?.status ?? pace.status;
   const exhaustionDay = projection === null ? pace.exhaustion_day : projection.exhaustionDay;
   switch (status) {
-    case "runs_out": return text.paceRunsOut(exhaustionDay);
-    case "within_budget": return text.paceWithinBudget;
-    case "already_reached": return text.paceAlreadyReached(exhaustionDay);
-    case "no_budget": return text.paceNoBudget;
-    case "no_positive_pace": return text.paceNoPositivePace;
-    case "historical": return text.paceHistorical;
+    case "runs_out": return exhaustionDay === null
+      ? t("budget.monthBudget.paceRunsOutBeforeEnd")
+      : t("budget.monthBudget.paceRunsOutDay", { day: exhaustionDay });
+    case "within_budget": return t("budget.monthBudget.paceWithinBudget");
+    case "already_reached": return exhaustionDay === null
+      ? t("budget.monthBudget.paceAlreadyReached")
+      : t("budget.monthBudget.paceAlreadyReachedDay", { day: exhaustionDay });
+    case "no_budget": return t("budget.monthBudget.paceNoBudget");
+    case "no_positive_pace": return t("budget.monthBudget.paceNoPositivePace");
+    case "historical": return t("budget.monthBudget.paceHistorical");
   }
 }
 
-function ExpectedIncomeCard({ income, currency, evaluationDate, categoryMap, categoryColors, text, locale }: {
+function ExpectedIncomeCard({ income, currency, evaluationDate, categoryMap, categoryColors, locale }: {
   income: AnalyticsMonthlyBudgetExpectedIncome;
   currency: string;
   evaluationDate: string;
   categoryMap: ReadonlyMap<string, string>;
   categoryColors: CategoryColorResolver;
-  text: MonthBudgetLabels;
   locale: string;
 }) {
   const money = (amount: string) => formatAmount(amount, currency, locale);
+  const title = t("budget.monthBudget.expectedIncomeTitle");
+  const totalLabel = t("budget.monthBudget.expectedIncomeTotal");
+  const fallbackCategory = t("budget.monthBudget.incomeCategoryFallback");
+  const previousMonthLabel = t("budget.monthBudget.expectedSourcePreviousMonth");
+  const delayedLabel = t("budget.monthBudget.expectedDelayed");
+
   return (
-    <article className="budget-total" aria-label={text.expectedIncomeTitle}>
+    <article className="budget-total" aria-label={title}>
       <div className="budget-limit-main">
-        <h4>{text.expectedIncomeTitle}</h4>
-        {income.status === "partial" ? <span className="budget-chip budget-warn">{text.partialIncome}</span> : null}
+        <h4>{title}</h4>
+        {income.status === "partial" ? <span className="budget-chip budget-warn">{t("budget.monthBudget.partialIncome")}</span> : null}
       </div>
       {income.status === "historical" ? (
-        <p className="budget-muted">{text.expectedIncomeHistorical}</p>
+        <p className="budget-muted">{t("budget.monthBudget.expectedIncomeHistorical")}</p>
       ) : income.status === "unavailable" ? (
-        <p className="budget-muted">{text.expectedIncomeUnavailable}</p>
+        <p className="budget-muted">{t("budget.monthBudget.expectedIncomeUnavailable")}</p>
       ) : income.status === "none" ? (
         <>
           <dl>
-            <dt>{text.expectedIncomeTotal}</dt>
+            <dt>{totalLabel}</dt>
             <dd>{money(income.total ?? "0")}</dd>
           </dl>
-          <p className="budget-muted">{text.expectedIncomeNone}</p>
+          <p className="budget-muted">{t("budget.monthBudget.expectedIncomeNone")}</p>
         </>
       ) : (
         <>
           {income.total !== null ? (
             <dl>
-              <dt>{text.expectedIncomeTotal}</dt>
+              <dt>{totalLabel}</dt>
               <dd><strong>{money(income.total)}</strong></dd>
             </dl>
           ) : (
-            <p className="budget-muted">{text.partialIncomeMissing}</p>
+            <p className="budget-muted">{t("budget.monthBudget.partialIncomeMissing")}</p>
           )}
           {income.items.length === 0 ? null : (
             <ul className="budget-entry-list">
@@ -409,14 +125,18 @@ function ExpectedIncomeCard({ income, currency, evaluationDate, categoryMap, cat
                     <div className="budget-recurring-main">
                       <span className="budget-entry-text">
                         <CategorySwatch color={categoryColors.get(item.category_id)} />
-                        {categoryMap.get(item.category_id) ?? text.incomeCategoryFallback}
+                        {categoryMap.get(item.category_id) ?? fallbackCategory}
                       </span>
                       <strong className="budget-recurring-amount">{money(item.amount)}</strong>
                     </div>
                     <div className="budget-entry-facts">
-                      <span>{text.expectedDate(item.expected_date)}</span>
-                      <span className="budget-chip">{text.expectedSourcePreviousMonth}</span>
-                      {delayed ? <span className="budget-chip budget-warn">{text.expectedDelayed}</span> : null}
+                      <span>
+                        {item.expected_date === null
+                          ? t("budget.monthBudget.expectedDateEmpty")
+                          : t("budget.monthBudget.expectedDateOn", { date: item.expected_date })}
+                      </span>
+                      <span className="budget-chip">{previousMonthLabel}</span>
+                      {delayed ? <span className="budget-chip budget-warn">{delayedLabel}</span> : null}
                     </div>
                   </li>
                 );
@@ -429,7 +149,7 @@ function ExpectedIncomeCard({ income, currency, evaluationDate, categoryMap, cat
   );
 }
 
-function PaceCard({ pace, projection, schedulePending, scheduleError, currency, provisional, partialIncome, text, locale }: {
+function PaceCard({ pace, projection, schedulePending, scheduleError, currency, provisional, partialIncome, locale }: {
   pace: AnalyticsMonthlyBudgetPace;
   projection: MonthPaceProjection | null;
   schedulePending: boolean;
@@ -437,47 +157,51 @@ function PaceCard({ pace, projection, schedulePending, scheduleError, currency, 
   currency: string;
   provisional: boolean;
   partialIncome: boolean;
-  text: MonthBudgetLabels;
   locale: string;
 }) {
   const dailyRate = projection === null ? pace.daily_rate : projection.dailyRate;
   const projectedSpend = projection === null ? pace.projected_month_spend : projection.projectedMonthSpend;
+  const title = t("budget.monthBudget.paceTitle");
+  const paceBudgetLabel = t("budget.monthBudget.paceBudget");
+
   return (
-    <article className="budget-total" aria-label={text.paceTitle}>
+    <article className="budget-total" aria-label={title}>
       <div className="budget-limit-main">
-        <h4>{text.paceTitle}</h4>
+        <h4>{title}</h4>
         <div className="budget-actions">
-          {provisional ? <span className="budget-chip budget-warn">{text.provisional}</span> : null}
-          {partialIncome ? <span className="budget-chip budget-warn">{text.partialIncome}</span> : null}
+          {provisional ? <span className="budget-chip budget-warn">{t("budget.monthBudget.provisional")}</span> : null}
+          {partialIncome ? <span className="budget-chip budget-warn">{t("budget.monthBudget.partialIncome")}</span> : null}
         </div>
       </div>
       <p className="budget-muted">
-        {pace.basis === "received_plus_expected" ? text.paceBasisReceivedPlusExpected : text.paceBasisReceived}
+        {pace.basis === "received_plus_expected"
+          ? t("budget.monthBudget.paceBasisReceivedPlusExpected")
+          : t("budget.monthBudget.paceBasisReceived")}
       </p>
       {schedulePending ? (
         <>
-          <p className="budget-muted" role="status">{text.scheduledPaymentsLoading}</p>
+          <p className="budget-muted" role="status">{t("budget.monthBudget.scheduledPaymentsLoading")}</p>
           <dl>
-            <dt>{text.paceBudget}</dt>
+            <dt>{paceBudgetLabel}</dt>
             <dd>{formatAmount(pace.budget, currency, locale)}</dd>
           </dl>
         </>
       ) : (
         <>
-          <p>{paceSentence(pace, text, projection)}</p>
-          {scheduleError ? <p className="budget-notice" role="note">{text.scheduledPaymentsError}</p> : null}
+          <p>{paceSentence(pace, projection)}</p>
+          {scheduleError ? <p className="budget-notice" role="note">{t("budget.monthBudget.scheduledPaymentsError")}</p> : null}
           <dl>
-            <dt>{text.paceBudget}</dt>
+            <dt>{paceBudgetLabel}</dt>
             <dd>{formatAmount(pace.budget, currency, locale)}</dd>
             {dailyRate === null ? null : (
               <>
-                <dt>{text.dailyRate}</dt>
-                <dd>{text.perDay(formatRatioHalfEven(dailyRate, currency, locale))}</dd>
+                <dt>{t("budget.monthBudget.dailyRate")}</dt>
+                <dd>{t("budget.monthBudget.perDay", { amount: formatRatioHalfEven(dailyRate, currency, locale) })}</dd>
               </>
             )}
             {projectedSpend === null ? null : (
               <>
-                <dt>{text.projectedSpend}</dt>
+                <dt>{t("budget.monthBudget.projectedSpend")}</dt>
                 <dd>{formatRatioHalfEven(projectedSpend, currency, locale)}</dd>
               </>
             )}
@@ -488,45 +212,46 @@ function PaceCard({ pace, projection, schedulePending, scheduleError, currency, 
   );
 }
 
-function PassThroughCard({ passThrough, currency, categoryMap, text, locale }: {
+function PassThroughCard({ passThrough, currency, categoryMap, locale }: {
   passThrough: AnalyticsMonthlyBudgetPassThrough;
   currency: string;
   categoryMap: ReadonlyMap<string, string>;
-  text: MonthBudgetLabels;
   locale: string;
 }) {
   const money = (amount: string) => formatAmount(amount, currency, locale);
-  const rentName = categoryMap.get(passThrough.rent_category_id) ?? text.rentLabel;
-  const mortgageName = categoryMap.get(passThrough.mortgage_category_id) ?? text.mortgageLabel;
+  const rentName = categoryMap.get(passThrough.rent_category_id) ?? t("budget.monthBudget.rentLabel");
+  const mortgageName = categoryMap.get(passThrough.mortgage_category_id) ?? t("budget.monthBudget.mortgageLabel");
+  const title = t("budget.monthBudget.passThroughTitle");
+
   return (
-    <article className="budget-total" aria-label={text.passThroughTitle}>
-      <h4>{text.passThroughTitle}</h4>
+    <article className="budget-total" aria-label={title}>
+      <h4>{title}</h4>
       <p className="budget-muted">{rentName} → {mortgageName}</p>
       <dl>
-        <dt>{text.rentReceived}</dt>
+        <dt>{t("budget.monthBudget.rentReceived")}</dt>
         <dd>{money(passThrough.rent_received)}</dd>
-        <dt>{text.mortgageDebits}</dt>
+        <dt>{t("budget.monthBudget.mortgageDebits")}</dt>
         <dd>{money(passThrough.mortgage_debits)}</dd>
         {isZero(passThrough.mortgage_refunds) ? null : (
           <>
-            <dt>{text.mortgageRefunds}</dt>
+            <dt>{t("budget.monthBudget.mortgageRefunds")}</dt>
             <dd>{money(passThrough.mortgage_refunds)}</dd>
           </>
         )}
-        <dt>{text.matchedRent}</dt>
+        <dt>{t("budget.monthBudget.matchedRent")}</dt>
         <dd>{money(passThrough.matched)}</dd>
-        <dt>{text.unappliedRent}</dt>
+        <dt>{t("budget.monthBudget.unappliedRent")}</dt>
         <dd>{money(passThrough.unapplied_rent)}</dd>
         {isZero(passThrough.unapplied_mortgage_refunds) ? null : (
           <>
-            <dt>{text.unappliedMortgageRefunds}</dt>
+            <dt>{t("budget.monthBudget.unappliedMortgageRefunds")}</dt>
             <dd>{money(passThrough.unapplied_mortgage_refunds)}</dd>
           </>
         )}
-        <dt><strong>{text.uncoveredMortgage}</strong></dt>
+        <dt><strong>{t("budget.monthBudget.uncoveredMortgage")}</strong></dt>
         <dd><strong>{money(passThrough.uncovered_mortgage)}</strong></dd>
       </dl>
-      <p className="budget-muted">{text.passThroughNote}</p>
+      <p className="budget-muted">{t("budget.monthBudget.passThroughNote")}</p>
     </article>
   );
 }
@@ -576,7 +301,7 @@ function shownCategorySpend(
   return [...treeRows, ...oneOffs];
 }
 
-export function MonthBudgetView({ api, accounts, text, locale, revision, onAccessLoss, onOpenMonth }: MonthBudgetViewProps) {
+export function MonthBudgetView({ api, accounts, locale, revision, onAccessLoss, onOpenMonth }: MonthBudgetViewProps) {
   const [period, setPeriod] = useState<string | undefined>(undefined);
   const [currency, setCurrency] = useState("PLN");
   const [history, setHistory] = useState<6 | 12>(6);
@@ -688,61 +413,62 @@ export function MonthBudgetView({ api, accounts, text, locale, revision, onAcces
   );
   const categoryMap = new Map(isCategoryList(categories) ? categories.map((item) => [item.id, item.name]) : []);
 
+  const title = t("budget.monthBudget.title");
   return (
-    <section className="budget-month budget-month-dashboard" aria-label={text.title}>
+    <section className="budget-month budget-month-dashboard" aria-label={title}>
       <div className="budget-limit-main">
-        <h4>{text.title}</h4>
-        <span className="budget-chip">{text.readOnly}</span>
+        <h4>{title}</h4>
+        <span className="budget-chip">{t("budget.monthBudget.readOnly")}</span>
       </div>
       <div className="budget-month-dashboard-controls">
         {nav === null ? null : (
-          <nav className="budget-month-nav" aria-label={text.month}>
-            <button type="button" aria-label={text.previousMonth}
+          <nav className="budget-month-nav" aria-label={t("budget.monthBudget.month")}>
+            <button type="button" aria-label={t("budget.monthBudget.previousMonth")}
               onClick={() => { setPeriod(shiftMonth(nav.active, -1)); }}>◀</button>
             <h3>{monthLabel(nav.active, locale)}</h3>
-            <button type="button" aria-label={text.nextMonth} disabled={nav.active >= nav.current}
+            <button type="button" aria-label={t("budget.monthBudget.nextMonth")} disabled={nav.active >= nav.current}
               onClick={() => { setPeriod(shiftMonth(nav.active, 1)); }}>▶</button>
           </nav>
         )}
         <div className="budget-range">
-          <label>{text.currency}
+          <label>{t("budget.monthBudget.currency")}
             <select name="currency" value={currency} onChange={(event) => { setCurrency(event.currentTarget.value); }}>
               {currencies.map((code) => <option key={code} value={code}>{code}</option>)}
             </select>
           </label>
-          <label>{text.chartHistory}
+          <label>{t("budget.monthBudget.chartHistory")}
             <select name="history" value={String(history)} onChange={(event) => {
               setHistory(event.currentTarget.value === "12" ? 12 : 6);
             }}>
-              <option value="6">{text.historyMonths(6)}</option>
-              <option value="12">{text.historyMonths(12)}</option>
+              <option value="6">{tPlural("budget.monthBudget.historyMonths", 6)}</option>
+              <option value="12">{tPlural("budget.monthBudget.historyMonths", 12)}</option>
             </select>
           </label>
         </div>
       </div>
 
-      {shown.state === "loading" ? <p className="budget-muted" role="status">{text.loading}</p> : null}
-      {shown.state === "badRequest" ? <p className="budget-notice" role="alert">{text.badRequest}</p> : null}
+      {shown.state === "loading" ? <p className="budget-muted" role="status">{t("budget.monthBudget.loading")}</p> : null}
+      {shown.state === "badRequest" ? <p className="budget-notice" role="alert">{t("budget.monthBudget.badRequest")}</p> : null}
       {shown.state === "limit" ? (
         <>
-          <p className="budget-notice" role="alert">{text.limit}</p>
+          <p className="budget-notice" role="alert">{t("budget.monthBudget.limit")}</p>
           <form className="budget-rule-editor" onSubmit={(event) => {
             event.preventDefault();
             if (validCurrency(manualCode)) setCurrency(manualCode.trim().toUpperCase());
           }}>
-            <label>{text.currencyCode}
+            <label>{t("budget.monthBudget.currencyCode")}
               <input type="text" name="manual_currency" autoComplete="off" maxLength={3} value={manualCode}
                 onChange={(event) => { setManualCode(event.currentTarget.value); }} />
             </label>
-            <button type="submit" disabled={!validCurrency(manualCode)}>{text.applyCurrency}</button>
+            <button type="submit" disabled={!validCurrency(manualCode)}>{t("budget.monthBudget.applyCurrency")}</button>
           </form>
         </>
       ) : null}
-      {shown.state === "error" ? <p className="budget-notice" role="alert">{text.error}</p> : null}
+      {shown.state === "error" ? <p className="budget-notice" role="alert">{t("budget.monthBudget.error")}</p> : null}
 
       {data === null ? null : (
         <ReadyDashboard data={data} series={series} paceSchedule={paceSchedule} categoryMap={categoryMap}
-          categories={categories} text={text} locale={locale} onOpenMonth={onOpenMonth} />
+          categories={categories} locale={locale} onOpenMonth={onOpenMonth} />
       )}
     </section>
   );
@@ -758,13 +484,12 @@ function SummaryMeter({ spent, budget, label }: { spent: string; budget: string;
   );
 }
 
-function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, text, locale, onOpenMonth }: {
+function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, locale, onOpenMonth }: {
   data: AnalyticsMonthlyBudget;
   series: AnalyticsMonthlyBudgetSeries | null;
   paceSchedule: PaceScheduleState;
   categoryMap: ReadonlyMap<string, string>;
   categories: LoadedCategories;
-  text: MonthBudgetLabels;
   locale: string;
   onOpenMonth: (month: string, serverCurrentMonth: string, options?: OpenMonthOptions) => void;
 }) {
@@ -787,46 +512,66 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, t
     : buildMonthPaceProjection(data, paceSchedule.state === "ready" ? paceSchedule.data : undefined);
   const projectedRemaining = isCurrent ? paceProjection?.projectedRemaining ?? null : null;
   const categoryColors = buildCategoryColors(isCategoryList(categories) ? categories : []);
+  const viewTransactionsText = t("budget.monthBudget.viewTransactions");
+  const provisionalText = t("budget.monthBudget.provisional");
+  const summaryTitle = t("budget.monthBudget.summaryTitle");
+  const cardExposureTitle = t("budget.monthBudget.cardExposureTitle");
+  const spendingAndLimitsTitle = t("budget.monthBudget.spendingAndLimits");
+  const uncategorisedLabel = t("budget.monthBudget.uncategorised");
+  const unknownCategoryLabel = t("budget.monthBudget.unknownCategory");
+  const archivedText = t("budget.monthBudget.archived");
+  const oneOffTagText = t("budget.monthBudget.oneOffTag");
+  const noLimitText = t("budget.monthBudget.noLimit");
 
   return (
     <>
       <ul className="budget-facts">
-        <li>{text.evaluatedFor(data.evaluation_date, data.evaluation_timezone)}</li>
-        <li>{text.ledgerAsOf(ledgerStamp)}</li>
+        <li>{t("budget.monthBudget.evaluatedFor", { date: data.evaluation_date, timezone: data.evaluation_timezone })}</li>
+        <li>
+          {ledgerStamp === null
+            ? t("budget.monthBudget.ledgerAsOfEmpty")
+            : t("budget.monthBudget.ledgerAsOfDate", { date: ledgerStamp })}
+        </li>
       </ul>
       {data.coverage.stale_selected_accounts > 0 ? (
         <p className="budget-notice" role="note">
-          {text.staleData} · {text.staleAccounts(data.coverage.stale_selected_accounts)}
+          {t("budget.monthBudget.staleData")} · {tPlural("budget.monthBudget.staleAccounts", data.coverage.stale_selected_accounts)}
         </p>
       ) : null}
       <div className="budget-month-basis">
-        <span>{text.purchaseDateBasis(data.cutoff)}</span>
+        <span>{t("budget.monthBudget.purchaseDateBasis", { cutoff: data.cutoff })}</span>
         {" · "}
         <button type="button" className="budget-link" onClick={() => { onOpenMonth(data.period, data.current_month); }}>
-          {text.viewTransactions}
+          {viewTransactionsText}
         </button>
         {data.coverage.purchase_date_fallback_count > 0 ? (
-          <span className="budget-muted"> · {text.purchaseDateFallback(data.coverage.purchase_date_fallback_count)}</span>
+          <span className="budget-muted">
+            {" · "}
+            {tPlural("budget.monthBudget.purchaseDateFallback", data.coverage.purchase_date_fallback_count)}
+          </span>
         ) : null}
       </div>
 
       {data.configuration.status === "unconfigured" || data.summary === null || data.expected_income === null || data.pace === null ? (
-        <p className="budget-notice" role="status">{text.unconfigured}</p>
+        <p className="budget-notice" role="status">{t("budget.monthBudget.unconfigured")}</p>
       ) : (
         <>
           {!data.coverage.has_activity ? (
             <p className="budget-notice" role="status">
-              <strong>{text.noStoredData}</strong> · {text.noStoredDataDetail}
+              <strong>{t("budget.monthBudget.noStoredData")}</strong> · {t("budget.monthBudget.noStoredDataDetail")}
             </p>
           ) : isZero(data.summary.start_budget) && isZero(data.summary.spent) && isZero(data.summary.remaining) ? (
-            <p className="budget-muted" role="status">{text.observedZero}</p>
+            <p className="budget-muted" role="status">{t("budget.monthBudget.observedZero")}</p>
           ) : null}
 
           {data.coverage.pending_transfer_rows > 0 ? (
             <p className="budget-notice" role="note">
-              {text.pendingTransfers(data.coverage.pending_transfer_rows)}
+              {tPlural("budget.monthBudget.pendingTransfers", data.coverage.pending_transfer_rows)}
               {data.coverage.pending_row_keys_truncated === true
-                ? ` ${text.provisionalTruncated(data.coverage.pending_row_keys?.length ?? 500, data.coverage.pending_transfer_rows)}`
+                ? ` ${t("budget.monthBudget.provisionalTruncated", {
+                    shown: data.coverage.pending_row_keys?.length ?? 500,
+                    total: data.coverage.pending_transfer_rows,
+                  })}`
                 : ""}
               {" "}
               <button type="button" className="budget-link"
@@ -838,23 +583,23 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, t
                     provisionalTruncated: data.coverage.pending_row_keys_truncated === true,
                   });
                 }}>
-                {text.viewTransactions}
+                {viewTransactionsText}
               </button>
             </p>
           ) : null}
           {data.coverage.transfer_scan_limited ? (
-            <p className="budget-notice" role="note">{text.transferScanLimited}</p>
+            <p className="budget-notice" role="note">{t("budget.monthBudget.transferScanLimited")}</p>
           ) : null}
 
           <div className="budget-totals">
-            <article className="budget-total" aria-label={text.summaryTitle}>
+            <article className="budget-total" aria-label={summaryTitle}>
               <div className="budget-limit-main">
-                <h4>{text.summaryTitle}</h4>
-                {data.coverage.provisional ? <span className="budget-chip budget-warn">{text.provisional}</span> : null}
+                <h4>{summaryTitle}</h4>
+                {data.coverage.provisional ? <span className="budget-chip budget-warn">{provisionalText}</span> : null}
               </div>
               <dl>
                 <dt>
-                  {text.budgetReceived}
+                  {t("budget.monthBudget.budgetReceived")}
                   {data.configuration.income_window ? (
                     <small className="budget-muted">
                       {" "}({incomeWindowLabel(data.configuration.income_window, locale)})
@@ -863,20 +608,20 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, t
                 </dt>
                 <dd><strong>{money(data.summary.start_budget)}</strong></dd>
                 <dt>
-                  {isCurrent ? text.spentToDate : text.spentClosed}
-                  {data.coverage.provisional ? <small className="budget-warn"> ({text.provisional})</small> : null}
+                  {isCurrent ? t("budget.monthBudget.spentToDate") : t("budget.monthBudget.spentClosed")}
+                  {data.coverage.provisional ? <small className="budget-warn"> ({provisionalText})</small> : null}
                 </dt>
                 <dd><strong>{money(data.summary.spent)}</strong></dd>
                 <dt>
-                  {schedulePending || projectedRemaining !== null ? text.remainingAtMonthEnd : text.remaining}
-                  {data.coverage.provisional ? <small className="budget-warn"> ({text.provisional})</small> : null}
+                  {schedulePending || projectedRemaining !== null ? t("budget.monthBudget.remainingAtMonthEnd") : t("budget.monthBudget.remaining")}
+                  {data.coverage.provisional ? <small className="budget-warn"> ({provisionalText})</small> : null}
                   {scheduleError && projectedRemaining !== null ? (
-                    <small className="budget-warn"> ({text.withoutScheduledPayments})</small>
+                    <small className="budget-warn"> ({t("budget.monthBudget.withoutScheduledPayments")})</small>
                   ) : null}
                 </dt>
                 <dd>
                   {schedulePending ? (
-                    <span className="budget-muted" role="status">{text.scheduledPaymentsLoading}</span>
+                    <span className="budget-muted" role="status">{t("budget.monthBudget.scheduledPaymentsLoading")}</span>
                   ) : (
                     <strong>
                       {projectedRemaining === null
@@ -887,64 +632,64 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, t
                 </dd>
               </dl>
               {scheduleError && projectedRemaining === null ? (
-                <p className="budget-muted" role="note">{text.scheduledPaymentsError}</p>
+                <p className="budget-muted" role="note">{t("budget.monthBudget.scheduledPaymentsError")}</p>
               ) : null}
               {isPositiveDecimal(data.summary.start_budget) ? (
-                <SummaryMeter spent={data.summary.spent} budget={data.summary.start_budget} label={text.spentVsBudget} />
+                <SummaryMeter spent={data.summary.spent} budget={data.summary.start_budget} label={t("budget.monthBudget.spentVsBudget")} />
               ) : null}
             </article>
 
             <ExpectedIncomeCard income={data.expected_income} currency={data.currency}
               evaluationDate={data.evaluation_date} categoryMap={categoryMap} categoryColors={categoryColors}
-              text={text} locale={locale} />
+              locale={locale} />
 
             <PaceCard pace={data.pace} projection={paceProjection}
               schedulePending={schedulePending} scheduleError={scheduleError} currency={data.currency}
               provisional={data.coverage.provisional} partialIncome={data.expected_income.status === "partial"}
-              text={text} locale={locale} />
+              locale={locale} />
 
             {data.pass_through === null ? null : (
               <PassThroughCard passThrough={data.pass_through} currency={data.currency}
-                categoryMap={categoryMap} text={text} locale={locale} />
+                categoryMap={categoryMap} locale={locale} />
             )}
 
-            <article className="budget-total" aria-label={text.cardExposureTitle}>
-              <h4>{text.cardExposureTitle}</h4>
+            <article className="budget-total" aria-label={cardExposureTitle}>
+              <h4>{cardExposureTitle}</h4>
               <dl>
-                <dt>{text.cardExposureTitle}</dt>
-                <dd><strong>{labelOf(text.cardStatuses, data.card_exposure.status)}</strong></dd>
+                <dt>{cardExposureTitle}</dt>
+                <dd><strong>{labelOf(MONTH_BUDGET_CARD_STATUS_KEYS, data.card_exposure.status)}</strong></dd>
               </dl>
-              <p className="budget-muted">{text.cardExposureNote}</p>
+              <p className="budget-muted">{t("budget.monthBudget.cardExposureNote")}</p>
             </article>
           </div>
 
-          <section className="budget-entries" aria-label={text.spendingAndLimits}>
-            <h4>{text.spendingAndLimits}</h4>
-            {categories === "pending" ? <p className="budget-muted" role="status">{text.categoriesLoading}</p> : null}
-            {categories === "error" ? <p className="budget-notice" role="alert">{text.categoriesError}</p> : null}
+          <section className="budget-entries" aria-label={spendingAndLimitsTitle}>
+            <h4>{spendingAndLimitsTitle}</h4>
+            {categories === "pending" ? <p className="budget-muted" role="status">{t("budget.monthBudget.categoriesLoading")}</p> : null}
+            {categories === "error" ? <p className="budget-notice" role="alert">{t("budget.monthBudget.categoriesError")}</p> : null}
             {isCategoryList(categories) && data.category_spend.length === 0 ? (
-              <p className="budget-muted">{text.noExpenses}</p>
+              <p className="budget-muted">{t("budget.monthBudget.noExpenses")}</p>
             ) : null}
             {isCategoryList(categories) && data.category_spend.length > 0 ? (
-              <div className="budget-table-wrap" role="region" aria-label={text.spendingAndLimits} tabIndex={0}>
+              <div className="budget-table-wrap" role="region" aria-label={spendingAndLimitsTitle} tabIndex={0}>
                 <table className="budget-month-dashboard-table">
                   <thead>
                     <tr>
-                      <th scope="col">{text.category}</th>
-                      <th scope="col">{text.expenses}</th>
-                      <th scope="col">{text.refunds}</th>
-                      <th scope="col">{text.netSpending}</th>
-                      <th scope="col">{text.limitColumn}</th>
+                      <th scope="col">{t("budget.monthBudget.category")}</th>
+                      <th scope="col">{t("budget.monthBudget.expenses")}</th>
+                      <th scope="col">{t("budget.monthBudget.refunds")}</th>
+                      <th scope="col">{t("budget.monthBudget.netSpending")}</th>
+                      <th scope="col">{t("budget.monthBudget.limitColumn")}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {shownCategorySpend(data.category_spend, categories, locale, collapsed).map((row) => {
                       const oneOff = row.one_off;
                       const label = oneOff
-                        ? (row.name ?? text.uncategorised)
+                        ? (row.name ?? uncategorisedLabel)
                         : row.category_id === null
-                          ? text.uncategorised
-                          : (row.name ?? categoryMap.get(row.category_id) ?? text.unknownCategory);
+                          ? uncategorisedLabel
+                          : (row.name ?? categoryMap.get(row.category_id) ?? unknownCategoryLabel);
                       const categoryId = row.category_id;
                       const closed = categoryId !== null && collapsed.has(categoryId);
                       return (
@@ -953,36 +698,45 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, t
                           <th scope="row">
                             {row.tree && row.has_children && categoryId !== null ? (
                               <button type="button" className="budget-tree-toggle" aria-expanded={!closed}
-                                aria-label={closed ? text.expandCategory(label) : text.collapseCategory(label)}
+                                aria-label={closed
+                                  ? t("budget.monthBudget.expandCategory", { name: label })
+                                  : t("budget.monthBudget.collapseCategory", { name: label })}
                                 onClick={() => { toggleCategory(categoryId); }}>
                                 {closed ? "▸" : "▾"}
                               </button>
                             ) : null}
                             <CategorySwatch color={oneOff ? oneOffCategoryColor(categoryColors, categoryId) : categoryColors.get(categoryId)} />
                             {label}
-                            {oneOff ? <small className="budget-one-off-tag">{text.oneOffTag}</small> : null}
-                            {row.archived ? <small className="budget-muted"> ({text.archived})</small> : null}
+                            {oneOff ? <small className="budget-one-off-tag">{oneOffTagText}</small> : null}
+                            {row.archived ? <small className="budget-muted"> ({archivedText})</small> : null}
                           </th>
                           <td>{money(row.expenses)}</td>
                           <td>{money(row.refunds)}</td>
                           <td><strong>{money(row.net_spending)}</strong></td>
                           <td>
-                            {row.limit === null ? text.noLimit : (
+                            {row.limit === null ? noLimitText : (
                               <div className="budget-month-limit-cell">
                                 <span className="budget-chip budget-limit-status" data-status={row.limit.status}>
-                                  {labelOf(text.limitStatuses, row.limit.status)}
+                                  {labelOf(MONTH_BUDGET_LIMIT_STATUS_KEYS, row.limit.status)}
                                 </span>
                                 <div className="budget-limit-meter">
                                   <progress value={clampPercentString(row.limit.percent_used_floor)} max={100} aria-label={label} />
-                                  <span>{text.limitUsed(money(row.limit.monthly_limit), row.limit.percent_used_floor)}</span>
+                                  <span>
+                                    {t("budget.monthBudget.limitUsed", {
+                                      limit: money(row.limit.monthly_limit),
+                                      percent: row.limit.percent_used_floor,
+                                    })}
+                                  </span>
                                 </div>
                                 <div className="budget-entry-facts">
                                   {isZero(row.limit.over_by) ? (
-                                    <span>{text.limitRemaining(money(row.limit.remaining))}</span>
+                                    <span>{t("budget.monthBudget.limitRemaining", { amount: money(row.limit.remaining) })}</span>
                                   ) : (
-                                    <span className="budget-warn">{text.limitOverBy(money(row.limit.over_by))}</span>
+                                    <span className="budget-warn">
+                                      {t("budget.monthBudget.limitOverBy", { amount: money(row.limit.over_by) })}
+                                    </span>
                                   )}
-                                  <span>{text.warningAt(row.limit.warning_percent)}</span>
+                                  <span>{t("budget.monthBudget.warningAt", { percent: row.limit.warning_percent })}</span>
                                 </div>
                               </div>
                             )}
@@ -999,7 +753,7 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, t
           {series === null || !isCategoryList(categories) ? null : (
             <MonthBudgetCharts budget={data} series={series} paceProjection={paceProjection}
               schedulePending={schedulePending} scheduleError={scheduleError} categories={categories}
-              locale={locale} text={text} />
+              locale={locale} />
           )}
         </>
       )}
