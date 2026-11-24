@@ -28,15 +28,16 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import ipaddress
 import json
 import logging
 import math
 import os
+import re
 import time
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from aiohttp import ClientConnectionError, web
 
@@ -327,36 +328,76 @@ _CORE_BROWSER_MUTATION_ROUTES = frozenset({
 _CORE_BROWSER_ROUTES = _CORE_BROWSER_READ_ROUTES | _CORE_BROWSER_MUTATION_ROUTES
 
 
+_HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+
+
+def _parse_canonical_host(authority: str) -> "tuple[str, str | None] | None":
+    if authority.startswith("["):
+        inner, has_close, remainder = authority[1:].partition("]")
+        if not has_close or "%" in inner:
+            return None
+        if remainder == "":
+            port_str = None
+        elif remainder.startswith(":"):
+            port_str = remainder[1:]
+        else:
+            return None
+        try:
+            return str(ipaddress.IPv6Address(inner)), port_str
+        except ValueError:
+            return None
+    if "[" in authority or "]" in authority:
+        return None
+    host_raw, has_port, port_part = authority.partition(":")
+    if has_port and ":" in port_part:
+        return None
+    port_str = port_part if has_port else None
+    if not host_raw or len(host_raw) > 253:
+        return None
+    try:
+        host_raw.encode("idna")
+    except UnicodeError:
+        return None
+    labels = host_raw.split(".")
+    if not all(_HOST_LABEL_RE.fullmatch(label) for label in labels):
+        return None
+    try:
+        return str(ipaddress.IPv4Address(host_raw)), port_str
+    except ValueError:
+        if labels[-1].isdigit():
+            return None
+        return host_raw.lower(), port_str
+
+
 def _canonical_origin_tuple(origin: str) -> "tuple[str, str, int] | None":
     if (
         not origin
         or not origin.isascii()
         or any(ord(ch) <= 32 or ord(ch) == 127 for ch in origin)
         or "\\" in origin
+        or "://" not in origin
     ):
         return None
-    if "://" not in origin:
-        return None
-    raw_scheme, authority = origin.split("://", 1)
+    raw_scheme, rest = origin.split("://", 1)
     scheme = raw_scheme.lower()
-    if (
-        scheme not in ("http", "https")
-        or not authority
-        or authority.endswith(":")
-        or any(ch in authority for ch in ("/", "?", "#", "@"))
-    ):
+    if scheme not in ("http", "https") or "?" in rest or "#" in rest:
         return None
-    try:
-        parsed = urlsplit(origin)
-        port = parsed.port
-    except ValueError:
+    authority, has_slash, tail = rest.partition("/")
+    if (has_slash and tail) or not authority or "@" in authority:
         return None
-    if not parsed.hostname:
+    parsed = _parse_canonical_host(authority)
+    if parsed is None:
         return None
-    if port is not None and not 1 <= port <= 65535:
-        return None
+    canonical_host, port_str = parsed
     default_port = 80 if scheme == "http" else 443
-    return scheme, parsed.hostname.lower(), default_port if port is None else port
+    if port_str is None:
+        return scheme, canonical_host, default_port
+    if not port_str or not port_str.isdigit():
+        return None
+    port = int(port_str)
+    if not 1 <= port <= 65535:
+        return None
+    return scheme, canonical_host, port
 
 
 def _check_core_origin(request) -> "web.Response | None":
