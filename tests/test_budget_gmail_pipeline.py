@@ -105,7 +105,8 @@ class GmailPipelineTests(TestCase):
                             "44051401458", "4111 1111 1111 1111", SETTINGS.owner_mailbox):
                 self.assertNotIn(private.encode(), stored)
 
-    def test_pipeline_records_pdf_unsupported_and_octet_stream_pdf_reasons_over_socket(self):
+    def test_pipeline_records_malformed_pdf_and_octet_stream_pdf_reasons_over_socket(self):
+        # The sidecar extracts PDFs since #278, so a malformed fixture PDF is rejected.
         with TemporaryDirectory() as directory:
             path = Path(directory) / "gmail-reasons.db"
             self.addCleanup(db.reset_engine_cache)
@@ -148,11 +149,11 @@ class GmailPipelineTests(TestCase):
                 finally:
                     sidecar.terminate()
             self.assertEqual(store.status(OWNER)["parse_failed_reasons"],
-                             {"charset_error": 1, "pdf_unsupported": 2})
+                             {"charset_error": 1, "worker_rejected": 2})
             self.assertEqual(sorted(logs.output), [
                 "WARNING:hestia.budget.gmail_message:gmail parse_failed reason=charset_error",
-                "WARNING:hestia.budget.gmail_message:gmail parse_failed reason=pdf_unsupported",
-                "WARNING:hestia.budget.gmail_message:gmail parse_failed reason=pdf_unsupported",
+                "WARNING:hestia.budget.gmail_message:gmail parse_failed reason=worker_rejected",
+                "WARNING:hestia.budget.gmail_message:gmail parse_failed reason=worker_rejected",
             ])
 
     @staticmethod
