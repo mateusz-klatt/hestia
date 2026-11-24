@@ -1040,18 +1040,13 @@ class GmailSyncTests(TestCase):
         self.sync()
         self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {})
 
-        # force_full_resync preserves counts when no new messages are processed, clears when a new message is imported,
-        # and transition resets them too.
+        # force_full_resync clears prior counts when a new recovery generation starts, and transition resets them too.
         self.assertEqual(self.store.commit(OWNER, 1, {}, (
             PendingMessage("e" * 64, NOW, "direct_allowlist", "parse_failed"),
         )), (0, 1, True))
         self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"other": 1})
         self.tick()
         self.transport.routes[("/messages", None)] = response(page())
-        self.sync(force_full_resync=True)
-        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"other": 1})
-        self.tick()
-        self.transport.routes[("/messages", None)] = response(page("mail-6"))
         self.sync(force_full_resync=True)
         self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {})
 
@@ -1228,8 +1223,9 @@ class GmailSyncTests(TestCase):
         self.assertIn(f"after:{schedule_cutoff}", self.transport.requests("/messages")[-1]["q"][0])
         self.assertEqual(self.processor.processed, ["fail-old", "new-m1"])
 
-        # 2. Re-queuing retry_parse_failed while a previous retry is paused in "running" state refreshes cutoff cleanly.
+        # 2. Re-queuing retry_parse_failed while a previous retry is paused in "running" state keeps the earlier cutoff.
         self.tick(15 * DAY)
+        first_cutoff = int(self.clock.now - SETTINGS.backfill_days * DAY)
         self.service.schedule(OWNER, retry_parse_failed=True)
         self.transport.routes[("/messages", None)] = response(page("p1", "p2"))
         with mock.patch.object(sync_module, "MAX_SYNC_MESSAGES_PER_RUN", 1):
@@ -1237,12 +1233,11 @@ class GmailSyncTests(TestCase):
         self.assertTrue(paused["has_more"])
         self.assertTrue(self.store.retry_full_window(OWNER))
         self.tick(60)
-        requeued_cutoff = int(self.clock.now - SETTINGS.backfill_days * DAY)
         self.service.schedule(OWNER, retry_parse_failed=True)
         resumed = self.sync(poll=True)
         self.assertFalse(resumed["has_more"])
         self.assertFalse(self.store.retry_full_window(OWNER))
-        self.assertIn(f"after:{requeued_cutoff}", self.transport.requests("/messages")[-1]["q"][0])
+        self.assertIn(f"after:{first_cutoff}", self.transport.requests("/messages")[-1]["q"][0])
 
         # 3. Concurrent retry arriving AFTER a 7-day 404 recovery starts is NOT cleared by the 7-day scan.
         self.tick(15 * DAY)
@@ -1314,12 +1309,140 @@ class GmailSyncTests(TestCase):
                          ("idle", "100", 0, 0))
         self.assertFalse(self.store.retry_full_window(OWNER))
 
-        # A follow-up force_full_resync over the same already-known messages does not erase reason counts.
+    def test_requeued_retry_while_running_keeps_earlier_cutoff_for_delete_and_scan(self):
+        self.enable()
+        self.transport.routes[("/messages", None)] = response(page())
+        self.sync()
         self.tick(60)
-        with mock.patch.object(self.processor, "process", side_effect=fail_pdf):
+        t_sched = self.clock.now
+        cutoff_1 = int(t_sched - SETTINGS.backfill_days * DAY)
+        dated_ids = {
+            "outside-old": cutoff_1 - 1,
+            "edge-1": cutoff_1 + 1,
+            "edge-2-later": cutoff_1 + 10,
+            "early-page": t_sched - 5 * DAY,
+        }
+        hmacs = {mid: digest(SETTINGS.hmac_secret, GMAIL_MESSAGE_DOMAIN, mid) for mid in dated_ids}
+        self.assertEqual(self.store.commit(OWNER, 1, {}, (
+            PendingMessage(hmacs["outside-old"], dated_ids["outside-old"], "direct_allowlist", "parse_failed",
+                           parse_failed_reason="pdf_unsupported"),
+            PendingMessage(hmacs["edge-1"], dated_ids["edge-1"], "direct_allowlist", "parse_failed",
+                           parse_failed_reason="pdf_unsupported"),
+            PendingMessage(hmacs["early-page"], dated_ids["early-page"], "direct_allowlist", "parse_failed",
+                           parse_failed_reason="pdf_unsupported"),
+        )), (0, 3, True))
+
+        # First retry deletes edge-1 (1s inside) and early-page, preserving outside-old.
+        self.service.schedule(OWNER, retry_parse_failed=True)
+        with self.sessions() as session:
+            self.assertIsNotNone(session.get(db.BudgetGmailMessage, (OWNER, hmacs["outside-old"])))
+            self.assertIsNone(session.get(db.BudgetGmailMessage, (OWNER, hmacs["edge-1"])))
+            self.assertIsNone(session.get(db.BudgetGmailMessage, (OWNER, hmacs["early-page"])))
+
+        # First poll pauses after early-page before reaching edge-1.
+        def messages_by_date(params):
+            query = params["q"][0]
+            after_ts = int(next(part for part in query.split() if part.startswith("after:")).split(":", 1)[1])
+            matched = [mid for mid in ("early-page", "edge-1", "edge-2-later", "outside-old")
+                       if dated_ids[mid] >= after_ts]
+            return response(page(*matched))
+
+        self.transport.routes[("/messages", None)] = messages_by_date
+        with mock.patch.object(sync_module, "MAX_SYNC_MESSAGES_PER_RUN", 1):
+            paused = self.sync(poll=True)
+        self.assertTrue(paused["has_more"])
+        self.assertEqual(self.processor.processed, ["early-page"])
+
+        # Seed edge-2-later (10s inside cutoff_1, 50s older than cutoff_1 + 60) and re-queue retry 60s later.
+        self.assertEqual(self.store.commit(OWNER, 1, {}, (
+            PendingMessage(hmacs["edge-2-later"], dated_ids["edge-2-later"], "direct_allowlist", "parse_failed",
+                           parse_failed_reason="pdf_unsupported"),
+        )), (0, 1, True))
+        self.tick(60)
+        self.service.schedule(OWNER, retry_parse_failed=True)
+        with self.sessions() as session:
+            # Second schedule delete also uses min(cutoff_1, cutoff_2) = cutoff_1.
+            self.assertIsNotNone(session.get(db.BudgetGmailMessage, (OWNER, hmacs["outside-old"])))
+            self.assertIsNone(session.get(db.BudgetGmailMessage, (OWNER, hmacs["edge-2-later"])))
+
+        # Next poll uses cutoff_1 (not now - 365d), re-fetching and re-processing both edge-1 and edge-2-later.
+        resumed = self.sync(poll=True)
+        self.assertFalse(resumed["has_more"])
+        self.assertFalse(self.store.retry_full_window(OWNER))
+        self.assertEqual(self.processor.processed, ["early-page", "edge-1", "edge-2-later"])
+        last_query = self.transport.requests("/messages")[-1]["q"][0]
+        self.assertIn(f"after:{cutoff_1}", last_query)
+        self.assertNotIn(f"after:{int(self.clock.now - SETTINGS.backfill_days * DAY)}", last_query)
+
+    def test_forced_recovery_resets_reasons_even_if_first_list_returns_503(self):
+        self.enable()
+        self.transport.routes[("/messages", None)] = response(page("fail-mime"))
+
+        def fail_mime(run, message_id, message_hmac):
+            self.processor.processed.append(message_id)
+            run.message(message_id)
+            return PendingMessage(message_hmac, self.clock.wall(), "direct_allowlist", "parse_failed",
+                                  parse_failed_reason="mime_error")
+
+        with mock.patch.object(self.processor, "process", side_effect=fail_mime):
+            self.sync()
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"mime_error": 1})
+
+        # Forced recovery clears prior mime_error at generation start; first list request returns 503.
+        self.tick(60)
+        self.transport.routes[("/messages", None)] = response({}, 503)
+        with self.assertRaisesRegex(GmailError, "provider_http"):
             self.sync(force_full_resync=True)
-        self.assertEqual(self.processor.processed, ["msg-pdf"])
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {})
+
+        # Next poll resumes recovery and imports a new message; old mime_error never returns.
+        self.clock.now = self.store.state(OWNER).next_sync_at
+        self.transport.routes[("/messages", None)] = response(page("new-ok"))
+        resumed = self.sync(poll=True)
+        self.assertEqual((resumed["imported_count"], resumed["has_more"]), (1, False))
+        self.assertEqual(self.processor.processed, ["fail-mime", "new-ok"])
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {})
+
+    def test_paused_retry_force_resumed_with_import_preserves_failure_counts(self):
+        self.enable()
+        self.transport.routes[("/messages", None)] = response(page())
+        self.sync()
+        self.tick(60)
+        fail_id = "fail-pdf"
+        fail_hmac = digest(SETTINGS.hmac_secret, GMAIL_MESSAGE_DOMAIN, fail_id)
+        self.assertEqual(self.store.commit(OWNER, 1, {}, (
+            PendingMessage(fail_hmac, self.clock.now - 5 * DAY, "direct_allowlist", "parse_failed",
+                           parse_failed_reason="pdf_unsupported"),
+        )), (0, 1, True))
+        self.service.schedule(OWNER, retry_parse_failed=True)
+
+        def process_mixed(run, message_id, message_hmac):
+            self.processor.processed.append(message_id)
+            run.message(message_id)
+            if message_id == fail_id:
+                return PendingMessage(message_hmac, self.clock.wall(), "direct_allowlist", "parse_failed",
+                                      parse_failed_reason="pdf_unsupported")
+            run.message(message_id, raw=True)
+            return PendingMessage(message_hmac, self.clock.wall(), "direct_allowlist", "imported",
+                                  None, INVOICE)
+
+        self.transport.routes[("/messages", None)] = response(page(fail_id, "new-ok"))
+        with mock.patch.object(sync_module, "MAX_SYNC_MESSAGES_PER_RUN", 1), \
+                mock.patch.object(self.processor, "process", side_effect=process_mixed):
+            paused = self.sync(poll=True)
+        self.assertTrue(paused["has_more"])
+        self.assertTrue(self.store.retry_full_window(OWNER))
         self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"pdf_unsupported": 1})
+
+        # Force-resuming the still-running retry imports new-ok without erasing pdf_unsupported.
+        self.tick(60)
+        with mock.patch.object(self.processor, "process", side_effect=process_mixed):
+            finished = self.sync(force_full_resync=True)
+        self.assertEqual((finished["imported_count"], finished["has_more"]), (1, False))
+        self.assertFalse(self.store.retry_full_window(OWNER))
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"pdf_unsupported": 1})
+        with self.sessions() as session:
+            self.assertEqual(session.get(db.BudgetGmailMessage, (OWNER, fail_hmac)).outcome, "parse_failed")
 
     def test_retry_parse_failed_deletes_only_rows_inside_scan_window_and_reuses_schedule_cutoff(self):
         self.enable()

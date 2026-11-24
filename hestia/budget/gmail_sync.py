@@ -124,7 +124,6 @@ class _Progress:
     skipped: int = 0
     attempted: int = 0
     restarted: bool = False
-    reset_reasons: bool = False
     terms: tuple = field(default_factory=tuple)
     label_id: str | None = None
 
@@ -178,14 +177,11 @@ class GmailSync:
             self.store.transition(owner, expected_version, status, mailbox_hmac, queue_sync=defer_profile)
             return self.store.status(owner)
 
-    def _commit(self, owner, progress, changes, pending=(), *, reset_reasons=False, starting_recovery=False):
-        should_reset = reset_reasons or (progress.reset_reasons and bool(pending))
+    def _commit(self, owner, progress, changes, pending=(), *, starting_recovery=False, starting_incremental=False):
         imported, skipped, drained = self.store.commit(
             owner, progress.generation, changes, pending,
-            reset_reasons=should_reset, starting_recovery=starting_recovery,
+            starting_recovery=starting_recovery, starting_incremental=starting_incremental,
         )
-        if should_reset:
-            progress.reset_reasons = False
         progress.imported += imported
         progress.skipped += skipped
         if not drained:
@@ -204,7 +200,6 @@ class GmailSync:
         }
         if full:
             changes["force_full_resync"] = 0
-        progress.reset_reasons = True
         self._commit(owner, progress, changes, starting_recovery=True)
 
     def _completion(self, state):
@@ -322,8 +317,8 @@ class GmailSync:
         scope_hmac = self._scope_hmac(progress)
         state = self.store.state(owner)
         if state.pending_history_id is None:
-            progress.reset_reasons = True
-            self._commit(owner, progress, {"pending_history_id": profile_history, "sync_phase": "incremental"})
+            self._commit(owner, progress, {"pending_history_id": profile_history, "sync_phase": "incremental"},
+                         starting_incremental=True)
         if state.scope_scan_query_hmac != scope_hmac:
             self._commit(owner, progress, {"history_page_token": None, "scope_scan_page_token": None,
                                           "scope_scan_query_hmac": scope_hmac})
