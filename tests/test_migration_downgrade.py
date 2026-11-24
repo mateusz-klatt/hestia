@@ -5,9 +5,11 @@ import sqlite3
 import tempfile
 import unittest
 
+from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
+from sqlalchemy.exc import IntegrityError
 
 from hestia import db
 
@@ -136,3 +138,190 @@ class MigrationDowngradeTests(unittest.TestCase):
         with engine.connect() as connection:
             self.assertIsNone(connection.exec_driver_sql("SELECT label FROM budget_annotations").scalar())
             self.assertEqual(compare_metadata(MigrationContext.configure(connection), db.metadata), [])
+
+    def test_0030_populated_roundtrip_0029_to_0030_to_0029_to_0030(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        target = Path(directory.name) / "bridge.db"
+        engine = db.make_engine(target)
+        try:
+            with engine.begin() as conn:
+                command.upgrade(db._alembic_config(conn), "0029")
+                conn.exec_driver_sql("INSERT INTO users (username, password_hash, role) VALUES ('alice', 'h1', 'admin')")
+                conn.exec_driver_sql("INSERT INTO users (username, password_hash, role) VALUES ('bob', 'h2', 'viewer')")
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_connections (id, owner, application_id, bank_name, country, enabled, next_attempt, failures) "
+                    "VALUES ('bank', 'alice', 'app', 'Bank', 'PL', 1, 0, 0)"
+                )
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_accounts (id, connection_id, owner, identification_hash, enabled, balances_json) "
+                    "VALUES ('acc', 'bank', 'alice', 'ih', 1, '[]')"
+                )
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_transactions (account_id, entry_reference, payload_json, observed_at, uncertain) "
+                    "VALUES ('acc', 'ref1', '{}', 1.0, 0)"
+                )
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_shops (id, owner, name, version, created_at, updated_at) "
+                    "VALUES ('shop', 'alice', 'Shop', 1, 1.0, 1.0)"
+                )
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_receipts "
+                    "(id, owner, shop_id, status, source_kind, document_kind, receipt_date, total_amount, currency, "
+                    "payment_method, linked_account_id, linked_entry_ref, linked_fingerprint, linked_evidence, "
+                    "version, created_at, updated_at) "
+                    "VALUES ('rcpt-1', 'alice', 'shop', 'confirmed', 'email', 'invoice', '2026-11-20', '10.00', 'PLN', "
+                    "'card', 'acc', 'ref1', 'fp', '{}', 1, 1.0, 1.0)"
+                )
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_receipt_lines "
+                    "(receipt_id, line_no, owner, line_kind, raw_name, raw_name_key, quantity, gross_line_total, net_line_total) "
+                    "VALUES ('rcpt-1', 1, 'alice', 'item', 'Item', 'item', '1', '10.00', '10.00')"
+                )
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_gmail_state (owner, grant_status, grant_generation, version) "
+                    "VALUES ('alice', 'active', 1, 2)"
+                )
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_gmail_messages "
+                    "(owner, gmail_id_hmac, rfc_message_id_hmac, internal_date, trust_path, outcome, receipt_id, created_at) "
+                    "VALUES ('alice', ?, ?, 100.0, 'spouse_forward', 'imported', 'rcpt-1', 100.0)",
+                    ("a" * 64, "b" * 64),
+                )
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_receipt_device_tokens "
+                    "(id, owner, device_name, token_hmac, created_at, expires_at, hard_expires_at, sliding_written_at) "
+                    "VALUES ('tok-1', 'alice', 'Vesta', ?, 1.0, 2.0, 3.0, 1.0)",
+                    ("c" * 64,),
+                )
+        finally:
+            engine.dispose()
+
+        # Upgrade 0029 -> 0030 through production runner.
+        engine, _ = db.init_db(target)
+        with engine.begin() as conn:
+            # Legacy inserts without 0030 columns continue working and default new nullable cols to NULL.
+            conn.exec_driver_sql("INSERT INTO users (username, password_hash, role) VALUES ('carol', 'h3', 'viewer')")
+            conn.exec_driver_sql(
+                "INSERT INTO budget_receipts (id, owner, status, source_kind, version, created_at, updated_at) "
+                "VALUES ('rcpt-legacy', 'alice', 'draft', 'live_text', 1, 2.0, 2.0)"
+            )
+            conn.exec_driver_sql(
+                "INSERT INTO budget_receipt_device_tokens "
+                "(id, owner, device_name, token_hmac, created_at, expires_at, hard_expires_at, sliding_written_at) "
+                "VALUES ('tok-legacy', 'alice', 'Old', ?, 2.0, 3.0, 4.0, 2.0)",
+                ("d" * 64,),
+            )
+            self.assertEqual(
+                conn.exec_driver_sql("SELECT budget_owner, credential_generation FROM users WHERE username='alice'").one(),
+                (0, 0),
+            )
+            self.assertEqual(
+                conn.exec_driver_sql("SELECT submitted_by FROM budget_receipts WHERE id='rcpt-1'").scalar(),
+                None,
+            )
+            self.assertEqual(
+                conn.exec_driver_sql(
+                    "SELECT actor, issued_permissions, token_hmac FROM budget_receipt_device_tokens WHERE id='tok-1'"
+                ).one(),
+                (None, None, "c" * 64),
+            )
+            # Populate 0030-specific tables/columns/markers.
+            conn.exec_driver_sql("INSERT INTO app_meta (key, value) VALUES ('auth_session_phase', 'v2')")
+            conn.exec_driver_sql("INSERT INTO app_meta (key, value) VALUES ('authz_policy_phase', 'catalog_compat')")
+            conn.exec_driver_sql(
+                "INSERT INTO permission_grants (username, permission_id, target_owner) VALUES ('bob', 'household.view', 'alice')"
+            )
+            conn.exec_driver_sql(
+                "INSERT INTO native_login_codes (id, username, code_hmac, generation, created_at, expires_at) "
+                "VALUES ('nc-1', 'bob', ?, 0, 1.0, 10.0)",
+                ("e" * 64,),
+            )
+            conn.exec_driver_sql("UPDATE budget_receipts SET submitted_by='bob' WHERE id='rcpt-1'")
+            conn.exec_driver_sql(
+                "UPDATE budget_receipt_device_tokens SET actor='bob', issued_permissions='[\"budget.receipts.add\"]' "
+                "WHERE id='tok-1'"
+            )
+
+        # Both new FKs enforce references at 0030.
+        with self.assertRaises(IntegrityError):
+            with engine.begin() as conn:
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_receipts (id, owner, submitted_by, status, source_kind, version, created_at, updated_at) "
+                    "VALUES ('rcpt-bad', 'alice', 'ghost', 'draft', 'live_text', 1, 2.0, 2.0)"
+                )
+        with self.assertRaises(IntegrityError):
+            with engine.begin() as conn:
+                conn.exec_driver_sql(
+                    "INSERT INTO budget_receipt_device_tokens "
+                    "(id, owner, actor, device_name, token_hmac, created_at, expires_at, hard_expires_at, sliding_written_at) "
+                    "VALUES ('tok-bad', 'alice', 'ghost', 'Bad', ?, 2.0, 3.0, 4.0, 2.0)",
+                    ("f" * 64,),
+                )
+
+        # Downgrade 0030 -> 0029 through production runner (with a leftover temp table to exercise cleanup).
+        with closing(sqlite3.connect(target)) as raw_conn:
+            raw_conn.execute('CREATE TABLE "_alembic_tmp_users" (stale TEXT)')
+        db.downgrade_db(target, "0029")
+
+        with closing(sqlite3.connect(target)) as raw_conn:
+            self.assertEqual(raw_conn.execute("PRAGMA integrity_check").fetchall(), [("ok",)])
+            self.assertEqual(raw_conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+            self.assertEqual(
+                raw_conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '!_alembic!_tmp!_%' ESCAPE '!'"
+                ).fetchall(),
+                [],
+            )
+            self.assertEqual(raw_conn.execute("SELECT version_num FROM alembic_version").fetchall(), [("0029",)])
+            self.assertEqual(
+                raw_conn.execute(
+                    "SELECT key FROM app_meta WHERE key IN ('auth_session_phase', 'authz_policy_phase')"
+                ).fetchall(),
+                [],
+            )
+            tables = {row[0] for row in raw_conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertNotIn("permission_grants", tables)
+            self.assertNotIn("native_login_codes", tables)
+            self.assertNotIn("budget_owner", {r[1] for r in raw_conn.execute("PRAGMA table_info(users)")})
+            self.assertNotIn("submitted_by", {r[1] for r in raw_conn.execute("PRAGMA table_info(budget_receipts)")})
+            self.assertNotIn(
+                "actor", {r[1] for r in raw_conn.execute("PRAGMA table_info(budget_receipt_device_tokens)")}
+            )
+            self.assertEqual(
+                raw_conn.execute("SELECT token_hmac FROM budget_receipt_device_tokens WHERE id='tok-1'").fetchone()[0],
+                "c" * 64,
+            )
+            self.assertEqual(
+                raw_conn.execute("SELECT line_no, raw_name FROM budget_receipt_lines WHERE receipt_id='rcpt-1'").fetchall(),
+                [(1, "Item")],
+            )
+            self.assertEqual(
+                raw_conn.execute("SELECT receipt_id, trust_path FROM budget_gmail_messages WHERE owner='alice'").fetchall(),
+                [("rcpt-1", "spouse_forward")],
+            )
+            index_xinfo = raw_conn.execute("PRAGMA index_xinfo('ix_budget_receipts_owner_date')").fetchall()
+            # (seqno, cid, name, desc, coll, key) -> receipt_date must keep DESC (desc == 1).
+            by_col = {row[2]: row[3] for row in index_xinfo if row[2] is not None}
+            self.assertEqual(by_col, {"owner": 0, "receipt_date": 1, "id": 0})
+
+        # Upgrade 0029 -> 0030 again and check parity + survival.
+        engine, _ = db.init_db(target)
+        with engine.connect() as conn:
+            self.assertEqual(compare_metadata(MigrationContext.configure(conn), db.metadata), [])
+            self.assertEqual(conn.exec_driver_sql("PRAGMA integrity_check").fetchall(), [("ok",)])
+            self.assertEqual(conn.exec_driver_sql("PRAGMA foreign_key_check").fetchall(), [])
+            self.assertEqual(
+                conn.exec_driver_sql("SELECT submitted_by FROM budget_receipts WHERE id='rcpt-1'").scalar(),
+                None,
+            )
+            self.assertEqual(
+                conn.exec_driver_sql(
+                    "SELECT actor, issued_permissions, token_hmac FROM budget_receipt_device_tokens WHERE id='tok-1'"
+                ).one(),
+                (None, None, "c" * 64),
+            )
+            self.assertEqual(
+                conn.exec_driver_sql("SELECT receipt_id FROM budget_gmail_messages WHERE owner='alice'").scalar(),
+                "rcpt-1",
+            )

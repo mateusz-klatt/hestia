@@ -84,6 +84,46 @@ class User(Base):
     password_hash: Mapped[str]
     role: Mapped[str] = mapped_column(default="viewer", server_default=text("'viewer'"))
     disabled: Mapped[bool] = mapped_column(default=False, server_default=text("0"))
+    budget_owner: Mapped[bool] = mapped_column(default=False, server_default=text("0"))
+    credential_generation: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+
+
+class PermissionGrant(Base):
+    """Direct installation-scoped (``target_owner IS NULL``) or owner-scoped permission grant."""
+
+    __tablename__ = "permission_grants"
+    __table_args__ = (
+        Index("uq_permission_grants_installation", "username", "permission_id", unique=True,
+              sqlite_where=text("target_owner IS NULL")),
+        Index("uq_permission_grants_owner", "username", "permission_id", "target_owner", unique=True,
+              sqlite_where=text("target_owner IS NOT NULL")),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    permission_id: Mapped[str]
+    target_owner: Mapped[str | None] = mapped_column(ForeignKey("users.username"))
+
+
+class NativeLoginCode(Base):
+    """One-time QR native login code; ``code_hmac`` is an HMAC, never the code."""
+
+    __tablename__ = "native_login_codes"
+    __table_args__ = (
+        UniqueConstraint("code_hmac", name="uq_native_login_codes_code_hmac"),
+        Index("ix_native_login_codes_active_user", "username", "expires_at",
+              sqlite_where=text("consumed_at IS NULL")),
+        CheckConstraint("length(code_hmac) = 64 AND code_hmac NOT GLOB '*[^0-9a-f]*'",
+                        name="ck_native_login_codes_hmac"),
+        CheckConstraint("generation >= 0", name="ck_native_login_codes_generation"),
+        CheckConstraint("expires_at > created_at", name="ck_native_login_codes_expiry"),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    code_hmac: Mapped[str]
+    generation: Mapped[int]
+    created_at: Mapped[float]
+    expires_at: Mapped[float]
+    consumed_at: Mapped[float | None]
 
 
 class UserSetting(Base):
@@ -968,6 +1008,7 @@ class BudgetReceipt(Base):
     linked_entry_ref: Mapped[str | None]
     linked_fingerprint: Mapped[str | None]
     linked_evidence: Mapped[str | None] = mapped_column(Text)
+    submitted_by: Mapped[str | None] = mapped_column(ForeignKey("users.username"))
     version: Mapped[int]
     created_at: Mapped[float]
     updated_at: Mapped[float]
@@ -1010,6 +1051,7 @@ class BudgetReceiptDeviceToken(Base):
         ForeignKeyConstraint(["owner"], ["users.username"]),
         UniqueConstraint("token_hmac", name="uq_budget_receipt_device_tokens_hmac"),
         Index("ix_budget_receipt_device_tokens_owner", "owner"),
+        Index("ix_budget_receipt_device_tokens_owner_actor", "owner", "actor"),
         CheckConstraint("length(device_name) BETWEEN 1 AND 64", name="ck_budget_receipt_device_tokens_name"),
         CheckConstraint("length(token_hmac) = 64 AND token_hmac NOT GLOB '*[^0-9a-f]*'",
                         name="ck_budget_receipt_device_tokens_hmac"),
@@ -1017,8 +1059,10 @@ class BudgetReceiptDeviceToken(Base):
     )
     id: Mapped[str] = mapped_column(primary_key=True)
     owner: Mapped[str]
+    actor: Mapped[str | None] = mapped_column(ForeignKey("users.username"))
     device_name: Mapped[str]
     token_hmac: Mapped[str]
+    issued_permissions: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[float]
     expires_at: Mapped[float]
     hard_expires_at: Mapped[float]
