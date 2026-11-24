@@ -48,6 +48,11 @@ _CONTROL_CATEGORIES = frozenset({"Cc", "Cf", "Cs"})
 _REMOTE = re.compile(r"(?i)\b(?:https?:|cid:|javascript:|data:[a-z0-9/+.-]{0,128}[;,])\S*")
 _PARSER_WORKER_SEMAPHORE = threading.Semaphore(1)
 _FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "gmail"
+_PDF_BENIGN_WARNINGS = frozenset({
+    ("pypdf._reader", "Xref table not zero-indexed. ID numbers for objects will be corrected."),
+    ("pypdf._cmap", "fontTools is required to fully parse the encoding of a CFF Type1 font in font "
+     "dictionary %(ft)s, but is not installed. Consider installing fontTools if you encounter encoding problems."),
+})
 
 
 class WorkerUnavailable(RuntimeError):
@@ -211,7 +216,8 @@ def _bounded_text(raw: str, *, html: bool) -> bytes:
 def _pdf_text(payload: bytes) -> bytes:
     # These hooks are scoped to a single render in the disposable child. They
     # cover streams pypdf reads before it exposes any pages (xref and objects).
-    from pypdf import PdfReader, apply_configuration, filters
+    from pypdf import PasswordType, PdfReader, apply_configuration, filters
+    from pypdf._encryption import AlgV4, AlgV5
     from pypdf.generic import StreamObject
 
     class RejectPDF(BaseException):
@@ -219,13 +225,30 @@ def _pdf_text(payload: bytes) -> bytes:
 
     class RejectPDFWarning(logging.Handler):
         def emit(self, record):
-            # Recovery can silently omit PDF content and diagnostics can quote it.
+            # Match pinned pypdf templates without formatting document data.
+            if record.levelno == logging.WARNING and (record.name, record.msg) in _PDF_BENIGN_WARNINGS:
+                return
             raise RejectPDF
 
-    class UnencryptedReader(PdfReader):
+    class EmptyUserPasswordReader(PdfReader):
         def _handle_encryption(self, password):
-            # PdfReader otherwise tries the empty password during construction.
-            raise RejectPDF
+            super()._handle_encryption(b"")
+            encryption = self._encryption
+            if encryption._password_type == PasswordType.USER_PASSWORD:
+                return
+
+            # pypdf tries the owner credential first. If that matches, require
+            # the empty user credential to independently unlock the same key.
+            values = encryption.values
+            if encryption.V <= 4:
+                user_key = AlgV4.verify_user_password(
+                    b"", encryption.R, encryption.Length, values.O, values.U,
+                    encryption.P, encryption.id1_entry, encryption.EncryptMetadata,
+                )
+            else:
+                user_key = AlgV5.verify_user_password(encryption.R, b"", values.U, values.UE)
+            if user_key != encryption._key:
+                raise RejectPDF
 
     initialize_stream = StreamObject.initialize_from_dictionary
     decode_stream = filters.decode_stream_data
@@ -306,7 +329,7 @@ def _pdf_text(payload: bytes) -> bytes:
             # The page tree is traversed iteratively. The interpreter limit
             # separately bounds recursive object parsing and form extraction.
             sys.setrecursionlimit(depth + MAX_PDF_RECURSION)
-            reader = UnencryptedReader(BytesIO(payload), strict=True)
+            reader = EmptyUserPasswordReader(BytesIO(payload), strict=True)
             if len(reader.pages) > MAX_PDF_PAGES:
                 raise RejectPDF
             pages = []

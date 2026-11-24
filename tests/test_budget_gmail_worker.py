@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from base64 import a85encode
 from io import BytesIO
+import logging
 import os
 from pathlib import Path
 import signal
@@ -17,7 +18,10 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import pypdf
+from pypdf._encryption import AlgV5, PasswordType
+from pypdf.constants import UserAccessPermissions
 from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject, NumberObject, TextStringObject
+from pypdf.generic import _font
 
 from hestia.budget import gmail_worker as worker
 from hestia.budget.gmail_invoice import ImportedInvoice, _safe_field, extract_invoice, has_provider_invoice_number
@@ -62,6 +66,16 @@ def _pdf_writer(*streams: bytes | None, flate: bool = False) -> pypdf.PdfWriter:
     return writer
 
 
+def _without_free_xref_entry(pdf: bytes) -> bytes:
+    # The offsets still address the same objects and xref table after omitting
+    # object 0. Only the first subsection's start number and count change.
+    before, xref, entries = pdf.partition(b"\nxref\n")
+    subsection, _, entries = entries.partition(b"\n")
+    first, count = subsection.split()
+    assert first == b"0" and entries.startswith(b"0000000000 65535 f \n")
+    return before + xref + f"1 {int(count) - 1}\n".encode() + entries.split(b"\n", 1)[1]
+
+
 class TestGmailInvoice(unittest.TestCase):
     def test_provider_templates_through_the_worker_socket(self):
         templates = {
@@ -104,10 +118,15 @@ serve(sys.argv[1])
                             self.assertTrue(has_provider_invoice_number(parsed))
                             self.assertFalse(has_provider_invoice_number(parsed.replace(expected.invoice_number,
                                                                                         "unexpected-format")))
-                    pdf = _write_pdf(_pdf_writer(_pdf_text(
+                    writer = _pdf_writer(_pdf_text(
                         b"Orange", b"Numer dokumentu: FV/2026/042", b"Kwota: 12,19 EUR", b"Termin platnosci: 05.02.2026",
-                    ), flate=True))
-                    parsed = client.parse("pdf", pdf)
+                    ), flate=True)
+                    permissions = UserAccessPermissions.all() & ~(
+                        UserAccessPermissions.EXTRACT | UserAccessPermissions.EXTRACT_TEXT_AND_GRAPHICS
+                    )
+                    writer.encrypt(user_password="", owner_password="synthetic owner", algorithm="AES-256",
+                                   permissions_flag=permissions)
+                    parsed = client.parse("pdf", _write_pdf(writer))
                     self.assertEqual(parsed, "Orange\nNumer dokumentu: FV/2026/042\nKwota: 12,19 EUR\n"
                                              "Termin platnosci: 05.02.2026")
                     self.assertEqual(extract_invoice(parsed), ImportedInvoice(
@@ -168,12 +187,69 @@ class TestGmailWorker(unittest.TestCase):
         pdf = _write_pdf(_pdf_writer(_pdf_text(b"First page"), None, _pdf_text(b"Last page")))
         self.assertEqual(worker._render(b"P" + pdf), b"+First page\nLast page")
 
-    def test_pdf_rejects_encryption_even_without_a_password(self):
-        for password in ("", "synthetic password"):
-            with self.subTest(empty_password=not password):
-                writer = _pdf_writer(_pdf_text(b"Private synthetic text"))
-                writer.encrypt(password, algorithm="RC4-128")
-                self.assertEqual(worker._render(b"P" + _write_pdf(writer)), b"-")
+    def test_pdf_allows_only_empty_user_passwords(self):
+        for algorithm, user_password, owner_password, expected in (
+            ("AES-256", "", "synthetic owner", b"+Synthetic invoice"),
+            ("AES-256", "", None, b"+Synthetic invoice"),
+            ("AES-128", "", None, b"+Synthetic invoice"),
+            ("AES-256", "synthetic user", "synthetic owner", b"-"),
+        ):
+            with self.subTest(algorithm=algorithm, empty_user=not user_password, explicit_owner=owner_password is not None):
+                writer = _pdf_writer(_pdf_text(b"Synthetic invoice"), flate=True)
+                writer.encrypt(user_password=user_password, owner_password=owner_password, algorithm=algorithm)
+                self.assertEqual(worker._render(b"P" + _write_pdf(writer)), expected)
+
+    def test_pdf_rejects_empty_owner_password_with_nonempty_user_password(self):
+        writer = _pdf_writer(_pdf_text(b"Synthetic invoice"))
+        generate_values = AlgV5.generate_values
+
+        def generate_with_empty_owner(revision, user_password, _owner_password, *args):
+            # PdfWriter substitutes the user password for an empty owner password.
+            return generate_values(revision, user_password, b"", *args)
+
+        with patch.object(AlgV5, "generate_values", side_effect=generate_with_empty_owner):
+            writer.encrypt(user_password="synthetic user", owner_password="", algorithm="AES-256")
+        pdf = _write_pdf(writer)
+        self.assertEqual(pypdf.PdfReader(BytesIO(pdf), strict=True).decrypt(b""), PasswordType.OWNER_PASSWORD)
+        self.assertEqual(worker._render(b"P" + pdf), b"-")
+
+    def test_pdf_allows_nonzero_xref_subsection_in_strict_mode(self):
+        pdf = _without_free_xref_entry(_write_pdf(_pdf_writer(_pdf_text(b"Synthetic invoice"))))
+        with self.assertLogs("pypdf._reader", level="WARNING") as warnings:
+            reader = pypdf.PdfReader(BytesIO(pdf), strict=True)
+            self.assertEqual(reader.pages[0].extract_text(), "Synthetic invoice")
+        self.assertIn("Xref table not zero-indexed.", warnings.output[0])
+        with self.assertNoLogs("pypdf", level="WARNING"):
+            self.assertEqual(worker._render(b"P" + pdf), b"+Synthetic invoice")
+
+    def test_pdf_allows_cff_encoding_fallback(self):
+        writer = _pdf_writer(_pdf_text(b"Synthetic invoice"))
+        font = writer.pages[0]["/Resources"]["/Font"]["/F1"]
+        cff = DecodedStreamObject()
+        cff[NameObject("/Subtype")] = NameObject("/Type1C")
+        font[NameObject("/FontDescriptor")] = DictionaryObject({
+            NameObject("/FontFile3"): writer._add_object(cff),
+        })
+        pdf = _write_pdf(writer)
+        with patch.object(_font, "HAS_FONTTOOLS", False):
+            with self.assertLogs("pypdf._cmap", level="WARNING") as warnings:
+                reader = pypdf.PdfReader(BytesIO(pdf), strict=True)
+                self.assertEqual(reader.pages[0].extract_text(), "Synthetic invoice")
+            self.assertIn("fontTools is required to fully parse the encoding of a CFF Type1 font", warnings.output[0])
+            with self.assertNoLogs("pypdf", level="WARNING"):
+                self.assertEqual(worker._render(b"P" + pdf), b"+Synthetic invoice")
+
+    def test_pdf_keeps_unrecognized_warning_templates_fail_closed(self):
+        pdf = _write_pdf(_pdf_writer(_pdf_text(b"Synthetic invoice")))
+        allowed_message = "Xref table not zero-indexed. ID numbers for objects will be corrected."
+        logger = logging.getLogger("pypdf._reader")
+        for log in (
+            lambda: logger.warning("%s", allowed_message),
+            lambda: logger.error(allowed_message),
+            lambda: logging.getLogger("pypdf.filters").warning(allowed_message),
+        ):
+            with patch.object(pypdf.PdfReader, "read", side_effect=log), self.assertNoLogs("pypdf", level="WARNING"):
+                self.assertEqual(worker._render(b"P" + pdf), b"-")
 
     def test_pdf_rejects_raw_and_decompressed_stream_overflow(self):
         oversized = b" " * (worker.MAX_PDF_STREAM_BYTES + 1)
@@ -260,7 +336,8 @@ class TestGmailWorker(unittest.TestCase):
         self.assertEqual(worker._render(b"P" + _write_pdf(_pdf_writer(nested))), b"-")
 
     def test_pdf_rejects_malformed_input_and_text_overflow(self):
-        for data in (b"%PDF-1.7\n", b"%PDF-1.7\n%%EOF", b"%PDF-synthetic"):
+        truncated = _write_pdf(_pdf_writer(_pdf_text(b"Synthetic invoice"))).removesuffix(b"%%EOF\n")
+        for data in (b"%PDF-1.7\n", b"%PDF-1.7\n%%EOF", b"%PDF-synthetic", truncated):
             with self.subTest(data=data):
                 self.assertEqual(worker._render(b"P" + data), b"-")
         writer = _pdf_writer(None)
