@@ -220,15 +220,28 @@ Rozwijane są `RRULE` i `RDATE` przez bibliotekę `recurring-ical-events`, pomij
 `EXDATE` oraz wszystkie odwołane wystąpienia. Nieistniejąca godzina przy wiosennej
 zmianie czasu jest przesuwana z użyciem wcześniejszego przesunięcia UTC i liczy się
 do `COUNT` zgodnie z erratą RFC 5545. Przed wywołaniem biblioteki każda reguła `RRULE`
-musi pasować do konserwatywnej białej listy: `FREQ` z zestawu `DAILY`, `WEEKLY`,
-`MONTHLY`, `YEARLY` oraz parametry `INTERVAL`, `COUNT`, `UNTIL`, `WKST`, `BYDAY`
-(z liczebnikami porządkowymi tylko dla `MONTHLY` i `YEARLY`), `BYMONTHDAY` i `BYMONTH`.
-`BYSETPOS` jest dozwolone wyłącznie dla `MONTHLY` (zakres `1 <= |pos| <= 5`) i `YEARLY`
-(zakres `1 <= |pos| <= 53`), wyłącznie w połączeniu z `BYDAY`. Reguły spoza białej
-listy — m.in. `SECONDLY`, `MINUTELY`, `HOURLY`, `BYYEARDAY`, `BYWEEKNO`, `BYHOUR`,
-`BYMINUTE`, `BYSECOND`, inne użycia `BYSETPOS`, porządkowe `BYDAY` przy `DAILY`/`WEEKLY`
-oraz niemożliwe pary `BYMONTH` i `BYMONTHDAY` (lub wartości spoza zakresu) — korzystają
-z fallbacku zwracającego tylko `DTSTART` z `truncated: true` i wpisem do dziennika.
+musi pasować do konserwatywnej białej listy kształtów **dowiedliwie produktywnych**:
+każdy odwiedzany okres musi dawać co najmniej jednego kandydata (oraz co najmniej `|pos|`
+kandydatów przy użyciu `BYSETPOS`) albo reguła musi mieć `INTERVAL=1` z przerwą między
+dopasowaniami ograniczoną 400-letnim cyklem gregoriańskim (np. 29 lutego w poniedziałek).
+Dozwolone jest `FREQ` z zestawu `DAILY`, `WEEKLY`, `MONTHLY`, `YEARLY`, `INTERVAL`
+do 1000, `COUNT`, `UNTIL`, `WKST`, `BYDAY`, `BYMONTHDAY` oraz `BYMONTH`.
+`BYSETPOS` jest dozwolone wyłącznie dla `MONTHLY` lub `YEARLY` z `BYDAY` bez liczebników
+porządkowych i bez `BYMONTHDAY` (dla `MONTHLY` także bez `BYMONTH`, a dla `YEARLY` bez
+`BYMONTH` albo z jednym miesiącem): każde `|pos|` musi mieścić się w gwarantowanej
+liczbie wystąpień dni tygodnia (`4 * len(BYDAY)` w miesiącu lub jednym miesiącu roku,
+`52 * len(BYDAY)` w całym roku). Przy `INTERVAL > 1` odrzucane są ponadto: `DAILY` i
+`WEEKLY` z `BYMONTH`/`BYMONTHDAY`, `DAILY` z nieosiągalnym `BYDAY` względem kroku mod 7,
+`MONTHLY` z `BYMONTH` nieosiągalnym w cyklu `(m0 - 1 + k*I) mod 12`, `BYMONTHDAY`
+`>= 29` lub `<= -29`, porządkowe `BYDAY` `>= 5` lub `<= -5`, każde przecięcie
+`BYDAY`+`BYMONTHDAY` oraz `DTSTART` w dniach 29–31 bez `BYMONTHDAY` i `BYDAY` dla
+`MONTHLY`/`YEARLY` (w tym 29 lutego w `YEARLY`). Przy `INTERVAL=1` dozwolone są
+przecięcia `BYDAY`+`BYMONTHDAY`, reguły przestępne oraz `BYMONTH` z `BYMONTHDAY` (lub
+domyślnym dniem `DTSTART`), gdy każdy wskazany miesiąc ma ten dzień; dla `YEARLY` z
+`BYMONTH` liczebnik porządkowy `BYDAY` jest ograniczony do 5. Reguły spoza białej listy
+— m.in. `SECONDLY`, `MINUTELY`, `HOURLY`, `BYYEARDAY`, `BYWEEKNO`, `BYHOUR`, `BYMINUTE`,
+`BYSECOND`, porządkowe `BYDAY` przy `DAILY`/`WEEKLY` oraz reguły nieproduktywne —
+korzystają z fallbacku zwracającego tylko `DTSTART` z `truncated: true` i wpisem do dziennika.
 Jeśli górne oszacowanie liczby wystąpień w poszerzonym oknie przekracza 5000 albo
 szacowana liczba badanych kroków replay od `DTSTART` do końca poszerzonego okna
 przekracza 200000, stosowany jest ten sam fallback bez wywoływania biblioteki. Szacunek

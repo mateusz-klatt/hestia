@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -706,55 +706,142 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
                            "recurrence": ["RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU"]})
         await self.create({"summary": "Last Weekday", "start": {"date": "2026-01-30"}, "end": {"date": "2026-01-31"},
                            "recurrence": ["RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1"]})
+        await self.create({"summary": "Sixth Weekday",
+                           "start": {"dateTime": "2026-01-08T09:00:00Z", "timeZone": "UTC"},
+                           "end": {"dateTime": "2026-01-08T10:00:00Z", "timeZone": "UTC"},
+                           "recurrence": ["RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=6"]})
         await self.create({"summary": "Fourth Monday Jan", "start": {"date": "2026-01-26"}, "end": {"date": "2026-01-27"},
                            "recurrence": ["RRULE:FREQ=YEARLY;BYMONTH=1;BYDAY=MO;BYSETPOS=4;WKST=SU"]})
+        await self.create({"summary": "Bimonthly Last Friday", "start": {"date": "2026-01-30"}, "end": {"date": "2026-01-31"},
+                           "recurrence": ["RRULE:FREQ=MONTHLY;INTERVAL=2;BYDAY=-1FR"]})
+        await self.create({"summary": "Friday 13th", "start": {"date": "2026-02-13"}, "end": {"date": "2026-02-14"},
+                           "recurrence": ["RRULE:FREQ=MONTHLY;BYDAY=FR;BYMONTHDAY=13"]})
+        await self.create({"summary": "March 15 bimonthly", "start": {"date": "2026-01-15"}, "end": {"date": "2026-01-16"},
+                           "recurrence": ["RRULE:FREQ=MONTHLY;INTERVAL=2;BYMONTH=3;BYMONTHDAY=15"]})
         response = await self.instances("from=2026-01-01&to=2026-04-01")
         self.assertEqual(response.status, 200)
         state = await response.json()
         by_summary = {}
         for item in state["instances"]:
-            by_summary.setdefault(item["summary"], []).append(item["start"]["date"])
+            value = item["start"].get("date") or item["start"]["dateTime"][:10]
+            by_summary.setdefault(item["summary"], []).append(value)
         self.assertEqual(by_summary, {
+            "Friday 13th": ["2026-02-13", "2026-03-13"],
+            "Sixth Weekday": ["2026-01-08", "2026-02-09", "2026-03-09"],
             "Fourth Monday Jan": ["2026-01-26"],
             "Last Friday": ["2026-01-30", "2026-02-27", "2026-03-27"],
+            "Bimonthly Last Friday": ["2026-01-30", "2026-03-27"],
             "Last Weekday": ["2026-01-30", "2026-02-27", "2026-03-31"],
+            "March 15 bimonthly": ["2026-01-15", "2026-03-15"],
             "Last Sunday March": ["2026-03-29"],
         })
         self.assertFalse(state["truncated"])
 
-    async def test_instances_disallowed_rule_shapes_use_dtstart_fallback(self):
-        rules = [
-            "RRULE:FREQ=YEARLY;BYYEARDAY=1",
-            "RRULE:FREQ=YEARLY;BYWEEKNO=1;BYDAY=MO",
-            "RRULE:FREQ=DAILY;BYHOUR=9",
-            "RRULE:FREQ=DAILY;BYMINUTE=0",
-            "RRULE:FREQ=DAILY;BYSECOND=0",
-            "RRULE:FREQ=MONTHLY;BYMONTHDAY=1,15;BYSETPOS=1",
-            "RRULE:FREQ=WEEKLY;BYDAY=MO,FR;BYSETPOS=1",
-            "RRULE:FREQ=MONTHLY;BYDAY=MO;BYSETPOS=6",
-            "RRULE:FREQ=MONTHLY;BYDAY=MO;BYSETPOS=0",
-            "RRULE:FREQ=YEARLY;BYDAY=MO;BYSETPOS=-54",
-            "RRULE:FREQ=DAILY;BYDAY=1MO",
-            "RRULE:FREQ=WEEKLY;BYDAY=-1FR",
-            "RRULE:FREQ=MONTHLY;BYDAY=6MO",
-            "RRULE:FREQ=YEARLY;BYDAY=54MO",
-            "RRULE:FREQ=YEARLY;BYMONTH=13",
-            "RRULE:FREQ=MONTHLY;BYMONTHDAY=32",
-        ]
-        for day, rule in enumerate(rules, start=1):
-            with self.subTest(rule=rule):
-                event = await self.create({"summary": f"Fallback {day}",
-                                           "start": {"dateTime": f"2026-01-{day:02d}T09:00:00Z", "timeZone": "UTC"},
-                                           "end": {"dateTime": f"2026-01-{day:02d}T10:00:00Z", "timeZone": "UTC"},
+    async def test_instances_productive_cycle_and_reachability_expansions(self):
+        await self.create({"summary": "Leap day", "start": {"date": "2024-02-29"}, "end": {"date": "2024-03-01"},
+                           "recurrence": ["RRULE:FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29"]})
+        await self.create({"summary": "Month30", "start": {"date": "2026-04-30"}, "end": {"date": "2026-05-01"},
+                           "recurrence": ["RRULE:FREQ=MONTHLY;BYMONTH=4,6;BYMONTHDAY=30"]})
+        await self.create({"summary": "Yearly pos 52", "start": {"date": "2026-12-28"}, "end": {"date": "2026-12-29"},
+                           "recurrence": ["RRULE:FREQ=YEARLY;BYDAY=MO;BYSETPOS=52"]})
+        await self.create({"summary": "Daily odd", "start": {"date": "2026-01-05"}, "end": {"date": "2026-01-06"},
+                           "recurrence": ["RRULE:FREQ=DAILY;INTERVAL=2;BYDAY=MO"]})
+        await self.create({"summary": "Interval 1000", "start": {"date": "2026-01-05"}, "end": {"date": "2026-01-06"},
+                           "recurrence": ["RRULE:FREQ=DAILY;INTERVAL=1000"]})
+        await self.create({"summary": "Leap Monday", "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
+                           "recurrence": ["RRULE:FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29;BYDAY=MO"]})
+        res_leap = await (await self.instances("from=2028-02-28&to=2028-03-01")).json()
+        self.assertEqual([item["start"]["date"] for item in res_leap["instances"] if item["summary"] == "Leap day"], ["2028-02-29"])
+        self.assertFalse(res_leap["truncated"])
+        res_m30 = await (await self.instances("from=2026-04-01&to=2026-07-01")).json()
+        self.assertEqual([item["start"]["date"] for item in res_m30["instances"] if item["summary"] == "Month30"],
+                         ["2026-04-30", "2026-06-30"])
+        res_jan = await (await self.instances("from=2026-01-05&to=2026-01-20")).json()
+        self.assertEqual([item["start"]["date"] for item in res_jan["instances"] if item["summary"] == "Daily odd"],
+                         ["2026-01-05", "2026-01-19"])
+        self.assertEqual([item["start"]["date"] for item in res_jan["instances"] if item["summary"] == "Interval 1000"],
+                         ["2026-01-05"])
+        res_dec = await (await self.instances("from=2026-12-01&to=2027-01-01")).json()
+        self.assertEqual([item["start"]["date"] for item in res_dec["instances"] if item["summary"] == "Yearly pos 52"],
+                         ["2026-12-28"])
+
+    async def test_instances_leap_day_bysetpos_and_unreachable_interval_fall_back(self):
+        for summary, start, rule in [
+            ("Codex (a) pos 2", "2026-01-01T09:00:00Z", "RRULE:FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29;BYDAY=MO;BYSETPOS=2"),
+            ("Codex (a) pos 53", "2026-01-01T09:00:00Z", "RRULE:FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29;BYDAY=MO;BYSETPOS=53"),
+            ("Codex (b) Jan->Jun", "2026-01-01T09:00:00Z", "RRULE:FREQ=MONTHLY;INTERVAL=12;BYMONTH=6"),
+        ]:
+            with self.subTest(summary=summary):
+                event = await self.create({"summary": summary,
+                                           "start": {"dateTime": start, "timeZone": "UTC"},
+                                           "end": {"dateTime": start.replace("09:00", "10:00"), "timeZone": "UTC"},
                                            "recurrence": [rule]})
                 started = time.monotonic()
                 with mock.patch.object(instance_expander, "of", side_effect=AssertionError("library replay")):
                     with self.assertLogs("hestia.calendar_sync.instances", level="WARNING"):
-                        response = await self.instances(f"from=2026-01-{day:02d}&to=2026-01-{day + 1:02d}")
+                        response = await self.instances("from=2026-01-01&to=2026-02-01")
                 self.assertLess(time.monotonic() - started, 1)
                 self.assertEqual(response.status, 200)
                 state = await response.json()
-                self.assertEqual([item["event_id"] for item in state["instances"]], [event["id"]])
+                self.assertIn(event["id"], [item["event_id"] for item in state["instances"]])
+                self.assertTrue(state["truncated"])
+
+    async def test_instances_disallowed_rule_shapes_use_dtstart_fallback(self):
+        cases = [
+            ("2026-01-01", "RRULE:FREQ=YEARLY;BYYEARDAY=1"),
+            ("2026-01-02", "RRULE:FREQ=YEARLY;BYWEEKNO=1;BYDAY=MO"),
+            ("2026-01-03", "RRULE:FREQ=DAILY;BYHOUR=9"),
+            ("2026-01-04", "RRULE:FREQ=DAILY;BYMINUTE=0"),
+            ("2026-01-05", "RRULE:FREQ=DAILY;BYSECOND=0"),
+            ("2026-01-06", "RRULE:FREQ=MONTHLY;BYMONTHDAY=1,15;BYSETPOS=1"),
+            ("2026-01-07", "RRULE:FREQ=WEEKLY;BYDAY=MO,FR;BYSETPOS=1"),
+            ("2026-01-08", "RRULE:FREQ=MONTHLY;BYDAY=1MO;BYSETPOS=1"),
+            ("2026-01-09", "RRULE:FREQ=MONTHLY;BYMONTH=1;BYDAY=MO;BYSETPOS=1"),
+            ("2026-01-10", "RRULE:FREQ=YEARLY;BYMONTH=1,2;BYDAY=MO;BYSETPOS=1"),
+            ("2026-01-11", "RRULE:FREQ=MONTHLY;BYDAY=MO;BYSETPOS=5"),
+            ("2026-01-12", "RRULE:FREQ=MONTHLY;BYDAY=MO,MO;BYSETPOS=5"),
+            ("2026-01-13", "RRULE:FREQ=MONTHLY;BYDAY=MO;BYSETPOS=0"),
+            ("2026-01-14", "RRULE:FREQ=YEARLY;BYMONTH=1;BYDAY=MO;BYSETPOS=5"),
+            ("2026-01-15", "RRULE:FREQ=YEARLY;BYDAY=MO;BYSETPOS=53"),
+            ("2026-01-16", "RRULE:FREQ=DAILY;BYDAY=1MO"),
+            ("2026-01-17", "RRULE:FREQ=WEEKLY;BYDAY=-1FR"),
+            ("2026-01-18", "RRULE:FREQ=MONTHLY;BYDAY=6MO"),
+            ("2026-01-19", "RRULE:FREQ=YEARLY;BYMONTH=2;BYDAY=6MO"),
+            ("2026-01-20", "RRULE:FREQ=YEARLY;BYDAY=54MO"),
+            ("2026-01-21", "RRULE:FREQ=YEARLY;BYMONTH=13"),
+            ("2026-01-22", "RRULE:FREQ=MONTHLY;BYMONTHDAY=32"),
+            ("2026-01-23", "RRULE:FREQ=DAILY;INTERVAL=1001"),
+            ("2026-01-24", "RRULE:FREQ=DAILY;INTERVAL=2;BYMONTH=1"),
+            ("2026-01-25", "RRULE:FREQ=DAILY;INTERVAL=2;BYMONTHDAY=15"),
+            ("2026-01-26", "RRULE:FREQ=WEEKLY;INTERVAL=2;BYMONTH=1"),
+            ("2026-01-27", "RRULE:FREQ=WEEKLY;INTERVAL=2;BYMONTHDAY=15"),
+            ("2026-01-25", "RRULE:FREQ=DAILY;INTERVAL=7;BYDAY=MO"),
+            ("2026-02-01", "RRULE:FREQ=MONTHLY;INTERVAL=2;BYMONTHDAY=29"),
+            ("2026-02-02", "RRULE:FREQ=MONTHLY;INTERVAL=2;BYMONTHDAY=-29"),
+            ("2026-02-03", "RRULE:FREQ=MONTHLY;INTERVAL=2;BYDAY=5MO"),
+            ("2026-02-04", "RRULE:FREQ=YEARLY;INTERVAL=2;BYDAY=-5FR"),
+            ("2026-02-05", "RRULE:FREQ=MONTHLY;INTERVAL=2;BYDAY=FR;BYMONTHDAY=13"),
+            ("2026-01-31", "RRULE:FREQ=MONTHLY;INTERVAL=2"),
+            ("2024-02-29", "RRULE:FREQ=YEARLY;INTERVAL=2"),
+            ("2026-02-06", "RRULE:FREQ=MONTHLY;BYMONTH=2,4;BYMONTHDAY=30"),
+            ("2026-01-31", "RRULE:FREQ=YEARLY;BYMONTH=6"),
+        ]
+        for index, (day_str, rule) in enumerate(cases):
+            with self.subTest(rule=rule):
+                day = date.fromisoformat(day_str)
+                event = await self.create({"summary": f"Fallback {index}",
+                                           "start": {"dateTime": f"{day_str}T09:00:00Z", "timeZone": "UTC"},
+                                           "end": {"dateTime": f"{day_str}T10:00:00Z", "timeZone": "UTC"},
+                                           "recurrence": [rule]})
+                started = time.monotonic()
+                next_day = (day + timedelta(days=1)).isoformat()
+                with mock.patch.object(instance_expander, "of", side_effect=AssertionError("library replay")):
+                    with self.assertLogs("hestia.calendar_sync.instances", level="WARNING"):
+                        response = await self.instances(f"from={day_str}&to={next_day}")
+                self.assertLess(time.monotonic() - started, 1)
+                self.assertEqual(response.status, 200)
+                state = await response.json()
+                self.assertIn(event["id"], [item["event_id"] for item in state["instances"]])
                 self.assertTrue(state["truncated"])
 
     async def test_instances_all_day_next_day_override_retains_membership(self):
@@ -963,17 +1050,18 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
                                                        {"date": "9999-12-31"}))
 
     async def test_instances_incompatible_rule_does_not_fail_group(self):
-        incompatible = await self.create({"summary": "Out-of-range ordinal in month",
+        incompatible = await self.create({"summary": "Incompatible library rule",
                                           "start": {"dateTime": "2026-01-01T09:00:00Z", "timeZone": "UTC"},
                                           "end": {"dateTime": "2026-01-01T10:00:00Z", "timeZone": "UTC"},
-                                          "recurrence": ["RRULE:FREQ=YEARLY;BYMONTH=12;BYDAY=10MO;COUNT=2"]})
+                                          "recurrence": ["RRULE:FREQ=DAILY;COUNT=2"]})
         healthy = await self.create({"summary": "Healthy", "start": {"date": "2026-01-02"}, "end": {"date": "2026-01-03"}})
-        with self.assertLogs("hestia.calendar_sync.instances", level="WARNING") as logs:
-            response = await self.instances("from=2026-01-01&to=2026-01-03")
+        with mock.patch.object(instance_expander, "of", side_effect=ValueError("incompatible")):
+            with self.assertLogs("hestia.calendar_sync.instances", level="WARNING") as logs:
+                response = await self.instances("from=2026-01-01&to=2026-01-03")
         self.assertEqual(response.status, 200)
         state = await response.json()
         self.assertEqual([(item["event_id"], item["summary"]) for item in state["instances"]],
-                         [(incompatible["id"], "Out-of-range ordinal in month"), (healthy["id"], "Healthy")])
+                         [(incompatible["id"], "Incompatible library rule"), (healthy["id"], "Healthy")])
         self.assertTrue(state["truncated"])
         self.assertTrue(any(incompatible["id"] in line for line in logs.output))
 
@@ -1051,6 +1139,7 @@ class CalendarApiContractTests(unittest.TestCase):
         yearly = {"start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
                   "recurrence": ["RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU"]}
         self.assertEqual(instance_expander._replay_upper_bound(yearly, end), 732)
+        start_day = {"start": {"date": "2026-01-01"}}
         for bad_rule in (
             "RRULE:broken",
             "RRULE:FREQ=DAILY;FREQ=WEEKLY",
@@ -1063,8 +1152,11 @@ class CalendarApiContractTests(unittest.TestCase):
             "RRULE:FREQ=DAILY;BYMONTH=4;BYMONTHDAY=-31",
         ):
             with self.subTest(bad_rule=bad_rule):
-                self.assertIsNotNone(instance_expander._unsupported_rule_reason({"recurrence": [bad_rule]}))
-        self.assertIsNone(instance_expander._unsupported_rule_reason({"recurrence": ["RRULE:FREQ=DAILY;BYMONTH=2;BYMONTHDAY=-29"]}))
+                self.assertIsNotNone(instance_expander._unsupported_rule_reason({**start_day, "recurrence": [bad_rule]}))
+        self.assertIsNone(instance_expander._unsupported_rule_reason({**start_day, "recurrence": ["RRULE:FREQ=DAILY;BYMONTH=2;BYMONTHDAY=-29"]}))
+        ny_jan31 = {"start": {"dateTime": "2026-02-01T04:30:00Z", "timeZone": "America/New_York"},
+                    "recurrence": ["RRULE:FREQ=MONTHLY;INTERVAL=2"]}
+        self.assertIsNotNone(instance_expander._unsupported_rule_reason(ny_jan31))
 
     def test_double_failure_fallback(self):
         event = {"id": "event", "uid": "event", "payload": {"start": {"date": "2026-01-01"}}}
