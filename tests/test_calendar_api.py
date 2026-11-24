@@ -415,7 +415,7 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
                            "recurrence": ["RRULE:FREQ=DAILY"]})
         with mock.patch.object(instance_expander, "of", side_effect=AssertionError("library replay")):
             with self.assertLogs("hestia.calendar_sync.instances", level="WARNING") as logs:
-                response = await self.instances("from=2026-01-01&to=2026-01-04")
+                response = await self.instances("from=9999-01-01&to=9999-01-04")
         self.assertEqual(response.status, 200)
         state = await response.json()
         self.assertEqual(state["instances"], [])
@@ -872,15 +872,12 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
                    "start": {"dateTime": "2000-01-01T09:00:00Z", "timeZone": "UTC"},
                    "end": {"dateTime": "2000-01-01T10:00:00Z", "timeZone": "UTC"},
                    "recurrence": ["RRULE:FREQ=DAILY"]}
-        store = api._store()
-        for index in range(1000):
-            store.save_local("family", payload, idempotency_key=f"codex-1000-series-{index:04d}")
-        ordered_ids = [row["id"] for row in store.list_events("family")]
+        ordered_ids = self._seed_group_events(1000, "daily", payload)
         per_event_bound = instance_expander._replay_upper_bound(
             payload, datetime(2026, 1, 4, tzinfo=timezone.utc), datetime(2026, 1, 1, tzinfo=timezone.utc)
         )
         expected_expanded = instance_expander.REQUEST_REPLAY_BUDGET // per_event_bound
-        self.assertEqual(expected_expanded, 21)
+        self.assertEqual(expected_expanded, 63)
 
         started = time.monotonic()
         with self.assertLogs("hestia.calendar_sync.instances", level="WARNING") as logs:
@@ -896,6 +893,109 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
             for item in state["instances"]
         ))
         self.assertIn("remaining request replay bound", "\n".join(logs.output))
+
+    def _seed_group_events(self, count: int, prefix: str, payload: dict) -> list[str]:
+        encoded = json.dumps(payload)
+        ordered_ids = [f"{prefix}-{index:04d}" for index in range(count)]
+        store = api._store()
+        with store.transaction() as session:
+            session.add_all([
+                db.CalendarEvent(
+                    id=identifier, group_id="family", uid=f"{identifier}@hestia",
+                    payload_json=encoded, fingerprint=f"fp-{identifier}",
+                    deleted=False, deleted_at=None, revision=1, modified_at=0.0, source="local",
+                )
+                for identifier in ordered_ids
+            ])
+        return ordered_ids
+
+    async def test_instances_codex_1000_rdate_and_exdate_events_charge_budget_before_parsing(self):
+        rdates = [f"RDATE:202601{(i % 28) + 1:02d}T{i % 24:02d}{i % 60:02d}00Z" for i in range(500)]
+        rdate_payload = {"summary": "Many RDATEs",
+                         "start": {"dateTime": "2025-12-01T00:00:00+00:00", "timeZone": "UTC"},
+                         "end": {"dateTime": "2025-12-01T01:00:00+00:00", "timeZone": "UTC"},
+                         "recurrence": rdates}
+        ordered_ids = self._seed_group_events(1000, "rdate", rdate_payload)
+        started = time.monotonic()
+        with mock.patch.object(instance_expander, "_property_values", wraps=instance_expander._property_values) as parser:
+            with self.assertLogs("hestia.calendar_sync.instances", level="WARNING"):
+                response = await self.instances("from=2026-01-01&to=2026-01-29")
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(response.status, 200)
+        state = await response.json()
+        self.assertTrue(state["truncated"])
+        self.assertEqual(len(state["instances"]), 1000)
+        self.assertEqual(sorted({item["event_id"] for item in state["instances"]}), ordered_ids[:2])
+        # Only the 2 events within budget parsed RDATE+EXDATE (plus 0 EXDATE calls on out-of-window DTSTART fallbacks).
+        self.assertEqual(parser.call_count, 4)
+
+        # Verify EXDATE-only events with in-window DTSTART also charge before expansion and stay < 2s.
+        exdates = [f"EXDATE:202601{(i % 27) + 2:02d}T{i % 24:02d}{i % 60:02d}00Z" for i in range(500)]
+        exdate_events = [
+            {"id": f"ex{i:04d}", "uid": f"ex{i:04d}", "revision": 1, "group_id": "family",
+             "payload": {"summary": "Many EXDATEs",
+                         "start": {"dateTime": "2026-01-01T09:00:00+00:00", "timeZone": "UTC"},
+                         "end": {"dateTime": "2026-01-01T10:00:00+00:00", "timeZone": "UTC"},
+                         "recurrence": exdates}}
+            for i in range(1000)
+        ]
+        started = time.monotonic()
+        with self.assertLogs("hestia.calendar_sync.instances", level="WARNING"):
+            ex_result = instance_expander.expand_events(exdate_events, date(2026, 1, 1), date(2026, 1, 2))
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertTrue(ex_result["truncated"])
+        self.assertEqual(len(ex_result["instances"]), 1000)
+
+    async def test_instances_codex_1500_yearly_s1_series_use_day_check_budget(self):
+        yearly_payload = {"summary": "Yearly 1900",
+                          "start": {"dateTime": "1900-01-01T09:00:00+00:00", "timeZone": "UTC"},
+                          "end": {"dateTime": "1900-01-01T10:00:00+00:00", "timeZone": "UTC"},
+                          "recurrence": ["RRULE:FREQ=YEARLY"]}
+        ordered_ids = self._seed_group_events(1500, "yr", yearly_payload)
+        per_event = instance_expander._replay_upper_bound(
+            yearly_payload, datetime(2026, 1, 4, tzinfo=timezone.utc), datetime(2025, 12, 31, tzinfo=timezone.utc)
+        )
+        self.assertGreater(per_event, 46_000)
+        expected_expanded = instance_expander.REQUEST_REPLAY_BUDGET // per_event
+        self.assertEqual(expected_expanded, 12)
+        started = time.monotonic()
+        with self.assertLogs("hestia.calendar_sync.instances", level="WARNING"):
+            response = await self.instances("from=2026-01-01&to=2026-01-03")
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(response.status, 200)
+        state = await response.json()
+        self.assertTrue(state["truncated"])
+        self.assertEqual([item["event_id"] for item in state["instances"]], ordered_ids[:expected_expanded])
+
+    async def test_instances_moved_override_at_padded_query_end_is_not_dropped(self):
+        await self.create({
+            "summary": "Moved boundary",
+            "start": {"dateTime": "2026-01-01T00:00:00Z", "timeZone": "UTC"},
+            "end": {"dateTime": "2026-01-01T01:00:00Z", "timeZone": "UTC"},
+            "recurrence": ["RRULE:FREQ=DAILY"],
+            "exceptions": [
+                {"originalStartTime": {"dateTime": "2026-01-03T00:00:00Z"},
+                 "summary": "Moved into Jan 1",
+                 "start": {"dateTime": "2026-01-01T12:00:00Z", "timeZone": "UTC"},
+                 "end": {"dateTime": "2026-01-01T13:00:00Z", "timeZone": "UTC"}},
+                {"originalStartTime": {"dateTime": "2026-01-02T12:00:00Z"},
+                 "summary": "True orphan inside padded window",
+                 "start": {"dateTime": "2026-01-01T15:00:00Z", "timeZone": "UTC"},
+                 "end": {"dateTime": "2026-01-01T16:00:00Z", "timeZone": "UTC"}},
+            ],
+        })
+        response = await self.instances("from=2026-01-01&to=2026-01-02")
+        self.assertEqual(response.status, 200)
+        state = await response.json()
+        self.assertFalse(state["truncated"])
+        self.assertEqual(
+            [(item["summary"], item["start"]["dateTime"], item["recurrence_id"]["dateTime"])
+             for item in state["instances"]],
+            [
+                ("Moved boundary", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+                ("Moved into Jan 1", "2026-01-01T12:00:00+00:00", "2026-01-03T00:00:00+00:00"),
+            ],
+        )
 
     def test_expand_events_shared_budget_fallback_and_exact_boundary(self):
         events = [
@@ -1288,7 +1388,27 @@ class CalendarApiContractTests(unittest.TestCase):
         daily = {"start": {"dateTime": "2026-01-01T00:00:00Z", "timeZone": "UTC"},
                  "end": {"dateTime": "2026-01-01T01:00:00Z", "timeZone": "UTC"},
                  "recurrence": ["RRULE:FREQ=DAILY", "RDATE:20260102T000000Z"]}
-        self.assertEqual(instance_expander._replay_upper_bound(daily, end), 3)
+        self.assertEqual(instance_expander._replay_upper_bound(daily, end), 503)
+        yearly_s1 = {"start": {"dateTime": "1900-01-01T09:00:00Z", "timeZone": "UTC"},
+                     "end": {"dateTime": "1900-01-01T10:00:00Z", "timeZone": "UTC"},
+                     "recurrence": ["RRULE:FREQ=YEARLY"]}
+        self.assertEqual(
+            instance_expander._replay_upper_bound(yearly_s1, datetime(2026, 1, 4, tzinfo=timezone.utc)),
+            46848,
+        )
+        comma_rdate = {"start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
+                       "recurrence": ["RDATE;VALUE=DATE:20260102,20260103"]}
+        self.assertEqual(instance_expander._replay_upper_bound(comma_rdate, end), 1000)
+        self.assertEqual(
+            instance_expander._property_values({"recurrence": ["RDATE;TZID=Europe/Warsaw:20260101T090000"]}, "RDATE"),
+            [datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)],
+        )
+        self.assertEqual(
+            instance_expander._property_values({"recurrence": ["RDATE:20260101T090000"]}, "RDATE"),
+            [datetime(2026, 1, 1, 9, 0).astimezone(timezone.utc)],
+        )
+        with self.assertRaises(ValueError):
+            instance_expander._property_values({"recurrence": ["RDATE:not-a-date"]}, "RDATE")
         monthly = {"start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
                    "recurrence": ["RRULE:FREQ=MONTHLY;BYDAY=-1FR"]}
         self.assertEqual(instance_expander._replay_upper_bound(monthly, end), 62)

@@ -247,16 +247,19 @@ przecięcia `BYDAY`+`BYMONTHDAY`, `BYSETPOS` przy `YEARLY`/`DAILY`/`WEEKLY`,
 zwraca wyłącznie `DTSTART` (z obsługą `EXDATE` i wyjątków dla `DTSTART`) z
 `truncated: true` i wpisem ostrzeżenia do dziennika serwera.
 Jeśli górne oszacowanie liczby wystąpień w poszerzonym oknie (z uwzględnieniem
-lookbacku od `query_start - czas_trwania`) przekracza 5000 albo szacowana liczba
-badanych kroków replay od `min(DTSTART, query_start - czas_trwania)` do końca
-poszerzonego okna przekracza pozostały wspólny budżet żądania (`REQUEST_REPLAY_BUDGET`,
-200000 kroków na całe żądanie dla wydarzeń przetwarzanych w ustalonej kolejności
-identyfikatorów), stosowany jest ten sam fallback bez wywoływania biblioteki
-(bez pomniejszania pozostałego budżetu dla kolejnych mniejszych lub niecyklicznych
-wydarzeń). Każde rozwinięte wydarzenie z `RRULE` odejmuje swój oszacowany koszt
-od budżetu żądania. Szacunek okresów przyjmuje konserwatywnie do 366 dni w roku, 31 w
-miesiącu, 7 w tygodniu i 1 dziennie przy selektorach `BYDAY`/`BYMONTHDAY`, a `COUNT`
-nie zmniejsza budżetu badanych okresów. Zmieniony wyjątek zastępuje swoje pierwotne wystąpienie.
+lookbacku od `query_start - czas_trwania`) przekracza 5000 albo szacowany koszt
+badania zdarzenia przekracza pozostały wspólny budżet żądania (`REQUEST_REPLAY_BUDGET`,
+600000 jednostek sprawdzeń dni na całe żądanie dla wydarzeń przetwarzanych w ustalonej
+kolejności identyfikatorów), stosowany jest ten sam fallback do `DTSTART` bez
+parsowania `RDATE` i bez wywoływania biblioteki (oraz bez pomniejszania pozostałego
+budżetu dla kolejnych mniejszych lub niecyklicznych wydarzeń). Koszt zdarzenia
+sumuje sprawdzenia dni z `RRULE` od `min(DTSTART, query_start - czas_trwania)` do końca
+poszerzonego okna (`okresy * dni_w_okresie * 1` kandydat dziennie, gdzie `DAILY=1`,
+`WEEKLY=7`, `MONTHLY=31`, `YEARLY=366`, a `COUNT` nie zmniejsza kosztu) oraz policzoną
+przed parsowaniem liczbę jawnych dat `RDATE` i `EXDATE` (po 500 jednostek na każdą
+datę). Każde rozwinięte wydarzenie odejmuje swój koszt od budżetu żądania. Zmieniony
+wyjątek zastępuje swoje pierwotne wystąpienie, a kontrola osieroconych wyjątków używa
+tego samego wyłącznego końca poszerzonego okna co wywołanie biblioteki.
 Odległy `RECURRENCE-ID` nie poszerza generowania, ale zapisany wyjątek trafiający w
 żądane okno może zostać zwrócony jako samodzielne wystąpienie. Uwzględniane są także
 wystąpienia zaczynające się przed oknem, ale nachodzące na nie. Daty całodniowe

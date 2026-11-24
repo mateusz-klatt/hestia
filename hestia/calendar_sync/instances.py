@@ -18,7 +18,11 @@ from .events import original_start_key, to_ical
 
 INSTANCE_LIMIT = 2000
 OCCURRENCE_BOUND = 5000
-REQUEST_REPLAY_BUDGET = 200_000
+# Shared request replay budget in dateutil day-check units across all events in a query.
+# Sized at 600,000 so a normal household calendar expands without truncation (e.g. ~12
+# yearly series from 1900 at ~46.8k each, ~63 daily series from 2000 at ~9.5k each,
+# or a full 500-RDATE/500-EXDATE series) while keeping worst-case daily replay under ~1.3s.
+REQUEST_REPLAY_BUDGET = 600_000
 MAX_EXPLICIT_DATES = 500
 MAX_RECURRING_DURATION = timedelta(days=31)
 _MAX_INTERVAL = 1000
@@ -41,8 +45,9 @@ _FREQUENCY_SECONDS = {
     "MONTHLY": 28 * 86400,
     "YEARLY": 365 * 86400,
 }
-_DAY_CANDIDATES = {"DAILY": 1, "WEEKLY": 7, "MONTHLY": 31, "YEARLY": 366}
-_DAY_SELECTORS = {"BYDAY", "BYMONTHDAY"}
+_DAYS_PER_PERIOD = {"DAILY": 1, "WEEKLY": 7, "MONTHLY": 31, "YEARLY": 366}
+_CANDIDATES_PER_DAY = 1
+_EXPLICIT_DATE_COST = 500  # Explicit RDATE/EXDATE property handling costs ~500x a day-check.
 _LOG = logging.getLogger(__name__)
 
 
@@ -95,10 +100,36 @@ def _make_window(start: date, end: date, zone_name: str) -> _Window:
     return _Window(start, end, zone, _midnight_utc(start, zone, True), _midnight_utc(end, zone, False))
 
 
+def _parse_utc_property_line(line: str, kind: str) -> list | None:
+    header, body = line.split(":", 1)
+    if ";" in header and header.upper() != kind + ";VALUE=DATE":
+        return None
+    parsed = []
+    try:
+        for token in body.split(","):
+            if "T" in token:
+                if not token.endswith("Z"):
+                    return None
+                parsed.append(datetime.fromisoformat(token).astimezone(_UTC))
+            else:
+                parsed.append(date.fromisoformat(token))
+    except ValueError:
+        return None
+    return parsed
+
+
 def _property_values(payload: dict, kind: str) -> list:
     lines = [line for line in payload.get("recurrence", []) if _kind(line) == kind]
     if not lines:
         return []
+    fast_values = []
+    for line in lines:
+        parsed = _parse_utc_property_line(line, kind)
+        if parsed is None:
+            break
+        fast_values.extend(parsed)
+    else:
+        return fast_values
     event = Calendar.from_ical(
         "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\n" + "\r\n".join(lines) + "\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
     ).walk("VEVENT")[0]
@@ -108,6 +139,18 @@ def _property_values(payload: dict, kind: str) -> list:
         for prop in (props if isinstance(props, list) else [props])
         for item in prop.dts
     ]
+
+
+def _explicit_date_counts(payload: dict) -> tuple[int, int]:
+    rdate_count = 0
+    exdate_count = 0
+    for line in payload.get("recurrence", []):
+        kind = _kind(line)
+        if kind == "RDATE":
+            rdate_count += line.split(":", 1)[1].count(",") + 1
+        elif kind == "EXDATE":
+            exdate_count += line.split(":", 1)[1].count(",") + 1
+    return rdate_count, exdate_count
 
 
 def _kind(line: str) -> str:
@@ -389,14 +432,10 @@ def _unsupported_rule_reason(payload: dict) -> str | None:
     return None
 
 
-def _first_instance(event: dict, window: _Window, exdates: set | None = None) -> dict | None:
+def _first_instance(event: dict, window: _Window) -> dict | None:
     payload = event["payload"]
     all_day = "date" in payload["start"]
     starting = _key(payload["start"], all_day)
-    if exdates is None:
-        exdates = set(_property_values(payload, "EXDATE"))
-    if starting in exdates:
-        return None
     content = payload
     for exception in payload.get("exceptions", []):
         if _key(exception["originalStartTime"], all_day) == starting:
@@ -408,6 +447,8 @@ def _first_instance(event: dict, window: _Window, exdates: set | None = None) ->
         if payload.get("status") == "cancelled":
             return None
     if not _overlaps(content, window):
+        return None
+    if starting in set(_property_values(payload, "EXDATE")):
         return None
     recurrence_id = payload["start"] if payload.get("recurrence") else None
     return _instance(event, content, recurrence_id)
@@ -465,15 +506,15 @@ def _replay_upper_bound(payload: dict, end: datetime, query_start: datetime | No
         if lookback < anchor:
             anchor = lookback
     seconds = max(0, (end - anchor).total_seconds())
-    bound = 0
+    rdate_count, exdate_count = _explicit_date_counts(payload)
+    bound = (rdate_count + exdate_count) * _EXPLICIT_DATE_COST
     for line in payload.get("recurrence", []):
         if _kind(line) != "RRULE":
             continue
         parts = _rrule_parts(line)
         frequency = parts["FREQ"]
         periods = ceil(seconds / (_FREQUENCY_SECONDS[frequency] * int(parts.get("INTERVAL", "1")))) + 1
-        per_period = _DAY_CANDIDATES[frequency] if _DAY_SELECTORS.intersection(parts) else 1
-        bound += periods * per_period
+        bound += periods * _DAYS_PER_PERIOD[frequency] * _CANDIDATES_PER_DAY
     return bound
 
 
@@ -482,8 +523,8 @@ def _expand_event(event: dict, window: _Window, budget: _ReplayBudget | None = N
     if not payload.get("recurrence"):
         return ([_instance(event, payload, None)] if _overlaps(payload, window) else []), False
 
-    def dtstart_only(cached_exdates: set | None = None) -> tuple[list[dict], bool]:
-        item = _first_instance(event, window, exdates=cached_exdates)
+    def dtstart_only() -> tuple[list[dict], bool]:
+        item = _first_instance(event, window)
         return ([item] if item is not None else []), True
 
     rrules = [line for line in payload.get("recurrence", []) if _kind(line) == "RRULE"]
@@ -498,12 +539,10 @@ def _expand_event(event: dict, window: _Window, budget: _ReplayBudget | None = N
     if reason is not None:
         _LOG.warning("Calendar event %s %s; using DTSTART only", event["id"], reason)
         return dtstart_only()
-    rdates = _property_values(payload, "RDATE")
-    exdates_list = _property_values(payload, "EXDATE")
-    exdates = set(exdates_list)
-    if len(rdates) > MAX_EXPLICIT_DATES or len(exdates_list) > MAX_EXPLICIT_DATES:
+    rdate_count, exdate_count = _explicit_date_counts(payload)
+    if rdate_count > MAX_EXPLICIT_DATES or exdate_count > MAX_EXPLICIT_DATES:
         _LOG.warning("Calendar event %s exceeds the 500 explicit recurrence date limit; using DTSTART only", event["id"])
-        return dtstart_only(exdates)
+        return dtstart_only()
     all_day = "date" in payload["start"]
     if all_day:
         first, last = _shift_date(window.start, -1), _shift_date(window.end, 1)
@@ -517,16 +556,18 @@ def _expand_event(event: dict, window: _Window, budget: _ReplayBudget | None = N
     exceptions = {_key(item["originalStartTime"], all_day): item for item in payload.get("exceptions", [])}
     pending = {original: item for original, item in exceptions.items() if _overlaps(item, window)}
     lookback_start = _shift_datetime(query_start, -duration)
-    if _occurrence_upper_bound(payload, lookback_start, query_end, len(rdates)) > OCCURRENCE_BOUND:
+    if _occurrence_upper_bound(payload, lookback_start, query_end, rdate_count) > OCCURRENCE_BOUND:
         _LOG.warning("Calendar event %s exceeds the instance occurrence bound; using DTSTART only", event["id"])
-        return dtstart_only(exdates)
+        return dtstart_only()
     if budget is None:
         budget = _ReplayBudget()
     replay_bound = _replay_upper_bound(payload, query_end, query_start)
     if replay_bound > budget.remaining:
         _LOG.warning("Calendar event %s exceeds the remaining request replay bound; using DTSTART only", event["id"])
-        return dtstart_only(exdates)
+        return dtstart_only()
     budget.remaining -= replay_bound
+    rdates = _property_values(payload, "RDATE")
+    exdates = set(_property_values(payload, "EXDATE"))
 
     explicit = {_key(payload["start"], all_day), *rdates}
     seen_overrides = set()
@@ -575,7 +616,7 @@ def _expand_event(event: dict, window: _Window, budget: _ReplayBudget | None = N
         if original in seen_overrides or original in exdates:
             continue
         if original not in explicit and original not in series_slots:
-            near = first <= original <= last if all_day else query_start <= original <= query_end
+            near = first <= original <= last if all_day else query_start <= original < query_end
             if near:
                 _LOG.debug("Skipping orphan override for calendar event %s at %s", event["id"], original.isoformat())
                 continue
