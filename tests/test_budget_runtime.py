@@ -142,6 +142,8 @@ class BudgetRuntimeTests(AdvancingTime, unittest.TestCase):
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
             code = cli.main(arguments)
+            # Unsuppressed: a connection this CLI call leaked surfaces in the captured stderr.
+            gc.collect()
         return code, stdout.getvalue(), stderr.getvalue()
 
     def cli_acquisition(self, config, *, path):
