@@ -41,6 +41,7 @@ const BUDGET_ROOT = path.dirname(url.fileURLToPath(import.meta.url));
 /**
  * Explicit allowlist for exact strings that are genuinely locale-invariant outside i18n.
  * ISO 4217 currency code input placeholder `"PLN"` stays identical across all locales.
+ * Interpolated template keys join decoded static parts with `${}` and trim the result.
  */
 const ALLOWED_LITERALS: Readonly<Record<string, readonly string[]>> = {
   "analytics/mortgages.tsx": ["PLN"],
@@ -165,8 +166,10 @@ function trailingIdentifierName(expr: ts.Expression): string | null {
   return null;
 }
 
-function collectJsxLiteralBranches(expr: ts.Expression, out: Array<ts.StringLiteral | ts.NoSubstitutionTemplateLiteral>): void {
-  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
+type JsxLiteralBranch = ts.StringLiteral | ts.NoSubstitutionTemplateLiteral | ts.TemplateExpression;
+
+function collectJsxLiteralBranches(expr: ts.Expression, out: JsxLiteralBranch[]): void {
+  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr) || ts.isTemplateExpression(expr)) {
     out.push(expr);
     return;
   }
@@ -177,7 +180,17 @@ function collectJsxLiteralBranches(expr: ts.Expression, out: Array<ts.StringLite
   }
   if (ts.isParenthesizedExpression(expr)) {
     collectJsxLiteralBranches(expr.expression, out);
+    return;
   }
+  if (!ts.isBinaryExpression(expr)) return;
+
+  const operator = expr.operatorToken.kind;
+  if (operator === ts.SyntaxKind.BarBarToken || operator === ts.SyntaxKind.QuestionQuestionToken) {
+    collectJsxLiteralBranches(expr.left, out);
+  } else if (operator !== ts.SyntaxKind.AmpersandAmpersandToken) {
+    return;
+  }
+  collectJsxLiteralBranches(expr.right, out);
 }
 
 export function checkBudgetSource(filePath: string, sourceText: string, rootDir = BUDGET_ROOT): GuardViolation[] {
@@ -198,6 +211,23 @@ export function checkBudgetSource(filePath: string, sourceText: string, rootDir 
     const trimmed = decoded.trim();
     if (trimmed === "" || allowed.has(trimmed) || isAllowedJsxText(decoded)) return;
     record(node, rule, `${prefix}${JSON.stringify(decoded)}`);
+  };
+
+  const checkJsxExpression = (expr: ts.Expression, rule: "jsx-text" | "jsx-attr", prefix = "") => {
+    const literals: JsxLiteralBranch[] = [];
+    collectJsxLiteralBranches(expr, literals);
+    for (const literal of literals) {
+      if (!ts.isTemplateExpression(literal)) {
+        checkJsxValue(literal, rule, literal.text, prefix);
+        continue;
+      }
+      const parts = [literal.head.text, ...literal.templateSpans.map((span) => span.literal.text)];
+      if (parts.every(isAllowedJsxText)) continue;
+      const decoded = parts.map(decodeHtmlEntities).join("${}");
+      if (!allowed.has(decoded.trim())) {
+        record(literal, rule, `${prefix}${JSON.stringify(decoded)}`);
+      }
+    }
   };
 
   const visit = (node: ts.Node) => {
@@ -257,9 +287,7 @@ export function checkBudgetSource(filePath: string, sourceText: string, rootDir 
 
       if (ts.isJsxExpression(node) && node.expression !== undefined
         && (ts.isJsxElement(node.parent) || ts.isJsxFragment(node.parent))) {
-        const literals: Array<ts.StringLiteral | ts.NoSubstitutionTemplateLiteral> = [];
-        collectJsxLiteralBranches(node.expression, literals);
-        for (const lit of literals) checkJsxValue(lit, "jsx-text", lit.text);
+        checkJsxExpression(node.expression, "jsx-text");
       }
 
       if (ts.isJsxAttribute(node) && ts.isIdentifier(node.name) && USER_VISIBLE_ATTRS.has(node.name.text)
@@ -268,9 +296,7 @@ export function checkBudgetSource(filePath: string, sourceText: string, rootDir 
         if (ts.isStringLiteral(node.initializer)) {
           checkJsxValue(node.initializer, "jsx-attr", node.initializer.text, prefix);
         } else if (ts.isJsxExpression(node.initializer) && node.initializer.expression !== undefined) {
-          const literals: Array<ts.StringLiteral | ts.NoSubstitutionTemplateLiteral> = [];
-          collectJsxLiteralBranches(node.initializer.expression, literals);
-          for (const lit of literals) checkJsxValue(lit, "jsx-attr", lit.text, prefix);
+          checkJsxExpression(node.initializer.expression, "jsx-attr", prefix);
         }
       }
     }
@@ -356,6 +382,84 @@ describe("budget UI i18n guard", () => {
       "polish-literal",
       "jsx-text",
     ]);
+  });
+
+  it("rejects text in template heads, middles, and tails in JSX children and visible attributes", () => {
+    const source = `
+      <>
+        <span>{\`Total: \${amount}\`}</span>
+        <span>{\`\${first} of \${last}\`}</span>
+        <span>{\`\${count} it&#101;ms\`}</span>
+        <input title={\`Total: \${amount}\`} aria-label={\`\${first} of \${last}\`}
+          placeholder={\`\${count} it&#101;ms\`} alt={\`Account \${id}\`} />
+      </>
+    `;
+    expect(checkBudgetSource("virtual.tsx", source).map(({ rule, detail }) => [rule, detail])).toEqual([
+      ["jsx-text", '"Total: ${}"'],
+      ["jsx-text", '"${} of ${}"'],
+      ["jsx-text", '"${} items"'],
+      ["jsx-attr", 'title="Total: ${}"'],
+      ["jsx-attr", 'aria-label="${} of ${}"'],
+      ["jsx-attr", 'placeholder="${} items"'],
+      ["jsx-attr", 'alt="Account ${}"'],
+    ]);
+  });
+
+  it("allows templates in class names and ids and locale-invariant template text", () => {
+    const source = `
+      <section className={\`budget-row \${selected}\`} id={\`budget-row-\${id}\`}>
+        <span>{\`\${count} &times;\`}</span>
+        <span>{\`\${used}/\${limit}\`}</span>
+        <input title={\`Hestia \${version} · 100%\`} aria-label={\`\${account} IBAN\`}
+          placeholder={\`\${month}-11\`} alt={\`\${count}\`} />
+      </section>
+    `;
+    expect(checkBudgetSource("virtual.tsx", source)).toEqual([]);
+  });
+
+  it("rejects text in logical JSX branches in children and visible attributes", () => {
+    const source = `
+      <>
+        {ready && "Ready"}
+        {label || "Fallback"}
+        {label ?? "Missing"}
+        {("Heading") || label}
+        {\`Entry \${id}\` ?? label}
+        {(ready && "Loaded") || label}
+        <input title={ready && (selected ? "Selected" : "Available")}
+          aria-label={"Account" || "Fallback"} placeholder={label ?? "Enter a value"}
+          alt={ready && \`Account \${id}\`} />
+      </>
+    `;
+    expect(checkBudgetSource("virtual.tsx", source).map(({ rule, detail }) => [rule, detail])).toEqual([
+      ["jsx-text", '"Ready"'],
+      ["jsx-text", '"Fallback"'],
+      ["jsx-text", '"Missing"'],
+      ["jsx-text", '"Heading"'],
+      ["jsx-text", '"Entry ${}"'],
+      ["jsx-text", '"Loaded"'],
+      ["jsx-attr", 'title="Selected"'],
+      ["jsx-attr", 'title="Available"'],
+      ["jsx-attr", 'aria-label="Account"'],
+      ["jsx-attr", 'aria-label="Fallback"'],
+      ["jsx-attr", 'placeholder="Enter a value"'],
+      ["jsx-attr", 'alt="Account ${}"'],
+    ]);
+  });
+
+  it("allows logical class names, ids, predicates, and locale-invariant display branches", () => {
+    const source = `
+      <section className={selected && "budget-row"} id={id ?? "budget-summary"}>
+        {"predicate" && t("budget.main.title")}
+        {status === "ready"}
+        {label || "Vesta"}
+        {symbol ?? "× 2"}
+        <input title={ready && "IBAN"} aria-label={"BLIK" || label}
+          placeholder={month ?? "2026-11"} alt={symbol ?? "…"} />
+      </section>
+    `;
+    expect(checkBudgetSource("virtual.tsx", source)).toEqual([]);
+    expect(checkBudgetSource("analytics/mortgages.tsx", '<input placeholder={currency ?? "PLN"} />')).toEqual([]);
   });
 
   it("allows t()/tPlural() calls alongside allowlisted punctuation, symbols, digits, and brand tokens", () => {
