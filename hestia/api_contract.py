@@ -110,7 +110,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.45.0: ordered per-user budget display languages, category and one-off label translations
 #         (migration 0029, down_revision 0028), resolved display fields and admin bulk import.
 # 0.46.0: additive 409 device_token_limit_reached response for new password-login device names at the active cap.
-CONTRACT_VERSION = "0.46.0"
+# 0.47.0: additive parse_failed_reasons diagnostic counts on BudgetReceiptGmailStatus (zero migration).
+CONTRACT_VERSION = "0.47.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -3059,6 +3060,7 @@ class BudgetReceiptGmailStatus(BaseModel):
     last_error: str | None
     pending_imported_count: int
     batch_processed_count: int
+    parse_failed_reasons: dict[str, int]
     google_revoke_url: Literal["https://myaccount.google.com/linkedapps"]
     google_revoke_affects_calendar_sync: Literal[True]
 

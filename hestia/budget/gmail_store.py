@@ -8,7 +8,7 @@ import uuid
 
 from sqlalchemy import and_, case, delete, func, or_, select, update
 
-from ..db import BudgetAnalyticsAudit, BudgetGmailMessage, BudgetGmailState, BudgetReceipt, BudgetReceiptLine
+from ..db import AppMeta, BudgetAnalyticsAudit, BudgetGmailMessage, BudgetGmailState, BudgetReceipt, BudgetReceiptLine
 from .gmail_client import GmailError
 from .store import BudgetStore
 from .views import BudgetHTTPStore
@@ -38,6 +38,11 @@ GRANT_RESET = {
 STATUS_FIELDS = ("grant_status", "grant_generation", "version", "sync_phase", "attention", "last_sync_at",
                  "next_sync_at", "backoff_until", "failures", "last_http_status", "last_error",
                  "batch_processed_count")
+_PARSE_FAILED_REASONS_PREFIX = "budget_gmail_parse_failed_reasons:"
+
+
+def _reasons_key(owner):
+    return _PARSE_FAILED_REASONS_PREFIX + owner
 
 
 def digest(secret, domain, value):
@@ -55,6 +60,7 @@ class PendingMessage:
     source_kind: str = "email"
     forwarded_manually: bool = False
     sender_domain: str | None = None
+    parse_failed_reason: str | None = None
 
 
 def _linked_manual_forward():
@@ -161,12 +167,18 @@ class GmailStore(BudgetStore):
         return session.scalar(select(func.count()).select_from(BudgetReceipt).where(
             BudgetReceipt.owner == owner, _unconfirmed_import()))
 
+    @staticmethod
+    def _parse_failed_reasons(session, owner):
+        row = session.get(AppMeta, _reasons_key(owner))
+        return json.loads(row.value) if row is not None else {}
+
     def status(self, owner):
         with self.sessions() as session:
             BudgetHTTPStore._owner(session, owner)
             row = self._state(session, owner)
             return {**{key: getattr(row, key) for key in STATUS_FIELDS},
-                    "pending_imported_count": self._pending_count(session, owner)}
+                    "pending_imported_count": self._pending_count(session, owner),
+                    "parse_failed_reasons": self._parse_failed_reasons(session, owner)}
 
     def at_pending_cap(self, owner):
         with self.sessions() as session:
@@ -181,6 +193,7 @@ class GmailStore(BudgetStore):
             session.add(row)
             for key, value in GRANT_RESET.items():
                 setattr(row, key, value)
+            session.execute(delete(AppMeta).where(AppMeta.key == _reasons_key(owner)))
             row.grant_status = status
             row.grant_generation += 1
             row.version += 1
@@ -247,10 +260,11 @@ class GmailStore(BudgetStore):
         session.flush()
         return receipt.id
 
-    def commit(self, owner, generation, changes, pending=()):
+    def commit(self, owner, generation, changes, pending=(), *, reset_reasons=False):
         """Commit up to one chunk; never advance a page past an uncommitted message."""
         imported = skipped = 0
         drained = True
+        new_reasons = []
         with self.transaction() as session:
             BudgetHTTPStore._owner(session, owner)
             row = self._state(session, owner)
@@ -274,12 +288,28 @@ class GmailStore(BudgetStore):
                     imported += 1
                 else:
                     skipped += 1
+                    if outcome == "parse_failed":
+                        new_reasons.append(item.parse_failed_reason or "unknown")
                 session.add(BudgetGmailMessage(owner=owner, gmail_id_hmac=item.gmail_id_hmac,
                                                rfc_message_id_hmac=rfc_hmac,
                                                internal_date=item.internal_date, trust_path=item.trust_path,
                                                outcome=outcome, created_at=now, receipt_id=receipt_id))
             if row.sync_phase in ("backfill", "full_resync"):
                 row.batch_processed_count += imported + skipped
+            if reset_reasons or new_reasons:
+                key = _reasons_key(owner)
+                meta = session.get(AppMeta, key)
+                counts = {} if reset_reasons or meta is None else json.loads(meta.value)
+                for reason in new_reasons:
+                    counts[reason] = counts.get(reason, 0) + 1
+                if counts:
+                    encoded = json.dumps(counts, sort_keys=True)
+                    if meta is None:
+                        session.add(AppMeta(key=key, value=encoded))
+                    else:
+                        meta.value = encoded
+                elif meta is not None:
+                    session.delete(meta)
             if drained:
                 for key, value in changes.items():
                     setattr(row, key, value)

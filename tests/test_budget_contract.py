@@ -312,6 +312,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertEqual(set(document["components"]["schemas"]["BudgetReceiptGmailSyncResult"]["required"]),
                          {"ok", "sync_phase", "version"})
         self.assertIn("batch_processed_count", document["components"]["schemas"]["BudgetReceiptGmailStatus"]["required"])
+        self.assertIn("parse_failed_reasons", document["components"]["schemas"]["BudgetReceiptGmailStatus"]["required"])
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
         self.assertIn("All-or-nothing", batch)

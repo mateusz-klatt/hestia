@@ -124,6 +124,7 @@ class _Progress:
     skipped: int = 0
     attempted: int = 0
     restarted: bool = False
+    reset_reasons: bool = False
     terms: tuple = field(default_factory=tuple)
     label_id: str | None = None
 
@@ -177,8 +178,13 @@ class GmailSync:
             self.store.transition(owner, expected_version, status, mailbox_hmac, queue_sync=defer_profile)
             return self.store.status(owner)
 
-    def _commit(self, owner, progress, changes, pending=()):
-        imported, skipped, drained = self.store.commit(owner, progress.generation, changes, pending)
+    def _commit(self, owner, progress, changes, pending=(), *, reset_reasons=False):
+        should_reset = reset_reasons or (progress.reset_reasons and bool(pending))
+        imported, skipped, drained = self.store.commit(
+            owner, progress.generation, changes, pending, reset_reasons=should_reset,
+        )
+        if should_reset:
+            progress.reset_reasons = False
         progress.imported += imported
         progress.skipped += skipped
         if not drained:
@@ -196,7 +202,8 @@ class GmailSync:
         }
         if full:
             changes["force_full_resync"] = 0
-        self._commit(owner, progress, changes)
+        progress.reset_reasons = False
+        self._commit(owner, progress, changes, reset_reasons=True)
 
     def _completion(self, state):
         now = self.store.clock()
@@ -313,6 +320,7 @@ class GmailSync:
         scope_hmac = self._scope_hmac(progress)
         state = self.store.state(owner)
         if state.pending_history_id is None:
+            progress.reset_reasons = True
             self._commit(owner, progress, {"pending_history_id": profile_history, "sync_phase": "incremental"})
         if state.scope_scan_query_hmac != scope_hmac:
             self._commit(owner, progress, {"history_page_token": None, "scope_scan_page_token": None,

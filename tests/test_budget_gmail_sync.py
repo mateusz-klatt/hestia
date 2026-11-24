@@ -105,6 +105,7 @@ class SyntheticProcessor:
         self.processed = []
         self.rfc = None
         self.outcome = "imported"
+        self.parse_failed_reason = None
 
     def ready(self):
         return self.available
@@ -114,7 +115,8 @@ class SyntheticProcessor:
         run.message(message_id)
         if self.outcome == "imported":
             run.message(message_id, raw=True)
-        return PendingMessage(message_hmac, self.clock.wall(), "direct_allowlist", self.outcome, self.rfc, INVOICE)
+        return PendingMessage(message_hmac, self.clock.wall(), "direct_allowlist", self.outcome, self.rfc, INVOICE,
+                              parse_failed_reason=self.parse_failed_reason)
 
 
 class GmailTransportTests(TestCase):
@@ -982,3 +984,72 @@ class GmailSyncTests(TestCase):
         self.assertTrue(restarted.sync(OWNER, poll=True)["ok"])
         state = self.store.state(OWNER)
         self.assertEqual((state.attention, state.run_requested), (None, 0))
+
+    def test_parse_failed_reasons_accumulate_across_batch_and_reset_on_new_run(self):
+        self.enable()
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {})
+
+        reasons_by_id = {"mail-1": "pdf_unsupported", "mail-2": "pdf_unsupported", "mail-3": "message_defects"}
+
+        def fail_with_reasons(run, message_id, message_hmac):
+            self.processor.processed.append(message_id)
+            run.message(message_id)
+            return PendingMessage(message_hmac, self.clock.wall(), "direct_allowlist", "parse_failed",
+                                  parse_failed_reason=reasons_by_id[message_id])
+
+        self.transport.routes[("/messages", None)] = response(page("mail-1", "mail-2", "mail-3"))
+        with mock.patch.object(sync_module, "MAX_SYNC_MESSAGES_PER_RUN", 1), \
+                mock.patch.object(self.processor, "process", side_effect=fail_with_reasons):
+            self.assertTrue(self.sync()["has_more"])
+            self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"pdf_unsupported": 1})
+            self.tick()
+            self.assertTrue(self.sync()["has_more"])
+            self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"pdf_unsupported": 2})
+            self.tick()
+            self.assertFalse(self.sync()["has_more"])
+        # Counts persist after the batch returns to idle.
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"],
+                         {"pdf_unsupported": 2, "message_defects": 1})
+
+        # Empty incremental poll preserves the prior batch counts.
+        self.tick()
+        self.transport.profile["historyId"] = "110"
+        self.transport.routes[("/history", None)] = response(history())
+        self.sync()
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"],
+                         {"pdf_unsupported": 2, "message_defects": 1})
+
+        # Incremental poll processing a new failing message replaces prior batch counts.
+        self.tick()
+        self.transport.profile["historyId"] = "120"
+        self.transport.routes[("/history", None)] = response(history("mail-4"))
+        self.transport.routes[("/messages", None)] = response(page("mail-4"))
+        reasons_by_id["mail-4"] = "part_defects"
+        with mock.patch.object(self.processor, "process", side_effect=fail_with_reasons):
+            self.sync()
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"part_defects": 1})
+
+        # Incremental poll processing an imported message clears prior failure counts.
+        self.tick()
+        self.transport.profile["historyId"] = "130"
+        self.transport.routes[("/history", None)] = response(history("mail-5"))
+        self.transport.routes[("/messages", None)] = response(page("mail-5"))
+        self.sync()
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {})
+
+        # force_full_resync clears prior counts even if 0 messages fail, and transition resets them too.
+        self.assertEqual(self.store.commit(OWNER, 1, {}, (
+            PendingMessage("e" * 64, NOW, "direct_allowlist", "parse_failed"),
+        )), (0, 1, True))
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"unknown": 1})
+        self.tick()
+        self.transport.routes[("/messages", None)] = response(page())
+        self.sync(force_full_resync=True)
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {})
+
+        self.assertEqual(self.store.commit(OWNER, 1, {}, (
+            PendingMessage("f" * 64, NOW, "direct_allowlist", "parse_failed", parse_failed_reason="charset_error"),
+        )), (0, 1, True))
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"charset_error": 1})
+        self.service.transition(OWNER, self.store.state(OWNER).version, "disabled")
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {})

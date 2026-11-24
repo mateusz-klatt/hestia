@@ -402,8 +402,65 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
         self.assertNotIn(b"synthetic-body-only-marker", stored)
         self.assertNotIn(b"billing@merchant.example.test", stored)
         after = await (await self.call("gmail-status")).json()
-        self.assertEqual((after["sync_phase"], after["pending_imported_count"], after["batch_processed_count"]),
-                         ("idle", 1, 0))
+        self.assertEqual((after["sync_phase"], after["pending_imported_count"], after["batch_processed_count"],
+                          after["parse_failed_reasons"]),
+                         ("idle", 1, 0, {}))
+
+    async def test_gmail_status_exposes_parse_failed_reasons_and_logs_safely(self):
+        os.environ[gmail_api.FLAG] = "1"
+        granted = await self.call("gmail-grant", json={"action": "enable", "expected_version": 1})
+        self.assertEqual(granted.status, 200)
+
+        from hestia.budget.gmail_worker import PDFUnsupported
+
+        pdf_mail = _scheduled_invoice()
+        pdf_mail["Subject"] = "Sensitive Subject Alpha"
+        pdf_mail.set_content(b"%PDF-1.4 fixture", maintype="application", subtype="pdf")
+
+        octet_pdf = _scheduled_invoice()
+        octet_pdf["Subject"] = "Sensitive Subject Beta"
+        octet_pdf.set_content("See attached PDF")
+        octet_pdf.add_attachment(b"%PDF-1.4 fixture", maintype="application", subtype="octet-stream",
+                                 filename="Invoice.PDF")
+
+        bad_charset = _scheduled_invoice()
+        bad_charset["Subject"] = "Sensitive Subject Gamma"
+        bad_charset.set_param("charset", "not-a-real-charset")
+
+        messages = {"msg-pdf": pdf_mail, "msg-octet": octet_pdf, "msg-charset": bad_charset}
+        self.transport.routes[("/messages", None)] = response_json(page_ids(*messages))
+        for msg_id, msg in messages.items():
+            self.transport.routes[("/messages/" + msg_id, None)] = _provider_message(msg_id, msg)
+
+        def parse_part(kind, payload):
+            if kind == "pdf":
+                raise PDFUnsupported("sensitive-pdf-detail")
+            return payload.decode("utf-8")
+
+        self.worker.parse.side_effect = parse_part
+        with self.assertLogs("hestia.budget.gmail_message", level="WARNING") as logs:
+            await asyncio.to_thread(gmail_api._Runtime().poll, lambda: True, lambda: _SESSION)
+
+        self.assertEqual(sorted(logs.output), [
+            "WARNING:hestia.budget.gmail_message:gmail parse_failed reason=charset_error",
+            "WARNING:hestia.budget.gmail_message:gmail parse_failed reason=pdf_unsupported",
+            "WARNING:hestia.budget.gmail_message:gmail parse_failed reason=pdf_unsupported",
+        ])
+        for entry in logs.output:
+            for secret in (*messages, "Sensitive", "billing@merchant.example.test", "sensitive-pdf-detail"):
+                self.assertNotIn(secret, entry)
+
+        response = await self.call("gmail-status")
+        self.assertEqual(response.status, 200)
+        body = await response.json()
+        validated = api_contract.BudgetReceiptGmailStatus.model_validate(body)
+        self.assertEqual(validated.parse_failed_reasons, {"charset_error": 1, "pdf_unsupported": 2})
+
+        with self.sessions() as session:
+            session.connection().exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+        stored = Path(self.env["HESTIA_DB"]).read_bytes()
+        for secret in (*messages, "Sensitive Subject", "billing@merchant.example.test", "sensitive-pdf-detail"):
+            self.assertNotIn(secret.encode(), stored)
 
 
 def _scheduled_invoice():
