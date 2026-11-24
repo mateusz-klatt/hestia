@@ -228,7 +228,7 @@ class TranslationStoreTests(AnalyticsCase):
         self.assertEqual([row["ok"] for row in results], [True, False, False])
         self.assertEqual([row["error"] for row in results[1:]], ["budget_analytics_conflict"] * 2)
 
-    def test_translations_allow_joiners_between_letters_in_direct_and_bulk_writes(self):
+    def test_translations_allow_joiners_between_letters_or_marks_in_direct_and_bulk_writes(self):
         persian = "می\u200cخواهم"
         translated = self.store.set_category_translation(
             "owner", category_id=self.food["id"], lang="fa", name=persian)
@@ -237,6 +237,13 @@ class TranslationStoreTests(AnalyticsCase):
         indic = "\u0995\u200d\u09b7"
         label = self.store.set_label_translation("owner", **key, lang="bn", label=indic)
         self.assertEqual(label["label"], indic)
+        devanagari = "\u0915\u094d\u200d\u0937"
+        translated = self.store.set_category_translation(
+            "owner", category_id=self.food["id"], lang="hi", name=devanagari)
+        self.assertEqual(translated["name"], devanagari)
+        bengali = "\u0995\u09cd\u200c\u09b7"
+        label = self.store.set_label_translation("owner", **key, lang="bn", label=bengali)
+        self.assertEqual(label["label"], bengali)
 
         bulk_persian = "کتاب\u200cها"
         results = self.store.import_translations("owner", entries=[
@@ -250,7 +257,9 @@ class TranslationStoreTests(AnalyticsCase):
     def test_translation_joiner_placement_and_blocked_hidden_characters(self):
         for joiner in ("\u200c", "\u200d"):
             for bad in (joiner + "ab", "ab" + joiner, "a" + joiner * 2 + "b",
-                        "a" + joiner + "1", "1" + joiner + "b"):
+                        "a" + joiner + "1", "1" + joiner + "b",
+                        "a" + joiner + " b", "a " + joiner + "b",
+                        "a" + joiner + ".b", "a." + joiner + "b"):
                 with self.subTest(joiner=ord(joiner), bad=repr(bad)), self.assertRaises(AnalyticsError):
                     self.store.set_category_translation(
                         "owner", category_id=self.food["id"], lang="fa", name=bad)

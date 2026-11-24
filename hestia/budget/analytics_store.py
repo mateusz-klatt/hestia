@@ -125,7 +125,8 @@ def _text(value, limit=80, *, translation=False):
         if unicodedata.category(char) not in ("Cc", "Cf", "Cs"):
             continue
         if (not translation or char not in _TRANSLATION_JOINERS or index == 0 or index + 1 == len(value)
-                or not value[index - 1].isalpha() or not value[index + 1].isalpha()):
+                or unicodedata.category(value[index - 1])[0] not in ("L", "M")
+                or unicodedata.category(value[index + 1])[0] not in ("L", "M")):
             raise AnalyticsError()
     normalized = unicodedata.normalize("NFC", value.strip())
     if not normalized or len(normalized) > limit:
