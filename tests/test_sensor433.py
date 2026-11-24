@@ -32,10 +32,29 @@ class _FakeStdout:
         return self._lines.pop(0)
 
 
+class _FakeStderr:
+    """An ``asyncio`` StreamReader stand-in for stderr: yields chunks from ``data``, then EOF."""
+    def __init__(self, data: bytes):
+        self._data = data
+        self._pos = 0
+
+    async def read(self, n: int = -1) -> bytes:
+        if self._pos >= len(self._data):
+            return b""
+        if n is None or n < 0:
+            chunk = self._data[self._pos:]
+            self._pos = len(self._data)
+            return chunk
+        chunk = self._data[self._pos:self._pos + n]
+        self._pos += n
+        return chunk
+
+
 class _FakeProc:
     """A ``create_subprocess_exec`` result: records terminate/kill/wait so reaping can be asserted."""
-    def __init__(self, lines=(), stdout=True, returncode=None, exit_code=0):
+    def __init__(self, lines=(), stdout=True, stderr=None, returncode=None, exit_code=0):
         self.stdout = _FakeStdout(lines) if stdout else None
+        self.stderr = _FakeStderr(stderr) if isinstance(stderr, bytes) else stderr
         self.returncode = returncode
         self._exit_code = exit_code
         self.terminated = False
@@ -162,7 +181,7 @@ class StreamReadingsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cmd, ["rtl_433", "-d", "rtl_tcp:127.0.0.1:5555", "-F", "json"])
         self.assertNotIn("-T", cmd)                    # streaming: rtl_433 runs until terminated
         self.assertEqual(kwargs["stdout"], asyncio.subprocess.PIPE)
-        self.assertEqual(kwargs["stderr"], asyncio.subprocess.DEVNULL)
+        self.assertEqual(kwargs["stderr"], asyncio.subprocess.PIPE)
 
     async def test_protocol_adds_R_flag(self):
         create = _make_create(_FakeProc([_line(temperature_C=1.0)]))
@@ -175,89 +194,58 @@ class StreamReadingsTests(unittest.IsolatedAsyncioTestCase):
         await _drain(create)
         self.assertNotIn("-R", create.calls[0][0])
 
-    async def test_extra_args_empty_keeps_exact_argv(self):
-        for empty in (None, "", "   "):
-            create = _make_create(_FakeProc([_line(temperature_C=1.0)]))
-            await _drain(create, device="rtl_tcp:127.0.0.1:1234", extra_args=empty)
-            self.assertEqual(create.calls[0][0], ["rtl_433", "-d", "rtl_tcp:127.0.0.1:1234", "-F", "json"])
+    async def test_nonzero_exit_logs_bounded_stderr_before_return(self):
+        proc = _FakeProc([], stderr=b"rtl_tcp: connect failed\nUsage: ...\n", returncode=1)
+        with self.assertLogs("hestia.sensor433", level="WARNING") as logs:
+            out = await _drain(_make_create(proc))
+        self.assertEqual(out, [])
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("exited with code 1", logs.output[0])
+        self.assertIn("rtl_tcp: connect failed | Usage: ...", logs.output[0])
 
-    async def test_extra_args_appended_to_argv(self):
-        create = _make_create(_FakeProc([_line(temperature_C=1.0)]))
-        await _drain(
-            create,
-            device="rtl_tcp:127.0.0.1:1234",
-            extra_args="-f 433.92M -f 868M -s 1024k -Y classic -H 30",
-        )
-        self.assertEqual(
-            create.calls[0][0],
-            ["rtl_433", "-d", "rtl_tcp:127.0.0.1:1234", "-F", "json",
-             "-f", "433.92M", "-f", "868M", "-s", "1024k", "-Y", "classic", "-H", "30"],
-        )
+    async def test_nonzero_exit_truncates_huge_stderr(self):
+        big = b"head-noise " * 400 + b"\nfinal fatal error\n"
+        proc = _FakeProc([], stderr=big, returncode=2)
+        with self.assertLogs("hestia.sensor433", level="WARNING") as logs:
+            await _drain(_make_create(proc))
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("exited with code 2: ...", logs.output[0])
+        self.assertIn("final fatal error", logs.output[0])
+        self.assertLessEqual(len(logs.output[0]), sensor433._STDERR_LIMIT + 128)
 
-    async def test_extra_args_quoted_and_negative_numeric_values_allowed(self):
-        create = _make_create(_FakeProc([_line(temperature_C=1.0)]))
-        await _drain(
-            create,
-            protocol="245",
-            extra_args="-X 'n=flex,m=OOK_PWM,s=500,l=1000,r=3000' -R -3 -p -12 -M level -qv",
-        )
-        self.assertEqual(
-            create.calls[0][0],
-            ["rtl_433", "-d", "rtl_tcp:127.0.0.1:1234", "-F", "json", "-R", "245",
-             "-X", "n=flex,m=OOK_PWM,s=500,l=1000,r=3000", "-R", "-3", "-p", "-12", "-M", "level", "-qv"],
-        )
+    async def test_zero_exit_with_stderr_logs_no_warning(self):
+        proc = _FakeProc([_line(temperature_C=1.0)], stderr=b"rtl_433 version 25.12\n", returncode=0)
+        with self.assertNoLogs("hestia.sensor433", level="WARNING"):
+            out = await _drain(_make_create(proc))
+        self.assertEqual(out, [sensor433.Reading(1.0, None)])
 
-    async def test_extra_args_validation_rejects_disallowed_and_file_writing_flags(self):
-        bad_cases = [
-            "-d 0",
-            "-d0",
-            "-F csv",
-            "-F json:/tmp/out.json",
-            "-Fcsv:/tmp/out.csv",
-            "-T 30",
-            "-T30",
-            "-w /tmp/raw.cu8",
-            "-w/tmp/raw.cu8",
-            "-w-",
-            "-W /tmp/raw.cu8",
-            "-W/tmp/raw.cu8",
-            "-S all",
-            "-S unknown",
-            "-Sknown",
-            "-c /tmp/rtl_433.conf",
-            "-qw /tmp/raw.cu8",
-            "-vd0",
-            "--output=csv:/tmp/out.csv",
-            "--write-file=/tmp/raw.cu8",
-            "--",
-            "-f 433.92M > /tmp/out",
-            "-f 433.92M 868M",
-            "-",
-            "-f",
-            "-f -w",
-            "-f 'unclosed",
-            "-f 433.92M\x00bad",
-            "-Z 1",
-        ]
-        for bad in bad_cases:
-            with self.subTest(extra_args=bad):
-                create = _make_create(_FakeProc([]))
+    async def test_crib_model_without_callback_rejected_without_spawning(self):
+        for enable_outdoor in (True, False):
+            with self.subTest(enable_outdoor=enable_outdoor):
+                create = _make_create(_FakeProc([_line(model="Nexus-TH", temperature_C=21.0)]))
+                async def on_out(_r):
+                    pass
                 with self.assertRaises(ValueError):
-                    await _drain(create, extra_args=bad)
-                self.assertEqual(create.calls, [])           # never spawned rtl_433
+                    await sensor433.stream_readings(
+                        on_out if enable_outdoor else None,
+                        crib_model="Nexus-TH",
+                        on_crib_reading=None,
+                        create=create,
+                    )
+                self.assertEqual(create.calls, [])
 
     async def test_routing_outdoor_vs_crib_vs_neither(self):
         proc = _FakeProc([
             _line(model="Prologue-TH", id=227, channel=1, temperature_C=4.2, humidity=80, battery_ok=1),
-            _line(model="Thermopro-TX2C", id=211, channel=3, temperature_C=21.6, humidity=48, battery_ok=1),
-            _line(model="Thermopro-TX2C", id=99, channel=2, temperature_C=19.0, humidity=50),  # neighbour ch
+            _line(model="Nexus-TH", id=211, channel=2, temperature_C=21.6, humidity=48, battery_ok=1),
+            _line(model="Nexus-TH", id=99, channel=3, temperature_C=19.0, humidity=50),         # neighbour ch
             _line(model="Acme-Doorbell", id=7, button=1),                                       # neither
         ])
         packets = []
         outdoor, crib = await _drain_routes(
             _make_create(proc),
             model="Prologue-TH", sensor_id="*", channel="1",
-            crib_model="Thermopro-TX2C", crib_id="*", crib_channel="3",
+            crib_model="Nexus-TH", crib_id="*", crib_channel="2",
             on_packet=packets.append,
         )
         self.assertEqual(outdoor, [sensor433.Reading(4.2, 80.0, 1)])
@@ -267,45 +255,45 @@ class StreamReadingsTests(unittest.IsolatedAsyncioTestCase):
     async def test_crib_route_only_when_outdoor_disabled(self):
         proc = _FakeProc([
             _line(model="Prologue-TH", id=227, channel=1, temperature_C=4.2),
-            _line(model="Thermopro-TX2C", id=211, channel=3, temperature_C=21.6, humidity=48),
+            _line(model="Nexus-TH", id=211, channel=2, temperature_C=21.6, humidity=48),
         ])
         outdoor, crib = await _drain_routes(
             _make_create(proc),
             enable_outdoor=False,
             model=None,
-            crib_model="Thermopro-TX2C", crib_id="*", crib_channel="3",
+            crib_model="Nexus-TH", crib_id="*", crib_channel="2",
         )
         self.assertEqual(outdoor, [])
         self.assertEqual(crib, [sensor433.Reading(21.6, 48.0, None)])
 
     async def test_ambiguous_packet_matching_both_routes_logs_once_and_skips(self):
         proc = _FakeProc([
-            _line(model="Thermopro-TX2C", id=211, channel=3, temperature_C=21.6),  # matches both (outdoor=any)
-            _line(model="Thermopro-TX2C", id=212, channel=3, temperature_C=22.0),  # second ambiguous packet
-            _line(model="Prologue-TH", id=227, channel=1, temperature_C=5.0),      # matches outdoor only
+            _line(model="Nexus-TH", id=211, channel=2, temperature_C=21.6),     # matches both (outdoor=any)
+            _line(model="Nexus-TH", id=212, channel=2, temperature_C=22.0),     # second ambiguous packet
+            _line(model="Prologue-TH", id=227, channel=1, temperature_C=5.0),   # matches outdoor only
         ])
         with self.assertLogs("hestia.sensor433", level="ERROR") as logs:
             outdoor, crib = await _drain_routes(
                 _make_create(proc),
-                model=None, sensor_id=None, channel=None,                          # matches ANY temp packet
-                crib_model="Thermopro-TX2C", crib_id="*", crib_channel="3",
+                model=None, sensor_id=None, channel=None,                       # matches ANY temp packet
+                crib_model="Nexus-TH", crib_id="*", crib_channel="2",
             )
-        self.assertEqual(len(logs.output), 1)                                      # logged once, not twice
+        self.assertEqual(len(logs.output), 1)                                   # logged once, not twice
         self.assertIn("both outdoor and crib", logs.output[0])
-        self.assertEqual(crib, [])                                                 # ambiguous packets dropped
-        self.assertEqual(outdoor, [sensor433.Reading(5.0, None, None)])            # non-ambiguous still routes
+        self.assertEqual(crib, [])                                              # ambiguous packets dropped
+        self.assertEqual(outdoor, [sensor433.Reading(5.0, None, None)])         # non-ambiguous still routes
 
     async def test_crib_wildcard_id_and_channel_survives_battery_swap(self):
         proc = _FakeProc([
-            _line(model="Thermopro-TX2C", id=211, channel=3, temperature_C=21.5),
-            _line(model="Thermopro-TX2C", id=88, channel=3, temperature_C=21.7),   # new random id after battery swap
-            _line(model="Thermopro-TX2C", id=211, channel=1, temperature_C=18.0),  # wrong channel
-            _line(model="Thermopro-TX2C", id=211, temperature_C=17.0),             # missing channel -> rejected
+            _line(model="Nexus-TH", id=211, channel=2, temperature_C=21.5),
+            _line(model="Nexus-TH", id=88, channel=2, temperature_C=21.7),    # new random id after battery swap
+            _line(model="Nexus-TH", id=211, channel=1, temperature_C=18.0),   # wrong channel
+            _line(model="Nexus-TH", id=211, temperature_C=17.0),              # missing channel -> rejected
         ])
         outdoor, crib = await _drain_routes(
             _make_create(proc),
             enable_outdoor=False,
-            crib_model="Thermopro-TX2C", crib_id="*", crib_channel="3",
+            crib_model="Nexus-TH", crib_id="*", crib_channel="2",
         )
         self.assertEqual(outdoor, [])
         self.assertEqual(crib, [sensor433.Reading(21.5, None, None), sensor433.Reading(21.7, None, None)])

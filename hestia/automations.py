@@ -710,6 +710,7 @@ class AutomationEngine:
         self._last_time_fire: "dict[str, tuple]" = {}   # time-trigger minute-slot dedup
         self._last_presence: "dict[str, bool]" = {}     # presence-trigger edge (per rule)
         self._last_gang: "dict[str, bool]" = {}         # per-gang switch-trigger edge: last value of the watched gang
+        self._last_global_fired: list = []              # frame-producing rule snapshots from last on_global()
 
     def reset_runtime(self, rule_id) -> None:
         """Drop a rule's loop-guard state so a re-authored/replaced id starts clean: the next true
@@ -821,11 +822,13 @@ class AutomationEngine:
         return frames
 
     def on_global(self, rt, field, value) -> list:
-        """React to a fresh value of a GLOBAL (node-less) state field — fed by a poller, e.g. the Neno baby-monitor
-        ``crib_temp``. Fires each enabled, mode-matching `state` rule on that field whose predicate
-        crosses false->true (edge-detected via ``_last_match``, like a device state trigger, but driven
-        here — ``on_event`` skips global fields). The edge is consumed even when conditions/debounce
-        suppress the action (re-fires only on the next false->true). Returns frames in rule order."""
+        """React to a fresh value of a GLOBAL (node-less) state field — fed by a poller, e.g. the crib
+        feeder for ``crib_temp``. Fires each enabled, mode-matching `state` rule on that field whose
+        predicate crosses false->true (edge-detected via ``_last_match``, like a device state trigger, but
+        driven here — ``on_event`` skips global fields). A condition/debounce-suppressed edge is consumed
+        (re-fires only on the next false->true); snapshots of frame-producing fires are recorded so the
+        caller can restore them via :meth:`restore_global_edges` when no gateway session is connected."""
+        self._last_global_fired = []
         frames = []
         for rule in self.store.rules.values():
             if not rule.enabled or rt.mode not in rule.modes:
@@ -838,8 +841,23 @@ class AutomationEngine:
             prev = self._last_match.get(rule.id, False)
             self._last_match[rule.id] = now_true           # always track, even if suppressed below
             if now_true and not prev:
-                frames.extend(self._fire(rt, rule))
+                prev_fired = self._last_fired.get(rule.id, _UNSET)
+                rule_frames = self._fire(rt, rule)
+                if rule_frames:
+                    self._last_global_fired.append((rule.id, prev, prev_fired))
+                frames.extend(rule_frames)
         return frames
+
+    def restore_global_edges(self) -> None:
+        """Undo edge + debounce consumption for frame-producing rules from the last :meth:`on_global`
+        call when delivery failed before any frame reached a gateway session."""
+        for rule_id, prev_match, prev_fired in self._last_global_fired:
+            self._last_match[rule_id] = prev_match
+            if prev_fired is _UNSET:
+                self._last_fired.pop(rule_id, None)
+            else:
+                self._last_fired[rule_id] = prev_fired
+        self._last_global_fired = []
 
     def _scheduled_due(self, rt, now, now_utc, tg):
         ttype = tg["type"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import shutil
 import signal
 import tempfile
@@ -1787,9 +1788,8 @@ class NianiaPollerTests(unittest.IsolatedAsyncioTestCase):
         dev.status.return_value = {"238": 256}
         with self.assertLogs("hestia.proxy", level="WARNING") as logs:
             t = asyncio.create_task(proxy._niania_poller(
-                rt, make_device=lambda: dev, interval=0.01, rtl_crib_model="Thermopro-TX2C"))
-            await asyncio.sleep(0.04)
-            await asyncio.gather(t, return_exceptions=True)
+                rt, make_device=lambda: dev, interval=0.01, rtl_crib_model="Nexus-TH"))
+            await asyncio.wait_for(t, timeout=1.0)
         self.assertTrue(t.done())                                 # returned immediately (not polling)
         dev.status.assert_not_called()                            # Tuya never polled
         self.assertIsNone(rt.state.crib_temp)
@@ -1802,12 +1802,11 @@ class NianiaPollerTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.multiple(
             proxy,
             NIANIA_IP="192.0.2.19", NIANIA_ID="id", NIANIA_KEY="0123456789abcdef",
-            RTL433_CRIB_MODEL="Thermopro-TX2C",
+            RTL433_CRIB_MODEL="Nexus-TH",
         ):
             with self.assertLogs("hestia.proxy", level="WARNING") as logs:
                 t = asyncio.create_task(proxy._niania_poller(rt, make_device=spy_make, interval=0.01))
-                await asyncio.sleep(0.04)
-                await asyncio.gather(t, return_exceptions=True)
+                await asyncio.wait_for(t, timeout=1.0)
         self.assertTrue(t.done())
         spy_make.assert_not_called()                              # env-configured Tuya suppressed upfront
         self.assertEqual(len(logs.output), 1)
@@ -1815,10 +1814,9 @@ class NianiaPollerTests(unittest.IsolatedAsyncioTestCase):
     async def test_rtl433_crib_route_without_tuya_configured_is_silent(self):
         rt, _ = self._rt()
         with mock.patch.multiple(proxy, NIANIA_IP="", NIANIA_ID="", NIANIA_KEY="",
-                                 RTL433_CRIB_MODEL="Thermopro-TX2C"):
+                                 RTL433_CRIB_MODEL="Nexus-TH"):
             t = asyncio.create_task(proxy._niania_poller(rt, interval=0.01))
-            await asyncio.sleep(0.04)
-            await asyncio.gather(t, return_exceptions=True)
+            await asyncio.wait_for(t, timeout=1.0)
         self.assertTrue(t.done())
         self.assertIsNone(rt.state.crib_temp)
 
@@ -2190,32 +2188,29 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
         _, _, _, task = await self._run()
         self.assertTrue(task.cancelled())                          # CancelledError not swallowed
 
-    async def test_bad_extra_args_disables_feeder_without_spawning(self):
-        for bad in ("-w /tmp/raw.cu8", "-d 0", "-F csv", "-T 10", "-S all", "-f 'unclosed"):
-            with self.subTest(extra_args=bad):
-                rt = proxy.ProxyRuntime()
-                stream = _FakeStream([sensor433.Reading(-5.0, 44.0)])
-                with self.assertLogs("hestia.proxy", level="WARNING") as logs:
-                    task = asyncio.create_task(proxy._sensor433_poller(
-                        rt, stream=stream, enabled=True, source="local",
-                        extra_args=bad, backoff=0.0))
-                    await asyncio.sleep(0.04)
-                    await asyncio.gather(task, return_exceptions=True)
-                self.assertTrue(task.done())
-                self.assertEqual(stream.calls, [])
-                self.assertTrue(any("HESTIA_RTL433_EXTRA_ARGS" in m for m in logs.output))
-
-    async def test_extra_args_parsed_and_forwarded_to_stream(self):
+    async def test_outdoor_globals_serialized_key_order_matches_legacy(self):
         rt = proxy.ProxyRuntime()
-        stream = _FakeStream([sensor433.Reading(-5.0, 44.0)])
+        sub = await rt.event_bus.try_subscribe()
         task = asyncio.create_task(proxy._sensor433_poller(
-            rt, stream=stream, enabled=True, source="local",
-            extra_args="-f 433.92M -f 868M -s 1024k -Y classic -H 30", backoff=0.0))
-        await asyncio.sleep(0.04)
+            rt, stream=_FakeStream([sensor433.Reading(-5.0, 44.0, battery_ok=0)]),
+            enabled=True, source="local", battery_warn=True,
+            device="d", model=None, sensor_id=None, protocol=None, backoff=0.0))
+        await asyncio.sleep(0.05)
         task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        self.assertEqual(stream.calls[0]["extra_args"],
-                         ["-f", "433.92M", "-f", "868M", "-s", "1024k", "-Y", "classic", "-H", "30"])
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1.0)
+        gl = [e for e in _drain_events(sub) if e.get("type") == "globals"]
+        self.assertEqual(len(gl), 1)
+        self.assertEqual(
+            list(gl[0]["fields"].keys()),
+            ["outdoor_temp", "outdoor_humidity", "outdoor_temp_ts", "outdoor_battery_ok"],
+        )
+        ts = gl[0]["fields"]["outdoor_temp_ts"]
+        expected_bytes = (
+            f'data: {{"type": "globals", "fields": {{"outdoor_temp": -5.0, '
+            f'"outdoor_humidity": 44.0, "outdoor_temp_ts": "{ts}", '
+            f'"outdoor_battery_ok": false}}}}\n\n'
+        ).encode("utf-8")
+        self.assertEqual(f"data: {json.dumps(gl[0])}\n\n".encode("utf-8"), expected_bytes)
 
     async def test_crib_route_updates_state_ts_ignores_humidity_and_fires_via_apply_global(self):
         rt = proxy.ProxyRuntime()
@@ -2232,11 +2227,11 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
             task = asyncio.create_task(proxy._sensor433_poller(
                 rt, stream=stream, enabled=True, source="local",
                 model="Prologue-TH", sensor_id="*", channel="1",
-                crib_model="Thermopro-TX2C", crib_id="*", crib_channel="3",
+                crib_model="Nexus-TH", crib_id="*", crib_channel="2",
                 backoff=0.0))
-            await asyncio.sleep(0.06)
+            await asyncio.sleep(0.05)
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1.0)
         self.assertEqual(rt.state.outdoor_temp, -5.0)
         self.assertEqual(rt.state.outdoor_humidity, 70.0)
         self.assertEqual(rt.state.crib_temp, 25.6)
@@ -2246,13 +2241,48 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
         fields_called = [c.args[1] for c in apply_spy.call_args_list]
         self.assertIn("crib_temp", fields_called)
         self.assertIn("outdoor_temp", fields_called)
-        events = []
-        while not sub.queue.empty():
-            events.append(sub.queue.get_nowait())
-        crib_events = [e["fields"] for e in events if e.get("type") == "globals" and "crib_temp" in e["fields"]]
+        crib_events = [e["fields"] for e in _drain_events(sub)
+                       if e.get("type") == "globals" and "crib_temp" in e["fields"]]
         self.assertEqual(len(crib_events), 1)
         self.assertEqual(set(crib_events[0]), {"crib_temp", "crib_temp_ts"})  # humidity ignored, no new API field
         self.assertRegex(crib_events[0]["crib_temp_ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+
+    async def test_crib_rule_edge_preserved_until_gateway_connects(self):
+        rt = proxy.ProxyRuntime()
+        rt.engine.set_rule(Rule.from_dict(CRIB_RULE))
+        # A second rule gated by a false condition MUST still consume its edge even while disconnected.
+        rt.engine.set_rule(Rule.from_dict({
+            "id": "crib-gated",
+            "trigger": {"type": "state", "field": "crib_temp", "op": "gt", "value": 24},
+            "conditions": [{"node": 10, "field": "switch", "op": "eq", "value": True}],
+            "actions": [{"op": "switch", "node": 15, "on": True}],
+        }))
+        sess = FakeSession()
+        connected = asyncio.Event()
+        delivered_first = asyncio.Event()
+
+        async def delayed_stream(_on_reading, *, on_crib_reading=None, **_kw):
+            await on_crib_reading(sensor433.Reading(25.6, 50.0))     # before gateway connects
+            delivered_first.set()
+            await asyncio.wait_for(connected.wait(), timeout=1.0)
+            await on_crib_reading(sensor433.Reading(25.7, 50.0))     # still >24 after gateway connects -> fires
+            await on_crib_reading(sensor433.Reading(26.0, 50.0))     # edge now consumed -> no re-fire
+            await asyncio.Event().wait()
+
+        with self.assertLogs("hestia.proxy", level="WARNING") as logs:
+            task = asyncio.create_task(proxy._sensor433_poller(
+                rt, stream=delayed_stream, enabled=False,
+                crib_model="Nexus-TH", crib_id="*", crib_channel="2", backoff=0.0))
+            await asyncio.wait_for(delivered_first.wait(), timeout=1.0)
+            self.assertEqual(sess.sent, [])                          # dropped while disconnected
+            rt.state.switches[10] = True                             # satisfy crib-gated's condition too
+            rt.sessions.append(sess)
+            connected.set()
+            await asyncio.sleep(0.05)
+            task.cancel()
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1.0)
+        self.assertTrue(any("sensor433: dropping" in m for m in logs.output))
+        self.assertEqual(len(sess.sent), 1)                          # crib-hot fired once; crib-gated stayed consumed
 
     async def test_crib_only_runs_even_when_outdoor_open_meteo_or_off(self):
         for enabled, source in ((False, "open-meteo"), (True, "open-meteo")):
@@ -2270,11 +2300,11 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
 
                 task = asyncio.create_task(proxy._sensor433_poller(
                     rt, stream=capture_stream, enabled=enabled, source=source,
-                    crib_model="Thermopro-TX2C", crib_id="*", crib_channel="3",
+                    crib_model="Nexus-TH", crib_id="*", crib_channel="2",
                     backoff=0.0))
                 await asyncio.sleep(0.05)
                 task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+                await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1.0)
                 self.assertEqual(seen_on_reading, [None])          # outdoor route inactive
                 self.assertEqual(rt.state.crib_temp, 25.6)
                 self.assertIsNone(rt.state.outdoor_temp)
@@ -2293,11 +2323,11 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs("hestia.proxy", level="WARNING") as logs:
             task = asyncio.create_task(proxy._sensor433_poller(
                 rt, stream=stream, enabled=False, battery_warn=True,
-                crib_model="Thermopro-TX2C", crib_id="*", crib_channel="3",
+                crib_model="Nexus-TH", crib_id="*", crib_channel="2",
                 backoff=0.0))
-            await asyncio.sleep(0.06)
+            await asyncio.sleep(0.05)
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1.0)
         low_warns = [m for m in logs.output if "crib sensor" in m and "battery low" in m]
         self.assertEqual(len(low_warns), 2)
 
@@ -2307,11 +2337,11 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertNoLogs("hestia.proxy", level="WARNING"):
             task = asyncio.create_task(proxy._sensor433_poller(
                 rt, stream=stream, enabled=False, battery_warn=False,
-                crib_model="Thermopro-TX2C", crib_id="*", crib_channel="3",
+                crib_model="Nexus-TH", crib_id="*", crib_channel="2",
                 backoff=0.0))
             await asyncio.sleep(0.05)
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1.0)
 
     async def test_relaunch_preserves_crib_config_and_battery_state(self):
         rt = proxy.ProxyRuntime()
@@ -2322,15 +2352,14 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs("hestia.proxy", level="WARNING") as logs:
             task = asyncio.create_task(proxy._sensor433_poller(
                 rt, stream=stream, enabled=False, battery_warn=True,
-                extra_args="-f 868M -s 1024k -Y classic",
-                crib_model="Thermopro-TX2C", crib_id="*", crib_channel="3",
+                crib_model="Nexus-TH", crib_id="*", crib_channel="2",
                 backoff=0.01))
-            await asyncio.sleep(0.06)
+            await asyncio.sleep(0.05)
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1.0)
         self.assertGreaterEqual(len(stream.calls), 2)              # exited -> relaunched
-        self.assertEqual(stream.calls[0]["crib_model"], "Thermopro-TX2C")
-        self.assertEqual(stream.calls[1]["extra_args"], ["-f", "868M", "-s", "1024k", "-Y", "classic"])
+        self.assertEqual(stream.calls[0]["crib_model"], "Nexus-TH")
+        self.assertEqual(stream.calls[1]["crib_channel"], "2")
         low_warns = [m for m in logs.output if "crib sensor" in m and "battery low" in m]
         self.assertEqual(len(low_warns), 1)                        # not re-warned on restart while still low
 

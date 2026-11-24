@@ -367,7 +367,7 @@ is **opt-in and OFF by default** — it makes **no** network call unless explici
 > opt-in. An unset/blank/false flag — or no coordinates — means the poller never starts (zero egress).
 > Like the baby-monitor poller it runs off the event loop and keeps the last value on a failed fetch.
 
-### Source — `local` (433 / 868 MHz weather sensors via `rtl_433`)
+### Source — `local` (433 MHz weather sensors via `rtl_433`)
 
 Set `HESTIA_OUTDOOR_TEMP_SOURCE=local` (with `HESTIA_OUTDOOR_TEMP=1`) to feed `outdoor_temp` from a
 local 433 MHz weather sensor decoded by the external **`rtl_433`** binary instead of the cloud —
@@ -379,44 +379,45 @@ holds.
 This is a **PUSH** feeder: hestia spawns **one long-lived** `rtl_433 -d <dev> -F json` and applies each
 matching reading the instant `rtl_433` streams it (no polling interval, no reception window). Alongside
 `outdoor_temp` it also fills a display-only **`outdoor_humidity`** (%RH) global when the packet carries it.
-The same single `rtl_433` process can also hop across bands (via `HESTIA_RTL433_EXTRA_ARGS`) and route a
-second sensor (via `HESTIA_RTL433_CRIB_MODEL` / `CRIB_CHANNEL` / `CRIB_ID`) into **`crib_temp`** (+
-`crib_temp_ts`). If `rtl_433` exits (e.g. `rtl_tcp` restart), the stream is relaunched after
-`HESTIA_RTL433_RESTART_SECS`.
+The same single 433.92 MHz `rtl_433` process can also route a **second 433 MHz sensor** (with a
+different `channel` or `model` from the outdoor sensor) via `HESTIA_RTL433_CRIB_MODEL` / `CRIB_CHANNEL` /
+`CRIB_ID` into **`crib_temp`** (+ `crib_temp_ts`). Set the crib filter values once the second 433 MHz
+sensor appears on `/api/rf433`. If `rtl_433` exits (e.g. `rtl_tcp` restart), any nonzero exit is logged
+with bounded stderr diagnostics and the stream is relaunched after `HESTIA_RTL433_RESTART_SECS`.
 
 | Env var | Meaning | Default |
 |---|---|---|
 | `HESTIA_RTL433_DEVICE` | rtl_433 `-d` source — e.g. `rtl_tcp:127.0.0.1:1234` or `0` for a direct dongle | `rtl_tcp:127.0.0.1:1234` |
-| `HESTIA_RTL433_EXTRA_ARGS` | extra `rtl_433` CLI flags (shell-split with `shlex`, appended after `-d dev -F json`). Rejects `-d`, `-F`, `-T`, `-w`, `-W`, `-S`, `-c`, `--*`, and stray positional args — bad config disables the feeder fail-safe | — (empty) |
 | `HESTIA_RTL433_MODEL` | outdoor route: only accept readings whose `model` matches (recommended) | — (any) |
 | `HESTIA_RTL433_ID` | outdoor route: only accept readings whose sensor `id` matches; **`*` = any id** (for a sensor whose id randomises on each battery change) | — (any) |
 | `HESTIA_RTL433_CHANNEL` | outdoor route: only accept readings on this `channel` (a physical DIP switch, **stable** across battery changes); pair with `HESTIA_RTL433_ID=*` to track one sensor across battery swaps yet still exclude a neighbour on another channel | — (any) |
-| `HESTIA_RTL433_CRIB_MODEL` | crib route: enable the second target into `crib_temp` + `crib_temp_ts` for packets matching this `model`. Supersedes `HESTIA_NIANIA_*` if both are configured | — (off) |
+| `HESTIA_RTL433_CRIB_MODEL` | crib route: enable the second 433 MHz target into `crib_temp` + `crib_temp_ts` for packets matching this `model`. Supersedes `HESTIA_NIANIA_*` if both are configured | — (off) |
 | `HESTIA_RTL433_CRIB_ID` | crib route: only accept readings whose sensor `id` matches (`*` = any id) | — (any) |
 | `HESTIA_RTL433_CRIB_CHANNEL` | crib route: only accept readings on this `channel` (rejects packets without `channel`) | — (any) |
 | `HESTIA_RTL433_BATTERY_WARN` | opt-in low-battery signal (`outdoor_battery_ok` badge on the dashboard; low-battery transition warning logged for the crib route). Off by default because some sensors (e.g. a rechargeable `Prologue-TH`) report low *permanently* | off |
-| `HESTIA_RTL433_PROTOCOL` | restrict decoding to one rtl_433 protocol number (`-R`) | — (all) |
+| `HESTIA_RTL433_PROTOCOL` | restrict decoding to **one** rtl_433 protocol number (`-R`). With two sensors of different protocols, leave `PROTOCOL` **unset** (or both sensors must share that single protocol) | — (all) |
 | `HESTIA_RTL433_RESTART_SECS` | delay before relaunching `rtl_433` after it exits, clamped to `[1, 600]` | `30` |
 
 > Filters (`MODEL` / `ID` / `CHANNEL`, and `CRIB_MODEL` / `CRIB_ID` / `CRIB_CHANNEL`) are **exact,
 > case-sensitive** string matches (`id` / `channel` are `str()`-ed first, so int `1` matches `"1"`), each
 > skipped when unset/empty. When a `CHANNEL` filter is set, a packet that **omits** `channel` is rejected
-> (it is a different device). Each decoded packet is routed to **at most one** target (outdoor or crib):
-> if a packet matches both active filters, hestia treats it as a config error, logs it once, and skips
-> updating either target.
+> (it is a different device). The crib sensor must be a **second 433 MHz sensor** with a different
+> `model` or `channel` from the outdoor sensor; each decoded packet is routed to **at most one** target
+> (outdoor or crib): if a packet matches both active filters, hestia treats it as a config error, logs it
+> once, and skips updating either target.
 >
 > **Crib precedence, humidity & battery:** if both `HESTIA_NIANIA_*` and `HESTIA_RTL433_CRIB_MODEL` are
 > configured, the `rtl_433` crib route wins — hestia logs a warning once and does **not** start the
 > Tuya poller. Crib humidity is ignored (the API has no crib humidity field). Low battery for crib is
 > logged once per transition into low when `HESTIA_RTL433_BATTERY_WARN` is enabled.
 
-> **Hardware requirement:** `local` needs a **dedicated** SDR/`rtl_tcp` endpoint. Do **not** point
-> `HESTIA_RTL433_DEVICE` at an `rtl_tcp` shared with another consumer — neither an FM/RDS receiver (a
-> retune **monopolises** the dongle) nor a second `rtl_433` (`rtl_tcp` serves a **single client**, so the
-> second reader silently gets nothing). Use `HESTIA_RTL433_EXTRA_ARGS` to hop frequencies within this
-> single `rtl_433` process instead of spawning a second client. hestia consumes the long-lived stream, takes
-> each matching finite `temperature_C` (+ `humidity` for outdoor, and `battery_ok` if present), and
-> **terminates and reaps** its `rtl_433` child on shutdown so a leaked process can never block the SDR.
+> **Hardware requirement:** `local` needs a **433-tuned antenna near the sensors** and a **dedicated**
+> SDR/`rtl_tcp` endpoint. Do **not** point `HESTIA_RTL433_DEVICE` at an `rtl_tcp` shared with another
+> consumer — neither an FM/RDS receiver (a 433 retune **monopolises** the dongle) nor a second `rtl_433`
+> (`rtl_tcp` serves a **single client**, so the second reader silently gets nothing). hestia consumes the
+> long-lived stream, takes each matching finite `temperature_C` (+ `humidity` for outdoor, and `battery_ok`
+> if present), and **terminates and reaps** its `rtl_433` child on shutdown so a leaked process can never
+> block the SDR.
 
 > **Freshness badge (dashboard):** each sample stamps the time it landed (`outdoor_temp_ts`, and
 > `crib_temp_ts` for the crib temperature), surfaced under the reading as a muted "**N ago**" badge
@@ -426,27 +427,26 @@ second sensor (via `HESTIA_RTL433_CRIB_MODEL` / `CRIB_CHANNEL` / `CRIB_ID`) into
 > `HESTIA_RTL433_BATTERY_WARN`) adds a red "🪫 low" to the badge; it stays `null` (no badge) while that
 > opt-in is off (the default).
 
-> **Dual-band hopping example (`Prologue-TH` on 433.92 MHz + ThermoPro TP-65 / `Thermopro-TX2C` on 868 MHz):**
+> **Two-sensor 433 MHz example (outdoor + crib on 433.92 MHz):**
 >
 > ```
 > HESTIA_OUTDOOR_TEMP=1
 > HESTIA_OUTDOOR_TEMP_SOURCE=local
 > HESTIA_RTL433_DEVICE=rtl_tcp:127.0.0.1:1234
-> HESTIA_RTL433_EXTRA_ARGS="-f 433.92M -f 868M -s 1024k -Y classic -H 30"
 > HESTIA_RTL433_MODEL=Prologue-TH
 > HESTIA_RTL433_ID=*            # any id — survives the random renumber on each battery swap
 > HESTIA_RTL433_CHANNEL=1       # the physical DIP switch — stable, and excludes a neighbour on another channel
-> HESTIA_RTL433_CRIB_MODEL=Thermopro-TX2C
-> HESTIA_RTL433_CRIB_ID=*       # TX-2C also randomises id on battery swap — pin model + channel
-> HESTIA_RTL433_CRIB_CHANNEL=3
-> # HESTIA_RTL433_BATTERY_WARN  # leave off if outdoor uses a rechargeable cell (always reports low)
+> HESTIA_RTL433_CRIB_MODEL=Nexus-TH   # second 433 MHz sensor (set once seen on /api/rf433)
+> HESTIA_RTL433_CRIB_ID=*
+> HESTIA_RTL433_CRIB_CHANNEL=2        # distinct channel/model from outdoor
+> # HESTIA_RTL433_PROTOCOL            # leave unset when outdoor and crib use different protocols
+> # HESTIA_RTL433_BATTERY_WARN        # leave off if outdoor uses a rechargeable cell (always reports low)
 > ```
 >
-> **Important for ThermoPro TP-65 (`Thermopro-TX2C`):** **`-Y classic` is required** in
-> `HESTIA_RTL433_EXTRA_ARGS` — without `-Y classic`, `rtl_433` decodes nothing from the TP-65 on 868 MHz.
-> Note also that both `Prologue-TH` and `Thermopro-TX2C` generate a **new random `id`** on each battery
-> swap (per rtl_433's decoder, `id` is generated on sensor start), while `channel` is set by the sensor's
-> physical switch — so pair `ID=*` with `CHANNEL` on both sensors instead of pinning a volatile `id`.
+> Why `ID=*` + `CHANNEL` matters (per rtl_433's `Prologue-TH` decoder): the `id` is *"a random id
+> generated when the sensor starts"* (the **same** battery often yields the same id, a **new/replaced**
+> one a different id), and `channel` is a separate sensor-set field — so `id` is the volatile part and
+> `channel` the stable one.
 >
 > The `battery_ok` flag is genuine (`0` = low, `1` = ok), but two quirks make the badge opt-in: the decoder
 > notes *"the first reading always says low"* (so even a fresh alkaline shows a transient low on power-up),

@@ -252,12 +252,9 @@ RTL433_PROTOCOL = os.environ.get("HESTIA_RTL433_PROTOCOL")  # None/"" -> all def
 # `id` which a Prologue-TH-class sensor RANDOMISES on every power-cycle. None/"" -> any channel. Pair with
 # HESTIA_RTL433_ID=* to track one sensor across battery swaps while still excluding a neighbour on another channel.
 RTL433_CHANNEL = os.environ.get("HESTIA_RTL433_CHANNEL")    # None/"" -> no channel filter
-# Extra rtl_433 CLI flags (shell-split via shlex, appended after -d/-F/-R) — e.g. for multi-band
-# frequency hopping (`-f 433.92M -f 868M -s 1024k -Y classic -H 30`). Validated against disallowed
-# flags (-d/-F/-T/-w/-W/-S/-c) in _sensor433_poller; bad config disables the feeder fail-safe.
-RTL433_EXTRA_ARGS = os.environ.get("HESTIA_RTL433_EXTRA_ARGS")          # None/"" -> default argv
-# Second (indoor/crib) sensor route on the SAME rtl_433 stream into State.crib_temp + crib_temp_ts.
-# Enabled iff CRIB_MODEL is non-empty; supersedes the Tuya baby-monitor poller if both are configured.
+# Second (indoor/crib) 433 MHz sensor route on the SAME rtl_433 stream into State.crib_temp +
+# crib_temp_ts. Enabled iff CRIB_MODEL is non-empty; supersedes the Tuya baby-monitor poller if both
+# are configured. Must differ in model or channel from the outdoor sensor.
 RTL433_CRIB_MODEL = os.environ.get("HESTIA_RTL433_CRIB_MODEL")          # None/"" -> crib route off
 RTL433_CRIB_ID = os.environ.get("HESTIA_RTL433_CRIB_ID")                # None/"" -> no id filter
 RTL433_CRIB_CHANNEL = os.environ.get("HESTIA_RTL433_CRIB_CHANNEL")      # None/"" -> no channel filter
@@ -1307,19 +1304,20 @@ async def _autosave(rt, interval: float = AUTOSAVE_SECS) -> None:
                 log.exception("autosave failed — will retry in %ss", interval)
 
 
-async def _inject(rt, frames, source: str = "scheduler", pace: bool = True) -> None:
+async def _inject(rt, frames, source: str = "scheduler", pace: bool = True) -> bool:
     """Inject automation frames to the current device session: no device connected → drop + warn (not
-    deferred); a per-frame OSError is logged and aborts the rest (the session is broken). Shared by the
-    scheduler and the niania poller — ``source`` tags the log lines so an incident is traced to the
-    right producer (the scheduler tests pin the default ``"scheduler"`` wording). ``pace`` spaces a
-    multi-frame burst so back-to-back frames don't wedge the gateway — left on for command bursts
-    (automations), turned OFF for GET-poll reads (the thermostat confirm), which don't need it."""
+    deferred) and return ``False``; a per-frame OSError is logged and aborts the rest (returns ``False``
+    if zero frames were sent, ``True`` otherwise). Shared by the scheduler and global-field feeders —
+    ``source`` tags the log lines so an incident is traced to the right producer (the scheduler tests pin
+    the default ``"scheduler"`` wording). ``pace`` spaces a multi-frame burst so back-to-back frames
+    don't wedge the gateway — left on for command bursts (automations), turned OFF for GET-poll reads
+    (the thermostat confirm), which don't need it."""
     if not frames:
-        return
+        return True
     session = rt.sessions[-1] if rt.sessions else None
     if session is None:
         log.warning("%s: dropping %d automation frame(s) — no device connected", source, len(frames))
-        return
+        return False
     for i, raw in enumerate(frames):
         if pace and i > 0 and INJECT_GAP_SECS > 0:
             await asyncio.sleep(INJECT_GAP_SECS)   # pace the burst so back-to-back frames don't wedge the gateway
@@ -1328,7 +1326,8 @@ async def _inject(rt, frames, source: str = "scheduler", pace: bool = True) -> N
         except OSError as exc:
             log.warning("%s inject failed (%d of %d frame(s) not sent): %r",
                         source, len(frames) - i, len(frames), exc)
-            break
+            return i > 0
+    return True
 
 
 async def _scheduler(rt, now=datetime.datetime.now, interval: float = SCHEDULER_SECS) -> None:
@@ -1351,10 +1350,13 @@ _UNSET = object()
 
 
 async def _apply_global(rt, field: str, value, source: str, *, with_timestamp: bool = False,
-                        extra_fields: "dict | None" = None, dirty: bool = False) -> None:
+                        extra_fields: "dict | None" = None,
+                        post_fields: "dict | None" = None,
+                        dirty: bool = False) -> None:
     """Record a fresh GLOBAL field sample into ``State``, publish a live ``globals`` SSE delta, and
-    fire matching ``on_global`` automation triggers via ``_inject``. Shared by ``_poll_global_field``
-    (Tuya baby-monitor / Open-Meteo) and ``_sensor433_poller`` (outdoor / crib 433 routes)."""
+    fire matching ``on_global`` automation triggers via ``_inject``. When ``_inject`` cannot deliver any
+    frame (no gateway connected yet), pending frame-producing rule edges are restored rather than
+    consumed. Shared by ``_poll_global_field`` (Tuya / Open-Meteo) and ``_sensor433_poller``."""
     log.debug("%s: %s = %r", source, field, value)
     if getattr(rt.state, field) != value or dirty:                       # only a REAL change needs persisting —
         rt.state.dirty = True                                            # else a steady poll re-flushes (+ re-runs
@@ -1366,8 +1368,12 @@ async def _apply_global(rt, field: str, value, source: str, *, with_timestamp: b
         now = time.time()
         setattr(rt.state, f"{field}_ts", now)
         fields[f"{field}_ts"] = _iso(now)
+    if post_fields:                                                      # preserve legacy wire key order after *_ts
+        fields.update(post_fields)
     rt.event_bus.publish({"type": "globals", "fields": fields})          # live dashboard update (every tick)
-    await _inject(rt, rt.engine.on_global(rt, field, value), source=source)
+    frames = rt.engine.on_global(rt, field, value)
+    if await _inject(rt, frames, source=source) is False:
+        rt.engine.restore_global_edges()
 
 
 async def _poll_global_field(rt, field, read, interval, source, *, with_timestamp=False) -> None:
@@ -1461,17 +1467,14 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
                             model=RTL433_MODEL, sensor_id=RTL433_ID, channel=RTL433_CHANNEL,
                             protocol=RTL433_PROTOCOL, battery_warn: bool = RTL433_BATTERY_WARN,
                             backoff: float = RTL433_RESTART_SECS,
-                            extra_args=_UNSET, crib_model=_UNSET, crib_id=_UNSET,
-                            crib_channel=_UNSET) -> None:
-    """Stream local 433 / 868 MHz weather sensors (ONE long-lived ``rtl_433``) into ``State.outdoor_temp``
+                            crib_model=_UNSET, crib_id=_UNSET, crib_channel=_UNSET) -> None:
+    """Stream local 433 MHz weather sensors (ONE long-lived ``rtl_433``) into ``State.outdoor_temp``
     (+ display-only ``State.outdoor_humidity``) and/or ``State.crib_temp``. OPT-IN: returns immediately
     (zero work, no rtl_433 spawned) unless ``enabled and source == "local"`` OR ``HESTIA_RTL433_CRIB_MODEL``
-    is set. Validates ``HESTIA_RTL433_EXTRA_ARGS`` upfront (bad config logs a warning and disables the
-    feeder fail-safe). If rtl_433 exits (rtl_tcp restart / SDR hiccup) the stream is relaunched after
-    ``backoff`` seconds. One bad reading never drops the stream; the daemon loop never dies on an error
+    is set. If rtl_433 exits (rtl_tcp restart / SDR hiccup) the stream is relaunched after ``backoff``
+    seconds. One bad reading never drops the stream; the daemon loop never dies on an error
     (``CancelledError`` is a ``BaseException``, so shutdown still cancels cleanly and ``stream`` reaps the
     child). See ``sensor433.stream_readings``."""
-    resolved_extra = RTL433_EXTRA_ARGS if extra_args is _UNSET else extra_args
     resolved_crib_model = RTL433_CRIB_MODEL if crib_model is _UNSET else crib_model
     resolved_crib_id = RTL433_CRIB_ID if crib_id is _UNSET else crib_id
     resolved_crib_channel = RTL433_CRIB_CHANNEL if crib_channel is _UNSET else crib_channel
@@ -1480,12 +1483,6 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
     crib_local = bool(resolved_crib_model)
     if not (outdoor_local or crib_local):
         return                                       # off / not selected -> no rtl_433
-
-    try:
-        parsed_extra = sensor433.parse_extra_args(resolved_extra)
-    except ValueError as exc:
-        log.warning("sensor433: bad HESTIA_RTL433_EXTRA_ARGS (%s) — rtl_433 feeder disabled", exc)
-        return
 
     async def on_outdoor_reading(reading) -> None:
         try:
@@ -1496,8 +1493,8 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
             await _apply_global(
                 rt, "outdoor_temp", reading.temperature_C, "sensor433",
                 with_timestamp=True,
-                extra_fields={"outdoor_humidity": reading.humidity,
-                              "outdoor_battery_ok": battery_ok},
+                extra_fields={"outdoor_humidity": reading.humidity},
+                post_fields={"outdoor_battery_ok": battery_ok},
                 dirty=humidity_changed,
             )
         except Exception:                            # one bad reading/rule-eval must NOT drop the SDR stream
@@ -1526,7 +1523,7 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
             await stream(
                 on_outdoor_reading if outdoor_local else None,
                 device=device, model=model, sensor_id=sensor_id,
-                channel=channel, protocol=protocol, extra_args=parsed_extra,
+                channel=channel, protocol=protocol,
                 crib_model=resolved_crib_model if crib_local else None,
                 crib_id=resolved_crib_id if crib_local else None,
                 crib_channel=resolved_crib_channel if crib_local else None,
