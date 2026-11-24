@@ -12,13 +12,19 @@ from .gmail_address import canonical_mailbox
 from .gmail_client import GmailError
 from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
 from .gmail_store import RFC_MESSAGE_DOMAIN, PendingMessage, digest
-from .gmail_trust import classify_sender, forward_sender_domain, mime_parts, unwrap_trusted_forward
+from .gmail_trust import _domain_matches, classify_sender, forward_sender_domain, mime_parts, unwrap_trusted_forward
 from .gmail_worker import MAX_HTML_BYTES, MAX_PDF_BYTES, WorkerRejected, WorkerUnavailable
 
 
 MAX_MESSAGE_BYTES = 10 * 1024 * 1024
 _MAX_BASE64_CHARS = 4 * ((MAX_MESSAGE_BYTES + 2) // 3)
 _INTERNAL_DATE = re.compile(r"[0-9]{1,19}\Z", re.ASCII)
+_ISSUER_SENDER_DOMAINS = {
+    "T-Mobile": ("t-mobile.pl",),
+    "Orange": ("orange.pl", "orange.com"),
+    "Play": ("play.pl", "mojefinanseplay.pl"),
+    "Respect Energy": ("respectenergy.pl",),
+}
 
 
 class _PartOversized(WorkerRejected):
@@ -122,6 +128,8 @@ class GmailMessageProcessor:
                        sender_domain=forward_sender_domain(inner), source_kind="attachment" if attached else "email")
 
     def _invoice(self, message, pending):
+        # This is the authenticated direct envelope or the original selected by the forward trust gate.
+        sender_domain = forward_sender_domain(message) or ""
         for kind, part in _document_parts(message):
             try:
                 payload = _document_payload(kind, part)
@@ -135,7 +143,9 @@ class GmailMessageProcessor:
                 pending = replace(pending, outcome="parse_failed")
                 continue
             invoice = extract_invoice(text)
-            if invoice is not None:
+            if invoice is not None and any(
+                _domain_matches(sender_domain, domain) for domain in _ISSUER_SENDER_DOMAINS.get(invoice.issuer, ())
+            ):
                 return replace(pending, outcome="imported", invoice=invoice,
                                rfc_message_id_hmac=_rfc_message_hmac(message, self.settings.hmac_secret),
                                source_kind="attachment" if kind == "pdf" else "email")
