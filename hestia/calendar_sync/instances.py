@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from icalendar import Calendar, vDDDTypes, vRecur
 from recurring_ical_events import of
 
-from .events import default_instance, original_start_key, to_ical
+from .events import original_start_key, to_ical
 
 
 INSTANCE_LIMIT = 2000
@@ -90,12 +90,12 @@ def _kind(line: str) -> str:
 
 def _library_payload(payload: dict) -> dict:
     content = deepcopy(payload)
+    content["exceptions"] = []
+    content["recurrence"] = [line for line in content.get("recurrence", []) if _kind(line) != "EXDATE"]
     if "date" not in content["start"]:
-        content["recurrence"] = [line for line in content.get("recurrence", []) if _kind(line) != "EXDATE"]
-        content["exceptions"] = []
         return content
     recurrence = []
-    for line in content.get("recurrence", []):
+    for line in content["recurrence"]:
         name, body = line.split(":", 1)
         if _kind(line) == "RRULE":
             body = ";".join(part for part in body.split(";") if part.split("=", 1)[0] not in _TIME_SELECTORS)
@@ -110,11 +110,6 @@ def _calendar(payload: dict, uid: str) -> Calendar:
     components = calendar.walk("VEVENT")
     if "date" not in content["start"]:
         components[0]["DTEND"] = vDDDTypes(_key(content["end"], False))
-    for component, exception in zip(components[1:], content.get("exceptions", [])):
-        if "DTSTART" not in component:
-            default = default_instance(content, exception["originalStartTime"])
-            component.add("dtstart", date.fromisoformat(default["start"]["date"]))
-            component.add("dtend", date.fromisoformat(default["end"]["date"]))
     return calendar
 
 
@@ -136,8 +131,8 @@ def _timed_queries(payload: dict) -> list[tuple[dict, datetime | None]]:
     return queries
 
 
-def _explicit_keys(payload: dict) -> set:
-    result = {_key(payload["start"], False)}
+def _explicit_keys(payload: dict, all_day: bool) -> set:
+    result = {_key(payload["start"], all_day)}
     for line in payload.get("recurrence", []):
         if _kind(line) == "RDATE":
             result.update(_property_keys(line, "RDATE"))
@@ -173,6 +168,39 @@ def _overlaps(content: dict, window: _Window) -> bool:
     return starting < window.upper and (ending > window.lower or starting == ending and starting >= window.lower)
 
 
+def _overlaps_padded(content: dict, window: _Window, start: date, end: date, lower: datetime, upper: datetime) -> bool:
+    if content.get("status") == "cancelled":
+        return False
+    if "date" in content["start"]:
+        try:
+            start -= timedelta(days=1)
+        except OverflowError:
+            start = date.min
+        try:
+            end += timedelta(days=1)
+        except OverflowError:
+            end = date.max
+    return _overlaps(content, _Window(start, end, window.zone, lower, upper))
+
+
+def _pending_bounds(pending: dict, query_start: datetime, query_end: datetime, all_day: bool) -> tuple[datetime, datetime]:
+    if not pending:
+        return query_start, query_end
+    margin = timedelta(days=1) if all_day else timedelta(hours=2)
+    try:
+        first = min(pending) - margin
+    except OverflowError:
+        first = min(pending)
+    try:
+        last = max(pending) + margin
+    except OverflowError:
+        last = max(pending)
+    if all_day:
+        first = datetime.combine(first, time.min, tzinfo=_UTC)
+        last = datetime.combine(last, time.min, tzinfo=_UTC)
+    return min(query_start, first), max(query_end, last)
+
+
 def _instance(event: dict, content: dict, recurrence_id: dict | None) -> dict:
     instance_id = event["id"] if recurrence_id is None else event["id"] + "/" + original_start_key(recurrence_id)
     return {
@@ -204,17 +232,16 @@ def _base_end(payload: dict, start: dict) -> dict | None:
         return None
 
 
-def _component_instance(event: dict, component, window: _Window, override: bool) -> dict | None:
+def _component_instance(event: dict, component, window: _Window) -> dict | None:
     payload = event["payload"]
     default_zone = payload["start"].get("timeZone")
-    start_zone = None if override else payload["start"].get("timeZone")
     content = {
         "summary": str(component.get("SUMMARY", "")),
         "location": str(component.get("LOCATION", "")),
-        "start": _time_dict(component["DTSTART"], default_zone, start_zone),
+        "start": _time_dict(component["DTSTART"], default_zone, default_zone),
         "status": str(component.get("STATUS", "CONFIRMED")).lower(),
     }
-    content["end"] = (_time_dict(component["DTEND"], default_zone) if override else _base_end(payload, content["start"]))
+    content["end"] = _base_end(payload, content["start"])
     if content["end"] is None or not _overlaps(content, window):
         return None
     recurrence_id = (_time_dict(component["RECURRENCE-ID"], default_zone, default_zone)
@@ -222,12 +249,15 @@ def _component_instance(event: dict, component, window: _Window, override: bool)
     return _instance(event, content, recurrence_id)
 
 
-def _stored_override(event: dict, exception: dict, original: datetime, window: _Window) -> dict | None:
+def _stored_override(event: dict, exception: dict, original, window: _Window) -> dict | None:
     if not _overlaps(exception, window):
         return None
-    zone_name = event["payload"]["start"]["timeZone"]
-    recurrence_id = {"dateTime": original.astimezone(ZoneInfo(zone_name)).isoformat(timespec="seconds"),
-                     "timeZone": zone_name}
+    if not isinstance(original, datetime):
+        recurrence_id = {"date": original.isoformat()}
+    else:
+        zone_name = event["payload"]["start"]["timeZone"]
+        recurrence_id = {"dateTime": original.astimezone(ZoneInfo(zone_name)).isoformat(timespec="seconds"),
+                         "timeZone": zone_name}
     return _instance(event, exception, recurrence_id)
 
 
@@ -319,31 +349,11 @@ def _replay_upper_bound(payload: dict, end: datetime) -> int:
         _, body = line.split(":", 1)
         parts = dict(part.split("=", 1) for part in body.split(";"))
         estimated = ceil(seconds / (_FREQUENCY_SECONDS[parts["FREQ"]] * int(parts.get("INTERVAL", "1")))) + 1
-        for selector in ("BYDAY", "BYMONTHDAY", "BYHOUR", "BYMINUTE", "BYSETPOS"):
-            if selector in parts:
-                estimated *= len(parts[selector].split(","))
+        for selector, values in parts.items():
+            if selector.startswith("BY"):
+                estimated *= len(values.split(","))
         bound += min(int(parts["COUNT"]), estimated) if "COUNT" in parts else estimated
     return bound
-
-
-def _override_member(event: dict, queries: list, explicit: set, original: datetime) -> bool:
-    if original in explicit:
-        return True
-    try:
-        stop = original + timedelta(seconds=1)
-    except OverflowError:
-        return False
-    for content, until in queries:
-        if until is not None and original > until or _replay_upper_bound(content, original) > REPLAY_BOUND:
-            continue
-        for series in of(_calendar(content, event["uid"])).series:
-            for occurrence in series.between(original, stop):
-                component = occurrence.as_component(False)
-                recurrence_id = _time_dict(component["RECURRENCE-ID"], event["payload"]["start"]["timeZone"],
-                                           event["payload"]["start"]["timeZone"])
-                if _key(recurrence_id, False) == original:
-                    return True
-    return False
 
 
 def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
@@ -355,21 +365,24 @@ def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
         first = _first_instance(event, window)
         return ([first] if first is not None else []), True
     query_start, query_end = _query_bounds(window)
-    if _occurrence_upper_bound(payload, query_start, query_end) > OCCURRENCE_BOUND:
+    all_day = "date" in payload["start"]
+    exceptions = {_key(item["originalStartTime"], all_day): item for item in payload.get("exceptions", [])}
+    pending = {original: item for original, item in exceptions.items()
+               if _overlaps_padded(item, window, window.start, window.end, query_start, query_end)}
+    generation_start, generation_end = _pending_bounds(pending, query_start, query_end, all_day)
+    if _occurrence_upper_bound(payload, generation_start, generation_end) > OCCURRENCE_BOUND:
         _LOG.warning("Calendar event %s exceeds the instance occurrence bound; using DTSTART only", event["id"])
         first = _first_instance(event, window)
         return ([first] if first is not None else []), True
-    if _replay_upper_bound(payload, query_end) > REPLAY_BOUND:
+    if _replay_upper_bound(payload, generation_end) > REPLAY_BOUND:
         _LOG.warning("Calendar event %s exceeds the recurrence replay bound; using DTSTART only", event["id"])
         first = _first_instance(event, window)
         return ([first] if first is not None else []), True
 
-    timed = "date" not in payload["start"]
-    explicit = _explicit_keys(payload) if timed else set()
-    exdates = _exclusion_keys(payload) if timed else set()
-    overrides = ({_key(item["originalStartTime"], False): item for item in payload.get("exceptions", [])}
-                 if timed else {})
+    explicit = _explicit_keys(payload, all_day)
+    exdates = _exclusion_keys(payload)
     seen_overrides = set()
+    series_slots = set()
     second_fold = _second_fold_start(payload)
     matches = []
     identifiers = set()
@@ -379,26 +392,29 @@ def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
             identifiers.add(instance["instance_id"])
             matches.append(instance)
 
-    queries = [(payload, None)] if not timed else _timed_queries(payload)
+    queries = [(payload, None)] if all_day else _timed_queries(payload)
     for content, until in queries:
         for series in of(_calendar(content, event["uid"])).series:
-            for occurrence in series.between(query_start, query_end):
+            for occurrence in series.between(generation_start, generation_end):
                 component = occurrence.as_component(False)
-                original = None
-                if timed:
+                if all_day:
+                    original_value = component["RECURRENCE-ID"].dt
+                    original = original_value.date() if isinstance(original_value, datetime) else original_value
+                else:
                     recurrence_id = _time_dict(component["RECURRENCE-ID"], payload["start"]["timeZone"],
                                                payload["start"]["timeZone"])
                     original = _key(recurrence_id, False)
-                    if until is not None and original not in explicit and original > until:
-                        continue
-                    if original in exdates:
-                        continue
-                if original in overrides:
+                if until is not None and original not in explicit and original > until:
+                    continue
+                series_slots.add(original)
+                if original in exdates:
+                    continue
+                if original in exceptions:
                     seen_overrides.add(original)
-                    instance = _stored_override(event, overrides[original], original, window)
+                    instance = (_stored_override(event, exceptions[original], original, window)
+                                if original in pending else None)
                 else:
-                    instance = _component_instance(event, component, window,
-                                                   bool(occurrence.recurrence_ids) if not timed else False)
+                    instance = _component_instance(event, component, window)
                 if instance is not None and second_fold is not None and original not in explicit:
                     zone = ZoneInfo(payload["start"]["timeZone"])
                     original_wall = datetime.fromisoformat(payload["start"]["dateTime"]).astimezone(zone).replace(tzinfo=None)
@@ -408,13 +424,8 @@ def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
                 add(instance)
     if second_fold is not None:
         add(_first_instance(event, window))
-    for original, exception in overrides.items():
-        if original in seen_overrides or original in exdates:
-            continue
-        if not _override_member(event, queries, explicit, original):
-            _LOG.debug("Skipping orphan override for calendar event %s at %s", event["id"], original.isoformat())
-            continue
-        add(_stored_override(event, exception, original, window))
+    for original in pending.keys() - seen_overrides - explicit - series_slots - exdates:
+        _LOG.debug("Skipping orphan override for calendar event %s at %s", event["id"], original.isoformat())
     matches.sort(key=lambda instance: _sort_key(instance, window))
     return matches[:INSTANCE_LIMIT + 1], False
 

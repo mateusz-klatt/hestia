@@ -234,9 +234,7 @@ takie zdarzenie jest raportowane w dzienniku serwera i nie blokuje pozostałych.
 Znane ograniczenia: fallback `SECONDLY`/`MINUTELY`/`HOURLY` obejmuje tylko `DTSTART`,
 więc później aktywowane wyjątki odwołanego wzorca pozostają w nim pominięte. Wystąpienia
 oddalone o mniej niż czas trwania zdarzenia od `0001-01-01` mogą zostać pominięte, gdy
-obliczenie granicznego czasu UTC wyszłoby poza obsługiwany zakres dat. Bieżący walidator
-odrzuca wyjątek godzinowy w serii całodniowej; jeśli taki wyjątek pochodzi z historycznych
-danych, zachowanie jego drugiej fazy czasu (fold) nie jest gwarantowane.
+obliczenie granicznego czasu UTC wyszłoby poza obsługiwany zakres dat.
 
 Nieprawidłowa data, odwrócony zakres lub zakres dłuższy niż 92 dni zwraca `400`
 z `{"error": "invalid_calendar_event"}`. Nieznana grupa zwraca `400` z

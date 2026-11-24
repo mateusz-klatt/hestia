@@ -480,8 +480,8 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
                            "end": {"dateTime": "2026-01-05T10:00:00Z", "timeZone": "UTC"},
                            "recurrence": ["RRULE:FREQ=DAILY;COUNT=1"], "exceptions": [
                                {"originalStartTime": {"dateTime": "2026-01-05T09:00:00Z"},
-                                "start": {"dateTime": "2026-02-01T09:00:00Z", "timeZone": "UTC"},
-                                "end": {"dateTime": "2026-02-01T10:00:00Z", "timeZone": "UTC"}}]})
+                                "start": {"dateTime": "2026-01-06T09:00:00Z", "timeZone": "UTC"},
+                                "end": {"dateTime": "2026-01-06T10:00:00Z", "timeZone": "UTC"}}]})
         response = await self.instances("from=2026-01-05&to=2026-01-06")
         self.assertEqual((await response.json())["instances"], [])
 
@@ -605,11 +605,80 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
                                {"originalStartTime": {"dateTime": "2026-01-02T09:00:00Z"}, "summary": "Moved series",
                                 "start": {"dateTime": "2026-01-21T09:00:00Z", "timeZone": "UTC"},
                                 "end": {"dateTime": "2026-01-21T10:00:00Z", "timeZone": "UTC"}}]})
-        response = await self.instances("from=2026-01-20&to=2026-01-22")
+        with mock.patch.object(instance_expander, "of", wraps=instance_expander.of) as library:
+            response = await self.instances("from=2026-01-20&to=2026-01-22")
+        self.assertEqual(library.call_count, 1)
         instances = (await response.json())["instances"]
         self.assertEqual([item["summary"] for item in instances], ["Moved explicit", "Moved series"])
         self.assertEqual(instances[0]["recurrence_id"]["dateTime"], "2026-01-01T09:00:00+00:00")
         self.assertEqual(instances[1]["recurrence_id"]["dateTime"], "2026-01-02T09:00:00+00:00")
+
+    async def test_instances_all_day_orphan_override_is_skipped(self):
+        await self.create({"summary": "Monday all-day", "start": {"date": "2026-01-05"}, "end": {"date": "2026-01-06"},
+                           "recurrence": ["RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=2"], "exceptions": [
+                               {"originalStartTime": {"date": "2026-01-06"}, "summary": "Orphan all-day",
+                                "start": {"date": "2026-01-07"}, "end": {"date": "2026-01-08"}}]})
+        with self.assertLogs("hestia.calendar_sync.instances", level="DEBUG") as logs:
+            response = await self.instances("from=2026-01-05&to=2026-01-13")
+        instances = (await response.json())["instances"]
+        self.assertEqual([item["summary"] for item in instances], ["Monday all-day", "Monday all-day"])
+        self.assertIn("orphan override", "\n".join(logs.output))
+
+    async def test_instances_gap_day_moved_override_matches_exact_utc_slot(self):
+        await self.create({"summary": "Gap base",
+                           "start": {"dateTime": "2026-03-28T02:30:00+01:00", "timeZone": "Europe/Warsaw"},
+                           "end": {"dateTime": "2026-03-28T03:30:00+01:00", "timeZone": "Europe/Warsaw"},
+                           "recurrence": ["RRULE:FREQ=DAILY;UNTIL=20260330T000000Z"], "exceptions": [
+                               {"originalStartTime": {"dateTime": "2026-03-29T01:30:00Z"}, "summary": "Moved gap",
+                                "start": {"dateTime": "2026-04-01T09:00:00+02:00", "timeZone": "Europe/Warsaw"},
+                                "end": {"dateTime": "2026-04-01T10:00:00+02:00", "timeZone": "Europe/Warsaw"}}]})
+        response = await self.instances("from=2026-04-01&to=2026-04-02")
+        instances = (await response.json())["instances"]
+        self.assertEqual([item["summary"] for item in instances], ["Moved gap"])
+        self.assertEqual(instances[0]["recurrence_id"],
+                         {"dateTime": "2026-03-29T03:30:00+02:00", "timeZone": "Europe/Warsaw"})
+
+    async def test_instances_all_day_master_uses_stored_timed_override_instants(self):
+        await self.create({"summary": "All-day master", "start": {"date": "2026-10-24"}, "end": {"date": "2026-10-25"},
+                           "recurrence": ["RDATE;VALUE=DATE:20261025"], "exceptions": [
+                               {"originalStartTime": {"date": "2026-10-25"}, "summary": "Timed fold override",
+                                "start": {"dateTime": "2026-10-25T02:30:00+01:00", "timeZone": "Europe/Warsaw"},
+                                "end": {"dateTime": "2026-10-25T03:30:00+01:00", "timeZone": "Europe/Warsaw"}}]})
+        response = await self.instances("from=2026-10-25&to=2026-10-26")
+        instances = (await response.json())["instances"]
+        self.assertEqual(len(instances), 1)
+        self.assertEqual(instances[0]["start"],
+                         {"dateTime": "2026-10-25T02:30:00+01:00", "timeZone": "Europe/Warsaw"})
+        self.assertEqual(instances[0]["end"],
+                         {"dateTime": "2026-10-25T03:30:00+01:00", "timeZone": "Europe/Warsaw"})
+        self.assertEqual(instances[0]["recurrence_id"], {"date": "2026-10-25"})
+
+    async def test_instances_explicit_override_after_until_is_still_emitted(self):
+        await self.create({"summary": "Base", "start": {"dateTime": "2026-01-20T09:00:00Z", "timeZone": "UTC"},
+                           "end": {"dateTime": "2026-01-20T10:00:00Z", "timeZone": "UTC"},
+                           "recurrence": ["RRULE:FREQ=DAILY;UNTIL=20260110T000000Z"], "exceptions": [
+                               {"originalStartTime": {"dateTime": "2026-01-20T09:00:00Z"}, "summary": "Explicit override",
+                                "start": {"dateTime": "2026-01-20T09:00:00Z", "timeZone": "UTC"},
+                                "end": {"dateTime": "2026-01-20T10:00:00Z", "timeZone": "UTC"}}]})
+        response = await self.instances("from=2026-01-20&to=2026-01-21")
+        instances = (await response.json())["instances"]
+        self.assertEqual([item["summary"] for item in instances], ["Explicit override"])
+
+    async def test_instances_irrelevant_overrides_do_not_expand_replay_window(self):
+        await self.create({"summary": "Base", "start": {"dateTime": "2026-01-01T09:00:00Z", "timeZone": "UTC"},
+                           "end": {"dateTime": "2026-01-01T10:00:00Z", "timeZone": "UTC"},
+                           "recurrence": ["RRULE:FREQ=DAILY;COUNT=1"], "exceptions": [
+                               {"originalStartTime": {"dateTime": "2000-01-01T09:00:00Z"}, "status": "cancelled"},
+                               {"originalStartTime": {"dateTime": "2000-01-02T09:00:00Z"},
+                                "start": {"dateTime": "2000-01-03T09:00:00Z", "timeZone": "UTC"},
+                                "end": {"dateTime": "2000-01-03T10:00:00Z", "timeZone": "UTC"}},
+                               {"originalStartTime": {"dateTime": "2026-01-01T09:00:00Z"}, "summary": "Active",
+                                "start": {"dateTime": "2026-01-02T09:00:00Z", "timeZone": "UTC"},
+                                "end": {"dateTime": "2026-01-02T10:00:00Z", "timeZone": "UTC"}}]})
+        response = await self.instances("from=2026-01-02&to=2026-01-03")
+        state = await response.json()
+        self.assertEqual([item["summary"] for item in state["instances"]], ["Active"])
+        self.assertFalse(state["truncated"])
 
     async def test_instances_first_fold_rdate_survives_second_fold_dtstart(self):
         await self.create({"summary": "Both folds",
@@ -803,13 +872,27 @@ class CalendarApiContractTests(unittest.TestCase):
         self.assertIn("moved exceptions", schema["properties"]["instance_id"]["description"])
         self.assertEqual(document["components"]["schemas"]["CalendarInstances"]["properties"]["instances"]["maxItems"], 2000)
 
-    def test_override_membership_guards_and_double_failure_fallback(self):
-        event = {"id": "event", "uid": "event", "payload": {"start": {"timeZone": "UTC"}}}
-        self.assertFalse(instance_expander._override_member(event, [], set(), datetime.max.replace(tzinfo=timezone.utc)))
-        until = datetime(2020, 1, 1, tzinfo=timezone.utc)
-        original = datetime(2021, 1, 1, tzinfo=timezone.utc)
-        self.assertFalse(instance_expander._override_member(event, [({}, until)], set(), original))
-        event["payload"] = {"start": {"date": "2026-01-01"}}
+    def test_override_padding_guards_datetime_limits(self):
+        minimum = datetime.min.replace(tzinfo=timezone.utc)
+        maximum = datetime.max.replace(tzinfo=timezone.utc)
+        window = instance_expander._Window(date.min, date.min, ZoneInfo("UTC"), minimum, minimum)
+        content = {"start": {"date": "0001-01-01"}, "end": {"date": "0001-01-02"}}
+        self.assertTrue(instance_expander._overlaps_padded(content, window, date.min, date.min, minimum, minimum))
+        window = instance_expander._Window(date.max, date.max, ZoneInfo("UTC"), maximum, maximum)
+        content = {"start": {"date": "9999-12-30"}, "end": {"date": "9999-12-31"}}
+        self.assertTrue(instance_expander._overlaps_padded(content, window, date.max, date.max, maximum, maximum))
+        instance_expander._pending_bounds({date.min: {}}, minimum, maximum, True)
+        instance_expander._pending_bounds({date.max: {}}, minimum, maximum, True)
+
+    def test_replay_bound_counts_every_by_list(self):
+        payload = {"start": {"dateTime": "2026-01-01T00:00:00Z", "timeZone": "UTC"},
+                   "end": {"dateTime": "2026-01-01T01:00:00Z", "timeZone": "UTC"},
+                   "recurrence": ["RRULE:FREQ=DAILY;BYSECOND=0,30;BYMINUTE=0;BYMONTH=1,2"]}
+        end = datetime(2026, 1, 3, tzinfo=timezone.utc)
+        self.assertEqual(instance_expander._replay_upper_bound(payload, end), 12)
+
+    def test_double_failure_fallback(self):
+        event = {"id": "event", "uid": "event", "payload": {"start": {"date": "2026-01-01"}}}
         with mock.patch.object(instance_expander, "_expand_event", side_effect=ValueError("bad rule")):
             with mock.patch.object(instance_expander, "_first_instance", side_effect=ValueError("bad start")):
                 with self.assertLogs("hestia.calendar_sync.instances", level="WARNING"):
