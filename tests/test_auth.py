@@ -121,7 +121,7 @@ class SessionTests(unittest.TestCase):
         self.assertIsNone(auth.verify_session(forged, now=1050.0, secret=SECRET))
 
     def test_malformed_token_rejected(self):
-        for bad in ("", "nodot", "a.b.c", "@@@.@@@"):
+        for bad in ("", "nodot", "a.a", "a.b.c", "@@@.@@@"):
             self.assertIsNone(auth.verify_session(bad, now=1.0, secret=SECRET))
 
     def _signed(self, payload: bytes) -> str:
@@ -135,6 +135,126 @@ class SessionTests(unittest.TestCase):
 
     def test_validly_signed_non_utf8_rejected(self):
         self.assertIsNone(auth.verify_session(self._signed(b"\xff\xfe|10"), now=1.0, secret=SECRET))
+
+    def _signed_v2_raw(self, payload_b64: str) -> str:
+        mac = hmac.new(SECRET, b"hestia/session/v2\0" + payload_b64.encode("ascii"), hashlib.sha256).digest()
+        return f"v2.{payload_b64}.{auth._b64u_encode(mac)}"
+
+    def _signed_v2_json(self, raw_json: bytes) -> str:
+        return self._signed_v2_raw(auth._b64u_encode(raw_json))
+
+    def test_v1_envelope_compatibility(self):
+        token = auth.make_session("tata", now=1000.0, secret=SECRET, ttl=100.0)
+        env = auth.decode_session(token, now=1050.0, secret=SECRET)
+        self.assertEqual(
+            env,
+            auth.SessionEnvelope(username="tata", expiry=1100, generation=0, version=1, purpose=None),
+        )
+
+    def test_v2_round_trip_browser_and_native(self):
+        for purpose in ("browser", "native"):
+            with self.subTest(purpose=purpose):
+                token = auth.make_session(
+                    "alice|żółć",
+                    now=1000.0,
+                    secret=SECRET,
+                    ttl=100.0,
+                    generation=3,
+                    purpose=purpose,
+                )
+                parts = token.split(".")
+                self.assertEqual(len(parts), 3)
+                self.assertEqual(parts[0], "v2")
+                self.assertNotIn("=", parts[1])
+                self.assertNotIn("=", parts[2])
+                # Compact UTF-8 JSON preserves Unicode without \\u escaping.
+                decoded_json = auth._b64u_decode(parts[1]).decode("utf-8")
+                self.assertIn("alice|żółć", decoded_json)
+                env = auth.decode_session(token, now=1050.0, secret=SECRET)
+                self.assertEqual(
+                    env,
+                    auth.SessionEnvelope(
+                        username="alice|żółć",
+                        expiry=1100,
+                        generation=3,
+                        version=2,
+                        purpose=purpose,
+                    ),
+                )
+                self.assertEqual(auth.verify_session(token, now=1050.0, secret=SECRET), "alice|żółć")
+
+    def test_make_session_v2_argument_validation(self):
+        with self.assertRaises(ValueError):
+            auth.make_session("alice", now=10.0, secret=SECRET, generation=0)
+        with self.assertRaises(ValueError):
+            auth.make_session("alice", now=10.0, secret=SECRET, purpose="browser")
+        with self.assertRaises(ValueError):
+            auth.make_session("", now=10.0, secret=SECRET, generation=0, purpose="browser")
+        with self.assertRaises(ValueError):
+            auth.make_session("alice", now=10.0, secret=SECRET, generation=-1, purpose="browser")
+        with self.assertRaises(ValueError):
+            auth.make_session("alice", now=10.0, secret=SECRET, generation=True, purpose="browser")
+        with self.assertRaises(ValueError):
+            auth.make_session("alice", now=10.0, secret=SECRET, generation=0, purpose="admin")
+
+    def test_decode_v2_checks_mac_before_json(self):
+        # Non-JSON payload with wrong MAC must be rejected at MAC comparison without decoding JSON.
+        forged = "v2.bm90LWpzb24." + auth._b64u_encode(b"\x00" * 32)
+        with mock.patch("hestia.auth.json.loads", side_effect=AssertionError("JSON parsed before MAC")):
+            self.assertIsNone(auth.decode_session(forged, now=10.0, secret=SECRET))
+
+    def test_decode_v2_rejects_malformed_envelopes_and_claims(self):
+        # Non-string, unsupported versions, wrong segment count, bad base64url
+        self.assertIsNone(auth.decode_session(None, now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session("v3.abc.def", now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session("v2.abc", now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session("v2.abc.def.ghi", now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session("v2..def", now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session("v2.ż.def", now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session("v2.abc.====", now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session("v2.abc.!!!", now=10.0, secret=SECRET))
+        # MAC has valid base64url chars and 32-byte length check: non-canonical trailing bits in payload_b64 (valid MAC)
+        # Encodes b"a" -> "YQ"; "YR" has non-zero unused low bits so _b64u_encode(b"a") == "YQ" != "YR".
+        self.assertIsNone(auth.decode_session(self._signed_v2_raw("YR"), now=10.0, secret=SECRET))
+        # Valid base64url JSON failures
+        self.assertIsNone(auth.decode_session(self._signed_v2_json(b"\xff\xfe"), now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session(self._signed_v2_json(b"{not-json"), now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session(self._signed_v2_json(b"[1,2,3]"), now=10.0, secret=SECRET))
+        self.assertIsNone(
+            auth.decode_session(
+                self._signed_v2_json(
+                    b'{"username":"a","username":"b","expiry":2000,"generation":0,"purpose":"browser"}'
+                ),
+                now=10.0,
+                secret=SECRET,
+            )
+        )
+        # Missing / extra / wrong-typed / out-of-range claims
+        bad_payloads = [
+            {"username": "a", "expiry": 2000, "generation": 0},
+            {"username": "a", "expiry": 2000, "generation": 0, "purpose": "browser", "extra": 1},
+            {"username": "", "expiry": 2000, "generation": 0, "purpose": "browser"},
+            {"username": 123, "expiry": 2000, "generation": 0, "purpose": "browser"},
+            {"username": "a", "expiry": True, "generation": 0, "purpose": "browser"},
+            {"username": "a", "expiry": 2000.5, "generation": 0, "purpose": "browser"},
+            {"username": "a", "expiry": 100, "generation": 0, "purpose": "browser"},  # expired when now == 100
+            {"username": "a", "expiry": 2000, "generation": -1, "purpose": "browser"},
+            {"username": "a", "expiry": 2000, "generation": True, "purpose": "browser"},
+            {"username": "a", "expiry": 2000, "generation": 0, "purpose": 123},
+            {"username": "a", "expiry": 2000, "generation": 0, "purpose": "receipt"},
+        ]
+        for payload in bad_payloads:
+            with self.subTest(payload=payload):
+                token = self._signed_v2_json(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+                self.assertIsNone(auth.decode_session(token, now=100.0, secret=SECRET))
+        # NaN constant
+        self.assertIsNone(
+            auth.decode_session(
+                self._signed_v2_json(b'{"username":"a","expiry":NaN,"generation":0,"purpose":"browser"}'),
+                now=10.0,
+                secret=SECRET,
+            )
+        )
 
 
 class UsersStoreTests(unittest.TestCase):

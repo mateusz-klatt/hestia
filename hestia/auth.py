@@ -19,6 +19,7 @@ layer (login endpoint + auth middleware) is a separate, deploy-coordinated step.
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
 import getpass
 import hashlib
 import hmac
@@ -43,6 +44,11 @@ _DKLEN = 32
 _DUMMY_PASSWORD = "hestia-dummy-password"
 
 SESSION_TTL = 30 * 24 * 3600.0   # 30-day "remember me" cookie
+SESSION_PURPOSE_BROWSER = "browser"
+SESSION_PURPOSE_NATIVE = "native"
+SESSION_PURPOSES = frozenset({SESSION_PURPOSE_BROWSER, SESSION_PURPOSE_NATIVE})
+_V2_MAC_PREFIX = b"hestia/session/v2\0"
+_V2_FIELDS = frozenset({"username", "expiry", "generation", "purpose"})
 LOGIN_ATTEMPTS = 10
 LOGIN_WINDOW = 60
 _MAX_LOGIN_BUCKETS = 4096
@@ -134,16 +140,124 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(dk, expected)
 
 
-def make_session(username: str, *, now: float, secret: bytes, ttl: float = SESSION_TTL) -> str:
-    """An HMAC-SHA256-signed ``username|expiry`` session token (``payload_b64.sig_b64``)."""
-    payload = f"{username}|{int(now + ttl)}".encode("utf-8")
-    sig = hmac.new(secret, payload, hashlib.sha256).digest()
-    return f"{_b64e(payload)}.{_b64e(sig)}"
+@dataclass(frozen=True)
+class SessionEnvelope:
+    """Decoded session metadata without account or database authorization."""
+
+    username: str
+    expiry: int
+    generation: int
+    version: int
+    purpose: str | None
 
 
-def verify_session(token: str, *, now: float, secret: bytes) -> "str | None":
-    """The username carried by a valid, unexpired, correctly-signed ``token`` — else ``None``. The
-    signature is checked constant-time BEFORE the expiry so a forged token is rejected the same way."""
+def _b64u_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64u_decode(text: str) -> bytes:
+    if not text or "=" in text or not text.isascii():
+        raise ValueError("invalid unpadded base64url")
+    padded = text + ("=" * ((4 - len(text) % 4) % 4))
+    raw = base64.b64decode(padded.encode("ascii"), altchars=b"-_", validate=True)
+    if _b64u_encode(raw) != text:
+        raise ValueError("non-canonical base64url")
+    return raw
+
+
+def _strict_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    obj: dict[str, object] = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError("duplicate JSON key")
+        obj[key] = value
+    return obj
+
+
+def make_session(
+    username: str,
+    *,
+    now: float,
+    secret: bytes,
+    ttl: float = SESSION_TTL,
+    generation: int | None = None,
+    purpose: str | None = None,
+) -> str:
+    """Issue a legacy v1 token or (when generation and purpose are supplied) a v2 session envelope."""
+    if (generation is None) != (purpose is None):
+        raise ValueError("generation and purpose must be supplied together")
+    if generation is None:
+        payload = f"{username}|{int(now + ttl)}".encode("utf-8")
+        sig = hmac.new(secret, payload, hashlib.sha256).digest()
+        return f"{_b64e(payload)}.{_b64e(sig)}"
+    if not isinstance(username, str) or not username:
+        raise ValueError("invalid username")
+    if type(generation) is not int or generation < 0:
+        raise ValueError("generation must be a nonnegative int")
+    if purpose not in SESSION_PURPOSES:
+        raise ValueError(f"invalid session purpose: {purpose!r}")
+    body = {
+        "username": username,
+        "expiry": int(now + ttl),
+        "generation": generation,
+        "purpose": purpose,
+    }
+    payload_bytes = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    payload_b64 = _b64u_encode(payload_bytes)
+    mac = hmac.new(secret, _V2_MAC_PREFIX + payload_b64.encode("ascii"), hashlib.sha256).digest()
+    return f"v2.{payload_b64}.{_b64u_encode(mac)}"
+
+
+def _decode_v2_session(token: str, *, now: float, secret: bytes) -> "SessionEnvelope | None":
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    _, payload_b64, mac_b64 = parts
+    if not payload_b64 or not payload_b64.isascii():
+        return None
+    try:
+        mac = _b64u_decode(mac_b64)
+    except ValueError:
+        return None
+    expected = hmac.new(secret, _V2_MAC_PREFIX + payload_b64.encode("ascii"), hashlib.sha256).digest()
+    if not hmac.compare_digest(mac, expected):
+        return None
+    try:
+        payload_bytes = _b64u_decode(payload_b64)
+        data = json.loads(payload_bytes.decode("utf-8"), object_pairs_hook=_strict_json_object)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(data, dict) or set(data) != _V2_FIELDS:
+        return None
+    username = data["username"]
+    expiry = data["expiry"]
+    generation = data["generation"]
+    purpose = data["purpose"]
+    if type(username) is not str or not username:
+        return None
+    if type(expiry) is not int or now >= expiry:
+        return None
+    if type(generation) is not int or generation < 0:
+        return None
+    if type(purpose) is not str or purpose not in SESSION_PURPOSES:
+        return None
+    return SessionEnvelope(
+        username=username,
+        expiry=expiry,
+        generation=generation,
+        version=2,
+        purpose=purpose,
+    )
+
+
+def decode_session(token: str, *, now: float, secret: bytes) -> "SessionEnvelope | None":
+    """Decode and verify HMAC + expiry of a v1 or v2 session token without DB authorization."""
+    if not isinstance(token, str):
+        return None
+    if token.startswith("v2."):
+        return _decode_v2_session(token, now=now, secret=secret)
+    if token.count(".") != 1:
+        return None
     try:
         payload_b64, sig_b64 = token.split(".")
         payload = _b64d(payload_b64)
@@ -160,7 +274,13 @@ def verify_session(token: str, *, now: float, secret: bytes) -> "str | None":
         return None
     if now >= expiry:
         return None
-    return username
+    return SessionEnvelope(username=username, expiry=expiry, generation=0, version=1, purpose=None)
+
+
+def verify_session(token: str, *, now: float, secret: bytes) -> "str | None":
+    """The username carried by a valid, unexpired, correctly-signed ``token`` — else ``None``."""
+    envelope = decode_session(token, now=now, secret=secret)
+    return None if envelope is None else envelope.username
 
 
 def users_path() -> Path:
