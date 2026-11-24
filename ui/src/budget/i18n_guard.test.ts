@@ -35,6 +35,15 @@ const LABEL_IDENTIFIER = /labels?$/i;
 const USER_VISIBLE_ATTRS = new Set(["title", "aria-label", "placeholder", "alt"]);
 const ALLOWED_BRAND_TOKEN = /(?<![\p{L}\p{N}_])(?:Vesta|Hestia|IBAN|BLIK)(?![\p{L}\p{N}_])/gu;
 const ALLOWED_REMAINDER = /^[0-9\p{P}\p{S}\s]*$/u;
+const NON_TEXT_CALLS = new Set(["t", "tPlural", "clsx", "cn", "testId"]);
+// Structured keys, class names and identifiers. Bare words can be UI copy.
+const MACHINE_TOKEN = /^[a-z][a-z0-9]*(?:(?:[._-][a-zA-Z0-9]+)+|(?:[A-Z][a-z0-9]*)+)$/;
+const LOOKUP_KEY = /^[a-z_$][\w$]*$/;
+const LOCALE_TAG = /^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|\d{3}))?$/;
+const FORMAT_LOCALE_ARGUMENTS = new Map([
+  ["toLocaleString", 0], ["toLocaleDateString", 0], ["toLocaleTimeString", 0],
+  ["formatAmount", 2], ["formatAxisLabel", 3], ["formatShortDate", 1], ["formatExpiry", 2],
+]);
 const ENTITY_PATTERN = /&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([a-zA-Z][a-zA-Z0-9]*));/g;
 const BUDGET_ROOT = path.dirname(url.fileURLToPath(import.meta.url));
 
@@ -168,29 +177,78 @@ function trailingIdentifierName(expr: ts.Expression): string | null {
 
 type JsxLiteralBranch = ts.StringLiteral | ts.NoSubstitutionTemplateLiteral | ts.TemplateExpression;
 
-function collectJsxLiteralBranches(expr: ts.Expression, out: JsxLiteralBranch[]): void {
-  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr) || ts.isTemplateExpression(expr)) {
-    out.push(expr);
+interface CallArgument {
+  callee: ts.Expression;
+  index: number;
+}
+
+function isAllowedCallLiteral(text: string, { callee, index }: CallArgument, file: string): boolean {
+  if (MACHINE_TOKEN.test(text)) return true;
+  const name = trailingIdentifierName(callee);
+  if (name === null) return false;
+
+  if ((name === "labelOf" && index === 1)
+    || (name === "get" && index === 0 && ts.isPropertyAccessExpression(callee))) {
+    // A template's static pieces can also form a lookup key. Its spans are checked separately.
+    const key = text.replaceAll("${}", "0");
+    return LOOKUP_KEY.test(key) || MACHINE_TOKEN.test(key);
+  }
+
+  if (FORMAT_LOCALE_ARGUMENTS.get(name) === index
+    || (index === 0 && ts.isPropertyAccessExpression(callee)
+      && ts.isIdentifier(callee.expression) && callee.expression.text === "Intl")) {
+    return LOCALE_TAG.test(text);
+  }
+
+  // These debit/credit codes select the amount's sign and styling.
+  return (file === "analytics/recurring.tsx" && name === "formatAmount" && index === 3 && text === "DBIT")
+    || (file === "analytics/transfers.tsx" && name === "side" && index === 1 && (text === "DBIT" || text === "CRDT"));
+}
+
+function collectJsxLiteralBranches(
+  expr: ts.Expression,
+  collect: (literal: JsxLiteralBranch, argument?: CallArgument) => void,
+  argument?: CallArgument,
+): void {
+  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
+    collect(expr, argument);
+    return;
+  }
+  if (ts.isTemplateExpression(expr)) {
+    collect(expr, argument);
+    for (const span of expr.templateSpans) {
+      collectJsxLiteralBranches(span.expression, collect, argument);
+    }
     return;
   }
   if (ts.isConditionalExpression(expr)) {
-    collectJsxLiteralBranches(expr.whenTrue, out);
-    collectJsxLiteralBranches(expr.whenFalse, out);
+    collectJsxLiteralBranches(expr.whenTrue, collect, argument);
+    collectJsxLiteralBranches(expr.whenFalse, collect, argument);
     return;
   }
   if (ts.isParenthesizedExpression(expr)) {
-    collectJsxLiteralBranches(expr.expression, out);
+    collectJsxLiteralBranches(expr.expression, collect, argument);
+    return;
+  }
+  if (ts.isCallExpression(expr)) {
+    const callee = expr.expression;
+    const name = trailingIdentifierName(callee);
+    if (name !== null && NON_TEXT_CALLS.has(name)) return;
+    if (ts.isIdentifier(callee) && (name === "Date" || name === "Number")) return;
+    for (const [index, value] of expr.arguments.entries()) {
+      collectJsxLiteralBranches(value, collect, { callee, index });
+    }
     return;
   }
   if (!ts.isBinaryExpression(expr)) return;
 
   const operator = expr.operatorToken.kind;
   if (operator === ts.SyntaxKind.BarBarToken || operator === ts.SyntaxKind.QuestionQuestionToken) {
-    collectJsxLiteralBranches(expr.left, out);
+    collectJsxLiteralBranches(expr.left, collect, argument);
   } else if (operator !== ts.SyntaxKind.AmpersandAmpersandToken) {
     return;
   }
-  collectJsxLiteralBranches(expr.right, out);
+  collectJsxLiteralBranches(expr.right, collect, argument);
 }
 
 export function checkBudgetSource(filePath: string, sourceText: string, rootDir = BUDGET_ROOT): GuardViolation[] {
@@ -206,28 +264,27 @@ export function checkBudgetSource(filePath: string, sourceText: string, rootDir 
     hits.push({ file: rel, line: line + 1, rule, detail });
   };
 
-  const checkJsxValue = (node: ts.Node, rule: "jsx-text" | "jsx-attr", raw: string, prefix = "") => {
+  const checkJsxValue = (node: ts.Node, rule: "jsx-text" | "jsx-attr", raw: string, prefix = "", argument?: CallArgument) => {
     const decoded = decodeHtmlEntities(raw);
     const trimmed = decoded.trim();
     if (trimmed === "" || allowed.has(trimmed) || isAllowedJsxText(decoded)) return;
+    if (argument !== undefined && isAllowedCallLiteral(trimmed, argument, rel)) return;
     record(node, rule, `${prefix}${JSON.stringify(decoded)}`);
   };
 
   const checkJsxExpression = (expr: ts.Expression, rule: "jsx-text" | "jsx-attr", prefix = "") => {
-    const literals: JsxLiteralBranch[] = [];
-    collectJsxLiteralBranches(expr, literals);
-    for (const literal of literals) {
+    collectJsxLiteralBranches(expr, (literal, argument) => {
       if (!ts.isTemplateExpression(literal)) {
-        checkJsxValue(literal, rule, literal.text, prefix);
-        continue;
+        checkJsxValue(literal, rule, literal.text, prefix, argument);
+        return;
       }
       const parts = [literal.head.text, ...literal.templateSpans.map((span) => span.literal.text)];
-      if (parts.every(isAllowedJsxText)) continue;
+      if (parts.every(isAllowedJsxText)) return;
       const decoded = parts.map(decodeHtmlEntities).join("${}");
-      if (!allowed.has(decoded.trim())) {
-        record(literal, rule, `${prefix}${JSON.stringify(decoded)}`);
-      }
-    }
+      const trimmed = decoded.trim();
+      if (allowed.has(trimmed) || (argument !== undefined && isAllowedCallLiteral(trimmed, argument, rel))) return;
+      record(literal, rule, `${prefix}${JSON.stringify(decoded)}`);
+    });
   };
 
   const visit = (node: ts.Node) => {
@@ -460,6 +517,103 @@ describe("budget UI i18n guard", () => {
     `;
     expect(checkBudgetSource("virtual.tsx", source)).toEqual([]);
     expect(checkBudgetSource("analytics/mortgages.tsx", '<input placeholder={currency ?? "PLN"} />')).toEqual([]);
+  });
+
+  it("rejects literals in template interpolations in JSX children and visible attributes", () => {
+    const source = `
+      <>
+        {\`\${ok ? "Yes" : "No"}\`}
+        {\`\${ready && "text"}\`}
+        {\`\${"First" || label}/\${label ?? "Last"}\`}
+        <input title={\`\${\`\${"Account"}\`}\`} aria-label={\`\${ready && "Available"}\`} />
+      </>
+    `;
+    expect(checkBudgetSource("virtual.tsx", source).map(({ rule, detail }) => [rule, detail])).toEqual([
+      ["jsx-text", '"Yes"'],
+      ["jsx-text", '"No"'],
+      ["jsx-text", '"text"'],
+      ["jsx-text", '"First"'],
+      ["jsx-text", '"Last"'],
+      ["jsx-attr", 'title="Account"'],
+      ["jsx-attr", 'aria-label="Available"'],
+    ]);
+  });
+
+  it("allows translated, non-visible, and locale-invariant template interpolations", () => {
+    const source = `
+      <section className={\`\${ready && "budget-row"}\`} id={\`\${"budget-summary"}\`}>
+        {\`\${"predicate" && t("budget.main.title")}\`}
+        {\`\${status === "ready"}\`}
+        {\`\${label ?? "IBAN"}/\${"× 2"}\`}
+        <input title={\`\${ready ? t("budget.main.title") : "—"}\`} />
+      </section>
+    `;
+    expect(checkBudgetSource("virtual.tsx", source)).toEqual([]);
+    expect(checkBudgetSource("analytics/mortgages.tsx", '<input placeholder={`${currency ?? "PLN"}`} />')).toEqual([]);
+  });
+
+  it("rejects call argument text, including nested calls, branches and templates", () => {
+    const source = `
+      <>
+        {fmt("Total", x)}
+        {String("Brak")}
+        {wrap(fmt((ok ? "Shown" : "Hidden"), ready && "text", old || "again", count ?? "unknown"))}
+        {\`\${String("Missing")}\`}
+        {fmt("pl")}{labelOf(keys, "Pending")}
+        <input title={join("A", b)} placeholder={fmt(\`Account \${ok ? "Open" : "Closed"}\`)} />
+      </>
+    `;
+    expect(checkBudgetSource("virtual.tsx", source).map(({ rule, detail }) => [rule, detail])).toEqual([
+      ["jsx-text", '"Total"'],
+      ["jsx-text", '"Brak"'],
+      ["jsx-text", '"Shown"'],
+      ["jsx-text", '"Hidden"'],
+      ["jsx-text", '"text"'],
+      ["jsx-text", '"again"'],
+      ["jsx-text", '"unknown"'],
+      ["jsx-text", '"Missing"'],
+      ["jsx-text", '"pl"'],
+      ["jsx-text", '"Pending"'],
+      ["jsx-attr", 'title="A"'],
+      ["jsx-attr", 'placeholder="Account ${}"'],
+      ["jsx-attr", 'placeholder="Open"'],
+      ["jsx-attr", 'placeholder="Closed"'],
+    ]);
+  });
+
+  it("allows translation keys, machine arguments, and non-visible call positions", () => {
+    const source = `
+      <section className={clsx("row selected", ready && cn("muted"))} data-testid={testId("summary")}>
+        {fmt(t("budget.main.title"), tPlural("budget.overview.uncertainCount", count))}
+        {i18n.t(\`budget.\${section}.title\`)}{tPlural(\`budget.\${section}.count\`, count)}
+        {fmt(clsx("row selected"), cn("row selected"), testId("summary"))}
+        {labels["account"]}{labels.get("account")}{labels.get(\`account-\${id}\`)}{labelOf(keys, "pending")}
+        {fmt("budget.main.title", "budget-row", "category_id", "entryKind")}
+        {Date("2026-11-24T00:00:00Z")}{Number("0xff")}
+        {new Intl.NumberFormat("en-US").format(count)}{Intl.getCanonicalLocales("pl")}
+        {date.toLocaleDateString("pl")}{formatAmount(count, currency, "en")}
+        {fmt(status === "ready", { status: "pending" })}
+        <input title={join(" · ", "Hestia", "2026-11")} />
+      </section>
+    `;
+    expect(checkBudgetSource("virtual.tsx", source)).toEqual([]);
+    expect(checkBudgetSource("analytics/mortgages.tsx", '<input placeholder={String("PLN")} />')).toEqual([]);
+  });
+
+  it("limits machine-token and banking-code allowances to their call contexts", () => {
+    const source = `
+      <>
+        {formatAmount(amount, currency, locale, "DBIT")}
+        {fmt("DBIT")}
+        {"budget-row"}
+      </>
+    `;
+    expect(checkBudgetSource("analytics/recurring.tsx", source).map(({ detail }) => detail)).toEqual([
+      '"DBIT"',
+      '"budget-row"',
+    ]);
+    expect(checkBudgetSource("virtual.tsx", '<span>{formatAmount(amount, currency, locale, "DBIT")}</span>'))
+      .toMatchObject([{ rule: "jsx-text", detail: '"DBIT"' }]);
   });
 
   it("allows t()/tPlural() calls alongside allowlisted punctuation, symbols, digits, and brand tokens", () => {
