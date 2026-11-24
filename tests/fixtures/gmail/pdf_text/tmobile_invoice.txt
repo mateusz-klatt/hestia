@@ -1,0 +1,39 @@
+STRONA INFORMACYJNA
+Numer faktury: 501234567890
+Termin płatności: 23.09.2026
+Numer rachunku: 00 0000 0000 0000 0000 0000 0000
+Data i miejsce wystawienia: 09.09.2026, Warszawa
+P/
+SPRZEDAWCA NABYWCA
+T-Mobile Polska S.A.
+ul. Przykładowa 1
+00-001 Warszawa, Polska
+NIP 5261040567
+JAN KOWALSKI
+UL. TESTOWA 1/1
+00-002 WARSZAWA
+Numer Klienta: 1.00000000
+ADRESAT
+KOWALSKI
+JAN KOWALSKI
+A Twoja faktura 59,99 zł brutto i
+A1 Abonamenty i opłaty cykliczne 59,99 zł brutto i
+A2 Opłaty jednorazowe 0,00 zł brutto i
+C Stan konta z poprzedniego okresu rozliczeniowego 0,00 zł brutto i
+A+C Prosimy o wpłatę 59,99 zł brutto i
+Pamiętaj, że kwota do zapłaty jest ważna na dzień wystawienia faktury i może różnić się od aktualnego salda.
+ZAPŁAĆ TERAZ
+WYKAZ DO FAKTURY
+ROZLICZENIE ZBIORCZE
+Lp. Nazwa usługi / produktu Cena jedn. netto Ilość Jedn. Kwota netto Stawka podatku Kwota podatku Kwota brutto
+1 Usługi Telekomunikacyjne 48,77 1 szt. 48,77 23% 11,22 59,99
+Stawka podatku Kwota netto Kwota podatku Kwota brutto
+23% 48,77 11,22 59,99
+Kwota
+59,99
+T-MOBILE POLSKA S.A. z siedzibą w Warszawie | ul. Przykładowa 1, 00-001 Warszawa | www.t-mobile.pl
+KRS 0000391193 | NIP 526-10-40-567 | Regon 011417295 | BDO 000020490
+TYTUŁ OPERACJI DATA KWOTA BRUTTO
+Twoja kwota do zapłaty z poprzedniego miesiąca 71,11 zł
+WPŁATA 21.08.2026 -71,11 zł
+Razem: 0,00 zł brutto
