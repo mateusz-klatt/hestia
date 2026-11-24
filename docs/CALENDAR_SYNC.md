@@ -237,19 +237,22 @@ prosty dowód produktywności. Poza parametrami z tabeli dozwolone są wyłączn
 | `S7(b)` | `YEARLY`, dokładnie jeden `BYMONTH` `m` i dokładnie jeden porządkowy `BYDAY` `nXX`; `1 <= \|n\| <= 4` dla dowolnego `INTERVAL`, `\|n\| = 5` tylko przy `INTERVAL=1` | Wskazany miesiąc ma co najmniej 4 wystąpienia każdego dnia tygodnia; 5. wraca przy `INTERVAL=1` |
 | `S7(c)` | `YEARLY`, dokładnie jeden `BYMONTH` `m` oraz lista `BYDAY` bez liczebników porządkowych | Każdy odwiedzany miesiąc zawiera każdy dzień tygodnia |
 
-**Wszystko inne korzysta z fallbacku do samego `DTSTART`**: w szczególności mieszane
+**Wszystko inne korzysta z fallbacku do samego `DTSTART`**: w szczególności więcej niż
+jedna reguła `RRULE` w wydarzeniu, ponad `500` dat `RDATE` lub `EXDATE`, wydarzenia
+cykliczne (z `RRULE` lub `RDATE`) o czasie trwania dłuższym niż 31 dni, mieszane
 listy `BYDAY` (zwykłe z porządkowymi), wielokrotne `BYMONTH`/`BYMONTHDAY`/`BYSETPOS`,
 przecięcia `BYDAY`+`BYMONTHDAY`, `BYSETPOS` przy `YEARLY`/`DAILY`/`WEEKLY`,
 `SECONDLY`/`MINUTELY`/`HOURLY`, `BYYEARDAY`, `BYWEEKNO`, `BYHOUR`, `BYMINUTE`,
 `BYSECOND`, niemożliwe pary miesiąca i dnia oraz `INTERVAL > 1000`. Taki przypadek
 zwraca wyłącznie `DTSTART` (z obsługą `EXDATE` i wyjątków dla `DTSTART`) z
 `truncated: true` i wpisem ostrzeżenia do dziennika serwera.
-Jeśli górne oszacowanie liczby wystąpień w poszerzonym oknie przekracza 5000 albo
-szacowana liczba badanych kroków replay od `DTSTART` do końca poszerzonego okna
-przekracza 200000, stosowany jest ten sam fallback bez wywoływania biblioteki. Szacunek
-okresów przyjmuje konserwatywnie do 366 dni w roku, 31 w miesiącu, 7 w tygodniu i 1
-dziennie przy selektorach `BYDAY`/`BYMONTHDAY`, a `COUNT` nie zmniejsza budżetu badanych
-okresów. Zmieniony wyjątek zastępuje swoje pierwotne wystąpienie.
+Jeśli górne oszacowanie liczby wystąpień w poszerzonym oknie (z uwzględnieniem
+lookbacku od `query_start - czas_trwania`) przekracza 5000 albo szacowana liczba
+badanych kroków replay od `min(DTSTART, query_start - czas_trwania)` do końca
+poszerzonego okna przekracza 200000, stosowany jest ten sam fallback bez wywoływania
+biblioteki. Szacunek okresów przyjmuje konserwatywnie do 366 dni w roku, 31 w
+miesiącu, 7 w tygodniu i 1 dziennie przy selektorach `BYDAY`/`BYMONTHDAY`, a `COUNT`
+nie zmniejsza budżetu badanych okresów. Zmieniony wyjątek zastępuje swoje pierwotne wystąpienie.
 Odległy `RECURRENCE-ID` nie poszerza generowania, ale zapisany wyjątek trafiający w
 żądane okno może zostać zwrócony jako samodzielne wystąpienie. Uwzględniane są także
 wystąpienia zaczynające się przed oknem, ale nachodzące na nie. Daty całodniowe
