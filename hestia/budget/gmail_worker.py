@@ -35,6 +35,8 @@ MAX_PDF_STREAM_BYTES = 4 * 1024 * 1024
 MAX_PDF_DECOMPRESSED_BYTES = 8 * 1024 * 1024
 MAX_PDF_RECURSION = 64
 _PDF_CHILD_ADDRESS_SPACE = 192 * 1024 * 1024
+_PDF_WHITESPACE = b"\0\t\n\f\r "  # ISO 32000-1, Table 1
+_MAX_FLATE_PADDING_BYTES = 32
 MAX_TEXT_BYTES = 32 * 1024
 MAX_TEXT_LINES = 500
 _MAX_REQUEST_BYTES = 11 * 1024 * 1024 // 2
@@ -289,13 +291,16 @@ def _pdf_text(payload: bytes) -> bytes:
         decoder = zlib.decompressobj()
         limit = remaining_stream_bytes()
         result = decoder.decompress(data, limit + 1)
-        if len(result) > limit or not decoder.eof or decoder.unused_data:
+        # Some producers count the EOL before endstream in the stream length.
+        padding = decoder.unused_data
+        if (len(result) > limit or not decoder.eof
+                or len(padding) > _MAX_FLATE_PADDING_BYTES or padding.strip(_PDF_WHITESPACE)):
             raise RejectPDF
         return result
 
     def bounded_ascii85(data):
         # The decoder has no output cap. Each 'z' encodes four zero bytes.
-        digits = data.translate(None, b"\0\t\n\f\r ").removeprefix(b"<~").removesuffix(b"~>")
+        digits = data.translate(None, _PDF_WHITESPACE).removeprefix(b"<~").removesuffix(b"~>")
         zero_groups = digits.count(b"z")
         if 4 * zero_groups + 4 * (len(digits) - zero_groups) // 5 > remaining_stream_bytes():
             raise RejectPDF

@@ -302,14 +302,26 @@ class TestGmailWorker(unittest.TestCase):
         with patch.object(worker, "MAX_PDF_DECOMPRESSED_BYTES", 1):
             self.assertEqual(worker._render(b"P" + pdf), b"-")
 
-    def test_pdf_rejects_invalid_flate_and_external_streams(self):
-        writer = _pdf_writer(_pdf_text(b"Unreadable invoice"), flate=True)
+    def test_pdf_bounds_flate_trailing_whitespace(self):
+        writer = _pdf_writer(_pdf_text(b"Synthetic invoice"), flate=True)
         contents = writer.pages[0]["/Contents"]
         encoded = contents._data
-        for data in (encoded[:-1], encoded + b"trailing bytes"):
-            contents._data = data
-            self.assertEqual(worker._render(b"P" + _write_pdf(writer)), b"-")
+        max_padding = b" \t\r\n\f\0" * 5 + b"\r\n"
+        for trailing, expected in (
+            (b"\n", b"+Synthetic invoice"),
+            (b"\r\n", b"+Synthetic invoice"),
+            (max_padding, b"+Synthetic invoice"),
+            (max_padding + b" ", b"-"),
+            (b"\r\ntrailing bytes\n", b"-"),
+            (b"\v", b"-"),
+        ):
+            with self.subTest(trailing=trailing):
+                contents._data = encoded + trailing
+                self.assertEqual(worker._render(b"P" + _write_pdf(writer)), expected)
+        contents._data = encoded[:-1]
+        self.assertEqual(worker._render(b"P" + _write_pdf(writer)), b"-")
 
+    def test_pdf_rejects_external_streams(self):
         writer = _pdf_writer(_pdf_text(b"External invoice"))
         writer.pages[0]["/Contents"][NameObject("/F")] = TextStringObject("https://example.test/content")
         self.assertEqual(worker._render(b"P" + _write_pdf(writer)), b"-")
