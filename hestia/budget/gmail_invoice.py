@@ -79,7 +79,8 @@ _SELLER_NIP = re.compile(r"NIP:?[ \t]*((?:PL)?[0-9][0-9 -]{8,16}[0-9])", re.IGNO
 
 _TMOBILE_NUMBER = re.compile(r"Numer faktury:[ \t]*(.*)", re.IGNORECASE)
 _TMOBILE_HEADER = re.compile(r"Faktura nr:[ \t]*(\S+)[ \t]+z dnia[ \t]*(.*)", re.IGNORECASE)
-_TMOBILE_DUE = re.compile(r"Termin płatności\b:?[ \t]*(.*)", re.IGNORECASE)
+# The colon is required: "Termin płatności do ..." is prose.
+_TMOBILE_DUE = re.compile(r"Termin płatności:[ \t]*(.*)", re.IGNORECASE)
 _TMOBILE_ISSUE = re.compile(
     r"Data i miejsce wystawienia:[ \t]*([^,\s]+)(?:,.*)?", re.IGNORECASE,
 )
@@ -89,9 +90,7 @@ _TMOBILE_FOOTER = re.compile(
     r"(?:Numer Klienta:[ \t]*\S+[ \t]+)?Numer faktury:[ \t]*(\S+)[ \t]+"
     r"Okres rozliczeniowy:.*?\bData wystawienia:[ \t]*(.*)", re.IGNORECASE,
 )
-_TMOBILE_AMOUNT = re.compile(
-    rf"A\+C[ \t]+Prosimy o wpłatę\b(?:[ \t]+({_PLN_VALUE})[ \t]+brutto i|.*)", re.IGNORECASE,
-)
+_TMOBILE_AMOUNT = re.compile(r"A\+C[ \t]+Prosimy o wpłatę\b[ \t]*(.*?)(?:[ \t]+brutto i)?", re.IGNORECASE)
 
 _PLAY_NUMBER_LABEL = re.compile(r"Numer faktury", re.IGNORECASE)
 _PLAY_ISSUE_LABEL = re.compile(r"Data wystawienia\b:?[ \t]*(.*)", re.IGNORECASE)
@@ -103,7 +102,7 @@ _PLAY_DUE = re.compile(
 # reports a payment label with a malformed due-date prefix as an invalid amount.
 _PLAY_PAYMENT = re.compile(
     rf"(?:TERMIN PŁATNOŚCI:?[ \t]*{_DATE_VALUE}[ \t]+)?PROSIMY O WPŁATĘ\b:?[ \t]*(.*)"
-    r"|TERMIN PŁATNOŚCI\b.*?[ \t]PROSIMY O WPŁATĘ\b.*", re.IGNORECASE,
+    r"|(TERMIN PŁATNOŚCI\b.*?[ \t]PROSIMY O WPŁATĘ\b.*)", re.IGNORECASE,
 )
 _PLAY_SUMMARY = re.compile(r"PODSUMOWANIE KWOTY DO ZAPŁATY\b:?[ \t]*(.*)", re.IGNORECASE)
 
@@ -179,6 +178,13 @@ def _matches(pattern: re.Pattern[str], lines: Iterable[str]) -> Iterable[re.Matc
             yield match
 
 
+# Real layouts repeat a label as a bare table heading ("Termin płatności:",
+# "PROSIMY O WPŁATĘ"). Empty values are ignored; every non-empty value must
+# parse and agree.
+def _valued(matches: Iterable[re.Match[str]]) -> list[str]:
+    return [value for match in matches if (value := next(filter(None, match.groups()), None))]
+
+
 def _one_value(values: Iterable[str | None]) -> str | None:
     distinct = set(values)
     return next(iter(distinct)) if len(distinct) == 1 else None
@@ -247,9 +253,7 @@ def _parse_nip(value: str) -> str | None:
     return _safe_field(digits) if valid_nip(digits) else None
 
 
-def _parse_pln_amount(value: str | None) -> str | None:
-    if value is None:
-        return None
+def _parse_pln_amount(value: str) -> str | None:
     if _safe_field(value) is None:
         return None
     match = _PLN_AMOUNT.fullmatch(value)
@@ -303,8 +307,8 @@ def _extract_tmobile(raw: list[str], clean: list[str]) -> ImportedInvoice | None
     issue_date = _parse_date(issue_value)
     if issue_date is None:
         return None
-    due_date = _one_value(_parse_dot_date(match[1]) for match in _matches(_TMOBILE_DUE, raw))
-    amount = _one_value(_parse_pln_amount(match[1]) for match in _matches(_TMOBILE_AMOUNT, raw))
+    due_date = _one_value(map(_parse_dot_date, _valued(_matches(_TMOBILE_DUE, raw))))
+    amount = _one_value(map(_parse_pln_amount, _valued(_matches(_TMOBILE_AMOUNT, raw))))
     return _pln_invoice(
         "T-Mobile", number, _one(_SELLER_NIP, clean), amount, issue_date, due_date
     )
@@ -325,8 +329,8 @@ def _extract_play(raw: list[str], clean: list[str]) -> ImportedInvoice | None:
     issue_date = _one_value(map(_parse_dot_date, issue_values))
     if issue_values and issue_date is None:
         return None
-    payment = _one_value(_parse_pln_amount(match[1]) for match in _matches(_PLAY_PAYMENT, raw))
-    if payment is None or any(_parse_pln_amount(match[1]) != payment for match in _matches(_PLAY_SUMMARY, raw)):
+    payment = _one_value(map(_parse_pln_amount, _valued(_matches(_PLAY_PAYMENT, raw))))
+    if payment is None or any(_parse_pln_amount(value) != payment for value in _valued(_matches(_PLAY_SUMMARY, raw))):
         return None
     return _pln_invoice("Play", number, _one(_SELLER_NIP, clean), payment, issue_date, due_date)
 
@@ -343,7 +347,7 @@ def _extract_orange(raw: list[str], clean: list[str]) -> ImportedInvoice | None:
     if len(payment_blocks) != 1:
         return None
     payment_date, amount_value = payment_blocks.pop()
-    due_date = _one_value(_parse_dot_date(match[1]) for match in _matches(_ORANGE_DUE, raw))
+    due_date = _one_value(map(_parse_dot_date, _valued(_matches(_ORANGE_DUE, raw))))
     if due_date is None or _parse_dot_date(payment_date) != due_date:
         return None
     issue_fields = list(_matches(_ORANGE_ISSUE_LABEL, raw))

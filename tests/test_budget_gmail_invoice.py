@@ -132,11 +132,26 @@ class IssuerInvoiceFixtureTests(unittest.TestCase):
         split_marker = "faktura\n" + " " * 513 + "\nkorygująca\n"
         self.assertIsNone(extract_invoice(invoice + split_marker))
 
+    def test_label_words_in_prose_do_not_take_part_in_agreement(self):
+        prose = {
+            "tmobile_invoice.txt": "Termin płatności\nTermin płatności do zapłaty sprawdzisz w aplikacji\n",
+            "play_invoice.txt": "PROSIMY O WPŁATĘ\nPODSUMOWANIE KWOTY DO ZAPŁATY\n",
+            "orange_invoice.txt": "Zapłać do\n",
+        }
+        for name, extra in prose.items():
+            with self.subTest(name=name):
+                text = _fixture(name)
+                self.assertIsNotNone(extract_invoice(text))
+                self.assertEqual(extract_invoice(text + extra), extract_invoice(text))
+
     def test_play_payment_is_primary_and_any_summary_must_agree(self):
         original = _fixture("play_invoice.txt")
         summary = "PODSUMOWANIE KWOTY DO ZAPŁATY: 150,37 zł"
         label = "PODSUMOWANIE KWOTY DO ZAPŁATY"
-        for suffix in ("", ":", ": 150,38 zł", ": -150,37 zł", ": nie podano", ": 150,37 zł dopisek"):
+        for suffix in ("", ":"):
+            with self.subTest(heading=label + suffix):
+                self.assertEqual(extract_invoice(original + label + suffix + "\n"), extract_invoice(original))
+        for suffix in (": 150,38 zł", ": -150,37 zł", ": nie podano", ": 150,37 zł dopisek"):
             line = label + suffix
             with self.subTest(line=line):
                 self.assertIsNone(extract_invoice(original.replace(summary, line)))
@@ -175,22 +190,25 @@ class IssuerInvoiceFixtureTests(unittest.TestCase):
         for name, equivalent, invalid in (
             (
                 "tmobile_invoice.txt",
-                "A+C Prosimy o wpłatę 059,99 zł brutto i",
+                ("A+C Prosimy o wpłatę 059,99 zł brutto i", "A+C Prosimy o wpłatę 59,99 zł",
+                 "A+C Prosimy o wpłatę"),
                 ("A+C Prosimy o wpłatę 60,00 zł brutto i", "A+C Prosimy o wpłatę -59,99 zł brutto i",
-                 "A+C Prosimy o wpłatę 59,99 zł", "A+C Prosimy o wpłatę"),
+                 "A+C Prosimy o wpłatę nie podano"),
             ),
             (
                 "play_invoice.txt",
-                "PROSIMY O WPŁATĘ: 000150,37 zł",
-                ("PROSIMY O WPŁATĘ: 150,38 zł", "PROSIMY O WPŁATĘ: -10,00 zł", "PROSIMY O WPŁATĘ:",
+                ("PROSIMY O WPŁATĘ: 000150,37 zł", "PROSIMY O WPŁATĘ:", "PROSIMY O WPŁATĘ"),
+                ("PROSIMY O WPŁATĘ: 150,38 zł", "PROSIMY O WPŁATĘ: -10,00 zł",
                  "PROSIMY O WPŁATĘ: nie podano", "PROSIMY O WPŁATĘ: 0000 0000 0000 0000",
                  "TERMIN PŁATNOŚCI: 23.11.2026 PROSIMY O WPŁATĘ: -10,00 zł",
                  "TERMIN PŁATNOŚCI: nie podano PROSIMY O WPŁATĘ: 150,37 zł"),
             ),
         ):
             original = _fixture(name)
-            with self.subTest(name=name, duplicate=equivalent):
-                self.assertEqual(extract_invoice(original + equivalent + "\n"), extract_invoice(original))
+            # Bare label lines are table headings in the real layouts.
+            for duplicate in equivalent:
+                with self.subTest(name=name, duplicate=duplicate):
+                    self.assertEqual(extract_invoice(original + duplicate + "\n"), extract_invoice(original))
             for duplicate in invalid:
                 with self.subTest(name=name, duplicate=duplicate):
                     self.assertIsNone(extract_invoice(original + duplicate + "\n"))
@@ -202,7 +220,8 @@ class IssuerInvoiceFixtureTests(unittest.TestCase):
         ):
             original = _fixture(name)
             self.assertEqual(extract_invoice(original + f"{label} {date}\n"), extract_invoice(original))
-            for duplicate_date in (other_date, "31.11.2026", "nie podano", "", f"{date} dopisek"):
+            self.assertEqual(extract_invoice(original + label + "\n"), extract_invoice(original))
+            for duplicate_date in (other_date, "31.11.2026", "nie podano", f"{date} dopisek"):
                 with self.subTest(name=name, duplicate_date=duplicate_date):
                     self.assertIsNone(extract_invoice(original + f"{label} {duplicate_date}\n"))
 
