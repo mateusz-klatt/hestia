@@ -55,6 +55,8 @@ init_db("/tmp/hestia-shadow.db")
 
 `init_db(path=None)` uses `HESTIA_DB` (or its configured default). Downgrades require an explicit path: `downgrade_db(None, "0019")`, an empty path, or a whitespace-only path raises `ValueError` before resolving a target or touching the engine cache. `downgrade_db(path, None)` and empty or invalid revisions also raise `ValueError`; omitting the required revision argument raises `TypeError`. Always pass both the copy path and target revision.
 
+**Production rollback runbook:** roll back the schema only with `hestia.db.downgrade_db(path, revision)`, never with the bare `alembic downgrade` CLI. The runner applies the FK-off transaction and the post-migration `PRAGMA foreign_key_check`. A bare CLI connection keeps the production pragmas, so a batch rebuild can fail with `FOREIGN KEY constraint failed` or leave the database half-migrated.
+
 ## Batch migrations on referenced tables
 
 SQLite `batch_alter_table` rebuilds a table by copying it and dropping the original. Child foreign keys reject that `DROP` while `PRAGMA foreign_keys=ON`, and SQLite ignores a change to that pragma inside a transaction. A batch migration on a table that other tables reference has to go through this path (`init_db` / `downgrade_db`), not a bare engine.

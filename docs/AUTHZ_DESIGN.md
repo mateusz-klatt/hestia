@@ -441,7 +441,7 @@ These details complete Parts A and B for client implementers. Each field below i
    - Each later PR adds its feature string when its endpoint ships, so a client never sees a QR or exchange button on a server that can't serve it.
 7. **Owner-scope key:** the `device-token` response also carries `owner_key`. It is an opaque, stable per-installation HMAC of the target owner (namespace `hestia/auth/owner-key/v1`), never the username. Clients bind a stored token to `(origin, actor, owner_key)`.
 8. **Legacy device tokens:** no introspection route. A client migrates a legacy receipts token by calling `POST /api/auth/device-token` with `prior_token` set to the legacy token. The server verifies it as rotation proof, binds it as actor = owner (the self slot) and returns the new token, preserving `token_id`. Until then the legacy token keeps working on the legacy routes, up to PR 4.
-9. **`GET /api/calendars/instances`** (OpenAPI 0.47.0) freezes its shape when it merges:
+9. **`GET /api/calendars/instances`** (OpenAPI **0.48.0**; 0.47.0 went to the additive Gmail fields of #279) freezes its shape when it merges:
    - the response is `{enabled, groups, truncated, instances[{instance_id, event_id, revision, group, summary, location, start, end, all_day, status, recurrence_id}]}`;
    - query parameters are `from` (inclusive), `to` (exclusive), `group?` and `tz?` (IANA, default UTC).
    - Distinct outcomes: a route missing on an older server means `calendar_instances` is absent from the feature probe; a disabled feature gives 200 with `enabled:false`; a missing permission gives 403.
