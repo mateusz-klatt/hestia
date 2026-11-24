@@ -1772,8 +1772,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Concrete calendar occurrences in an inclusive date window
-         * @description Requires viewer. Expands RRULE/RDATE, removes EXDATE and cancelled exceptions, and applies moved or modified exceptions. Both dates are inclusive and the window cannot exceed 92 days. Instances are sorted by start and capped at 2000.
+         * Concrete calendar occurrences in a half-open date window
+         * @description Requires viewer. Expands RRULE/RDATE, applies moved or modified exceptions, and omits EXDATE and every cancelled occurrence. The window is [from, to), from is inclusive, to is exclusive, and its duration cannot exceed 92 days. Instances are sorted by start and capped at 2000. Disabled synchronization returns 200 with enabled=false and empty groups and instances.
          */
         get: operations["getCalendarInstances"];
         put?: never;
@@ -6507,6 +6507,11 @@ export interface components {
             event_id: string;
             /** Group */
             group: string;
+            /**
+             * Instance Id
+             * @description Unique within this response and stable across calls. Series use event_id/original-start, where all-day dates use YYYY-MM-DD and timed slots use their canonical UTC instant; moved exceptions retain the original slot ID. Single events use event_id.
+             */
+            instance_id: string;
             /** Location */
             location: string;
             /**
@@ -6522,7 +6527,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "confirmed" | "tentative" | "cancelled";
+            status: "confirmed" | "tentative";
             /** Summary */
             summary: string;
         };
@@ -6580,6 +6585,10 @@ export interface components {
         };
         /** CalendarInstances */
         CalendarInstances: {
+            /** Enabled */
+            enabled: boolean;
+            /** Groups */
+            groups: components["schemas"]["CalendarGroup"][];
             /** Instances */
             instances: components["schemas"]["CalendarExpandedInstance"][];
             /**
@@ -15902,9 +15911,9 @@ export interface operations {
     getCalendarInstances: {
         parameters: {
             query: {
-                /** @description First date in the window (YYYY-MM-DD). */
+                /** @description Inclusive window start date (YYYY-MM-DD). */
                 from: string;
-                /** @description Last date in the window (YYYY-MM-DD). */
+                /** @description Exclusive window end date (YYYY-MM-DD), matching exclusive CalendarDate end semantics. */
                 to: string;
                 /** @description Selected configured group; defaults to the first group. */
                 group?: string;

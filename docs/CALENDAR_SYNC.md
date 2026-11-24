@@ -191,23 +191,34 @@ CLI tworzy nowe wydarzenie przy każdym osobnym wywołaniu `put` bez `--event`.
 
 ### Rozwinięta agenda HTTP
 
-`GET /api/calendars/instances?from=2026-11-01&to=2026-11-30` zwraca konkretne
+`GET /api/calendars/instances?from=2026-11-01&to=2026-12-01` zwraca konkretne
 wystąpienia dla natywnego klienta, który nie musi interpretować reguł RFC 5545.
-Parametry `from` i `to` są wymagane, w formacie `YYYY-MM-DD`; zakres obejmuje oba
-dni i może mieć najwyżej 92 dni. Opcjonalny `group` działa jak w `GET /api/calendars`,
-czyli bez parametru wybiera pierwszą skonfigurowaną grupę. Odczyt wymaga roli `viewer`
-i obsługuje natywną sesję `Authorization: Bearer`.
+Parametry `from` i `to` są wymagane, w formacie `YYYY-MM-DD`; zakres jest półotwarty
+`[from, to)`: początek jest włączony, a koniec wyłączony jak `end.date`. Może mieć
+najwyżej 92 dni; równe daty dają pusty zakres. Opcjonalny `group` działa jak w
+`GET /api/calendars`, czyli bez parametru wybiera pierwszą skonfigurowaną grupę.
+Odczyt wymaga roli `viewer` i obsługuje natywną sesję `Authorization: Bearer`.
 
-Odpowiedź `{"instances": [...], "truncated": bool}` jest posortowana według początku.
-Każde wystąpienie zawiera `event_id`, `revision`, `group`, `summary`, `location`,
-`start`, `end`, `all_day`, `status` oraz `recurrence_id` (`null` dla wydarzenia
-niecyklicznego). `start` i `end` używają tej samej reprezentacji `date` albo
-`dateTime`/`timeZone` co zwykły odczyt kalendarza. Rozwijane są `RRULE` i `RDATE`,
-pomijane `EXDATE` oraz odwołane wyjątki; zmieniony wyjątek zastępuje swoje pierwotne
-wystąpienie. Uwzględniane są także wystąpienia zaczynające się przed oknem, ale
-nachodzące na nie. Daty całodniowe pozostają datami, a godziny zachowują strefę IANA
-przez zmianę czasu. Odpowiedź jest ograniczona do 2000 najwcześniejszych wystąpień;
-dalsze pominięcie sygnalizuje `truncated: true`.
+Odpowiedź `{"enabled": bool, "groups": [{"id": ...}], "truncated": bool,
+"instances": [...]}` jest posortowana według początku. `groups` jest identyczne jak
+w zwykłym odczycie kalendarza. Wyłączona synchronizacja zwraca `200` z
+`enabled: false` oraz pustymi `groups` i `instances`. Każde wystąpienie zawiera
+`instance_id`, `event_id`, `revision`, `group`, `summary`, `location`, `start`, `end`,
+`all_day`, `status` oraz `recurrence_id` (`null` dla wydarzenia niecyklicznego).
+`instance_id` jest unikalne w odpowiedzi i stabilne między wywołaniami: dla pojedynczego
+wydarzenia to `event_id`, a dla serii `event_id/pierwotny_początek`. Data całodniowa
+ma postać `YYYY-MM-DD`, a pierwotna godzina jest kanoniczną chwilą UTC. Przeniesiony
+wyjątek zachowuje identyfikator pierwotnego miejsca w serii.
+
+`start` i `end` używają tej samej reprezentacji `date` albo `dateTime`/`timeZone` co
+zwykły odczyt kalendarza. Godzina jest zawsze bezwzględna i ma przesunięcie UTC;
+czas floating jest rozwiązywany przez strefę wydarzenia lub regułę strefy źródła.
+Rozwijane są `RRULE` i `RDATE`, pomijane `EXDATE` oraz wszystkie odwołane wystąpienia;
+zmieniony wyjątek zastępuje swoje pierwotne wystąpienie. Uwzględniane są także
+wystąpienia zaczynające się przed oknem, ale nachodzące na nie. Daty całodniowe
+pozostają datami, a godziny zachowują strefę IANA przez zmianę czasu. Odpowiedź jest
+ograniczona do 2000 najwcześniejszych wystąpień; dalsze pominięcie sygnalizuje
+`truncated: true`.
 
 Nieprawidłowa data, odwrócony zakres lub zakres dłuższy niż 92 dni zwraca `400`
 z `{"error": "invalid_calendar_event"}`. Nieznana grupa zwraca `400` z

@@ -13057,6 +13057,11 @@
             "title": "Group",
             "type": "string"
           },
+          "instance_id": {
+            "description": "Unique within this response and stable across calls. Series use event_id/original-start, where all-day dates use YYYY-MM-DD and timed slots use their canonical UTC instant; moved exceptions retain the original slot ID. Single events use event_id.",
+            "title": "Instance Id",
+            "type": "string"
+          },
           "location": {
             "title": "Location",
             "type": "string"
@@ -13095,8 +13100,7 @@
           "status": {
             "enum": [
               "confirmed",
-              "tentative",
-              "cancelled"
+              "tentative"
             ],
             "title": "Status",
             "type": "string"
@@ -13107,6 +13111,7 @@
           }
         },
         "required": [
+          "instance_id",
           "event_id",
           "revision",
           "group",
@@ -13229,6 +13234,17 @@
       },
       "CalendarInstances": {
         "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/CalendarGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
           "instances": {
             "items": {
               "$ref": "#/components/schemas/CalendarExpandedInstance"
@@ -13244,6 +13260,8 @@
           }
         },
         "required": [
+          "enabled",
+          "groups",
           "instances",
           "truncated"
         ],
@@ -26022,11 +26040,11 @@
     },
     "/api/calendars/instances": {
       "get": {
-        "description": "Requires viewer. Expands RRULE/RDATE, removes EXDATE and cancelled exceptions, and applies moved or modified exceptions. Both dates are inclusive and the window cannot exceed 92 days. Instances are sorted by start and capped at 2000.",
+        "description": "Requires viewer. Expands RRULE/RDATE, applies moved or modified exceptions, and omits EXDATE and every cancelled occurrence. The window is [from, to), from is inclusive, to is exclusive, and its duration cannot exceed 92 days. Instances are sorted by start and capped at 2000. Disabled synchronization returns 200 with enabled=false and empty groups and instances.",
         "operationId": "getCalendarInstances",
         "parameters": [
           {
-            "description": "First date in the window (YYYY-MM-DD).",
+            "description": "Inclusive window start date (YYYY-MM-DD).",
             "in": "query",
             "name": "from",
             "required": true,
@@ -26036,7 +26054,7 @@
             }
           },
           {
-            "description": "Last date in the window (YYYY-MM-DD).",
+            "description": "Exclusive window end date (YYYY-MM-DD), matching exclusive CalendarDate end semantics.",
             "in": "query",
             "name": "to",
             "required": true,
@@ -26086,7 +26104,7 @@
             "description": "invalid configuration"
           }
         },
-        "summary": "Concrete calendar occurrences in an inclusive date window",
+        "summary": "Concrete calendar occurrences in a half-open date window",
         "x-required-role": "viewer"
       }
     },

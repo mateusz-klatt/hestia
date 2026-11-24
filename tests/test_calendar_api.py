@@ -175,11 +175,16 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(api, "load_config", return_value=None):
             response = await self.client.get(api.PATH, headers=self.headers())
             self.assertEqual(await response.json(), {"enabled": False, "groups": [], "events": [], "status": {"endpoints": [], "pending": []}})
+            response = await self.instances("from=2026-01-01&to=2026-01-02")
+            self.assertEqual(response.status, 200)
+            self.assertEqual(await response.json(), {"enabled": False, "groups": [], "truncated": False, "instances": []})
             self.assertEqual((await self.post(create_request())).status, 503)
         empty = {**self.config, "groups": []}
         self.config_path.write_text(json.dumps(empty))
         response = await self.client.get(api.PATH, headers=self.headers())
         self.assertEqual((await response.json())["events"], [])
+        response = await self.instances("from=2026-01-01&to=2026-01-02")
+        self.assertEqual(await response.json(), {"enabled": True, "groups": [], "truncated": False, "instances": []})
         for exception in (ConfigError("never-leak-secret"), CalendarConflict("never-leak-token")):
             with mock.patch.object(api, "_store", side_effect=exception):
                 response = await self.client.get(api.PATH, headers=self.headers())
@@ -229,7 +234,7 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         await self.create({"summary": "Extra dates", "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"},
                            "recurrence": ["RRULE:FREQ=DAILY;COUNT=3", "RDATE;VALUE=DATE:20260110",
                                           "EXDATE;VALUE=DATE:20260102"]})
-        response = await self.instances("from=2026-01-01&to=2026-01-10")
+        response = await self.instances("from=2026-01-01&to=2026-01-11")
         self.assertEqual(response.status, 200)
         state = await response.json()
         self.assertEqual([item["start"]["date"] for item in state["instances"]],
@@ -238,7 +243,7 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
                          ["2026-01-01", "2026-01-03", "2026-01-10"])
 
     async def test_instances_apply_moved_and_cancelled_exceptions(self):
-        await self.create({"summary": "Base", "location": "Home",
+        series = await self.create({"summary": "Base", "location": "Home",
                            "start": {"date": "2025-12-30"}, "end": {"date": "2025-12-31"},
                            "recurrence": ["RRULE:FREQ=DAILY;COUNT=4"], "exceptions": [
                                {"originalStartTime": {"date": "2025-12-31"}, "summary": "Moved", "location": "Office",
@@ -252,12 +257,33 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
                           for item in instances], [("Base", "2026-01-02", "2026-01-02"),
                                                    ("Moved", "2026-01-05", "2025-12-31")])
         self.assertEqual(instances[1]["location"], "Office")
+        self.assertEqual(instances[1]["instance_id"], series["id"] + "/2025-12-31")
+        identifiers = [item["instance_id"] for item in instances]
+        self.assertEqual(len(identifiers), len(set(identifiers)))
+        repeated = await self.instances("from=2026-01-01&to=2026-01-06")
+        self.assertEqual([item["instance_id"] for item in (await repeated.json())["instances"]], identifiers)
+
+    async def test_instances_exclude_cancelled_events_series_and_exceptions(self):
+        await self.create({"summary": "Visible", "start": {"date": "2026-01-02"}, "end": {"date": "2026-01-03"}})
+        await self.create({"summary": "Cancelled single", "status": "cancelled",
+                           "start": {"date": "2026-01-03"}, "end": {"date": "2026-01-04"}})
+        await self.create({"summary": "Cancelled master", "status": "cancelled",
+                           "start": {"date": "2026-01-04"}, "end": {"date": "2026-01-05"},
+                           "recurrence": ["RRULE:FREQ=DAILY;COUNT=2"]})
+        await self.create({"summary": "Exception base", "start": {"date": "2026-01-06"}, "end": {"date": "2026-01-07"},
+                           "recurrence": ["RRULE:FREQ=DAILY;COUNT=2"], "exceptions": [
+                               {"originalStartTime": {"date": "2026-01-07"}, "status": "cancelled"}]})
+        response = await self.instances("from=2026-01-01&to=2026-01-10")
+        instances = (await response.json())["instances"]
+        self.assertEqual([item["summary"] for item in instances], ["Visible", "Exception base"])
+        self.assertEqual([item["start"]["date"] for item in instances], ["2026-01-02", "2026-01-06"])
+        self.assertTrue(all(item["status"] != "cancelled" for item in instances))
 
     async def test_instances_preserve_all_day_and_timed_representations(self):
-        await self.create({"summary": "Dates", "start": {"date": "2026-06-10"}, "end": {"date": "2026-06-12"}})
-        await self.create({"summary": "Timed", "location": "Warsaw", "status": "tentative",
-                           "start": {"dateTime": "2026-06-10T09:00:00+02:00", "timeZone": "Europe/Warsaw"},
-                           "end": {"dateTime": "2026-06-10T10:00:00+02:00", "timeZone": "Europe/Warsaw"}})
+        dates = await self.create({"summary": "Dates", "start": {"date": "2026-06-10"}, "end": {"date": "2026-06-12"}})
+        timed = await self.create({"summary": "Timed", "location": "Warsaw", "status": "tentative",
+                           "start": {"dateTime": "2026-06-10T09:00:00", "timeZone": "Europe/Warsaw"},
+                           "end": {"dateTime": "2026-06-10T10:00:00", "timeZone": "Europe/Warsaw"}})
         response = await self.instances("from=2026-06-10&to=2026-06-11")
         state = await response.json()
         api_contract.CalendarInstances.model_validate(state)
@@ -271,14 +297,16 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
                          {"dateTime": "2026-06-10T10:00:00+02:00", "timeZone": "Europe/Warsaw"})
         self.assertFalse(instances["Timed"]["all_day"])
         self.assertEqual(instances["Timed"]["status"], "tentative")
+        self.assertEqual(instances["Dates"]["instance_id"], dates["id"])
+        self.assertEqual(instances["Timed"]["instance_id"], timed["id"])
         self.assertTrue(all(item["recurrence_id"] is None for item in state["instances"]))
 
     async def test_instances_keep_warsaw_wall_time_across_dst(self):
-        await self.create({"summary": "DST",
+        series = await self.create({"summary": "DST",
                            "start": {"dateTime": "2026-03-22T09:00:00+01:00", "timeZone": "Europe/Warsaw"},
                            "end": {"dateTime": "2026-03-22T10:00:00+01:00", "timeZone": "Europe/Warsaw"},
                            "recurrence": ["RRULE:FREQ=WEEKLY;COUNT=3"]})
-        response = await self.instances("from=2026-03-22&to=2026-04-05")
+        response = await self.instances("from=2026-03-22&to=2026-04-06")
         instances = (await response.json())["instances"]
         self.assertEqual([(item["start"]["dateTime"], item["end"]["dateTime"]) for item in instances], [
             ("2026-03-22T09:00:00+01:00", "2026-03-22T10:00:00+01:00"),
@@ -286,32 +314,41 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
             ("2026-04-05T09:00:00+02:00", "2026-04-05T10:00:00+02:00"),
         ])
         self.assertTrue(all(item["start"]["timeZone"] == "Europe/Warsaw" for item in instances))
+        self.assertEqual([item["instance_id"] for item in instances], [
+            series["id"] + "/2026-03-22T08:00:00+00:00",
+            series["id"] + "/2026-03-29T07:00:00+00:00",
+            series["id"] + "/2026-04-05T07:00:00+00:00",
+        ])
 
-    async def test_instances_use_overlap_and_inclusive_window_boundaries(self):
+    async def test_instances_use_overlap_and_half_open_window_boundaries(self):
         events = [
             ("Overlaps start", "2025-12-31T23:30:00Z", "2026-01-01T00:30:00Z"),
             ("Ends at start", "2025-12-31T22:30:00Z", "2026-01-01T00:00:00Z"),
             ("Point at start", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
-            ("Ends at window end", "2026-01-02T23:30:00Z", "2026-01-03T00:00:00Z"),
-            ("Starts at window end", "2026-01-03T00:00:00Z", "2026-01-03T01:00:00Z"),
+            ("Ends at window end", "2026-01-01T23:30:00Z", "2026-01-02T00:00:00Z"),
+            ("Starts at window end", "2026-01-02T00:00:00Z", "2026-01-02T01:00:00Z"),
         ]
         for summary, starting, ending in events:
             await self.create({"summary": summary,
                                "start": {"dateTime": starting, "timeZone": "UTC"},
                                "end": {"dateTime": ending, "timeZone": "UTC"}})
         await self.create({"summary": "All-day before", "start": {"date": "2025-12-31"}, "end": {"date": "2026-01-01"}})
-        await self.create({"summary": "All-day last", "start": {"date": "2026-01-02"}, "end": {"date": "2026-01-03"}})
+        await self.create({"summary": "All-day within", "start": {"date": "2026-01-01"}, "end": {"date": "2026-01-02"}})
+        await self.create({"summary": "All-day at end", "start": {"date": "2026-01-02"}, "end": {"date": "2026-01-03"}})
         response = await self.instances("from=2026-01-01&to=2026-01-02")
         instances = (await response.json())["instances"]
-        self.assertEqual([item["summary"] for item in instances],
-                         ["Overlaps start", "Point at start", "All-day last", "Ends at window end"])
+        self.assertEqual({item["summary"] for item in instances},
+                         {"Overlaps start", "Point at start", "All-day within", "Ends at window end"})
 
     async def test_instances_validate_dates_and_the_92_day_limit(self):
-        response = await self.instances("from=2026-01-01&to=2026-04-02")
+        response = await self.instances("from=2026-01-01&to=2026-04-03")
         self.assertEqual(response.status, 200)
+        response = await self.instances("from=2026-01-01&to=2026-01-01")
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["instances"], [])
         invalid = ["", "from=2026-01-01", "to=2026-01-01", "from=20260101&to=2026-01-02",
                    "from=2026-02-30&to=2026-03-01", "from=2026-01-03&to=2026-01-02",
-                   "from=2026-01-01&to=2026-04-03"]
+                   "from=2026-01-01&to=2026-04-04"]
         for query in invalid:
             with self.subTest(query=query):
                 response = await self.instances(query)
@@ -334,7 +371,7 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["instances"][0]["start"]["dateTime"], "2026-01-01T00:00:00+00:00")
         stamps = [item["start"]["dateTime"] for item in state["instances"]]
         self.assertEqual(stamps, sorted(stamps))
-        response = await self.instances("from=2026-01-01&to=2026-01-01")
+        response = await self.instances("from=2026-01-01&to=2026-01-02")
         state = await response.json()
         self.assertEqual(len(state["instances"]), 24)
         self.assertFalse(state["truncated"])
@@ -347,12 +384,18 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
                                     "end": {"date": "2026-01-06"}})
         work = await self.create({"summary": "Other instance", "start": {"date": "2026-01-05"},
                                   "end": {"date": "2026-01-06"}}, group="other")
+        calendar_response = await self.client.get(api.PATH, headers=self.headers("viewer"))
+        calendar_groups = (await calendar_response.json())["groups"]
+        self.assertEqual(calendar_groups, [{"id": "family"}, {"id": "other"}])
         for query, expected in [("from=2026-01-01&to=2026-01-10", ("family", family["id"])),
                                 ("from=2026-01-01&to=2026-01-10&group=family", ("family", family["id"])),
                                 ("from=2026-01-01&to=2026-01-10&group=other", ("other", work["id"]))]:
             with self.subTest(query=query):
                 response = await self.instances(query)
-                instances = (await response.json())["instances"]
+                state = await response.json()
+                self.assertTrue(state["enabled"])
+                self.assertEqual(state["groups"], calendar_groups)
+                instances = state["instances"]
                 self.assertEqual([(item["group"], item["event_id"]) for item in instances], [expected])
 
 
@@ -377,10 +420,11 @@ class CalendarApiContractTests(unittest.TestCase):
         self.assertEqual(set(schemas["CalendarUpdateRequest"]["required"]), {"group", "id", "revision", "payload"})
 
     def test_expanded_instances_contract_and_route_parameters(self):
-        result = {"instances": [{"event_id": "event", "revision": 1, "group": "family", "summary": "Agenda",
-                                "location": "", "start": {"date": "2026-11-01"}, "end": {"date": "2026-11-02"},
-                                "all_day": True, "status": "confirmed", "recurrence_id": None}],
-                  "truncated": False}
+        result = {"enabled": True, "groups": [{"id": "family"}],
+                  "instances": [{"instance_id": "event", "event_id": "event", "revision": 1, "group": "family",
+                                 "summary": "Agenda", "location": "", "start": {"date": "2026-11-01"},
+                                 "end": {"date": "2026-11-02"}, "all_day": True, "status": "confirmed",
+                                 "recurrence_id": None}], "truncated": False}
         api_contract.CalendarInstances.model_validate(result)
         document = api_contract.build_openapi()
         operation = document["paths"][api.INSTANCES_PATH]["get"]
@@ -388,10 +432,14 @@ class CalendarApiContractTests(unittest.TestCase):
         parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
         self.assertTrue(parameters["from"]["required"])
         self.assertTrue(parameters["to"]["required"])
+        self.assertIn("Inclusive", parameters["from"]["description"])
+        self.assertIn("Exclusive", parameters["to"]["description"])
         self.assertNotIn("required", parameters["group"])
         schema = document["components"]["schemas"]["CalendarExpandedInstance"]
-        self.assertEqual(set(schema["required"]), {"event_id", "revision", "group", "summary", "location",
+        self.assertEqual(set(schema["required"]), {"instance_id", "event_id", "revision", "group", "summary", "location",
                                                    "start", "end", "all_day", "status", "recurrence_id"})
+        self.assertIn("stable across calls", schema["properties"]["instance_id"]["description"])
+        self.assertIn("moved exceptions", schema["properties"]["instance_id"]["description"])
         self.assertEqual(document["components"]["schemas"]["CalendarInstances"]["properties"]["instances"]["maxItems"], 2000)
 
     def test_parallel_web_and_runtime_db_initialization_has_one_migration(self):

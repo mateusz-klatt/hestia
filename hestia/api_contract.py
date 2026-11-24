@@ -1044,6 +1044,7 @@ class Calendars(BaseModel):
 
 class CalendarExpandedInstance(BaseModel):
     model_config = _READ
+    instance_id: str = Field(description="Unique within this response and stable across calls. Series use event_id/original-start, where all-day dates use YYYY-MM-DD and timed slots use their canonical UTC instant; moved exceptions retain the original slot ID. Single events use event_id.")
     event_id: str
     revision: Annotated[int, Field(ge=1)]
     group: str
@@ -1052,12 +1053,14 @@ class CalendarExpandedInstance(BaseModel):
     start: CalendarTime
     end: CalendarTime
     all_day: bool
-    status: Literal["confirmed", "tentative", "cancelled"]
+    status: Literal["confirmed", "tentative"]
     recurrence_id: CalendarTime | None = Field(description="Original series slot; null for a non-recurring event.")
 
 
 class CalendarInstances(BaseModel):
     model_config = _READ
+    enabled: bool
+    groups: list[CalendarGroup]
     instances: list[CalendarExpandedInstance] = Field(max_length=2000)
     truncated: bool = Field(description="True when additional matching instances were omitted at the 2000-instance cap.")
 
@@ -4067,13 +4070,13 @@ def build_openapi() -> dict:
             _P_CALENDAR_INSTANCES: {
                 "get": {
                     "operationId": "getCalendarInstances",
-                    "summary": "Concrete calendar occurrences in an inclusive date window",
-                    "description": "Requires viewer. Expands RRULE/RDATE, removes EXDATE and cancelled exceptions, and applies moved or modified exceptions. Both dates are inclusive and the window cannot exceed 92 days. Instances are sorted by start and capped at 2000.",
+                    "summary": "Concrete calendar occurrences in a half-open date window",
+                    "description": "Requires viewer. Expands RRULE/RDATE, applies moved or modified exceptions, and omits EXDATE and every cancelled occurrence. The window is [from, to), from is inclusive, to is exclusive, and its duration cannot exceed 92 days. Instances are sorted by start and capped at 2000. Disabled synchronization returns 200 with enabled=false and empty groups and instances.",
                     "parameters": [
                         {"name": "from", "in": "query", "required": True, "schema": {"type": "string", "format": "date"},
-                         "description": "First date in the window (YYYY-MM-DD)."},
+                         "description": "Inclusive window start date (YYYY-MM-DD)."},
                         {"name": "to", "in": "query", "required": True, "schema": {"type": "string", "format": "date"},
-                         "description": "Last date in the window (YYYY-MM-DD)."},
+                         "description": "Exclusive window end date (YYYY-MM-DD), matching exclusive CalendarDate end semantics."},
                         {"name": "group", "in": "query", "schema": {"type": "string"},
                          "description": "Selected configured group; defaults to the first group."},
                     ],

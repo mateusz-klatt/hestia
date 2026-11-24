@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, timedelta
+from datetime import date
 
 from aiohttp import web
 
@@ -47,9 +47,9 @@ def _window(query):
         last = date.fromisoformat(query["to"])
         if first.isoformat() != query["from"] or last.isoformat() != query["to"]:
             raise ValueError("Calendar dates must use YYYY-MM-DD")
-        if first > last or (last - first).days >= 92:
-            raise ValueError("Calendar window must contain between 1 and 92 days")
-        return first, last + timedelta(days=1)
+        if first > last or (last - first).days > 92:
+            raise ValueError("Calendar window cannot exceed 92 days")
+        return first, last
     except (KeyError, ValueError, OverflowError) as exc:
         raise ValueError("Invalid calendar window") from exc
 
@@ -57,11 +57,12 @@ def _window(query):
 def _read_instances(group, window_start, window_end):
     store = _store()
     if store is None:
-        return {"instances": [], "truncated": False}
+        return {"enabled": False, "groups": [], "truncated": False, "instances": []}
     groups = store.groups()
     selected = group or (groups[0]["id"] if groups else None)
     events = store.list_events(selected) if selected is not None else []
-    return expand_events(events, window_start, window_end)
+    result = expand_events(events, window_start, window_end)
+    return {"enabled": True, "groups": groups, "truncated": result["truncated"], "instances": result["instances"]}
 
 
 def _write(body, deleting):

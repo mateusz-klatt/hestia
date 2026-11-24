@@ -58,6 +58,8 @@ def _contains(rules: rruleset, value: datetime) -> bool:
 
 
 def _overlaps(content: dict, window_start: date, window_end: date) -> bool:
+    if content.get("status") == "cancelled":
+        return False
     if "date" in content["start"]:
         starting = date.fromisoformat(content["start"]["date"])
         ending = date.fromisoformat(content["end"]["date"])
@@ -70,7 +72,9 @@ def _overlaps(content: dict, window_start: date, window_end: date) -> bool:
 
 
 def _instance(event: dict, content: dict, recurrence_id: dict | None) -> dict:
+    instance_id = event["id"] if recurrence_id is None else event["id"] + "/" + original_start_key(recurrence_id)
     return {
+        "instance_id": instance_id,
         "event_id": event["id"],
         "revision": event["revision"],
         "group": event["group_id"],
