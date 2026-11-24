@@ -8,7 +8,7 @@ import uuid
 
 from sqlalchemy import and_, case, delete, func, or_, select, update
 
-from ..db import BudgetAnalyticsAudit, BudgetGmailMessage, BudgetGmailState, BudgetReceipt, BudgetReceiptLine
+from ..db import AppMeta, BudgetAnalyticsAudit, BudgetGmailMessage, BudgetGmailState, BudgetReceipt, BudgetReceiptLine
 from .gmail_client import GmailError
 from .store import BudgetStore
 from .views import BudgetHTTPStore
@@ -38,6 +38,46 @@ GRANT_RESET = {
 STATUS_FIELDS = ("grant_status", "grant_generation", "version", "sync_phase", "attention", "last_sync_at",
                  "next_sync_at", "backoff_until", "failures", "last_http_status", "last_error",
                  "batch_processed_count")
+_PARSE_FAILED_REASONS_PREFIX = "budget_gmail_parse_failed_reasons:"
+_RETRY_WINDOW_PREFIX = "budget_gmail_retry_full_window:"
+_INC_RESET_PREFIX = "budget_gmail_inc_reset:"
+PARSE_FAILED_REASONS = (
+    "charset_error",
+    "message_defects",
+    "mime_error",
+    "other",
+    "part_defects",
+    "pdf_unsupported",
+    "recursion",
+    "unicode_error",
+    "worker_rejected",
+)
+_PARSE_FAILED_REASON_SET = frozenset(PARSE_FAILED_REASONS)
+
+
+def normalize_parse_failed_reason(reason):
+    """Map unknown or missing parse_failed reason codes to 'other'."""
+    return reason if isinstance(reason, str) and reason in _PARSE_FAILED_REASON_SET else "other"
+
+
+def _normalize_reason_counts(raw):
+    counts = {}
+    for reason, count in raw.items():
+        key = normalize_parse_failed_reason(reason)
+        counts[key] = counts.get(key, 0) + count
+    return counts
+
+
+def _reasons_key(owner):
+    return _PARSE_FAILED_REASONS_PREFIX + owner
+
+
+def _retry_window_key(owner):
+    return _RETRY_WINDOW_PREFIX + owner
+
+
+def _inc_reset_key(owner):
+    return _INC_RESET_PREFIX + owner
 
 
 def digest(secret, domain, value):
@@ -55,6 +95,7 @@ class PendingMessage:
     source_kind: str = "email"
     forwarded_manually: bool = False
     sender_domain: str | None = None
+    parse_failed_reason: str | None = None
 
 
 def _linked_manual_forward():
@@ -128,7 +169,7 @@ class GmailStore(BudgetStore):
     def fence(self, owner, generation):
         self._active(self.state(owner), generation)
 
-    def schedule_sync(self, owner, *, now, force_full_resync, cooldown):
+    def schedule_sync(self, owner, *, now, force_full_resync, cooldown, retry_parse_failed=False, backfill_days=365):
         """Queue a poller run. The request does not fetch or parse mail."""
         with self.transaction() as session:
             BudgetHTTPStore._owner(session, owner)
@@ -139,12 +180,30 @@ class GmailStore(BudgetStore):
                 raise GmailError("mailbox_mismatch", 403, attention="identity_mismatch")
             if row.backoff_until > now:
                 raise GmailError("budget_receipt_gmail_backoff", 429)
+            if not row.run_requested and row.last_attempt_at is not None and row.last_attempt_at + cooldown > now:
+                raise GmailError("budget_receipt_gmail_cooldown", 429)
+            if retry_parse_failed:
+                cutoff = max(0, int(now) - backfill_days * DAY)
+                key = _retry_window_key(owner)
+                meta = session.get(AppMeta, key)
+                if meta is not None:
+                    cutoff = min(cutoff, json.loads(meta.value)["cutoff"])
+                session.execute(delete(BudgetGmailMessage).where(
+                    BudgetGmailMessage.owner == owner,
+                    BudgetGmailMessage.outcome == "parse_failed",
+                    BudgetGmailMessage.receipt_id.is_(None),
+                    BudgetGmailMessage.internal_date >= cutoff,
+                ))
+                encoded = json.dumps({"state": "pending", "cutoff": cutoff})
+                if meta is None:
+                    session.add(AppMeta(key=key, value=encoded))
+                else:
+                    meta.value = encoded
+                force_full_resync = True
             if row.run_requested:
-                if force_full_resync and row.sync_phase != "full_resync":
+                if force_full_resync and (retry_parse_failed or row.sync_phase != "full_resync"):
                     row.force_full_resync = 1
                 return {"ok": True, "sync_phase": row.sync_phase, "version": row.version}
-            if row.last_attempt_at is not None and row.last_attempt_at + cooldown > now:
-                raise GmailError("budget_receipt_gmail_cooldown", 429)
             session.add(row)
             row.next_sync_at = now
             row.run_requested = 1
@@ -152,6 +211,10 @@ class GmailStore(BudgetStore):
                 row.force_full_resync = 1
             row.version += 1
             return {"ok": True, "sync_phase": row.sync_phase, "version": row.version}
+
+    def retry_full_window(self, owner):
+        with self.sessions() as session:
+            return session.get(AppMeta, _retry_window_key(owner)) is not None
 
     def check_version(self, owner, expected):
         self._version(self.state(owner), expected)
@@ -161,12 +224,18 @@ class GmailStore(BudgetStore):
         return session.scalar(select(func.count()).select_from(BudgetReceipt).where(
             BudgetReceipt.owner == owner, _unconfirmed_import()))
 
+    @staticmethod
+    def _parse_failed_reasons(session, owner):
+        row = session.get(AppMeta, _reasons_key(owner))
+        return _normalize_reason_counts(json.loads(row.value)) if row is not None else {}
+
     def status(self, owner):
         with self.sessions() as session:
             BudgetHTTPStore._owner(session, owner)
             row = self._state(session, owner)
             return {**{key: getattr(row, key) for key in STATUS_FIELDS},
-                    "pending_imported_count": self._pending_count(session, owner)}
+                    "pending_imported_count": self._pending_count(session, owner),
+                    "parse_failed_reasons": self._parse_failed_reasons(session, owner)}
 
     def at_pending_cap(self, owner):
         with self.sessions() as session:
@@ -181,6 +250,9 @@ class GmailStore(BudgetStore):
             session.add(row)
             for key, value in GRANT_RESET.items():
                 setattr(row, key, value)
+            session.execute(delete(AppMeta).where(
+                AppMeta.key.in_((_reasons_key(owner), _retry_window_key(owner), _inc_reset_key(owner))),
+            ))
             row.grant_status = status
             row.grant_generation += 1
             row.version += 1
@@ -247,10 +319,12 @@ class GmailStore(BudgetStore):
         session.flush()
         return receipt.id
 
-    def commit(self, owner, generation, changes, pending=()):
+    def commit(self, owner, generation, changes, pending=(), *, starting_recovery=False, starting_incremental=False):
         """Commit up to one chunk; never advance a page past an uncommitted message."""
         imported = skipped = 0
         drained = True
+        new_reasons = []
+        reset_reasons = False
         with self.transaction() as session:
             BudgetHTTPStore._owner(session, owner)
             row = self._state(session, owner)
@@ -274,18 +348,64 @@ class GmailStore(BudgetStore):
                     imported += 1
                 else:
                     skipped += 1
+                    if outcome == "parse_failed":
+                        new_reasons.append(normalize_parse_failed_reason(item.parse_failed_reason))
                 session.add(BudgetGmailMessage(owner=owner, gmail_id_hmac=item.gmail_id_hmac,
                                                rfc_message_id_hmac=rfc_hmac,
                                                internal_date=item.internal_date, trust_path=item.trust_path,
                                                outcome=outcome, created_at=now, receipt_id=receipt_id))
             if row.sync_phase in ("backfill", "full_resync"):
                 row.batch_processed_count += imported + skipped
+            if starting_incremental:
+                session.merge(AppMeta(key=_inc_reset_key(owner), value="1"))
+            if imported or skipped:
+                inc_meta = session.get(AppMeta, _inc_reset_key(owner))
+                if inc_meta is not None:
+                    reset_reasons = True
+                    session.delete(inc_meta)
+            if starting_recovery:
+                session.execute(delete(AppMeta).where(AppMeta.key == _inc_reset_key(owner)))
+                retry_meta = session.get(AppMeta, _retry_window_key(owner))
+                if retry_meta is not None:
+                    marker = json.loads(retry_meta.value)
+                    changes = {
+                        **changes,
+                        "resume_cutoff_ts": min(changes["resume_cutoff_ts"], marker["cutoff"]),
+                        "force_full_resync": 0,
+                        "sync_phase": "full_resync",
+                    }
+                    if marker["state"] == "pending":
+                        reset_reasons = True
+                        retry_meta.value = json.dumps({"state": "running", "cutoff": marker["cutoff"]})
+                else:
+                    reset_reasons = True
+            if reset_reasons or new_reasons:
+                key = _reasons_key(owner)
+                meta = session.get(AppMeta, key)
+                counts = {} if reset_reasons or meta is None else _normalize_reason_counts(json.loads(meta.value))
+                for reason in new_reasons:
+                    counts[reason] = counts.get(reason, 0) + 1
+                if counts:
+                    encoded = json.dumps(counts, sort_keys=True)
+                    if meta is None:
+                        session.add(AppMeta(key=key, value=encoded))
+                    else:
+                        meta.value = encoded
+                elif meta is not None:
+                    session.delete(meta)
             if drained:
+                was_recovery = row.sync_phase != "incremental"
                 for key, value in changes.items():
                     setattr(row, key, value)
                 if changes.get("sync_phase") == "idle":
                     # A force request may arrive after the worker chose what to scan.
                     row.run_requested = int(bool(row.force_full_resync))
+                    if was_recovery:
+                        retry_meta = session.get(AppMeta, _retry_window_key(owner))
+                        if retry_meta is not None and json.loads(retry_meta.value)["state"] == "running":
+                            session.delete(retry_meta)
+                    else:
+                        session.execute(delete(AppMeta).where(AppMeta.key == _inc_reset_key(owner)))
         return imported, skipped, drained
 
     def retain(self, owner, generation):

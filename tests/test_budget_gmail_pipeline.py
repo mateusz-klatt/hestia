@@ -107,6 +107,57 @@ class GmailPipelineTests(TestCase):
                             "44051401458", "4111 1111 1111 1111", SETTINGS.owner_mailbox):
                 self.assertNotIn(private.encode(), stored)
 
+    def test_pipeline_records_malformed_pdf_and_octet_stream_pdf_reasons_over_socket(self):
+        # The sidecar extracts PDFs since #278, so a malformed fixture PDF is rejected.
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "gmail-reasons.db"
+            self.addCleanup(db.reset_engine_cache)
+            _engine, sessions = db.init_db(path)
+            with sessions.begin() as session:
+                session.add_all([db.User(username=OWNER, password_hash="synthetic", role="admin"),
+                                 db.AppMeta(key="users_authoritative", value="1")])
+
+            pdf_mail = self._email("billing@orange.example.test", "unused")
+            pdf_mail.set_content(b"%PDF-1.4 fixture", maintype="application", subtype="pdf")
+            octet_mail = self._email("billing@orange.example.test", "cover")
+            octet_mail.add_attachment(b"%PDF-1.4 fixture", maintype="application", subtype="octet-stream",
+                                      filename="Invoice.PDF")
+            bad_charset = self._email("billing@orange.example.test", "Invoice body")
+            bad_charset.set_param("charset", "not-a-real-charset")
+            messages = {"pipe-pdf": pdf_mail, "pipe-octet": octet_mail, "pipe-charset": bad_charset}
+
+            transport, clock = FakeGmailTransport(), FakeClock()
+            transport.routes[("/messages", None)] = response(page(*messages))
+            for message_id, message in messages.items():
+                transport.routes[("/messages/" + message_id, None)] = self._provider_message(message_id, message)
+            settings = replace(SETTINGS, sender_allowlist=("billing@orange.example.test",))
+            client = GmailClient(transport, monotonic=clock.monotonic, sleep=clock.sleep)
+            worker = ReceiptParserWorker(str(Path(directory) / "parse.sock"))
+            store = GmailStore(sessions, clock=clock.wall)
+            service = GmailSync(settings, store, client, GmailMessageProcessor(settings, worker), path)
+            with subprocess.Popen((sys.executable, "-B", "-c",
+                                   "from hestia.budget.gmail_worker import serve; import sys; serve(sys.argv[1])",
+                                   worker.socket_path), env={}, stderr=subprocess.DEVNULL) as sidecar:
+                try:
+                    for _ in range(50):
+                        if worker.ready():
+                            break
+                        time.sleep(0.01)
+                    self.assertTrue(worker.ready())
+                    service.transition(OWNER, 1, "active")
+                    with self.assertLogs("hestia.budget.gmail_message", level="WARNING") as logs:
+                        outcome = service.sync(OWNER)
+                    self.assertEqual((outcome["imported_count"], outcome["skipped_count"]), (0, 3))
+                finally:
+                    sidecar.terminate()
+            self.assertEqual(store.status(OWNER)["parse_failed_reasons"],
+                             {"charset_error": 1, "worker_rejected": 2})
+            self.assertEqual(sorted(logs.output), [
+                "WARNING:hestia.budget.gmail_message:gmail parse_failed reason=charset_error",
+                "WARNING:hestia.budget.gmail_message:gmail parse_failed reason=worker_rejected",
+                "WARNING:hestia.budget.gmail_message:gmail parse_failed reason=worker_rejected",
+            ])
+
     @staticmethod
     def _email(sender, text, *, subtype="plain"):
         domain = sender.partition("@")[2]

@@ -177,8 +177,11 @@ class GmailSync:
             self.store.transition(owner, expected_version, status, mailbox_hmac, queue_sync=defer_profile)
             return self.store.status(owner)
 
-    def _commit(self, owner, progress, changes, pending=()):
-        imported, skipped, drained = self.store.commit(owner, progress.generation, changes, pending)
+    def _commit(self, owner, progress, changes, pending=(), *, starting_recovery=False, starting_incremental=False):
+        imported, skipped, drained = self.store.commit(
+            owner, progress.generation, changes, pending,
+            starting_recovery=starting_recovery, starting_incremental=starting_incremental,
+        )
         progress.imported += imported
         progress.skipped += skipped
         if not drained:
@@ -186,17 +189,18 @@ class GmailSync:
 
     def _start_recovery(self, owner, progress, profile_history, state, *, full):
         now = self.store.clock()
-        cutoff = max(0, now - self.settings.backfill_days * DAY)
+        full_cutoff = max(0, now - self.settings.backfill_days * DAY)
+        cutoff = full_cutoff
         if full:
             last_sync = state.last_sync_at if state.last_sync_at is not None else now
-            cutoff = max(cutoff, last_sync - 7 * DAY)
+            cutoff = max(full_cutoff, last_sync - 7 * DAY)
         changes = {
             **_PHASE_RESET, "history_id": None, "pending_history_id": profile_history, "resume_cutoff_ts": cutoff,
             "sync_phase": "full_resync" if full else "backfill",
         }
         if full:
             changes["force_full_resync"] = 0
-        self._commit(owner, progress, changes)
+        self._commit(owner, progress, changes, starting_recovery=True)
 
     def _completion(self, state):
         now = self.store.clock()
@@ -313,7 +317,8 @@ class GmailSync:
         scope_hmac = self._scope_hmac(progress)
         state = self.store.state(owner)
         if state.pending_history_id is None:
-            self._commit(owner, progress, {"pending_history_id": profile_history, "sync_phase": "incremental"})
+            self._commit(owner, progress, {"pending_history_id": profile_history, "sync_phase": "incremental"},
+                         starting_incremental=True)
         if state.scope_scan_query_hmac != scope_hmac:
             self._commit(owner, progress, {"history_page_token": None, "scope_scan_page_token": None,
                                           "scope_scan_query_hmac": scope_hmac})
@@ -409,8 +414,9 @@ class GmailSync:
                     "skipped_count": progress.skipped, "has_more": state.sync_phase != "idle",
                     "attention": state.attention, "next_sync_at": state.next_sync_at}
 
-    def schedule(self, owner, *, force_full_resync=False):
+    def schedule(self, owner, *, force_full_resync=False, retry_parse_failed=False):
         """Record a due poller run. Import work stays on the background loop."""
         self._require_owner(owner)
         return self.store.schedule_sync(owner, now=self.store.clock(), force_full_resync=force_full_resync,
-                                        cooldown=MANUAL_COOLDOWN)
+                                        retry_parse_failed=retry_parse_failed,
+                                        backfill_days=self.settings.backfill_days, cooldown=MANUAL_COOLDOWN)

@@ -97,7 +97,8 @@ class _Runtime:
         service = self._service(path, store, _settings(secret))
         if operation == "gmail-grant":
             return _grant_result(service.transition(owner, values["expected_version"], "active", defer_profile=True))
-        return service.schedule(owner, force_full_resync=values["force_full_resync"])
+        return service.schedule(owner, force_full_resync=values["force_full_resync"],
+                                retry_parse_failed=values["retry_parse_failed"])
 
     def poll(self, auth_enabled, session_secret):
         if not _poll_enabled(auth_enabled):

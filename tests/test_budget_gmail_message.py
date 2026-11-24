@@ -436,3 +436,171 @@ class GmailMessageProcessorTests(unittest.TestCase):
         pending = self._process(_metadata(outer), _raw(outer))
         self.assertEqual((pending.outcome, pending.forwarded_manually, pending.invoice),
                          ("skipped_non_receipt", False, None))
+
+    def test_parse_failed_logs_fixed_reason_codes_without_message_material(self):
+        def make_part_defect():
+            return (
+                f"From: {MERCHANT}\r\n"
+                f"Authentication-Results: mx.google.com; dkim=pass header.d=respectenergy.pl; dmarc=pass header.from=respectenergy.pl\r\n"
+                "Subject: Sensitive Subject\r\n"
+                "Content-Type: multipart/mixed; boundary=\"bnd\"\r\n\r\n"
+                "--bnd\r\nContent-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n\r\n!!!\r\n--bnd--\r\n"
+            ).encode("ascii")
+
+        def make_message_defect():
+            return b"Content-Type: multipart/mixed; boundary=missing\n" + _email().as_bytes()
+
+        def make_bad_charset():
+            message = _email()
+            message.set_param("charset", "not-a-real-charset")
+            return message
+
+        pdf_mail = _email()
+        pdf_mail.set_content(b"%PDF-fixture", maintype="application", subtype="pdf")
+        html_forward = _email(SPOUSE, "<body>Sensitive Forward Body</body>", subtype="html")
+
+        from email.errors import MessageError
+
+        cases = [
+            ("message_defects", make_message_defect(), None, None),
+            ("part_defects", make_part_defect(), None, None),
+            ("charset_error", make_bad_charset(), None, None),
+            ("pdf_unsupported", pdf_mail, PDFUnsupported("sensitive pdf detail"), None),
+            ("worker_rejected", _email(), WorkerRejected("sensitive worker detail"), None),
+            ("worker_rejected", html_forward, WorkerRejected("sensitive forward detail"), None),
+            ("mime_error", _email(), None, MessageError("sensitive mime detail")),
+            ("recursion", _email(), None, RecursionError("sensitive recursion detail")),
+            ("unicode_error", _email(), None, UnicodeError("sensitive unicode detail")),
+        ]
+        for expected_reason, message, worker_error, parser_error in cases:
+            with self.subTest(reason=expected_reason, message_type=type(message).__name__):
+                self.worker.parse.side_effect = worker_error or (lambda _kind, source: source.decode("utf-8"))
+                raw_response = _raw(message)
+                meta = _metadata() if isinstance(message, bytes) else _metadata(message)
+                with self.assertLogs("hestia.budget.gmail_message", level="WARNING") as logs:
+                    if parser_error is not None:
+                        with patch.object(gmail_message.BytesParser, "parsebytes", side_effect=parser_error):
+                            pending = self._process(meta, raw_response)
+                    else:
+                        pending = self._process(meta, raw_response)
+                self.assertEqual((pending.outcome, pending.parse_failed_reason), ("parse_failed", expected_reason))
+                self.assertEqual(logs.output, [f"WARNING:hestia.budget.gmail_message:gmail parse_failed reason={expected_reason}"])
+                for forbidden in (MESSAGE_ID, MERCHANT, SPOUSE, "Sensitive", "sensitive", "RE/2026/00042"):
+                    self.assertNotIn(forbidden, logs.output[0])
+
+    def test_invoice_and_forward_precedence_records_only_deciding_final_reason(self):
+        # Earlier WorkerRejected overwritten by a later imported HTML part logs nothing.
+        imported_alt = _email(text="Open invoice")
+        imported_alt.add_alternative("<strong>Synthetic invoice</strong>", subtype="html")
+        self.worker.parse.side_effect = [WorkerRejected(), INVOICE]
+        with self.assertNoLogs("hestia.budget.gmail_message", level="INFO"):
+            pending = self._process(_metadata(imported_alt), _raw(imported_alt))
+        self.assertEqual((pending.outcome, pending.parse_failed_reason), ("imported", None))
+
+        # Earlier WorkerRejected overwritten by later oversized part -> skipped_oversized, no reason/log.
+        oversized_alt = _email(text="First part fails")
+        oversized_alt.add_attachment(b"%PDF-" + b"x" * 16, maintype="application", subtype="pdf")
+        self.worker.parse.side_effect = [WorkerRejected()]
+        with patch.object(gmail_message, "MAX_PDF_BYTES", 8), \
+                self.assertNoLogs("hestia.budget.gmail_message", level="INFO"):
+            pending = self._process(_metadata(oversized_alt), _raw(oversized_alt))
+        self.assertEqual((pending.outcome, pending.parse_failed_reason), ("skipped_oversized", None))
+
+        # Earlier WorkerRejected overwritten by later PDFUnsupported -> logs pdf_unsupported once.
+        two_failures = _email(text="First part fails")
+        two_failures.add_attachment(b"%PDF-fixture", maintype="application", subtype="pdf")
+        self.worker.parse.side_effect = [WorkerRejected(), PDFUnsupported()]
+        with self.assertLogs("hestia.budget.gmail_message", level="WARNING") as logs:
+            pending = self._process(_metadata(two_failures), _raw(two_failures))
+        self.assertEqual((pending.outcome, pending.parse_failed_reason), ("parse_failed", "pdf_unsupported"))
+        self.assertEqual(logs.output, ["WARNING:hestia.budget.gmail_message:gmail parse_failed reason=pdf_unsupported"])
+
+        # Earlier PDFUnsupported followed by non-invoice HTML stays parse_failed with pdf_unsupported.
+        pdf_then_non_invoice = _email(text="Cover note without invoice fields")
+        pdf_then_non_invoice.add_attachment(b"%PDF-fixture", maintype="application", subtype="pdf")
+        self.worker.parse.side_effect = ["Cover note without invoice fields", PDFUnsupported()]
+        with self.assertLogs("hestia.budget.gmail_message", level="WARNING") as logs:
+            pending = self._process(_metadata(pdf_then_non_invoice), _raw(pdf_then_non_invoice))
+        self.assertEqual((pending.outcome, pending.parse_failed_reason), ("parse_failed", "pdf_unsupported"))
+        self.assertEqual(logs.output, ["WARNING:hestia.budget.gmail_message:gmail parse_failed reason=pdf_unsupported"])
+
+        # Spouse forward falling back from failed _invoice to _manual_forward is imported, not parse_failed.
+        inner = _email(MERCHANT)
+        inner.set_content(b"%PDF-fixture", maintype="application", subtype="pdf")
+        outer = _email(SPOUSE, "Forwarding PDF", rfc_id="<spouse-pdf@gmail.com>")
+        outer.add_attachment(inner)
+        self.worker.parse.side_effect = PDFUnsupported()
+        with self.assertNoLogs("hestia.budget.gmail_message", level="INFO"):
+            pending = self._process(_metadata(outer), _raw(outer))
+        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.parse_failed_reason),
+                         ("imported", True, None))
+
+    def test_octet_stream_pdf_detection_requires_pdf_extension_and_header(self):
+        for filename in ("invoice.pdf", "Faktura.PDF", "bill.Pdf"):
+            with self.subTest(filename=filename):
+                message = _email()
+                message.set_content(b"%PDF-1.4 fixture", maintype="application", subtype="octet-stream",
+                                    filename=filename)
+                self.worker.parse.side_effect = [INVOICE]
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual((pending.outcome, pending.source_kind, pending.parse_failed_reason),
+                                 ("imported", "attachment", None))
+                self.worker.parse.assert_called_once_with("pdf", b"%PDF-1.4 fixture")
+                self.worker.parse.reset_mock()
+
+                self.worker.parse.side_effect = [PDFUnsupported()]
+                with self.assertLogs("hestia.budget.gmail_message", level="WARNING") as logs:
+                    failed = self._process(_metadata(message), _raw(message))
+                self.assertEqual((failed.outcome, failed.parse_failed_reason), ("parse_failed", "pdf_unsupported"))
+                self.assertEqual(logs.output, ["WARNING:hestia.budget.gmail_message:gmail parse_failed reason=pdf_unsupported"])
+                self.worker.parse.reset_mock()
+
+        # Multipart message with a non-invoice cover body also imports the octet-stream PDF attachment.
+        multipart = _email(text="See attached invoice")
+        multipart.add_attachment(b"%PDF-1.4 fixture", maintype="application", subtype="octet-stream",
+                                 filename="Faktura.PDF")
+        self.worker.parse.side_effect = ["See attached invoice", INVOICE]
+        pending = self._process(_metadata(multipart), _raw(multipart))
+        self.assertEqual((pending.outcome, pending.source_kind), ("imported", "attachment"))
+        self.assertEqual(self.worker.parse.call_args_list,
+                         [call("text", b"See attached invoice\n"), call("pdf", b"%PDF-1.4 fixture")])
+        self.worker.parse.reset_mock()
+
+        # Filename in Content-Type name parameter also matches.
+        name_only = _email()
+        name_only.set_content(b"%PDF-1.4 fixture", maintype="application", subtype="octet-stream")
+        name_only.set_param("name", "faktura.pdf")
+        self.worker.parse.side_effect = [INVOICE]
+        self.assertEqual(self._process(_metadata(name_only), _raw(name_only)).outcome, "imported")
+        self.worker.parse.assert_called_once_with("pdf", b"%PDF-1.4 fixture")
+        self.worker.parse.reset_mock()
+
+        # Missing filename, wrong extension, or missing %PDF- header must NOT be sent as PDF.
+        for kwargs, body in (
+            ({}, b"%PDF-1.4 fixture"),
+            ({"filename": "invoice.bin"}, b"%PDF-1.4 fixture"),
+            ({"filename": "invoice.pdf"}, b"Not a PDF payload"),
+        ):
+            with self.subTest(kwargs=kwargs, body=body):
+                message = _email()
+                message.set_content(body, maintype="application", subtype="octet-stream", **kwargs)
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual(pending.outcome, "skipped_non_receipt")
+                self.worker.parse.assert_not_called()
+
+        oversized = _email()
+        oversized.set_content(b"%PDF-" + b"x" * 16, maintype="application", subtype="octet-stream",
+                              filename="big.PDF")
+        with patch.object(gmail_message, "MAX_PDF_BYTES", 8):
+            pending = self._process(_metadata(oversized), _raw(oversized))
+        self.assertEqual(pending.outcome, "skipped_oversized")
+        self.worker.parse.assert_not_called()
+
+    def test_unknown_rejected_reason_normalizes_to_other_in_logs_and_result(self):
+        secret = "raw-sensitive-error"
+        self.worker.parse.side_effect = gmail_message._Rejected(secret)
+        with self.assertLogs("hestia.budget.gmail_message", level="WARNING") as logs:
+            pending = self._process(_metadata(), _raw(_email()))
+        self.assertEqual((pending.outcome, pending.parse_failed_reason), ("parse_failed", "other"))
+        self.assertEqual(logs.output, ["WARNING:hestia.budget.gmail_message:gmail parse_failed reason=other"])
+        self.assertNotIn(secret, logs.output[0])
