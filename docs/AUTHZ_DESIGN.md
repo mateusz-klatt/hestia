@@ -398,3 +398,33 @@ In `ui/src/main.ts`, mount and expose Budget using `own_budget.can_view`. In `ui
 In `ui/src/budget/budget.tsx`, use the existing invalidation and request-epoch mechanism on changed actor, lost ledger access, feature disablement, or `budget_actor_changed`. An optional receipt or device denial clears or hides that panel and refreshes capabilities. It does not clear a still-authorized ledger. Keep device administration available when `can_manage_devices` remains true. Roll back PR 3 → PR 2 with `catalog_custom` intact and the same capability contract. PR 3 adds the grant editor and upgraded receipt behavior on top of this baseline. [Browser reload](../ui/src/budget/budget.tsx:152) · [Device panel mount](../ui/src/budget/budget.tsx:439)
 
 **Acceptance tests.** On the PR 2 rollback image, an authorized owner projected as `viewer` or `operator` still sees the ledger after dropping IOC or receipt permissions. A forbidden optional receipt call leaves accounts and connections visible. Real loss of `budget.view`, actor mismatch, or logout clears private state immediately, and late successful responses cannot restore it. Test an account switch during parallel reload and confirm that the mismatched request reaches no owner lookup. Keep the pinned Vesta 0.9.0 decode test passing without new fields in `WhoAmI`.
+
+---
+
+# Part C: wire contract details agreed with Vesta (2026-11-24)
+
+These details complete Parts A and B for client implementers. Each field below is additive.
+
+1. **`GET /api/me/capabilities`** (PR 2) is authenticated and `Cache-Control: no-store`. It returns:
+   ```json
+   {"user": "…"|null,
+    "installation_permissions": ["ioc.view", "…"],
+    "own_budget": {"permissions": ["…"], "can_view": true, "can_use_receipts": true, "can_manage_devices": true} | null,
+    "delegated_receipts": {"permissions": ["budget.receipts.add"], "can_use": true} | null,
+    "household_available": false}
+   ```
+   - A delegate never sees the owner's username.
+   - In auth-off mode, `user` is `null` and `installation_permissions` lists the full ordinary catalog.
+   - A client that gets 404 (an older server) falls back to the legacy `whoami.role` mapping.
+2. **`POST /api/auth/device-token`** (PR 3):
+   - The request is `{"device_name": "…", "prior_token": "…"?}`. `prior_token` is the proof for a verified rotation.
+   - The response is `{"token", "token_id", "scope": "receipts", "actor", "owner", "issued_permissions": […], "expires_at"}`.
+   - Self-revoke stays on `POST /api/budget/receipts/device-token/revoke` with `{token_id}`.
+3. **Errors** use the existing `{"error": {"code": …}}` envelope:
+   - `qr-redeem`: 400 `qr_auth_ambiguous`, 400 `qr_origin_mismatch`, 401 `qr_code_invalid`, 429 `qr_rate_limited` with `Retry-After`, 503 `auth_origin_unavailable`;
+   - `device-token`: 401 for a missing or stale native session, 403 `budget_forbidden` when there is no eligible receipt target, 409 `device_token_limit_reached`.
+4. **`POST /api/budget/receipts/confirm`** keeps its exact shape for Vesta 2.0, including `"link": null` with the legacy semantics. Explicit `keep`/`unlink`/`link` actions arrive later as an optional additive field; clients that omit it keep today's behaviour.
+5. **Transport:**
+   - `device-token` needs a current native session and is allowed over plain-HTTP LAN.
+   - QR issuance and redemption stay https-only. Their origin is the configured `HESTIA_PUBLIC_ORIGIN`.
+   - A 200 response from `qr-redeem` always includes `token`, using the same shape as `POST /api/login` with `bearer: true`, i.e. `{ok, user, token}`.
