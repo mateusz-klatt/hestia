@@ -29,6 +29,24 @@ class IssuerInvoiceFixtureTests(unittest.TestCase):
         )
         self.assertTrue(has_provider_invoice_number(text))
 
+    def test_tmobile_2025_layout_reads_number_and_issue_date_from_footer(self):
+        footer = ("Numer Klienta: 1.00000000 Numer faktury: 501234567890 "
+                  "Okres rozliczeniowy: 09.08.2026–08.09.2026 Data wystawienia: 09.09.2026")
+        legacy = (_fixture("tmobile_invoice.txt")
+                  .replace("Numer faktury: 501234567890\n", "Faktura nr: 501234567890 z dnia 09.09.2026\n")
+                  .replace("Data i miejsce wystawienia: 09.09.2026, Warszawa\n", "")
+                  + footer + "\n")
+        self.assertEqual(
+            extract_invoice(legacy),
+            ImportedInvoice("T-Mobile", "5261040567", "501234567890", "59.99", "PLN", "2026-09-09", "2026-09-23"),
+        )
+        current = _fixture("tmobile_invoice.txt") + footer + "\n"
+        self.assertEqual(extract_invoice(current), extract_invoice(_fixture("tmobile_invoice.txt")))
+        self.assertIsNone(extract_invoice(current.replace("501234567890 Okres", "501234567891 Okres")))
+        # Conflicting issue dates drop the optional date, like a missing one.
+        conflicting = extract_invoice(current.replace("Data wystawienia: 09.09.2026", "Data wystawienia: 10.09.2026"))
+        self.assertEqual((conflicting.invoice_number, conflicting.issue_date), ("501234567890", None))
+
     def test_play_layout(self):
         text = _fixture("play_invoice.txt")
         self.assertEqual(

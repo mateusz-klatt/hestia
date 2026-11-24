@@ -68,6 +68,13 @@ _TMOBILE_ISSUE = re.compile(
     rf"^Data i miejsce wystawienia:[ \t]*({_DATE_VALUE})(?:,[ \t]*[^\n]*)?[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
 )
+# Page footer present in both the 2025 and 2026 layouts. The 2025 layout has no
+# standalone "Numer faktury:" or "Data i miejsce wystawienia:" line.
+_TMOBILE_FOOTER = re.compile(
+    rf"Numer faktury:[ \t]*([0-9]{{12}})[ \t]+Okres rozliczeniowy:[^\n]*?"
+    rf"Data wystawienia:[ \t]*({_DATE_VALUE})[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 _TMOBILE_AMOUNT = re.compile(
     rf"^A\+C[ \t]+Prosimy o wpłatę[ \t]+({_PLN_VALUE})[ \t]+brutto i[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
@@ -209,9 +216,14 @@ def _extract_respect(_raw: str, clean: str) -> ImportedInvoice | None:
 def _extract_tmobile(raw: str, clean: str) -> ImportedInvoice | None:
     if _TMOBILE_CORRECTION.search(raw):
         return None
-    number = _safe_invoice_number(_one(_TMOBILE_NUMBER, raw) or "", _FORWARDED_INVOICE_NUMBERS["T-Mobile"])
+    footer = _TMOBILE_FOOTER.findall(raw)
+    numbers = set(_TMOBILE_NUMBER.findall(raw)) | {number for number, _ in footer}
+    issues = set(_TMOBILE_ISSUE.findall(clean)) | {issued for _, issued in footer}
+    number = _safe_invoice_number(
+        next(iter(numbers)) if len(numbers) == 1 else "", _FORWARDED_INVOICE_NUMBERS["T-Mobile"]
+    )
     due_date = _parse_date(_one(_TMOBILE_DUE, clean) or "")
-    issue_date = _parse_date(_one(_TMOBILE_ISSUE, clean) or "")
+    issue_date = _parse_date(next(iter(issues)) if len(issues) == 1 else "")
     return _pln_invoice(
         "T-Mobile", number, _one(_SELLER_NIP, clean), _one(_TMOBILE_AMOUNT, clean), issue_date, due_date
     )
