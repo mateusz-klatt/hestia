@@ -168,39 +168,6 @@ def _overlaps(content: dict, window: _Window) -> bool:
     return starting < window.upper and (ending > window.lower or starting == ending and starting >= window.lower)
 
 
-def _overlaps_padded(content: dict, window: _Window, start: date, end: date, lower: datetime, upper: datetime) -> bool:
-    if content.get("status") == "cancelled":
-        return False
-    if "date" in content["start"]:
-        try:
-            start -= timedelta(days=1)
-        except OverflowError:
-            start = date.min
-        try:
-            end += timedelta(days=1)
-        except OverflowError:
-            end = date.max
-    return _overlaps(content, _Window(start, end, window.zone, lower, upper))
-
-
-def _pending_bounds(pending: dict, query_start: datetime, query_end: datetime, all_day: bool) -> tuple[datetime, datetime]:
-    if not pending:
-        return query_start, query_end
-    margin = timedelta(days=1) if all_day else timedelta(hours=2)
-    try:
-        first = min(pending) - margin
-    except OverflowError:
-        first = min(pending)
-    try:
-        last = max(pending) + margin
-    except OverflowError:
-        last = max(pending)
-    if all_day:
-        first = datetime.combine(first, time.min, tzinfo=_UTC)
-        last = datetime.combine(last, time.min, tzinfo=_UTC)
-    return min(query_start, first), max(query_end, last)
-
-
 def _instance(event: dict, content: dict, recurrence_id: dict | None) -> dict:
     instance_id = event["id"] if recurrence_id is None else event["id"] + "/" + original_start_key(recurrence_id)
     return {
@@ -249,9 +216,7 @@ def _component_instance(event: dict, component, window: _Window) -> dict | None:
     return _instance(event, content, recurrence_id)
 
 
-def _stored_override(event: dict, exception: dict, original, window: _Window) -> dict | None:
-    if not _overlaps(exception, window):
-        return None
+def _stored_override(event: dict, exception: dict, original) -> dict | None:
     if not isinstance(original, datetime):
         recurrence_id = {"date": original.isoformat()}
     else:
@@ -348,12 +313,35 @@ def _replay_upper_bound(payload: dict, end: datetime) -> int:
             continue
         _, body = line.split(":", 1)
         parts = dict(part.split("=", 1) for part in body.split(";"))
-        estimated = ceil(seconds / (_FREQUENCY_SECONDS[parts["FREQ"]] * int(parts.get("INTERVAL", "1")))) + 1
+        frequency = parts["FREQ"]
+        estimated = ceil(seconds / (_FREQUENCY_SECONDS[frequency] * int(parts.get("INTERVAL", "1")))) + 1
+        if "BYDAY" in parts and not {"BYMONTHDAY", "BYYEARDAY", "BYWEEKNO"}.intersection(parts):
+            if frequency == "YEARLY":
+                estimated *= 53
+            elif frequency == "MONTHLY":
+                estimated *= 5
         for selector, values in parts.items():
             if selector.startswith("BY"):
                 estimated *= len(values.split(","))
-        bound += min(int(parts["COUNT"]), estimated) if "COUNT" in parts else estimated
+        bound += estimated
     return bound
+
+
+def _impossible_rule(payload: dict) -> bool:
+    limits = {2: 29, 4: 30, 6: 30, 9: 30, 11: 30}
+    for line in payload.get("recurrence", []):
+        if _kind(line) != "RRULE":
+            continue
+        _, body = line.split(":", 1)
+        parts = dict(part.split("=", 1) for part in body.split(";"))
+        if "BYMONTH" not in parts or "BYMONTHDAY" not in parts:
+            continue
+        days = [int(value) for value in parts["BYMONTHDAY"].split(",")]
+        possible = any(1 <= abs(day) <= limits.get(int(month), 31)
+                       for month in parts["BYMONTH"].split(",") for day in days)
+        if not possible:
+            return True
+    return False
 
 
 def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
@@ -364,17 +352,19 @@ def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
         _LOG.warning("Calendar event %s uses SECONDLY, MINUTELY or HOURLY recurrence; using DTSTART only", event["id"])
         first = _first_instance(event, window)
         return ([first] if first is not None else []), True
+    if _impossible_rule(payload):
+        _LOG.warning("Calendar event %s has impossible month/day recurrence selectors; using DTSTART only", event["id"])
+        first = _first_instance(event, window)
+        return ([first] if first is not None else []), True
     query_start, query_end = _query_bounds(window)
     all_day = "date" in payload["start"]
     exceptions = {_key(item["originalStartTime"], all_day): item for item in payload.get("exceptions", [])}
-    pending = {original: item for original, item in exceptions.items()
-               if _overlaps_padded(item, window, window.start, window.end, query_start, query_end)}
-    generation_start, generation_end = _pending_bounds(pending, query_start, query_end, all_day)
-    if _occurrence_upper_bound(payload, generation_start, generation_end) > OCCURRENCE_BOUND:
+    pending = {original: item for original, item in exceptions.items() if _overlaps(item, window)}
+    if _occurrence_upper_bound(payload, query_start, query_end) > OCCURRENCE_BOUND:
         _LOG.warning("Calendar event %s exceeds the instance occurrence bound; using DTSTART only", event["id"])
         first = _first_instance(event, window)
         return ([first] if first is not None else []), True
-    if _replay_upper_bound(payload, generation_end) > REPLAY_BOUND:
+    if _replay_upper_bound(payload, query_end) > REPLAY_BOUND:
         _LOG.warning("Calendar event %s exceeds the recurrence replay bound; using DTSTART only", event["id"])
         first = _first_instance(event, window)
         return ([first] if first is not None else []), True
@@ -395,7 +385,7 @@ def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
     queries = [(payload, None)] if all_day else _timed_queries(payload)
     for content, until in queries:
         for series in of(_calendar(content, event["uid"])).series:
-            for occurrence in series.between(generation_start, generation_end):
+            for occurrence in series.between(query_start, query_end):
                 component = occurrence.as_component(False)
                 if all_day:
                     original_value = component["RECURRENCE-ID"].dt
@@ -411,7 +401,7 @@ def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
                     continue
                 if original in exceptions:
                     seen_overrides.add(original)
-                    instance = (_stored_override(event, exceptions[original], original, window)
+                    instance = (_stored_override(event, exceptions[original], original)
                                 if original in pending else None)
                 else:
                     instance = _component_instance(event, component, window)
@@ -424,8 +414,20 @@ def _expand_event(event: dict, window: _Window) -> tuple[list[dict], bool]:
                 add(instance)
     if second_fold is not None:
         add(_first_instance(event, window))
-    for original in pending.keys() - seen_overrides - explicit - series_slots - exdates:
-        _LOG.debug("Skipping orphan override for calendar event %s at %s", event["id"], original.isoformat())
+    for original, exception in pending.items():
+        if original in seen_overrides or original in exdates:
+            continue
+        if original not in explicit and original not in series_slots:
+            if all_day:
+                first = query_start.astimezone(window.zone).date()
+                last = query_end.astimezone(window.zone).date()
+                near = first <= original <= last
+            else:
+                near = query_start <= original <= query_end
+            if near:
+                _LOG.debug("Skipping orphan override for calendar event %s at %s", event["id"], original.isoformat())
+                continue
+        add(_stored_override(event, exception, original))
     matches.sort(key=lambda instance: _sort_key(instance, window))
     return matches[:INSTANCE_LIMIT + 1], False
 

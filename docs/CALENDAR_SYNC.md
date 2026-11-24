@@ -223,8 +223,13 @@ do `COUNT` zgodnie z erratą RFC 5545. Reguły `SECONDLY`, `MINUTELY` i `HOURLY`
 rozwijane: zwracany jest tylko `DTSTART` z `truncated: true` i wpisem do dziennika.
 Jeśli górne oszacowanie liczby wystąpień w poszerzonym oknie przekracza 5000 albo
 szacowana liczba kroków replay od `DTSTART`, powiększona o wielokrotność selektorów BY*,
-przekracza 200000, stosowany jest ten sam fallback bez wywoływania biblioteki. Zmieniony wyjątek zastępuje swoje pierwotne
-wystąpienie. Uwzględniane są także
+przekracza 200000, stosowany jest ten sam fallback bez wywoływania biblioteki. Dla `BYDAY`
+przyjmujemy konserwatywnie 53 okresy w roku i 5 w miesiącu, a `COUNT` nie zmniejsza
+budżetu badanych okresów. Przed rozwinięciem odrzucamy niemożliwe kombinacje `BYMONTH` i
+`BYMONTHDAY`; inne sprzeczne selektory BY* nie mają osobnej analizy i są objęte jedynie
+konserwatywnym budżetem. Zmieniony wyjątek zastępuje swoje pierwotne wystąpienie.
+Odległy `RECURRENCE-ID` nie poszerza generowania, ale zapisany wyjątek trafiający w
+żądane okno może zostać zwrócony jako samodzielne wystąpienie. Uwzględniane są także
 wystąpienia zaczynające się przed oknem, ale nachodzące na nie. Daty całodniowe
 pozostają datami, a godziny zachowują strefę IANA przez zmianę czasu. Odpowiedź jest
 ograniczona do 2000 najwcześniejszych wystąpień. `truncated: true` sygnalizuje także

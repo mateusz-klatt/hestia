@@ -613,6 +613,51 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(instances[0]["recurrence_id"]["dateTime"], "2026-01-01T09:00:00+00:00")
         self.assertEqual(instances[1]["recurrence_id"]["dateTime"], "2026-01-02T09:00:00+00:00")
 
+    async def test_instances_yearly_weekday_expansion_hits_replay_bound_before_library(self):
+        hours = ",".join(str(value) for value in range(24))
+        seconds = ",".join(str(value) for value in range(60))
+        await self.create({"summary": "Pathological yearly",
+                           "start": {"dateTime": "1900-01-01T00:00:00Z", "timeZone": "UTC"},
+                           "end": {"dateTime": "1900-01-01T01:00:00Z", "timeZone": "UTC"},
+                           "recurrence": [f"RRULE:FREQ=YEARLY;BYDAY=MO;BYHOUR={hours};BYSECOND={seconds}"]})
+        with mock.patch.object(instance_expander, "of", side_effect=AssertionError("library replay")):
+            with self.assertLogs("hestia.calendar_sync.instances", level="WARNING") as logs:
+                response = await self.instances("from=2026-01-01&to=2026-02-01")
+        self.assertEqual(response.status, 200)
+        state = await response.json()
+        self.assertEqual(state["instances"], [])
+        self.assertTrue(state["truncated"])
+        self.assertIn("replay bound", "\n".join(logs.output))
+
+    async def test_instances_impossible_month_day_falls_back_before_library(self):
+        event = await self.create({"summary": "Impossible date",
+                                   "start": {"dateTime": "2026-01-01T00:00:00Z", "timeZone": "UTC"},
+                                   "end": {"dateTime": "2026-01-01T01:00:00Z", "timeZone": "UTC"},
+                                   "recurrence": ["RRULE:FREQ=DAILY;COUNT=1;BYMONTH=2;BYMONTHDAY=30"]})
+        with mock.patch.object(instance_expander, "of", side_effect=AssertionError("library replay")):
+            with self.assertLogs("hestia.calendar_sync.instances", level="WARNING") as logs:
+                response = await self.instances("from=2026-01-01&to=2026-02-01")
+        self.assertEqual(response.status, 200)
+        state = await response.json()
+        self.assertEqual([item["event_id"] for item in state["instances"]], [event["id"]])
+        self.assertTrue(state["truncated"])
+        self.assertIn("impossible month/day", "\n".join(logs.output))
+
+    async def test_instances_stale_override_does_not_widen_generation(self):
+        await self.create({"summary": "Daily", "start": {"date": "2026-03-01"}, "end": {"date": "2026-03-02"},
+                           "recurrence": ["RRULE:FREQ=DAILY"], "exceptions": [
+                               {"originalStartTime": {"date": "2000-01-01"}, "summary": "Stale",
+                                "start": {"date": "2026-04-02"}, "end": {"date": "2026-04-03"}},
+                               {"originalStartTime": {"date": "2000-01-02"}, "summary": "Standalone",
+                                "start": {"date": "2026-04-01"}, "end": {"date": "2026-04-02"}}]})
+        with mock.patch.object(instance_expander, "of", wraps=instance_expander.of) as library:
+            response = await self.instances("from=2026-04-01&to=2026-04-02")
+        self.assertEqual(library.call_count, 1)
+        state = await response.json()
+        self.assertEqual({item["summary"] for item in state["instances"]}, {"Daily", "Standalone"})
+        self.assertNotIn("Stale", [item["summary"] for item in state["instances"]])
+        self.assertFalse(state["truncated"])
+
     async def test_instances_all_day_orphan_override_is_skipped(self):
         await self.create({"summary": "Monday all-day", "start": {"date": "2026-01-05"}, "end": {"date": "2026-01-06"},
                            "recurrence": ["RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=2"], "exceptions": [
@@ -872,24 +917,14 @@ class CalendarApiContractTests(unittest.TestCase):
         self.assertIn("moved exceptions", schema["properties"]["instance_id"]["description"])
         self.assertEqual(document["components"]["schemas"]["CalendarInstances"]["properties"]["instances"]["maxItems"], 2000)
 
-    def test_override_padding_guards_datetime_limits(self):
-        minimum = datetime.min.replace(tzinfo=timezone.utc)
-        maximum = datetime.max.replace(tzinfo=timezone.utc)
-        window = instance_expander._Window(date.min, date.min, ZoneInfo("UTC"), minimum, minimum)
-        content = {"start": {"date": "0001-01-01"}, "end": {"date": "0001-01-02"}}
-        self.assertTrue(instance_expander._overlaps_padded(content, window, date.min, date.min, minimum, minimum))
-        window = instance_expander._Window(date.max, date.max, ZoneInfo("UTC"), maximum, maximum)
-        content = {"start": {"date": "9999-12-30"}, "end": {"date": "9999-12-31"}}
-        self.assertTrue(instance_expander._overlaps_padded(content, window, date.max, date.max, maximum, maximum))
-        instance_expander._pending_bounds({date.min: {}}, minimum, maximum, True)
-        instance_expander._pending_bounds({date.max: {}}, minimum, maximum, True)
-
     def test_replay_bound_counts_every_by_list(self):
         payload = {"start": {"dateTime": "2026-01-01T00:00:00Z", "timeZone": "UTC"},
                    "end": {"dateTime": "2026-01-01T01:00:00Z", "timeZone": "UTC"},
                    "recurrence": ["RRULE:FREQ=DAILY;BYSECOND=0,30;BYMINUTE=0;BYMONTH=1,2"]}
         end = datetime(2026, 1, 3, tzinfo=timezone.utc)
         self.assertEqual(instance_expander._replay_upper_bound(payload, end), 12)
+        self.assertTrue(instance_expander._impossible_rule({"recurrence": ["RRULE:FREQ=DAILY;BYMONTH=4;BYMONTHDAY=-31"]}))
+        self.assertFalse(instance_expander._impossible_rule({"recurrence": ["RRULE:FREQ=DAILY;BYMONTH=2;BYMONTHDAY=-29"]}))
 
     def test_double_failure_fallback(self):
         event = {"id": "event", "uid": "event", "payload": {"start": {"date": "2026-01-01"}}}
