@@ -7,6 +7,7 @@
 !tools/
 !tools/klima.ir
 !requirements.txt
+!requirements-receipt-parser.txt
 !LICENSE
 !NOTICE
 !ui/

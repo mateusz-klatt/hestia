@@ -1,5 +1,7 @@
 FROM python:3.14-slim AS receipt-parser
 
+COPY requirements-receipt-parser.txt /app/requirements-receipt-parser.txt
+RUN python -m pip install --no-cache-dir -r /app/requirements-receipt-parser.txt
 COPY hestia/budget/gmail_worker.py /app/hestia/budget/gmail_worker.py
 RUN install -d -m 0700 -o 1000 -g 1000 /run/hestia-receipt-parser
 USER 1000:1000
