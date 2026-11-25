@@ -135,7 +135,7 @@ export function createBudgetApi(expectedActor: string | null = null) {
       pendingReads.add(controller);
       init = { ...init, signal: controller.signal };
     }
-    if (expectedActor !== null && snapshotTag != null) {
+    if (snapshotTag != null) {
       const headers = new Headers(init.headers);
       headers.set("X-Hestia-Expected-Actor", snapshotTag);
       init = { ...init, headers };

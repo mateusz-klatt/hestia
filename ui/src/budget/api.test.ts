@@ -91,9 +91,10 @@ describe("budget api", () => {
       const { url, init } = sent(fetchMock, index);
       expect(url.pathname).toBe(`/api/budget/receipts/device-token/${path}`);
       expect(init).toMatchObject({
-        credentials: "same-origin", cache: "no-store", method: "POST",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        credentials: "same-origin", cache: "no-store", method: "POST", body: JSON.stringify(body),
       });
+      expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+      expect(new Headers(init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
       if (path === "list") expect(init.signal).toBeInstanceOf(AbortSignal);
       else expect(init.signal).toBeUndefined();
     });
@@ -104,10 +105,9 @@ describe("budget api", () => {
     await budgetApi.spreadCategoryColors();
     const { url, init } = sent(fetchMock);
     expect(url.pathname).toBe("/api/budget/analytics/category-colors-spread");
-    expect(init).toEqual({
-      credentials: "same-origin", cache: "no-store", method: "POST",
-      headers: { "Content-Type": "application/json" }, body: "{}",
-    });
+    expect(init).toMatchObject({ credentials: "same-origin", cache: "no-store", method: "POST", body: "{}" });
+    expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+    expect(new Headers(init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
   });
 
   it("passes an analytics page limit only when one is given", async () => {
@@ -199,10 +199,11 @@ describe("budget api", () => {
     await budgetApi.refresh(connection, { accountId: "local-a", operation: "balances" }, "synthetic-key-0000001");
     const { url, init } = sent(fetchMock);
     expect(url.pathname).toMatch(/\/api\/budget\/refresh$/);
-    const headers = init.headers as Record<string, string>;
-    expect(headers["Idempotency-Key"]).toBe("synthetic-key-0000001");
-    expect(headers["Content-Type"]).toBe("application/json");
-    expect(Object.keys(headers)).not.toContain("Authorization");
+    const headers = new Headers(init.headers);
+    expect(headers.get("Idempotency-Key")).toBe("synthetic-key-0000001");
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(headers.get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
+    expect(headers.has("Authorization")).toBe(false);
     expect(JSON.parse(init.body as string)).toEqual({ connection_id: "bank", expected_version: 4,
       account_id: "local-a", operation: "balances" });
     await budgetApi.refresh(connection);
