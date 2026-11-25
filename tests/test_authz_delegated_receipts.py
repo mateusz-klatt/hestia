@@ -203,6 +203,42 @@ class DelegatedReceiptStoreTests(AnalyticsCase):
         self.assertIsNone(detail["receipt"]["linked_entry_ref"])
         self.assertEqual(confirmed["status"], "confirmed")
 
+    def test_delegate_target_change_before_parse_write_rejects_the_draft(self):
+        self.grant("budget.receipts.add")
+        delegate = self.delegated()
+        read_candidates = delegate._read_candidates
+
+        def retarget_after_read(owner, parsed):
+            candidates = read_candidates(owner, parsed)
+            with self.sessions.begin() as session:
+                session.execute(db.PermissionGrant.__table__.update().where(
+                    db.PermissionGrant.username == "delegate",
+                ).values(target_owner="other"))
+            return candidates
+
+        with mock.patch.object(delegate, "_read_candidates", side_effect=retarget_after_read), \
+             self.assertRaises(device_token.DeviceTokenError) as denied:
+            delegate.parse_text("delegate", receipt_text())
+        self.assertEqual((denied.exception.status, denied.exception.code), (403, "budget_forbidden"))
+        self.assertEqual(self.rows(db.BudgetReceipt), [])
+
+    def test_target_change_before_detail_candidate_snapshot_rejects_former_ledger(self):
+        parsed = self.receipts.parse_text("owner", receipt_text())
+        read = BudgetReceiptStore._read
+
+        @contextmanager
+        def retarget_before_read(store, owner, permission="budget.view"):
+            with self.sessions.begin() as session:
+                session.get(db.User, "owner").budget_owner = False
+                session.add(db.PermissionGrant(username="owner", permission_id="budget.receipts.view", target_owner="other"))
+            with read(store, owner, permission=permission) as session:
+                yield session
+
+        with mock.patch.object(BudgetReceiptStore, "_read", retarget_before_read), \
+             self.assertRaises(device_token.DeviceTokenError) as denied:
+            self.receipts.detail("owner", parsed["receipt_id"])
+        self.assertEqual((denied.exception.status, denied.exception.code), (403, "budget_forbidden"))
+
     def test_delegate_qr_alert_uses_actor_and_redemption_date(self):
         from hestia.budget.analytics_views import BudgetAnalyticsViews
 

@@ -157,7 +157,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         self._token_key = _subkey(material, _TOKEN_INFO)
         self._evidence_key = _subkey(material, _EVIDENCE_INFO)
 
-    def _owner(self, session, owner, permission=None):
+    def _owner(self, session, owner, permission=None, *, require_same_target=False):
         token = None
         actor = self._session_actor or owner
         if self._device_id is not None:
@@ -174,7 +174,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             target = owner
         else:
             target = authz.resolve_budget_target(session, actor)
-            if target is None:
+            if target is None or (require_same_target and target != owner):
                 raise DeviceTokenError(403, "budget_forbidden")
         super()._owner(session, target)
         self._session_actor = actor
@@ -323,7 +323,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             owner = self._owner(session, owner, "budget.receipts.add")
         candidates = self._read_candidates(owner, parsed)
         with self.transaction() as session:
-            owner = self._owner(session, owner, "budget.receipts.add")
+            self._owner(session, owner, "budget.receipts.add", require_same_target=True)
             now = self._now()
             self._purge(session, owner, now)
             drafts = session.scalar(select(func.count()).select_from(Receipt).where(
@@ -380,7 +380,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             due_date=parsed.get("due_date"),
         )
         with self._read(owner, permission=None) as session:
-            self._owner(session, owner, "budget.receipts.add")
+            self._owner(session, owner, "budget.receipts.add", require_same_target=True)
             if not self._match_allowed:
                 return []
             return self._candidates(session, owner, preview, parsed)
@@ -870,7 +870,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         if preview is None:
             return {"receipt": receipt}
         with self._read(owner, permission=None) as session:
-            self._owner(session, owner, "budget.receipts.view")
+            self._owner(session, owner, "budget.receipts.view", require_same_target=True)
             if not self._match_allowed:
                 row = self._owned(session, owner, receipt_id)
                 return {"receipt": self._detail(session, row)}
