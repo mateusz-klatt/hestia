@@ -277,6 +277,70 @@ class GmailMessageProcessorTests(unittest.TestCase):
                                   pending.sender_domain, pending.payment, pending.rfc_message_id_hmac),
                                  ("spouse_forward", "imported", True, "billing.shop.example.test", None, None))
 
+        # Attached message/rfc822 forwards never fall back to the outer cover note's HTML part.
+        attached_no_total = self._payment_email("No amount in this message", rfc_id=inner_id)
+        outer_with_html = _email(SPOUSE, "Cover note", rfc_id=outer_id)
+        outer_with_html.add_alternative("<p>Amount paid: 999 PLN</p>", subtype="html")
+        outer_with_html.add_attachment(attached_no_total)
+        pending = self._process(_metadata(outer_with_html), _raw(outer_with_html))
+        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.payment), ("imported", True, None))
+
+    def test_inline_forwarded_payment_falls_back_to_outer_html_only_on_missing_total(self):
+        self.settings.payment_senders = (PaymentSender("@shop.example.test", "Example Shop"),)
+        inner_id = "<inline-shop-42@shop.example.test>"
+        plain = (
+            "Note: 999 PLN\n"
+            "---------- Forwarded message ---------\n"
+            "From: Example Shop <orders@shop.example.test>\n"
+            "Subject: Order #800100200\n"
+            f"Message-ID: {inner_id}\n\n"
+            "Order confirmed without table."
+        )
+        html = (
+            "<div>Note: Amount paid: 999 PLN</div>"
+            "<div>---------- Forwarded message ---------<br>"
+            "From: Example Shop &lt;orders@shop.example.test&gt;<br>"
+            "Subject: Order #800100200<br>"
+            f"Message-ID: {inner_id}</div>"
+            "<p>Razem: 42,50 PLN</p>"
+        )
+        message = _email(OWNER, plain, rfc_id="<outer-inline@gmail.com>")
+        message.add_alternative(html, subtype="html")
+        self.worker.parse.side_effect = lambda kind, source: (
+            source.decode("utf-8").replace("<br>", "\n").replace("<div>", "\n").replace("</div>", "\n")
+            .replace("<p>", "\n").replace("</p>", "\n").replace("&lt;", "<").replace("&gt;", ">")
+            if kind == "html" else source.decode("utf-8")
+        )
+        pending = self._process(_metadata(message), _raw(message))
+        self.assertEqual((pending.trust_path, pending.outcome, pending.forwarded_manually,
+                          pending.payment.fields.merchant, pending.payment.fields.total_amount),
+                         ("owner_forward", "imported", False, "Example Shop", "42.5"))
+        self.assertEqual(pending.rfc_message_id_hmac,
+                         digest(SECRET, RFC_MESSAGE_DOMAIN, "inline-shop-42@shop.example.test"))
+
+        # HTML without a forward marker is still checked if present on an inline forward.
+        no_marker_html_msg = _email(OWNER, plain, rfc_id="<outer-inline-nomarker@gmail.com>")
+        no_marker_html_msg.add_alternative("<p>Razem: 51,00 PLN</p>", subtype="html")
+        pending = self._process(_metadata(no_marker_html_msg), _raw(no_marker_html_msg))
+        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.payment.fields.total_amount),
+                         ("imported", False, "51"))
+
+        # Explicit plain rejection does NOT fall back to outer HTML; neither does plain-only missing total or HTML-only.
+        rejected_plain = plain.replace("Order confirmed without table.", "Payment failed")
+        rejected_msg = _email(OWNER, rejected_plain, rfc_id="<outer-inline-rej@gmail.com>")
+        rejected_msg.add_alternative(html, subtype="html")
+        pending = self._process(_metadata(rejected_msg), _raw(rejected_msg))
+        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.payment), ("imported", True, None))
+
+        plain_only = _email(OWNER, plain, rfc_id="<outer-plain-only@gmail.com>")
+        pending = self._process(_metadata(plain_only), _raw(plain_only))
+        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.payment), ("imported", True, None))
+
+        html_only = _email(OWNER, html.replace("<p>Razem: 42,50 PLN</p>", "<p>No amount</p>"), subtype="html",
+                           rfc_id="<outer-html-only@gmail.com>")
+        pending = self._process(_metadata(html_only), _raw(html_only))
+        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.payment), ("imported", True, None))
+
     def test_direct_invoice_accepts_its_provider_domains(self):
         for name, issuer, domains in (
             ("orange_invoice.txt", "Orange", ("pl.orange.com", "orange.com", "orange.pl")),

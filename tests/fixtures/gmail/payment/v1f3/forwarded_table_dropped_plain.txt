@@ -1,0 +1,11 @@
+Przesyłam potwierdzenie zamówienia.
+
+---------- Forwarded message ---------
+From: Example Shop <orders@shop.example.test>
+Date: Wed, 25 Nov 2026 at 10:20
+Subject: Dziękujemy za opłacenie zamówienia nr XX12345
+Message-ID: <shop-v1f3-table@shop.example.test>
+To: owner@gmail.com
+
+Dziękujemy za opłacenie zamówienia nr XX12345.
+Zamówienie zostało przekazane do realizacji.
