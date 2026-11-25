@@ -20,7 +20,7 @@ function formatCountdown(expiresAt: number, now: number): string {
   return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function PairingCode({ payload, label, unavailable }: { payload: string; label: string; unavailable: string }) {
+function QrCode({ payload, label, unavailable }: { payload: string; label: string; unavailable: string }) {
   const matrix = qrMatrix(payload);
   if (matrix === null) return <p className="budget-muted">{unavailable}</p>;
   const size = matrix.length;
@@ -33,6 +33,58 @@ function PairingCode({ payload, label, unavailable }: { payload: string; label: 
       <rect x={-4} y={-4} width={size + 8} height={size + 8} fill="#fff" />
       <g fill="#111">{rects}</g>
     </svg>
+  );
+}
+
+export function LoginQr({ api }: { api: Pick<BudgetApi, "authFeatures" | "issueQrLoginCode"> }) {
+  const [origin, setOrigin] = useState<string | null>(null);
+  const [payload, setPayload] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const generation = useRef(0);
+
+  useEffect(() => {
+    const current = ++generation.current;
+    void api.authFeatures().then((result) => {
+      if (generation.current !== current) return;
+      setOrigin(result.ok && Array.isArray(result.data.features) && result.data.features.includes("qr_login")
+        && typeof result.data.qr_origin === "string" ? result.data.qr_origin : null);
+      setPayload(null);
+      setBusy(false);
+      setFailed(false);
+    });
+    return () => { generation.current += 1; };
+  }, [api]);
+
+  if (origin === null) return null;
+  const show = async () => {
+    const current = ++generation.current;
+    setBusy(true);
+    setFailed(false);
+    const result = await api.issueQrLoginCode(origin);
+    if (generation.current !== current) return;
+    setBusy(false);
+    if (result.ok && typeof result.data.qr_payload === "string") setPayload(result.data.qr_payload);
+    else setFailed(true);
+  };
+
+  const unavailable = t("budget.devices.loginQrError");
+  return (
+    <div className="budget-pair">
+      {payload === null ? (
+        <button type="button" className="budget-primary" disabled={busy} onClick={() => { void show(); }}>
+          {t("budget.devices.showLoginQr")}
+        </button>
+      ) : (
+        <>
+          <QrCode payload={payload} label={t("budget.devices.loginQr")} unavailable={unavailable} />
+          <div className="budget-actions">
+            <button type="button" onClick={() => { setPayload(null); }}>{t("budget.devices.close")}</button>
+          </div>
+        </>
+      )}
+      {failed ? <p className="budget-notice" role="alert">{unavailable}</p> : null}
+    </div>
   );
 }
 
@@ -125,7 +177,7 @@ export function ReceiptDevices({ api, locale, revision, onAccessLoss, focusRevis
         <div className="budget-pair">
           <p className="budget-muted">{t("budget.devices.code")}</p>
           <p className="budget-pair-code">{pairing.code}</p>
-          <PairingCode payload={pairing.qr_payload} label={t("budget.devices.qr")} unavailable={t("budget.devices.unavailable")} />
+          <QrCode payload={pairing.qr_payload} label={t("budget.devices.qr")} unavailable={t("budget.devices.unavailable")} />
           <p className="budget-muted">
             {t("budget.devices.expires", { time: formatExpiry(pairing.expires_at * 1000, now, locale) })} · {t("budget.devices.remainingLabel")} <span role="timer">{formatCountdown(pairing.expires_at * 1000, now)}</span>
           </p>

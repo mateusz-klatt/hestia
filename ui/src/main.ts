@@ -183,8 +183,8 @@ const live = new LiveController(
 );
 
 /** Wire up the live app (events, intervals, initial fetch). Called only once authenticated. */
-function startApp(): void {
-  const calendar = mountCalendar(el("calendar-root"), canControl);
+function startApp(canEditCalendar: boolean): void {
+  const calendar = mountCalendar(el("calendar-root"), canEditCalendar);
   // Budget visibility follows live own-ledger capability, not the legacy role projection.
   const budget = canViewBudget ? mountBudget(el("budget-root"), currentUsername) : null;
   const audit = renderAuditFeed(el("audit-feed"), fetchAudit, () => latestDevices);
@@ -390,6 +390,9 @@ void (async () => {
   isAdmin = authOff || me.role === "admin";
   canControl = authOff || me.role === "operator" || me.role === "admin";
   const discovered = await budgetApi.capabilities();
+  const canEditCalendar = authOff || (discovered.ok
+    ? discovered.data.installation_permissions.includes("calendar.edit")
+    : discovered.status === 404 && canControl);
   canManageUsers = authOff || (discovered.ok
     && discovered.data.installation_permissions.includes("system.manage_users"));
   canViewBudget = discovered.ok ? discovered.data.own_budget?.can_view === true : discovered.status === 404;
@@ -438,5 +441,5 @@ void (async () => {
     changePassword: changeOwnPassword, // 🔑 in the ⚙ menu — verifies the current password server-side
   };
   renderUser(el("auth"), me.user, me.user !== null ? authedUserOpts : userOpts);
-  startApp();
+  startApp(canEditCalendar);
 })();

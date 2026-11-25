@@ -106,6 +106,8 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     setMortgagePayment: vi.fn<BudgetApi["setMortgagePayment"]>(),
     inbox: vi.fn<BudgetApi["inbox"]>(() => ok(inboxOf())),
     markInbox: vi.fn<BudgetApi["markInbox"]>(() => ok({ inbox: inboxMarkSaved() })),
+    authFeatures: vi.fn<BudgetApi["authFeatures"]>(() => ok({ auth_contract: 2, features: [], qr_origin: null })),
+    issueQrLoginCode: vi.fn<BudgetApi["issueQrLoginCode"]>(),
     receiptDevices: vi.fn<BudgetApi["receiptDevices"]>(() => ok([])),
     pairReceiptDevice: vi.fn<BudgetApi["pairReceiptDevice"]>(),
     cancelReceiptPairCode: vi.fn<BudgetApi["cancelReceiptPairCode"]>(),
@@ -1135,6 +1137,35 @@ describe("analytics views", () => {
     expect(host.querySelector(".budget-devices")).not.toBeNull();
     expect(api.receiptDevices).toHaveBeenCalledTimes(1);
     expect(scrollSpy).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+  });
+
+  it("renders the sign-in QR in Accounts when advertised, even without receipt device management", async () => {
+    const api = fakeApi();
+    const origin = "https://home.example";
+    api.capabilities.mockImplementation(() => ok({
+      ...authorization, own_budget: { ...authorization.own_budget, can_manage_devices: false },
+    }));
+    api.authFeatures.mockImplementation(() => ok({ auth_contract: 2, features: ["qr_login"], qr_origin: origin }));
+    api.issueQrLoginCode.mockImplementation(() => ok({ qr_payload: `hestia-login:${origin}#1234567890123456789` }));
+    await render(api);
+    expect(api.receiptDevices).not.toHaveBeenCalled();
+    expect(api.issueQrLoginCode).not.toHaveBeenCalled();
+    await click(button("Show sign-in QR code"));
+    expect(api.issueQrLoginCode).toHaveBeenCalledWith(origin);
+    expect(host.querySelector('svg[aria-label="Sign-in QR code"]')?.getAttribute("viewBox")).toBe("-4 -4 41 41");
+    await click(button("Close"));
+    expect(host.querySelector('svg[aria-label="Sign-in QR code"]')).toBeNull();
+  });
+
+  it("hides the sign-in control when discovery omits qr_login", async () => {
+    const api = fakeApi();
+    api.authFeatures.mockImplementation(() => ok({
+      auth_contract: 2, features: ["device_exchange"], qr_origin: "https://home.example",
+    }));
+    await render(api);
+    expect(api.authFeatures).toHaveBeenCalled();
+    expect(host.textContent).not.toContain("Show sign-in QR code");
+    expect(api.issueQrLoginCode).not.toHaveBeenCalled();
   });
 
   it("gates the quarantine tab on analytics, defaults to Monthly budget, and keeps Quarantine after Forecast", async () => {

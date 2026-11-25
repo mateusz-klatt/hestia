@@ -26,7 +26,7 @@ import { YearView } from "./analytics/year";
 import { MAIN_BALANCE_TYPE_KEYS, MAIN_FRESHNESS_KEYS, MAIN_JOB_STATUS_KEYS, MAIN_KIND_KEYS, MAIN_SCOPE_KEYS,
   MAIN_VIEW_KEYS, hasAnalytics, labelOf } from "./analytics/model";
 import type { RuleCandidate } from "./analytics/model";
-import { ReceiptDevices } from "./devices";
+import { LoginQr, ReceiptDevices } from "./devices";
 import { ReceiptsView } from "./receipts";
 import type { ReceiptsApi } from "./receipts_api";
 import { createPendingReceiptStore } from "./receipts_model";
@@ -690,6 +690,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
           connections={connections} locale={locale} revision={revision} onAccessLoss={receiptViewBarrier} />
       ) : (
         <>
+        <LoginQr key={`login-qr:${principal ?? ""}`} api={api} />
         {canManageDevices ? <ReceiptDevices key={principal ?? ""} api={api} locale={locale} revision={revision}
           onAccessLoss={deviceBarrier} focusRevision={devicesFocus} /> : null}
         {connections.length === 0 ? <p className="budget-status">{t("budget.main.empty")}</p> : null}
