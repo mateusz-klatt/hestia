@@ -35,6 +35,7 @@ CONFIRM_FIELDS = frozenset({
     "receipt_id", "expected_version", "raw_shop_name", "raw_nip", "receipt_kind", "receipt_date",
     "receipt_time", "total_amount", "currency", "payment_method", "lines", "link",
 })
+_CONFIRM_REQUIRED = CONFIRM_FIELDS - frozenset({"lines"})
 LINE_FIELDS = frozenset({
     "line_kind", "raw_name", "ptu_code", "quantity", "raw_unit", "unit_price_raw",
     "gross_line_total", "discount_amount", "net_line_total",
@@ -765,7 +766,7 @@ def _validate_line(value, line_no):
 
 
 def validate_confirm(values):
-    if not isinstance(values, dict) or set(values) != CONFIRM_FIELDS:
+    if not isinstance(values, dict) or not _CONFIRM_REQUIRED.issubset(values) or set(values) - CONFIRM_FIELDS:
         raise ReceiptError()
     if (not isinstance(values["receipt_id"], str) or not _UUID.fullmatch(values["receipt_id"])
             or type(values["expected_version"]) is not int or values["expected_version"] < 1):
@@ -789,12 +790,15 @@ def validate_confirm(values):
     total = _confirm_money(values["total_amount"], mismatch=True)
     if compare_money(total, "0") <= 0:
         raise ReceiptError("budget_receipt_total_mismatch")
-    lines = values["lines"]
-    if not isinstance(lines, list) or len(lines) > MAX_RECEIPT_LINES:
-        raise ReceiptError()
-    clean_lines = [_validate_line(line, number) for number, line in enumerate(lines, 1)]
-    if sum_money(line["net_line_total"] for line in clean_lines) != total:
-        raise ReceiptError("budget_receipt_total_mismatch")
+    lines = values.get("lines")
+    if lines is None:
+        clean_lines = None
+    else:
+        if not isinstance(lines, list) or len(lines) > MAX_RECEIPT_LINES:
+            raise ReceiptError()
+        clean_lines = [_validate_line(line, number) for number, line in enumerate(lines, 1)]
+        if sum_money(line["net_line_total"] for line in clean_lines) != total:
+            raise ReceiptError("budget_receipt_total_mismatch")
     link = values["link"]
     if link is not None:
         token = None if not isinstance(link, dict) else link.get("candidate_token")

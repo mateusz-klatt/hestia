@@ -178,6 +178,13 @@ class ParserEdgeTests(unittest.TestCase):
         check(line={"line_kind": "fee"})
         check(line={"ptu_code": "Z"})
         check(line={"raw_name": 1})
+        check(extra_field="unexpected")
+        for missing_key in ("expected_version", "receipt_id", "link"):
+            with self.subTest(missing_key=missing_key), self.assertRaises(ReceiptError):
+                validate_confirm({key: value for key, value in base.items() if key != missing_key})
+        for omitted in ({key: value for key, value in base.items() if key != "lines"}, {**base, "lines": None}):
+            cleaned = validate_confirm(omitted)
+            self.assertIsNone(cleaned["lines"])
         for bad in ({}, [], None):
             with self.subTest(bad=type(bad).__name__), self.assertRaises(ReceiptError):
                 validate_confirm(bad)

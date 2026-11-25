@@ -5792,8 +5792,11 @@ export interface components {
             currency: string;
             /** Expected Version */
             expected_version: number;
-            /** Lines */
-            lines: components["schemas"]["BudgetReceiptLineInput"][];
+            /**
+             * Lines
+             * @description Omit or send null to keep stored lines unchanged and re-validate totals against them.
+             */
+            lines?: components["schemas"]["BudgetReceiptLineInput"][] | null;
             link: components["schemas"]["BudgetReceiptLinkRequest"] | null;
             /**
              * Payment Method

@@ -491,6 +491,17 @@ class BudgetReceiptStore(BudgetHTTPStore):
         link["entry_reference"] = reference
         return verified, stored
 
+    @staticmethod
+    def _check_stored_lines(session, owner, receipt_id, total_amount):
+        stored = list(session.scalars(select(Line).where(
+            Line.receipt_id == receipt_id, Line.owner == owner).order_by(Line.line_no)))
+        for line in stored:
+            expected_net = sum_money((line.gross_line_total, negate_money(line.discount_amount)))
+            if canonical_money(line.net_line_total) != expected_net:
+                raise ReceiptError("budget_receipt_total_mismatch")
+        if sum_money(line.net_line_total for line in stored) != total_amount:
+            raise ReceiptError("budget_receipt_total_mismatch")
+
     def confirm(self, owner, values):
         cleaned = validate_confirm(values)
         with self.transaction() as session:
@@ -500,6 +511,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             row = self._owned(session, owner, values["receipt_id"])
             if row.version != values["expected_version"]:
                 raise ReceiptError("budget_receipt_conflict", 409)
+            if cleaned["lines"] is None:
+                self._check_stored_lines(session, owner, row.id, cleaned["total_amount"])
             row_was_draft = row.status == "draft"
             link = cleaned["link"]
             fingerprint = None if link is None else self._confirmed_link(session, owner, cleaned, link, row)
@@ -508,9 +521,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
             for key in ("raw_shop_name", "raw_nip", "receipt_kind", "receipt_date", "receipt_time",
                         "total_amount", "currency", "payment_method"):
                 setattr(row, key, cleaned[key])
-            session.execute(delete(Line).where(Line.receipt_id == row.id, Line.owner == owner))
-            for line in cleaned["lines"]:
-                session.add(Line(receipt_id=row.id, owner=owner, **line))
+            if cleaned["lines"] is not None:
+                session.execute(delete(Line).where(Line.receipt_id == row.id, Line.owner == owner))
+                for line in cleaned["lines"]:
+                    session.add(Line(receipt_id=row.id, owner=owner, **line))
             if link is None:
                 row.linked_account_id = row.linked_entry_ref = row.linked_fingerprint = row.linked_evidence = None
             else:

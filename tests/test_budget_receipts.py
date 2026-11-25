@@ -966,6 +966,79 @@ NR KARTY ****5555
         self.assertEqual(self.receipt_row(parsed["receipt_id"]).raw_shop_name, "[usunięto]")
         _assert_digit_cap(self, confirmed)
 
+    def test_confirm_omitted_or_null_lines_keeps_stored_and_redacted_lines_and_validates_totals(self):
+        from sqlalchemy import delete, select
+
+        parsed = self.receipts.parse_text(
+            "owner",
+            "BIEDRONKA\nNIP 7791011327\n2026-11-20\nCHLEB 1 x 4,00 4,00 A\nSER 1 x 6,00 6,00 A\nSUMA PLN 10,00\nKARTA\n",
+        )
+        receipt_id = parsed["receipt_id"]
+        # Seed a stored line carrying a 12-digit identifier that _line_dict redacts on output.
+        secret_name = "KARMA 123456789012"
+        secret_unit = "987654321098"
+        with self.sessions.begin() as session:
+            stored = list(session.scalars(select(db.BudgetReceiptLine).where(
+                db.BudgetReceiptLine.receipt_id == receipt_id).order_by(db.BudgetReceiptLine.line_no)))
+            stored[0].raw_name = secret_name
+            stored[0].raw_name_key = secret_name.lower()
+            stored[0].raw_unit = secret_unit
+
+        detail = self.receipts.detail("owner", receipt_id)["receipt"]
+        self.assertEqual(detail["lines"][0]["raw_name"], "[usunięto]")
+        self.assertEqual(detail["lines"][0]["raw_unit"], "[usunięto]")
+
+        # Mismatched header total with omitted lines fails cleanly and keeps stored data intact.
+        bad_total = confirm_values(parsed, total_amount="9.00")
+        bad_total.pop("lines")
+        with self.assertRaises(ReceiptError) as err:
+            self.receipts.confirm("owner", bad_total)
+        self.assertEqual((err.exception.code, err.exception.status), ("budget_receipt_total_mismatch", 400))
+
+        # Omitting `lines` keeps stored lines (and unredacted DB strings) intact while updating header.
+        no_lines = confirm_values(parsed, raw_shop_name="BIEDRONKA UPDATED")
+        no_lines.pop("lines")
+        saved = self.receipts.confirm("owner", no_lines)["receipt"]
+        self.assertEqual(saved["raw_shop_name"], "BIEDRONKA UPDATED")
+        self.assertEqual(saved["lines"][0]["raw_name"], "[usunięto]")
+        self.assertEqual(saved["lines"][1]["raw_name"], "SER")
+        with self.sessions() as session:
+            kept = list(session.scalars(select(db.BudgetReceiptLine).where(
+                db.BudgetReceiptLine.receipt_id == receipt_id).order_by(db.BudgetReceiptLine.line_no)))
+            self.assertEqual(len(kept), 2)
+            self.assertEqual((kept[0].raw_name, kept[0].raw_unit), (secret_name, secret_unit))
+            self.assertEqual(kept[1].raw_name, "SER")
+
+        # Sending explicit `"lines": None` also preserves stored lines when total matches.
+        saved_v3 = self.receipts.confirm(
+            "owner", confirm_values(parsed, expected_version=saved["version"], raw_shop_name="BIEDRONKA V3", lines=None),
+        )["receipt"]
+        self.assertEqual(saved_v3["raw_shop_name"], "BIEDRONKA V3")
+        with self.sessions() as session:
+            first = session.scalars(select(db.BudgetReceiptLine).where(
+                db.BudgetReceiptLine.receipt_id == receipt_id, db.BudgetReceiptLine.line_no == 1)).one()
+            self.assertEqual(first.raw_name, secret_name)
+
+        # Stored line violating gross - discount == net rejects confirm when lines are omitted.
+        with self.sessions.begin() as session:
+            second = session.scalars(select(db.BudgetReceiptLine).where(
+                db.BudgetReceiptLine.receipt_id == receipt_id, db.BudgetReceiptLine.line_no == 2)).one()
+            second.gross_line_total = "99.00"
+        with self.assertRaises(ReceiptError) as bad_stored:
+            self.receipts.confirm("owner", confirm_values(parsed, expected_version=saved_v3["version"], lines=None))
+        self.assertEqual((bad_stored.exception.code, bad_stored.exception.status), ("budget_receipt_total_mismatch", 400))
+
+        # Zero stored lines + positive total rejects confirm when lines are omitted.
+        with self.sessions.begin() as session:
+            session.execute(delete(db.BudgetReceiptLine).where(db.BudgetReceiptLine.receipt_id == receipt_id))
+        with self.assertRaises(ReceiptError) as empty_stored:
+            self.receipts.confirm("owner", confirm_values(parsed, expected_version=saved_v3["version"], lines=None))
+        self.assertEqual((empty_stored.exception.code, empty_stored.exception.status), ("budget_receipt_total_mismatch", 400))
+
+        # Legacy path sending explicit lines still replaces stored lines cleanly.
+        legacy_saved = self.receipts.confirm("owner", confirm_values(parsed, expected_version=saved_v3["version"]))["receipt"]
+        self.assertEqual(len(legacy_saved["lines"]), 2)
+
     def test_wrapped_pan_never_survives_storage_or_responses(self):
         rng = random.Random(20261123)
         separators = list(" .,/-")
@@ -1548,6 +1621,20 @@ class ReceiptHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         self.assertEqual(confirmed.status, 200, await confirmed.text())
         saved = (await confirmed.json())["receipt"]
         api_contract.BudgetReceiptConfirmResult.model_validate({"ok": True, "receipt": saved})
+        # HTTP confirm omitting `lines` (and with `lines: null`) preserves stored lines.
+        omit_body = confirm_values(parsed, expected_version=saved["version"], raw_shop_name="BIEDRONKA HTTP 2")
+        omit_body.pop("lines")
+        http_omitted = await self.post("confirm", omit_body)
+        self.assertEqual(http_omitted.status, 200, await http_omitted.text())
+        saved = (await http_omitted.json())["receipt"]
+        self.assertEqual(saved["raw_shop_name"], "BIEDRONKA HTTP 2")
+        self.assertEqual(len(saved["lines"]), 1)
+        self.assertEqual(saved["lines"][0]["raw_name"], PRIVATE_ITEM)
+        http_null = await self.post("confirm", confirm_values(
+            parsed, expected_version=saved["version"], raw_shop_name="BIEDRONKA HTTP 3", lines=None))
+        self.assertEqual(http_null.status, 200, await http_null.text())
+        saved = (await http_null.json())["receipt"]
+        self.assertEqual(saved["lines"][0]["raw_name"], PRIVATE_ITEM)
         self.assertNotIn("raw_ocr_text", saved)
         self.assertIsNone(saved["raw_text_expires_at"])
         deleted = await self.post("delete", {"receipt_id": saved["receipt_id"],
