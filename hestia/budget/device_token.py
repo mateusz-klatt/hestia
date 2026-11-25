@@ -710,10 +710,8 @@ class DeviceTokenStore:
                     or (previous.actor or previous.owner) != actor
                 ):
                     raise DeviceTokenError(409, "device_token_prior_invalid")
-                ceiling = _issued_mask(previous)
-                if previous.actor is None and previous.owner == actor:
-                    ceiling = authz.DEVICE_ELIGIBLE_PERMISSIONS
-                issued &= ceiling
+                if previous.issued_permissions is not None:
+                    issued &= _issued_mask(previous)
                 if not issued:
                     raise DeviceTokenError(403, "budget_forbidden")
 

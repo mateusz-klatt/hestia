@@ -221,6 +221,23 @@ class DeviceExchangeStoreTests(unittest.TestCase):
                 {}, self.secret, self.moment)
             self.assertEqual(forbidden["status"], 403)
 
+    def test_issued_legacy_token_can_exchange_with_only_budget_view(self):
+        pair = self.store.issue_code("owner")
+        legacy = self.store.redeem(pair["code"], "Vesta")
+        with self.sessions.begin() as session:
+            row = session.get(db.BudgetReceiptDeviceToken, legacy["token_id"])
+            self.assertEqual(row.actor, "owner")
+            self.assertIsNone(row.issued_permissions)
+            session.execute(db.PermissionGrant.__table__.delete().where(
+                db.PermissionGrant.username == "owner", db.PermissionGrant.target_owner == "owner",
+                db.PermissionGrant.permission_id != "budget.view",
+            ))
+
+        exchanged = self.exchange(prior=legacy["token"])
+        self.assertEqual(exchanged["token_id"], legacy["token_id"])
+        self.assertEqual(exchanged["scope"], "device")
+        self.assertEqual(exchanged["issued_permissions"], ["budget.view"])
+
     def test_exchange_validation_actor_state_and_session_generation(self):
         for name in (None, "", "x" * 65, "bad\n"):
             with self.subTest(name=name), self.assertRaises(device_token.DeviceTokenError) as caught:
