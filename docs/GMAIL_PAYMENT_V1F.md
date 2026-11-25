@@ -189,3 +189,95 @@ Expected on the current mailbox:
 - Tpay 17 ids, of which 8 paid;
 - PayU ≈ 87 registered;
 - Paynow: the expired transaction is no longer imported.
+
+## Revision 2 (2026-11-25, after the Codex review of PR #295 and the operator's real-mailbox validation)
+
+This revision overrides the sections above wherever they conflict.
+
+### R1. Replace in-place reprocess with a reset + re-import
+
+The owner has confirmed **none** of the production Gmail imports. Instead of re-classifying legacy rows in place (Codex P0/P1 #2, #3, #4, #5), remove the `reprocess-payments` scan and all code paths that retag or mutate legacy rows. Add an operator CLI instead:
+
+`python -m hestia.budget gmail reset-unconfirmed-payments [--dry-run]`
+
+It runs in ONE write transaction (`BEGIN IMMEDIATE`), fenced to the active grant generation. It refuses unless the grant is active.
+
+- **Selects** the owner's receipts where:
+  - `document_kind='payment_confirmation'`;
+  - `status='imported'`;
+  - `source_kind='email'`;
+  - `linked_account_id IS NULL`;
+  - `forwarded_manually=0`.
+
+  Invoices and receipts are never selected, nor is any confirmed, needs_review or linked row.
+- **Deletes** each selected receipt through the existing tombstone/delete path, including its AppMeta provenance and evidence pointers.
+- **Deletes** the `budget_gmail_messages` rows whose `receipt_id` was one of them. It also deletes every `skipped_duplicate` row and every `skipped_non_receipt` row with `trust_path='direct_allowlist'`, so the next full-window backfill re-fetches and re-evaluates those messages. Invoice rows with `outcome='imported'` stay, so invoices do not duplicate.
+- **Schedules** a full-window backfill, as `--retry-parse-failed` does today.
+- **Prints** counts only.
+
+`--dry-run` prints the counts and rolls back.
+
+### R2. Provider-scoped parsing (Codex #1, operator F1)
+
+`payment_senders` entries with `gateway: true` gain an optional `provider` in `{"p24","tpay","autopay","payu","paynow","stripe"}`. When it is absent, the provider is inferred from the sender domain: przelewy24.pl→p24, tpay.com→tpay, autopay.pl→autopay, payu.com→payu, paynow.pl→paynow, stripe.com→stripe. An unknown domain gives provider None, meaning v1e behaviour with status registered.
+
+Status markers and id extraction use ONLY that provider's patterns. Ids are normalized to upper case before the HMAC.
+
+Status precedence:
+1. failed;
+2. card verification (p24);
+3. an explicit paid subject;
+4. an explicit registered subject or body marker;
+5. an explicit paid body marker;
+6. otherwise registered.
+
+The paid body markers must be **whole-line or labelled statements**:
+- Paynow: a line equal to `opłacona` (optionally preceded by the line `Transakcja została`), or `Transakcja została opłacona`;
+- Autopay: `Płatność zakończona sukcesem`, `Przekazaliśmy Twoje pieniądze`, `Twoja wpłata została przekazana odbiorcy.`;
+- P24: `niniejsza wiadomość jest informacją o potwierdzeniu realizacji płatności`.
+
+Never use bare `opłacona` inside a sentence. Real registered emails contain "Jeżeli transakcja nie została opłacona" (P24) and "sprawdzić, czy transakcja została już opłacona" (PayU).
+
+A conditional cancellation sentence ("Jeśli wpłata nie została dokonana, transakcja zostanie anulowana") is NOT failed. Failed requires a status line: Paynow `straciła ważność` / `odrzucona` / `anulowana` as the status value.
+
+### R3. Payee resolution (operator F2, F3)
+
+- A labelled payee (`Odbiorca wpłaty:` or `Odbiorca:`, value on the same line or on the next non-empty line) wins over unlabelled candidates (`Do X`, `dla X`, subject).
+- A candidate that is a URL or a dotted domain (`4parents.pl`, `https://sklep.example.test/`) is a **host**, never a payee. It feeds `payee_host`.
+- Multiple distinct candidates reject only when two **labelled** payees disagree.
+
+### R4. Ordering-independent merge in normal import (Codex #4, #6)
+
+- **Failed** with a reference and no row: record a ref-level disposition in AppMeta, `budget_gmail_gateway_failed:<receipt-independent key>`, holding the ref HMAC plus gateway. It follows the provenance lifecycle and expires with the import window. A later registered email with that ref is skipped as `skipped_non_receipt`. A later paid email with that ref imports normally: paid wins and the disposition is cleared.
+- **Remove** the v1e "gateway and shop within ±2 days → `skipped_non_receipt`" rule. Both import, and evidence attachment links them. Same-sender v1e dedupe stays.
+- **Evidence attachment candidates** exclude any row with `gateway IS NOT NULL`, so gateway rows never become shop documents.
+- When a paid upgrade changes the amount, fee or date, **revalidate** an existing attachment, unless either side is owner-confirmed.
+
+### R5. Money safety (Codex #7)
+
+- Reject a gateway email whose fee currency differs from its amount or total currency.
+- A paid upgrade never changes `currency`. A currency mismatch with the existing row means `skipped_duplicate` with no mutation.
+
+### R6. Contract gating (Codex #8)
+
+- The new receipt fields (`gateway`, `gateway_status`, `fee_amount`, `payee_host`, `evidence_for_receipt_id`, `has_document`, `payment_evidence`) are emitted only when the client negotiates the new contract version, using the existing response-shaper / profile pattern in receipt_api. Older pinned clients get exactly the old shapes.
+- Update the web UI contract pin.
+- Default list cursors stay valid: an absent `evidence` filter signs the same cursor context as before.
+
+### R7. Same-owner evidence pointer (Codex #9)
+
+Same-owner integrity must be enforced in SQLite. The pointer gets `SET NULL` on target delete without touching `owner`. Use triggers (BEFORE INSERT/UPDATE: raise unless the target exists with the same owner; AFTER DELETE on the target: null the pointers) or an equivalent. The downgrade drops them.
+
+### R8. Tests
+
+Add regression tests for:
+- both arrival orders: registered/paid, failed/registered and gateway/shop;
+- a provider-scoped id when another provider's id appears in a title;
+- the real-world phrases from R2;
+- next-line `Odbiorca:`;
+- a host-like `Do X`;
+- fee currency mismatch;
+- contract gating on wire responses (absent, pinned and current headers);
+- the cursor compatibility rule;
+- a cross-owner pointer rejection;
+- reset CLI dry-run and real runs: counts, invoices untouched, confirmed/linked rows untouched, grant fencing.
