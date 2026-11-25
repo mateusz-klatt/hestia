@@ -572,6 +572,11 @@ const en = {
   "budget.receipts.redactedLinesEditBlocked": "Line editing is disabled because one or more lines contain redacted data. Saved line items are kept unchanged when confirming.",
   "budget.receipts.bulkExcludedDrafts": "Excluded {count} OCR, pasted or live-text drafts (open individually to confirm).",
   "budget.receipts.merchantWithNip": "{merchant} (NIP {nip})",
+  "budget.receipts.suggestedMatchHeading": "Suggested match",
+  "budget.receipts.matchBadgeNip": "NIP match",
+  "budget.receipts.matchBadgeMerchant": "Merchant",
+  "budget.receipts.suggestedMatchChange": "Change",
+  "budget.receipts.suggestedMatchUnlink": "Unlink / no link",
 
   "budget.consent.title": "Consent status & renewal overview",
   "budget.consent.intro": "Read-only summary of bank consent validity and stored authorization records. No remote closure, deletion or bank request runs here.",

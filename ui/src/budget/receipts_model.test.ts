@@ -130,6 +130,7 @@ function candidateOf(overrides: Partial<ReceiptCandidate> = {}): ReceiptCandidat
     transaction_date: null,
     date_distance: 0,
     merchant_token_hit: true,
+    match_strength: "none",
     candidate_token: "cand-token-1",
     ...overrides,
   };
@@ -666,5 +667,63 @@ describe("receipts_model", () => {
     if (builtPay.ok) {
       expect(builtPay.request.link).toBeNull();
     }
+  });
+
+  it("preselects candidate:0 only for a single strong unlinked match and never in bulk or non-qualifying cases", () => {
+    const nipCand = candidateOf({ match_strength: "nip", candidate_token: "tok-nip" });
+    const distCand = candidateOf({ match_strength: "distinctive", candidate_token: "tok-dist" });
+    const genericCand = candidateOf({ match_strength: "generic", candidate_token: "tok-gen" });
+    const noneCand = candidateOf({ match_strength: "none", merchant_token_hit: false, candidate_token: "tok-none" });
+
+    for (const status of ["imported", "draft", "needs_review"] as const) {
+      for (const strongCand of [nipCand, distCand]) {
+        const unlinked = detailOf({
+          status,
+          linked: false,
+          linked_account_id: null,
+          linked_entry_ref: null,
+        });
+        const draft = draftFromDetail(unlinked, [strongCand]);
+        expect(draft.linkChoice).toBe("candidate:0");
+        const built = buildConfirmRequest(unlinked, draft, [strongCand]);
+        expect(built.ok).toBe(true);
+        if (built.ok) {
+          expect(built.request.link).toEqual({
+            account_id: strongCand.account_id,
+            entry_reference: strongCand.entry_reference,
+            candidate_token: strongCand.candidate_token,
+          });
+        }
+      }
+
+      expect(draftFromDetail(detailOf({ status, linked: false }), [genericCand]).linkChoice).toBe("");
+      expect(draftFromDetail(detailOf({ status, linked: false }), [noneCand]).linkChoice).toBe("");
+      expect(draftFromDetail(detailOf({ status, linked: false }), [nipCand, noneCand]).linkChoice).toBe("");
+    }
+
+    // Never preselect if linked flag or stored link fields are set, or when confirmed, or for cash/mixed.
+    expect(draftFromDetail(detailOf({
+      status: "needs_review",
+      linked: false,
+      linked_account_id: "acc-1",
+      linked_entry_ref: "b".repeat(64),
+    }), [nipCand]).linkChoice).toBe("");
+    expect(draftFromDetail(detailOf({
+      status: "needs_review",
+      linked: true,
+      linked_account_id: "acc-1",
+      linked_entry_ref: "b".repeat(64),
+    }), [nipCand]).linkChoice).toBe("");
+    expect(draftFromDetail(detailOf({ status: "confirmed", linked: false }), [nipCand]).linkChoice).toBe("unlink");
+    expect(draftFromDetail(detailOf({ status: "imported", payment_method: "cash", linked: false }), [nipCand]).linkChoice).toBe("unlink");
+    expect(draftFromDetail(detailOf({ status: "imported", payment_method: "mixed", linked: false }), [nipCand]).linkChoice).toBe("unlink");
+
+    // Bulk confirm never preselects even when single strong candidate exists.
+    const bulkTarget = detailOf({ status: "imported", source_kind: "email", document_kind: "invoice", lines: [], linked: false });
+    const bulkDraft = draftFromDetail(bulkTarget, []);
+    expect(bulkDraft.linkChoice).toBe("unlink");
+    const builtBulk = buildPlainBulkConfirmRequest(bulkTarget, "Summary");
+    expect(builtBulk.ok).toBe(true);
+    if (builtBulk.ok) expect(builtBulk.request.link).toBeNull();
   });
 });

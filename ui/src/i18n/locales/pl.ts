@@ -554,6 +554,11 @@ const pl: Partial<Messages> = {
   "budget.receipts.redactedLinesEditBlocked": "Edycja pozycji jest zablokowana, ponieważ co najmniej jedna pozycja zawiera usunięte dane. Przy zatwierdzaniu zachowane zostaną zapisane pozycje.",
   "budget.receipts.bulkExcludedDrafts": "Pominięto {count} szkiców OCR, wklejonych lub z aparatu (otwórz pojedynczo, aby zatwierdzić).",
   "budget.receipts.merchantWithNip": "{merchant} (NIP {nip})",
+  "budget.receipts.suggestedMatchHeading": "Sugerowane dopasowanie",
+  "budget.receipts.matchBadgeNip": "NIP",
+  "budget.receipts.matchBadgeMerchant": "Sprzedawca",
+  "budget.receipts.suggestedMatchChange": "Zmień",
+  "budget.receipts.suggestedMatchUnlink": "Odłącz / bez powiązania",
 
   "budget.consent.title": "Stan zgód i przypomnienia o odnowieniu",
   "budget.consent.intro": "Wyłącznie podgląd ważności zgód bankowych oraz zapisanych prób autoryzacji. Nie zamyka sesji w banku, niczego nie usuwa i nie wysyła żądań do banku.",

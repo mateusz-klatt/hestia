@@ -45,6 +45,7 @@ import {
   merchantBulkGroups,
   mergeReceiptRows,
   normalizeDecimalInput,
+  preselectedCandidate,
   receiptAccountLabel,
   receiptHasRedactedLines,
   receiptMerchantGroupKey,
@@ -1235,8 +1236,10 @@ function ReceiptDetailDrawer({
   const [confirmDraft, setConfirmDraft] = useState<ReceiptConfirmDraft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
   const keepActionErrorRef = useRef(false);
   const drawerMountedRef = useRef(true);
+  const linkChoicesRef = useRef<HTMLFieldSetElement | null>(null);
 
   useEffect(() => {
     drawerMountedRef.current = true;
@@ -1252,6 +1255,7 @@ function ReceiptDetailDrawer({
   }, [onClose, actionBusy]);
 
   useEffect(() => {
+    setSuggestionDismissed(false);
     if (detailState.kind === "ready") {
       setConfirmDraft(draftFromDetail(detailState.detail, detailState.candidates));
       if (keepActionErrorRef.current) {
@@ -1446,6 +1450,10 @@ function ReceiptDetailDrawer({
           const showCandidateRadios = detail.status !== "confirmed" && candidates.length > 0;
           const tokensDisabledByEdit = matchingChanged && (showKeepRadio || showCandidateRadios || detail.linked);
           const disableTokens = actionBusy !== null || !linkOptions.paymentAllowsLink || matchingChanged;
+          const suggestedCandidate = confirmDraft === null || suggestionDismissed || !linkOptions.canPickCandidates
+            ? null
+            : preselectedCandidate(detail, candidates, draftMethod);
+          const bannerCandidate = confirmDraft?.linkChoice === "candidate:0" ? suggestedCandidate : null;
 
           return (
             <div className="budget-receipt-drawer-body">
@@ -1480,6 +1488,81 @@ function ReceiptDetailDrawer({
                   {t("budget.receipts.forwardedManually", { domain: detail.forwarded_sender_domain })}
                 </p>
               ) : null}
+
+              {bannerCandidate === null ? null : ((candidate) => {
+                const accountText = receiptAccountLabel(
+                  accounts,
+                  connections,
+                  candidate.account_id,
+                  t("budget.main.account"),
+                );
+                const dateText = candidateDisplayDate(candidate) ?? t("budget.receipts.noDate");
+                const daysText = candidate.date_distance === 0
+                  ? t("budget.receipts.candidateSameDay")
+                  : t("budget.receipts.candidateDays", { days: candidate.date_distance });
+                const amountText = formatAmount(
+                  candidate.amount,
+                  candidate.currency,
+                  locale,
+                  candidate.credit_debit_indicator,
+                );
+                const strengthBadge = candidate.match_strength === "nip"
+                  ? t("budget.receipts.matchBadgeNip")
+                  : t("budget.receipts.matchBadgeMerchant");
+                return (
+                  <section
+                    className="budget-notice budget-receipt-suggested"
+                    aria-label={t("budget.receipts.suggestedMatchHeading")}
+                  >
+                    <div className="budget-receipt-suggested-head">
+                      <strong>{t("budget.receipts.suggestedMatchHeading")}</strong>
+                      <span
+                        className="budget-chip budget-receipt-match-badge"
+                        data-match-strength={candidate.match_strength}
+                      >
+                        {strengthBadge}
+                      </span>
+                    </div>
+                    <div className="budget-entry-main">
+                      <span className="budget-muted">{dateText}</span>
+                      <span className="budget-entry-text">
+                        {accountText}
+                        {` (${daysText})`}
+                      </span>
+                      <strong className={candidate.credit_debit_indicator === "DBIT" ? "is-debit" : "is-credit"}>
+                        {amountText}
+                      </strong>
+                    </div>
+                    <div className="budget-actions">
+                      <button
+                        type="button"
+                        className="budget-link"
+                        disabled={actionBusy !== null}
+                        onClick={() => {
+                          setSuggestionDismissed(true);
+                          setConfirmDraft((current) => (current === null ? null : { ...current, linkChoice: "" }));
+                          linkChoicesRef.current?.focus();
+                          const target: { scrollIntoView?: (options?: ScrollIntoViewOptions) => void } | null =
+                            linkChoicesRef.current;
+                          target?.scrollIntoView?.({ block: "nearest" });
+                        }}
+                      >
+                        {t("budget.receipts.suggestedMatchChange")}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={actionBusy !== null}
+                        onClick={() => {
+                          setSuggestionDismissed(true);
+                          setConfirmDraft((current) => (current === null ? null : { ...current, linkChoice: "unlink" }));
+                        }}
+                      >
+                        {t("budget.receipts.suggestedMatchUnlink")}
+                      </button>
+                    </div>
+                  </section>
+                );
+              })(bannerCandidate)}
 
               <dl className="budget-receipt-meta">
                 <dt>{t("budget.receipts.date")}</dt>
@@ -1874,7 +1957,7 @@ function ReceiptDetailDrawer({
                     ))}
                   </div>
 
-                  <fieldset className="budget-receipt-link-choices">
+                  <fieldset ref={linkChoicesRef} tabIndex={-1} className="budget-receipt-link-choices">
                     <legend>{t("budget.receipts.linkChoiceHeading")}</legend>
                     {!linkOptions.paymentAllowsLink ? (
                       <p className="budget-muted">{t("budget.receipts.cashNoLinkNote")}</p>

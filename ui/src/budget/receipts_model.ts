@@ -350,6 +350,39 @@ export function availableLinkOptions(
   };
 }
 
+export function isStrongMatchStrength(strength: ReceiptCandidate["match_strength"]): boolean {
+  return strength === "nip" || strength === "distinctive";
+}
+
+/**
+ * Preselects the single candidate only when the receipt is unlinked (`imported` / `draft` / `needs_review`
+ * with no stored link), payment allows linking, there is exactly one candidate, and `match_strength` is
+ * `"nip"` or `"distinctive"`.
+ */
+export function preselectedCandidate(
+  detail: Pick<ReceiptDetail, "status" | "linked" | "linked_account_id" | "linked_entry_ref">,
+  candidates: readonly ReceiptCandidate[],
+  paymentMethod: ReceiptPaymentMethod,
+): ReceiptCandidate | null {
+  if (detail.status !== "imported" && detail.status !== "draft" && detail.status !== "needs_review") {
+    return null;
+  }
+  if (detail.linked || detail.linked_account_id !== null || detail.linked_entry_ref !== null) {
+    return null;
+  }
+  if (paymentMethod === "cash" || paymentMethod === "mixed") {
+    return null;
+  }
+  if (candidates.length !== 1) {
+    return null;
+  }
+  const sole = candidates[0];
+  if (sole === undefined || !isStrongMatchStrength(sole.match_strength)) {
+    return null;
+  }
+  return sole;
+}
+
 export function draftFromDetail(
   detail: ReceiptDetail,
   candidates: readonly ReceiptCandidate[] = [],
@@ -359,9 +392,12 @@ export function draftFromDetail(
       ? (detail.payment_method as ReceiptPaymentMethod)
       : "unknown";
   const options = availableLinkOptions(detail, candidates, paymentMethod, false);
+  const preselected = preselectedCandidate(detail, candidates, paymentMethod);
   let linkChoice = "unlink";
-  if (detail.linked || options.canPickCandidates) {
-    // Ambiguous link state (changed/review link, confirmed re-edit, or unlinked row with candidates):
+  if (preselected !== null && options.canPickCandidates) {
+    linkChoice = "candidate:0";
+  } else if (detail.linked || options.canPickCandidates) {
+    // Ambiguous link state (changed/review link, confirmed re-edit, multiple or weak candidates):
     // leave linkChoice empty so Confirm stays disabled until the user explicitly chooses.
     linkChoice = "";
   }
