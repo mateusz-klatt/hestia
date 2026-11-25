@@ -579,6 +579,7 @@ const en = {
   "budget.receipts.suggestedMatchUnlink": "Unlink / no link",
   "budget.receipts.bookingDateNote": "(booked {date})",
   "budget.receipts.candidateListChanged": "Candidate list has changed",
+  "budget.receipts.bankEvidenceChanged": "Bank details have changed — please choose again",
 
   "budget.consent.title": "Consent status & renewal overview",
   "budget.consent.intro": "Read-only summary of bank consent validity and stored authorization records. No remote closure, deletion or bank request runs here.",

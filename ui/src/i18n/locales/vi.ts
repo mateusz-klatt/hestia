@@ -558,6 +558,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchUnlink": "Hủy liên kết / không liên kết",
   "budget.receipts.bookingDateNote": "(ghi sổ {date})",
   "budget.receipts.candidateListChanged": "Danh sách đối chiếu đã thay đổi",
+  "budget.receipts.bankEvidenceChanged": "Dữ liệu ngân hàng đã thay đổi — vui lòng chọn lại",
   "budget.consent.title": "Tổng quan trạng thái & gia hạn chấp thuận",
   "budget.consent.intro": "Bản tóm tắt chỉ đọc về hiệu lực chấp thuận ngân hàng và hồ sơ ủy quyền đã lưu. Không thực hiện việc đóng từ xa, xóa hay gửi yêu cầu ngân hàng tại đây.",
   "budget.consent.loading": "Đang tải tổng quan chấp thuận…",

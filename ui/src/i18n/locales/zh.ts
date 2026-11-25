@@ -558,6 +558,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchUnlink": "取消关联 / 不关联",
   "budget.receipts.bookingDateNote": "(入账 {date})",
   "budget.receipts.candidateListChanged": "匹配列表已更改",
+  "budget.receipts.bankEvidenceChanged": "银行数据已更改 — 请重新选择",
   "budget.consent.title": "授权状态与续期概览",
   "budget.consent.intro": "银行授权有效期及已保存授权记录的只读摘要。此处不会执行远程关闭、删除或银行请求。",
   "budget.consent.loading": "正在加载授权概览…",

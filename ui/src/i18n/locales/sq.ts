@@ -558,6 +558,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchUnlink": "Shkëput / pa lidhje",
   "budget.receipts.bookingDateNote": "(regjistruar {date})",
   "budget.receipts.candidateListChanged": "Lista e përputhjeve ka ndryshuar",
+  "budget.receipts.bankEvidenceChanged": "Të dhënat bankare kanë ndryshuar — zgjidhni përsëri",
   "budget.consent.title": "Përmbledhje e gjendjes & rinovimit të pëlqimeve",
   "budget.consent.intro": "Përmbledhje vetëm për lexim e vlefshmërisë së pëlqimeve bankare dhe e regjistrimeve të ruajtura të autorizimit. Këtu nuk kryhen mbyllje në distancë, fshirje ose kërkesa bankare.",
   "budget.consent.loading": "Duke ngarkuar përmbledhjen e pëlqimeve…",

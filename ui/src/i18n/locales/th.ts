@@ -558,6 +558,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchUnlink": "ยกเลิก / ไม่เชื่อมโยง",
   "budget.receipts.bookingDateNote": "(ลงบัญชี {date})",
   "budget.receipts.candidateListChanged": "รายการที่ตรงกันมีการเปลี่ยนแปลง",
+  "budget.receipts.bankEvidenceChanged": "ข้อมูลธนาคารมีการเปลี่ยนแปลง — โปรดเลือกอีกครั้ง",
   "budget.consent.title": "ภาพรวมสถานะความยินยอม และ การต่ออายุ",
   "budget.consent.intro": "สรุปแบบอ่านอย่างเดียวของอายุความยินยอมของธนาคารและบันทึกการอนุญาตที่เก็บไว้ ไม่มีการปิดจากระยะไกล การลบ หรือคำขอไปยังธนาคารจากที่นี่",
   "budget.consent.loading": "กำลังโหลดภาพรวมความยินยอม…",

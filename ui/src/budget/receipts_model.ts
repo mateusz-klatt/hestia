@@ -345,8 +345,17 @@ export function createPendingReceiptStore(): PendingReceiptStore {
 export interface SelectedCandidateBinding {
   readonly account_id: string;
   readonly entry_reference: string;
-  readonly candidate_token: string;
   readonly match_strength: ReceiptCandidate["match_strength"];
+  readonly evidence_fingerprint: string | null;
+}
+
+export interface KeepCandidateBinding {
+  readonly account_id: string;
+  readonly entry_reference: string;
+  readonly match_strength: ReceiptCandidate["match_strength"];
+  readonly evidence_fingerprint: string | null;
+  readonly evidence_digest: string;
+  readonly reviewed_token: string;
 }
 
 export interface ReceiptConfirmDraft {
@@ -363,15 +372,40 @@ export interface ReceiptConfirmDraft {
   /** "" (explicit choice required on linked receipt without keep token) | "keep" | "unlink" | "candidate:<index>" */
   linkChoice: string;
   selectedCandidate: SelectedCandidateBinding | null;
+  keepBinding: KeepCandidateBinding | null;
   readonly candidateSetKey: string;
+}
+
+function candidateEvidenceFingerprint(candidate: ReceiptCandidate): string | null {
+  const extra = candidate as ReceiptCandidate & { evidence_fingerprint?: unknown };
+  return typeof extra.evidence_fingerprint === "string" && extra.evidence_fingerprint !== ""
+    ? extra.evidence_fingerprint
+    : null;
+}
+
+export function candidateEvidenceDigest(candidate: ReceiptCandidate): string {
+  return [
+    candidate.account_id,
+    candidate.entry_reference,
+    candidate.amount,
+    candidate.currency,
+    candidate.credit_debit_indicator,
+    candidate.transaction_date ?? "",
+    candidate.booking_date ?? "",
+    candidate.value_date ?? "",
+    candidate.merchant_token_hit ? "1" : "0",
+    candidate.match_strength,
+    String(candidate.date_distance),
+    candidateEvidenceFingerprint(candidate) ?? "",
+  ].join("\0");
 }
 
 export function candidateSelectionBinding(candidate: ReceiptCandidate): SelectedCandidateBinding {
   return {
     account_id: candidate.account_id,
     entry_reference: candidate.entry_reference,
-    candidate_token: candidate.candidate_token,
     match_strength: candidate.match_strength,
+    evidence_fingerprint: candidateEvidenceFingerprint(candidate),
   };
 }
 
@@ -382,8 +416,28 @@ export function candidateMatchesBinding(
   return binding !== null
     && candidate.account_id === binding.account_id
     && candidate.entry_reference === binding.entry_reference
-    && candidate.candidate_token === binding.candidate_token
-    && candidate.match_strength === binding.match_strength;
+    && candidate.match_strength === binding.match_strength
+    && candidateEvidenceFingerprint(candidate) === binding.evidence_fingerprint;
+}
+
+export function keepCandidateBinding(candidate: ReceiptCandidate): KeepCandidateBinding {
+  return {
+    account_id: candidate.account_id,
+    entry_reference: candidate.entry_reference,
+    match_strength: candidate.match_strength,
+    evidence_fingerprint: candidateEvidenceFingerprint(candidate),
+    evidence_digest: candidateEvidenceDigest(candidate),
+    reviewed_token: candidate.candidate_token,
+  };
+}
+
+export function keepEvidenceMatches(
+  candidate: ReceiptCandidate | null,
+  binding: KeepCandidateBinding | null,
+): boolean {
+  return candidate !== null
+    && binding !== null
+    && candidateEvidenceDigest(candidate) === binding.evidence_digest;
 }
 
 export function buildCandidateSetKey(
@@ -391,7 +445,7 @@ export function buildCandidateSetKey(
   candidates: readonly ReceiptCandidate[],
 ): string {
   const parts = candidates.map(
-    (cand) => `${cand.account_id}\0${cand.entry_reference}\0${cand.candidate_token}\0${cand.match_strength}`,
+    (cand) => `${cand.account_id}\0${cand.entry_reference}\0${cand.match_strength}\0${candidateEvidenceFingerprint(cand) ?? ""}`,
   );
   return `${detail.receipt_id}|${String(detail.version)}|${detail.status}|${detail.linked ? "1" : "0"}|${parts.join("\x1f")}`;
 }
@@ -405,6 +459,19 @@ export function selectCandidateDraft(
     ...draft,
     linkChoice: `candidate:${String(index)}`,
     selectedCandidate: candidateSelectionBinding(candidate),
+    keepBinding: null,
+  };
+}
+
+export function selectKeepDraft(
+  draft: ReceiptConfirmDraft,
+  currentCandidate: ReceiptCandidate | null,
+): ReceiptConfirmDraft {
+  return {
+    ...draft,
+    linkChoice: "keep",
+    selectedCandidate: null,
+    keepBinding: currentCandidate === null ? null : keepCandidateBinding(currentCandidate),
   };
 }
 
@@ -412,8 +479,17 @@ export function clearStaleCandidateSelection(
   draft: ReceiptConfirmDraft,
   currentReceiptId: string,
   currentCandidateSetKey: string,
+  currentKeepCandidate?: ReceiptCandidate | null,
 ): ReceiptConfirmDraft | null {
   if (draft.receiptId !== currentReceiptId) return null;
+  if (draft.linkChoice === "keep" && currentKeepCandidate !== undefined && !keepEvidenceMatches(currentKeepCandidate, draft.keepBinding)) {
+    return {
+      ...draft,
+      linkChoice: "",
+      selectedCandidate: null,
+      keepBinding: null,
+    };
+  }
   if (draft.candidateSetKey === currentCandidateSetKey) return draft;
   if (!draft.linkChoice.startsWith("candidate:") && draft.selectedCandidate === null && draft.linkChoice !== "keep") {
     return draft;
@@ -422,6 +498,7 @@ export function clearStaleCandidateSelection(
     ...draft,
     linkChoice: "",
     selectedCandidate: null,
+    keepBinding: null,
   };
 }
 
@@ -529,13 +606,13 @@ export function preselectedCandidate(
 export type ReceiptLinkExplicitChoice =
   | { kind: "empty" }
   | { kind: "unlink" }
-  | { kind: "keep" }
+  | { kind: "keep"; keepBinding: KeepCandidateBinding | null }
   | {
       kind: "candidate";
       account_id: string;
       entry_reference: string;
-      candidate_token: string;
       match_strength: ReceiptCandidate["match_strength"];
+      evidence_fingerprint: string | null;
     };
 
 export interface ReceiptLinkSessionEntry {
@@ -550,7 +627,7 @@ export interface ReceiptLinkSessionEntry {
 
 export function candidateIdentityKeys(candidates: readonly ReceiptCandidate[]): string[] {
   return candidates.map(
-    (cand) => `${cand.account_id}:${cand.entry_reference}:${cand.candidate_token}:${cand.match_strength}`,
+    (cand) => `${cand.account_id}:${cand.entry_reference}:${cand.match_strength}:${candidateEvidenceFingerprint(cand) ?? ""}`,
   );
 }
 
@@ -576,19 +653,38 @@ function resolveTouchedLinkChoice(
   detail: Pick<ReceiptDetail, "status" | "linked">,
   options: ReceiptLinkOptions,
   candidates: readonly ReceiptCandidate[],
-): { linkChoice: string; selectedCandidate: SelectedCandidateBinding | null } {
+): {
+  linkChoice: string;
+  selectedCandidate: SelectedCandidateBinding | null;
+  keepBinding: KeepCandidateBinding | null;
+  keepEvidenceInvalidated: boolean;
+} {
   if (choice === null) {
-    return { linkChoice: defaultAmbiguousOrUnlink(detail, options), selectedCandidate: null };
+    return {
+      linkChoice: defaultAmbiguousOrUnlink(detail, options),
+      selectedCandidate: null,
+      keepBinding: null,
+      keepEvidenceInvalidated: false,
+    };
   }
   if (choice.kind === "unlink") {
-    return { linkChoice: "unlink", selectedCandidate: null };
+    return { linkChoice: "unlink", selectedCandidate: null, keepBinding: null, keepEvidenceInvalidated: false };
   }
   if (choice.kind === "empty") {
-    return { linkChoice: !options.paymentAllowsLink && !detail.linked ? "unlink" : "", selectedCandidate: null };
+    return {
+      linkChoice: !options.paymentAllowsLink && !detail.linked ? "unlink" : "",
+      selectedCandidate: null,
+      keepBinding: null,
+      keepEvidenceInvalidated: false,
+    };
   }
   if (choice.kind === "keep") {
-    if (options.canKeep) return { linkChoice: "keep", selectedCandidate: null };
-    return { linkChoice: !options.paymentAllowsLink && !detail.linked ? "unlink" : "", selectedCandidate: null };
+    if (options.canKeep && keepEvidenceMatches(options.currentCandidate, choice.keepBinding)) {
+      return { linkChoice: "keep", selectedCandidate: null, keepBinding: choice.keepBinding, keepEvidenceInvalidated: false };
+    }
+    const fallbackChoice = !options.paymentAllowsLink && !detail.linked ? "unlink" : "";
+    const invalidated = choice.keepBinding !== null && detail.status === "needs_review" && detail.linked;
+    return { linkChoice: fallbackChoice, selectedCandidate: null, keepBinding: null, keepEvidenceInvalidated: invalidated };
   }
   const idx = candidates.findIndex((cand) => candidateMatchesBinding(cand, choice));
   const matched = idx >= 0 ? candidates[idx] : undefined;
@@ -596,12 +692,14 @@ function resolveTouchedLinkChoice(
     return {
       linkChoice: `candidate:${String(idx)}`,
       selectedCandidate: candidateSelectionBinding(matched),
+      keepBinding: null,
+      keepEvidenceInvalidated: false,
     };
   }
   if ((!options.paymentAllowsLink || detail.status === "confirmed") && !detail.linked) {
-    return { linkChoice: "unlink", selectedCandidate: null };
+    return { linkChoice: "unlink", selectedCandidate: null, keepBinding: null, keepEvidenceInvalidated: false };
   }
-  return { linkChoice: "", selectedCandidate: null };
+  return { linkChoice: "", selectedCandidate: null, keepBinding: null, keepEvidenceInvalidated: false };
 }
 
 /**
@@ -613,7 +711,12 @@ export function resolveDraftFromDetailSession(
   detail: ReceiptDetail,
   candidates: readonly ReceiptCandidate[],
   previous: ReceiptLinkSessionEntry | undefined,
-): { draft: ReceiptConfirmDraft; nextSessionEntry: ReceiptLinkSessionEntry; showSuggestedBanner: boolean } {
+): {
+  draft: ReceiptConfirmDraft;
+  nextSessionEntry: ReceiptLinkSessionEntry;
+  showSuggestedBanner: boolean;
+  keepEvidenceInvalidated: boolean;
+} {
   const currentKeys = candidateIdentityKeys(candidates);
   const serverStateChanged = previous !== undefined && (
     previous.baselineVersion !== detail.version
@@ -646,14 +749,19 @@ export function resolveDraftFromDetailSession(
     const paymentMethod = baseDraft.paymentMethod;
     const options = availableLinkOptions(detail, candidates, paymentMethod, false);
     const touched = resolveTouchedLinkChoice(nextSessionEntry.choice, detail, options, candidates);
+    const sanitizedEntry: ReceiptLinkSessionEntry = touched.keepEvidenceInvalidated
+      ? { ...nextSessionEntry, choice: { kind: "empty" } }
+      : nextSessionEntry;
     return {
       draft: {
         ...baseDraft,
         linkChoice: touched.linkChoice,
         selectedCandidate: touched.selectedCandidate,
+        keepBinding: touched.keepBinding,
       },
-      nextSessionEntry,
+      nextSessionEntry: sanitizedEntry,
       showSuggestedBanner: false,
+      keepEvidenceInvalidated: touched.keepEvidenceInvalidated,
     };
   }
   if (nextSessionEntry.candidateSetChanged) {
@@ -663,9 +771,11 @@ export function resolveDraftFromDetailSession(
         ...baseDraft,
         linkChoice: defaultAmbiguousOrUnlink(detail, options),
         selectedCandidate: null,
+        keepBinding: null,
       },
       nextSessionEntry,
       showSuggestedBanner: false,
+      keepEvidenceInvalidated: false,
     };
   }
   const canPreselect = baseDraft.linkChoice === "candidate:0"
@@ -674,6 +784,7 @@ export function resolveDraftFromDetailSession(
     draft: baseDraft,
     nextSessionEntry,
     showSuggestedBanner: canPreselect,
+    keepEvidenceInvalidated: false,
   };
 }
 
@@ -720,6 +831,7 @@ export function draftFromDetail(
     })),
     linkChoice,
     selectedCandidate,
+    keepBinding: null,
     candidateSetKey: buildCandidateSetKey(detail, candidates),
   };
 }
@@ -1047,13 +1159,21 @@ export function buildConfirmRequest(
   if (draft.linkChoice === "unlink") {
     link = null;
   } else if (draft.linkChoice === "keep") {
-    if (!options.paymentAllowsLink || !options.canKeep || options.currentCandidate === null) {
+    if (!options.paymentAllowsLink || options.matchingFieldsChanged || detail.status === "confirmed") {
       return { ok: false, errorKey: "budget.receipts.invalidForm" };
     }
+    if (
+      !options.canKeep
+      || options.currentCandidate === null
+      || draft.keepBinding === null
+      || !keepEvidenceMatches(options.currentCandidate, draft.keepBinding)
+    ) {
+      return { ok: false, errorKey: "budget.receipts.bankEvidenceChanged" };
+    }
     link = {
-      account_id: options.currentCandidate.account_id,
-      entry_reference: options.currentCandidate.entry_reference,
-      candidate_token: options.currentCandidate.candidate_token,
+      account_id: draft.keepBinding.account_id,
+      entry_reference: draft.keepBinding.entry_reference,
+      candidate_token: draft.keepBinding.reviewed_token,
     };
   } else if (draft.linkChoice.startsWith("candidate:")) {
     if (!options.paymentAllowsLink || options.matchingFieldsChanged) {

@@ -2792,6 +2792,129 @@ NR KARTY ****5555
             ev_row.evidence_for_receipt_id = doc_rec
         self.assertEqual(self.receipts.detail("owner", ev_rec)["candidates"], [])
 
+    def test_round6_confirm_refuses_evidence_row_attached_after_preview(self):
+        self.add_transaction(
+            "a", "r6-ev-tx", amount="230.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["BIEDRONKA NIP 7791011327"],
+        )
+        doc_rec = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="230.00",
+            shop="BIEDRONKA", nip="7791011327",
+        )
+        ev_rec = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-15", total="230.00",
+            shop="BIEDRONKA", nip="7791011327", with_line=True,
+        )
+        preview = self.receipts.detail("owner", ev_rec)
+        chosen = preview["candidates"][0]
+
+        # Simulate Gmail attaching ev_rec as evidence after preview without bumping its version.
+        with self.sessions.begin() as session:
+            ev_row = session.get(db.BudgetReceipt, ev_rec)
+            ev_row.gateway = "PayU"
+            ev_row.evidence_for_receipt_id = doc_rec
+
+        payload = {
+            "receipt_id": ev_rec, "expected_version": 1, "raw_shop_name": "BIEDRONKA",
+            "raw_nip": "7791011327", "receipt_kind": "purchase", "receipt_date": "2026-11-15",
+            "receipt_time": None, "total_amount": "230.00", "currency": "PLN", "payment_method": "card",
+            "lines": [{
+                "line_kind": "other", "raw_name": "Opłata miesięczna", "ptu_code": None, "quantity": "1",
+                "raw_unit": None, "unit_price_raw": None, "gross_line_total": "230.00",
+                "discount_amount": "0", "net_line_total": "230.00",
+            }],
+        }
+        for link in (
+            None,
+            {
+                "account_id": chosen["account_id"],
+                "entry_reference": chosen["entry_reference"],
+                "candidate_token": chosen["candidate_token"],
+            },
+        ):
+            with self.subTest(link=link is not None), self.assertRaises(ReceiptError) as rejected:
+                self.receipts.confirm("owner", {**payload, "link": link})
+            self.assertEqual((rejected.exception.code, rejected.exception.status),
+                             ("budget_receipt_stale_source", 409))
+
+        ev_after = self.receipt_row(ev_rec)
+        self.assertEqual(ev_after.status, "imported")
+        self.assertIsNone(ev_after.linked_entry_ref)
+        with self.assertRaises(ReceiptError) as del_rejected:
+            self.receipts.delete("owner", {"receipt_id": ev_rec, "expected_version": 1})
+        self.assertEqual((del_rejected.exception.code, del_rejected.exception.status),
+                         ("budget_receipt_stale_source", 409))
+        # Bank transaction remains unreserved for the real invoice document.
+        self.assertEqual(len(self.receipts.detail("owner", doc_rec)["candidates"]), 1)
+
+    def test_round6_keep_stale_reviewed_token_rejected_after_bank_evidence_change(self):
+        from hestia.budget.receipt_reconcile import reconcile_receipt_links
+
+        self.add_transaction(
+            "a", "r6-keep-tx", amount="231.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["BIEDRONKA NIP 7791011327"],
+        )
+        rec_id = self._seed_imported(
+            document_kind="receipt", issue_date="2026-11-15", total="231.00",
+            shop="BIEDRONKA", nip="7791011327", with_line=True,
+        )
+        init_cand = self.receipts.detail("owner", rec_id)["candidates"][0]
+        base_payload = {
+            "receipt_id": rec_id, "expected_version": 1, "raw_shop_name": "BIEDRONKA",
+            "raw_nip": "7791011327", "receipt_kind": "purchase", "receipt_date": "2026-11-15",
+            "receipt_time": None, "total_amount": "231.00", "currency": "PLN", "payment_method": "card",
+            "lines": [{
+                "line_kind": "other", "raw_name": "Opłata miesięczna", "ptu_code": None, "quantity": "1",
+                "raw_unit": None, "unit_price_raw": None, "gross_line_total": "231.00",
+                "discount_amount": "0", "net_line_total": "231.00",
+            }],
+        }
+        self.receipts.confirm("owner", {
+            **base_payload,
+            "link": {
+                "account_id": init_cand["account_id"],
+                "entry_reference": init_cand["entry_reference"],
+                "candidate_token": init_cand["candidate_token"],
+            },
+        })
+        self.change_transaction("a", "r6-keep-tx", remittance_information=["BIEDRONKA NIP 7791011327 POS 1"])
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now), 1)
+
+        reviewed = self.receipts.detail("owner", rec_id)
+        self.assertEqual(reviewed["receipt"]["status"], "needs_review")
+        reviewed_cand = reviewed["candidates"][0]
+
+        # Bank evidence changes again without bumping receipt version; owner's reviewed Keep token must 409.
+        self.change_transaction("a", "r6-keep-tx", remittance_information=["BIEDRONKA NIP 7791011327 CHANGED"])
+        with self.assertRaises(ReceiptError) as rejected:
+            self.receipts.confirm("owner", {
+                **base_payload,
+                "expected_version": reviewed["receipt"]["version"],
+                "link": {
+                    "account_id": reviewed_cand["account_id"],
+                    "entry_reference": reviewed_cand["entry_reference"],
+                    "candidate_token": reviewed_cand["candidate_token"],
+                },
+            })
+        self.assertEqual((rejected.exception.code, rejected.exception.status),
+                         ("budget_receipt_stale_source", 409))
+        self.assertEqual(self.receipt_row(rec_id).status, "needs_review")
+
+        # After re-previewing the new bank evidence, confirming with the fresh token succeeds.
+        refreshed = self.receipts.detail("owner", rec_id)
+        fresh_cand = refreshed["candidates"][0]
+        saved = self.receipts.confirm("owner", {
+            **base_payload,
+            "expected_version": refreshed["receipt"]["version"],
+            "link": {
+                "account_id": fresh_cand["account_id"],
+                "entry_reference": fresh_cand["entry_reference"],
+                "candidate_token": fresh_cand["candidate_token"],
+            },
+        })
+        self.assertEqual(saved["receipt"]["status"], "confirmed")
+
 
 class ReceiptRetentionSweepTests(fixture.unittest.IsolatedAsyncioTestCase):
     async def test_sweep_calls_retain_expired_when_flag_is_off(self):

@@ -557,6 +557,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchUnlink": "Atšaukti / be susiejimo",
   "budget.receipts.bookingDateNote": "(įregistruota {date})",
   "budget.receipts.candidateListChanged": "Atitikmenų sąrašas pasikeitė",
+  "budget.receipts.bankEvidenceChanged": "Banko duomenys pasikeitė — pasirinkite iš naujo",
   "budget.consent.title": "Sutikimų būsenos ir atnaujinimo apžvalga",
   "budget.consent.intro": "Tik skaitoma banko sutikimų galiojimo ir išsaugotų autorizavimo įrašų suvestinė. Čia nevykdomas nuotolinis uždarymas, trynimas ar banko užklausos.",
   "budget.consent.loading": "Įkeliama sutikimų apžvalga…",

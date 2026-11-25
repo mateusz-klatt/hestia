@@ -557,6 +557,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchUnlink": "Dezasociază / fără asociere",
   "budget.receipts.bookingDateNote": "(contabilizat {date})",
   "budget.receipts.candidateListChanged": "Lista de potriviri s-a schimbat",
+  "budget.receipts.bankEvidenceChanged": "Datele bancare s-au schimbat — alegeți din nou",
   "budget.consent.title": "Starea consimțămintelor și reînnoirile",
   "budget.consent.intro": "Rezumat doar pentru citire al valabilității consimțămintelor bancare și al înregistrărilor de autorizare salvate. Aici nu se execută închideri la distanță, ștergeri sau cereri bancare.",
   "budget.consent.loading": "Se încarcă rezumatul consimțămintelor…",

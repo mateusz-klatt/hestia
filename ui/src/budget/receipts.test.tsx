@@ -1860,4 +1860,133 @@ describe("ReceiptsView", () => {
     expect(button("Zatwierdź dokument", dialog()).disabled).toBe(true);
     expect(dialog().querySelector(".budget-receipt-suggested")).toBeNull();
   });
+
+  it("preserves preselection across reopen when only randomized candidate_token rotates and submits the fresh token", async () => {
+    const entryRef = "a".repeat(64);
+    const candFirst = receiptCandidate({
+      entry_reference: entryRef,
+      candidate_token: "tok-rand-1",
+      match_strength: "nip",
+    });
+    const candReopen = receiptCandidate({
+      entry_reference: entryRef,
+      candidate_token: "tok-rand-2",
+      match_strength: "nip",
+    });
+    const detail = receiptDetail({ receipt_id: "rec-reopen", status: "imported", linked: false });
+    const clients = fakeClients([receiptSummary({ receipt_id: "rec-reopen", status: "imported" })]);
+    vi.mocked(clients.rApi.receiptDetail)
+      .mockImplementationOnce(() => ok({ receipt: detail, candidates: [candFirst] }))
+      .mockImplementationOnce(() => ok({ receipt: detail, candidates: [candReopen] }));
+
+    await renderReceipts(clients, { locale: "en", revision: 1 });
+    await click(openDetailButton(0));
+    expect(dialog().querySelector(".budget-receipt-suggested")).not.toBeNull();
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
+    await click(button("Close", dialog()));
+
+    // Reopening the unchanged receipt returns a newly randomized candidate_token ("tok-rand-2"),
+    // yet preselection stays intact and Confirm submits the fresh token from CURRENT candidates.
+    await click(openDetailButton(0));
+    expect(dialog().querySelector(".budget-receipt-suggested")).not.toBeNull();
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
+    const confirmBtn = button("Confirm receipt", dialog());
+    expect(confirmBtn.disabled).toBe(false);
+    await click(confirmBtn);
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      receipt_id: "rec-reopen",
+      link: { account_id: candReopen.account_id, entry_reference: entryRef, candidate_token: "tok-rand-2" },
+    }));
+  });
+
+  it("submits reviewed_token for Keep on needs_review and fails closed with Dane z banku się zmieniły when bank evidence changes", async () => {
+    const entryRef = "b".repeat(64);
+    const candReviewed = receiptCandidate({
+      entry_reference: entryRef,
+      candidate_token: "tok-t1",
+      amount: "42.50",
+      match_strength: "nip",
+    });
+    const candRotatedOnly = receiptCandidate({
+      entry_reference: entryRef,
+      candidate_token: "tok-t2",
+      amount: "42.50",
+      match_strength: "nip",
+    });
+    const candEvidenceDrifted = receiptCandidate({
+      entry_reference: entryRef,
+      candidate_token: "tok-drifted",
+      amount: "42.51",
+      match_strength: "nip",
+    });
+    const detailSame = receiptDetail({
+      receipt_id: "rec-keep-same",
+      status: "needs_review",
+      linked: true,
+      linked_account_id: candReviewed.account_id,
+      linked_entry_ref: entryRef,
+      version: 2,
+    });
+    const detailDrifted = receiptDetail({
+      receipt_id: "rec-keep-drift",
+      status: "needs_review",
+      linked: true,
+      linked_account_id: candReviewed.account_id,
+      linked_entry_ref: entryRef,
+      version: 2,
+    });
+
+    const driftRefresh = deferred<ReceiptDetailResult>();
+    const clients = fakeClients([
+      receiptSummary({ receipt_id: "rec-keep-same", status: "needs_review", linked: true }),
+      receiptSummary({ receipt_id: "rec-keep-drift", status: "needs_review", linked: true }),
+    ]);
+    let sameCalls = 0;
+    let driftCalls = 0;
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      if (id === "rec-keep-same") {
+        sameCalls += 1;
+        return ok({ receipt: detailSame, candidates: [sameCalls === 1 ? candReviewed : candRotatedOnly] });
+      }
+      driftCalls += 1;
+      if (driftCalls === 1) return ok({ receipt: detailDrifted, candidates: [candReviewed] });
+      return driftRefresh.promise;
+    });
+
+    await renderReceipts(clients, { locale: "pl", revision: 1 });
+
+    // Part 1: Keep survives nonce-only refresh and submits the originally reviewed tok-t1 (never swaps in tok-t2).
+    await click(openDetailButton(0, "Szczegóły"));
+    const keepRadioSame = linkRadio("keep", dialog());
+    await click(keepRadioSame);
+    expect(keepRadioSame.checked).toBe(true);
+    await renderReceipts(clients, { locale: "pl", revision: 2 });
+    await click(button("Zatwierdź dokument", dialog()));
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
+      receipt_id: "rec-keep-same",
+      link: { account_id: candReviewed.account_id, entry_reference: entryRef, candidate_token: "tok-t1" },
+    }));
+    await click(button("Zamknij", dialog()));
+
+    // Part 2: When bank evidence drifts (amount changes 42.50 -> 42.51), Confirm fails closed even in microtask gap.
+    vi.mocked(clients.rApi.confirmReceipt).mockClear();
+    await click(openDetailButton(1, "Szczegóły"));
+    const keepRadioDrift = linkRadio("keep", dialog());
+    await click(keepRadioDrift);
+    const confirmDriftBtn = button("Zatwierdź dokument", dialog());
+    expect(confirmDriftBtn.disabled).toBe(false);
+
+    await renderReceipts(clients, { locale: "pl", revision: 3 });
+    await act(async () => {
+      driftRefresh.resolve({ ok: true, data: { receipt: detailDrifted, candidates: [candEvidenceDrifted] } });
+      await Promise.resolve();
+      confirmDriftBtn.click();
+    });
+
+    expect(clients.rApi.confirmReceipt).not.toHaveBeenCalled();
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("Dane z banku się zmieniły — wybierz ponownie");
+    expect(linkRadio("keep", dialog()).checked).toBe(false);
+    expect(button("Zatwierdź dokument", dialog()).disabled).toBe(true);
+  });
 });

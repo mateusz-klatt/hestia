@@ -557,6 +557,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchUnlink": "Ukloni / bez veze",
   "budget.receipts.bookingDateNote": "(proknjiženo {date})",
   "budget.receipts.candidateListChanged": "Popis podudaranja se promijenio",
+  "budget.receipts.bankEvidenceChanged": "Bankovni podaci su se promijenili — odaberite ponovno",
   "budget.consent.title": "Pregled stanja i obnove privola",
   "budget.consent.intro": "Pregled valjanosti privola banci i spremljenih zapisa autorizacije samo za čitanje. Ovdje se ne pokreću udaljeno zatvaranje, brisanje ni zahtjevi banci.",
   "budget.consent.loading": "Učitavanje pregleda privola…",

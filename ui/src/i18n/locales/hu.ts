@@ -557,6 +557,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchUnlink": "Leválasztás / nincs kapcsolat",
   "budget.receipts.bookingDateNote": "(könyvelve {date})",
   "budget.receipts.candidateListChanged": "Az egyezések listája megváltozott",
+  "budget.receipts.bankEvidenceChanged": "A banki adatok megváltoztak — válasszon újra",
   "budget.consent.title": "Hozzájárulások állapota és megújítása",
   "budget.consent.intro": "A banki hozzájárulások érvényességének és a tárolt engedélyezési adatoknak csak olvasható összefoglalója. Itt nem történik távoli lezárás, törlés vagy banki kérés.",
   "budget.consent.loading": "Hozzájárulások áttekintésének betöltése…",

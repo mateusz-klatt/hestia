@@ -556,6 +556,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchUnlink": "Verknüpfung lösen / ohne",
   "budget.receipts.bookingDateNote": "(gebucht {date})",
   "budget.receipts.candidateListChanged": "Die Trefferliste hat sich geändert",
+  "budget.receipts.bankEvidenceChanged": "Bankdaten haben sich geändert — bitte erneut wählen",
   "budget.consent.title": "Einwilligungsstatus & Verlängerungsübersicht",
   "budget.consent.intro": "Schreibgeschützte Übersicht zur Gültigkeit der Bankeinwilligungen und zu gespeicherten Autorisierungen. Hier werden weder Einwilligungen bei der Bank beendet noch Daten gelöscht oder Bankanfragen ausgeführt.",
   "budget.consent.loading": "Einwilligungsübersicht wird geladen…",

@@ -816,6 +816,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 self._owner(session, owner, "budget.receipts.edit")
             if row.version != values["expected_version"]:
                 raise ReceiptError("budget_receipt_conflict", 409)
+            if row.evidence_for_receipt_id is not None:
+                raise ReceiptError("budget_receipt_stale_source", 409)
             effective = dict(cleaned)
             effective.setdefault("raw_shop_name", row.raw_shop_name)
             effective.setdefault("raw_nip", row.raw_nip)
@@ -1078,6 +1080,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 raise DeviceTokenError(403, "budget_forbidden")
             if row.version != values["expected_version"]:
                 raise ReceiptError("budget_receipt_conflict", 409)
+            if row.evidence_for_receipt_id is not None:
+                raise ReceiptError("budget_receipt_stale_source", 409)
             tombstone_receipt(session, owner, row.id)
             session.execute(delete(Line).where(Line.receipt_id == row.id, Line.owner == owner))
             erase_receipt_audit(session, owner, row.id)

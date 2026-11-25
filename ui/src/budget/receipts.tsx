@@ -29,6 +29,7 @@ import {
   buildPlainBulkConfirmRequest,
   buildReceiptListRequest,
   candidateDisplayDate,
+  candidateSelectionBinding,
   clearStaleCandidateSelection,
   computeLinesDelta,
   createPendingReceiptStore,
@@ -43,6 +44,7 @@ import {
   isExcludedDraftForBulk,
   isRedactedValue,
   isStaleCursorError,
+  keepCandidateBinding,
   merchantBulkGroups,
   mergeReceiptRows,
   normalizeDecimalInput,
@@ -53,6 +55,7 @@ import {
   reconcileLinkChoice,
   resolveDraftFromDetailSession,
   selectCandidateDraft,
+  selectKeepDraft,
   suggestedCandidateDates,
   validReceiptDateRange,
 } from "./receipts_model";
@@ -719,7 +722,7 @@ export function ReceiptsView({
   const resolveDetailDraft = useCallback((
     detail: ReceiptDetail,
     candidates: readonly ReceiptCandidate[],
-  ): { draft: ReceiptConfirmDraft; showSuggestedBanner: boolean } => {
+  ): { draft: ReceiptConfirmDraft; showSuggestedBanner: boolean; keepEvidenceInvalidated: boolean } => {
     const key = `${actorKey}:${detail.receipt_id}`;
     const resolved = resolveDraftFromDetailSession(
       detail,
@@ -727,7 +730,11 @@ export function ReceiptsView({
       receiptLinkMemoryRef.current.get(key),
     );
     receiptLinkMemoryRef.current.set(key, resolved.nextSessionEntry);
-    return { draft: resolved.draft, showSuggestedBanner: resolved.showSuggestedBanner };
+    return {
+      draft: resolved.draft,
+      showSuggestedBanner: resolved.showSuggestedBanner,
+      keepEvidenceInvalidated: resolved.keepEvidenceInvalidated,
+    };
   }, [actorKey]);
 
   const recordLinkChoiceTouched = useCallback((
@@ -1267,7 +1274,7 @@ interface DrawerProps {
   resolveDetailDraft: (
     detail: ReceiptDetail,
     candidates: readonly ReceiptCandidate[],
-  ) => { draft: ReceiptConfirmDraft; showSuggestedBanner: boolean };
+  ) => { draft: ReceiptConfirmDraft; showSuggestedBanner: boolean; keepEvidenceInvalidated: boolean };
   onLinkChoiceTouched: (receiptId: string, choice: ReceiptLinkExplicitChoice) => void;
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
   onClose: () => void;
@@ -1329,6 +1336,8 @@ function ReceiptDetailDrawer({
       setSuggestionDismissed(!resolved.showSuggestedBanner);
       if (keepActionErrorRef.current) {
         keepActionErrorRef.current = false;
+      } else if (resolved.keepEvidenceInvalidated) {
+        setActionError(t("budget.receipts.bankEvidenceChanged"));
       } else {
         setActionError(null);
       }
@@ -1362,6 +1371,7 @@ function ReceiptDetailDrawer({
         ...next,
         linkChoice: nextLinkChoice,
         selectedCandidate: nextLinkChoice.startsWith("candidate:") ? current.selectedCandidate : null,
+        keepBinding: nextLinkChoice === "keep" ? current.keepBinding : null,
       };
     });
   };
@@ -1370,10 +1380,16 @@ function ReceiptDetailDrawer({
     const currentCandidates = getLatestCandidates(detail.receipt_id) ?? candidates;
     const built = buildConfirmRequest(detail, draft, currentCandidates, t("budget.receipts.summaryLineDefault"));
     if (!built.ok) {
-      if (built.errorKey === "budget.receipts.candidateListChanged") {
+      if (built.errorKey === "budget.receipts.candidateListChanged" || built.errorKey === "budget.receipts.bankEvidenceChanged") {
         keepActionErrorRef.current = true;
-        setSuggestionDismissed(true);
-        setConfirmDraft((current) => (current === null ? null : { ...current, linkChoice: "", selectedCandidate: null }));
+        if (built.errorKey === "budget.receipts.candidateListChanged") {
+          setSuggestionDismissed(true);
+        } else {
+          onLinkChoiceTouched(detail.receipt_id, { kind: "empty" });
+        }
+        setConfirmDraft((current) => (current === null
+          ? null
+          : { ...current, linkChoice: "", selectedCandidate: null, keepBinding: null }));
       }
       setActionError(t(built.errorKey));
       return;
@@ -1515,15 +1531,16 @@ function ReceiptDetailDrawer({
         ) : (() => {
           const { detail, candidates } = detailState;
           const currentCandidateSetKey = buildCandidateSetKey(detail, candidates);
+          const storedKeepCandidate = findCurrentLinkedCandidate(detail, candidates);
           const activeDraft = confirmDraft === null
             ? null
-            : clearStaleCandidateSelection(confirmDraft, detail.receipt_id, currentCandidateSetKey);
+            : clearStaleCandidateSelection(confirmDraft, detail.receipt_id, currentCandidateSetKey, storedKeepCandidate);
           const hasRedactedLines = receiptHasRedactedLines(detail.lines);
           const draftMethod: ReceiptPaymentMethod = activeDraft?.paymentMethod ?? "unknown";
           const matchingChanged = activeDraft !== null && hasMatchingFieldsChanged(detail, activeDraft);
           const linkOptions = availableLinkOptions(detail, candidates, draftMethod, matchingChanged);
           const { currentCandidate } = linkOptions;
-          const hasStoredKeepCandidate = findCurrentLinkedCandidate(detail, candidates) !== null;
+          const hasStoredKeepCandidate = storedKeepCandidate !== null;
           const lineDelta = activeDraft === null
             || (detail.document_kind === "invoice" && detail.lines.length === 0 && activeDraft.lines.length === 0)
             ? null
@@ -1632,7 +1649,9 @@ function ReceiptDetailDrawer({
                           onLinkChoiceTouched(detail.receipt_id, { kind: "empty" });
                           setSuggestionDismissed(true);
                           setConfirmDraft((current) => (
-                            current === null ? null : { ...current, linkChoice: "", selectedCandidate: null }
+                            current === null
+                              ? null
+                              : { ...current, linkChoice: "", selectedCandidate: null, keepBinding: null }
                           ));
                           linkChoicesRef.current?.focus();
                           const target: { scrollIntoView?: (options?: ScrollIntoViewOptions) => void } | null =
@@ -1649,7 +1668,9 @@ function ReceiptDetailDrawer({
                           onLinkChoiceTouched(detail.receipt_id, { kind: "unlink" });
                           setSuggestionDismissed(true);
                           setConfirmDraft((current) => (
-                            current === null ? null : { ...current, linkChoice: "unlink", selectedCandidate: null }
+                            current === null
+                              ? null
+                              : { ...current, linkChoice: "unlink", selectedCandidate: null, keepBinding: null }
                           ));
                         }}
                       >
@@ -2083,8 +2104,11 @@ function ReceiptDetailDrawer({
                           disabled={disableTokens}
                           checked={activeDraft.linkChoice === "keep" && linkOptions.canKeep}
                           onChange={() => {
-                            onLinkChoiceTouched(detail.receipt_id, { kind: "keep" });
-                            setConfirmDraft({ ...activeDraft, linkChoice: "keep", selectedCandidate: null });
+                            onLinkChoiceTouched(detail.receipt_id, {
+                              kind: "keep",
+                              keepBinding: currentCandidate === null ? null : keepCandidateBinding(currentCandidate),
+                            });
+                            setConfirmDraft(selectKeepDraft(activeDraft, currentCandidate));
                           }}
                         />
                         <span>{t("budget.receipts.linkChoiceKeep")}</span>
@@ -2100,7 +2124,7 @@ function ReceiptDetailDrawer({
                         checked={activeDraft.linkChoice === "unlink"}
                         onChange={() => {
                           onLinkChoiceTouched(detail.receipt_id, { kind: "unlink" });
-                          setConfirmDraft({ ...activeDraft, linkChoice: "unlink", selectedCandidate: null });
+                          setConfirmDraft({ ...activeDraft, linkChoice: "unlink", selectedCandidate: null, keepBinding: null });
                         }}
                       />
                       <span>
@@ -2137,10 +2161,7 @@ function ReceiptDetailDrawer({
                             onChange={() => {
                               onLinkChoiceTouched(detail.receipt_id, {
                                 kind: "candidate",
-                                account_id: candidate.account_id,
-                                entry_reference: candidate.entry_reference,
-                                candidate_token: candidate.candidate_token,
-                                match_strength: candidate.match_strength,
+                                ...candidateSelectionBinding(candidate),
                               });
                               setConfirmDraft(selectCandidateDraft(activeDraft, candidate, index));
                             }}

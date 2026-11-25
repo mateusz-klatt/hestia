@@ -558,6 +558,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchUnlink": "Dínasc / gan nasc",
   "budget.receipts.bookingDateNote": "(leabharaithe {date})",
   "budget.receipts.candidateListChanged": "D'athraigh an liosta meaitseanna",
+  "budget.receipts.bankEvidenceChanged": "D'athraigh sonraí an bhainc — roghnaigh arís",
   "budget.consent.title": "Forbhreathnú ar stádas toilithe & athnuachan",
   "budget.consent.intro": "Achoimre inléite amháin ar bhailíocht toilithe bainc agus ar thaifid údaraithe stóráilte. Ní dhéantar ciandúnadh, scriosadh ná iarratas bainc anseo.",
   "budget.consent.loading": "Forbhreathnú toilithe á lódáil…",

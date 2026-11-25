@@ -557,6 +557,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchUnlink": "Noņemt / bez sasaistes",
   "budget.receipts.bookingDateNote": "(iegrāmatots {date})",
   "budget.receipts.candidateListChanged": "Atbilstību saraksts ir mainījies",
+  "budget.receipts.bankEvidenceChanged": "Bankas dati ir mainījušies — izvēlieties vēlreiz",
   "budget.consent.title": "Piekrišanu statusa un atjaunošanas pārskats",
   "budget.consent.intro": "Tikai lasāms bankas piekrišanu derīguma un saglabāto autorizācijas ierakstu kopsavilkums. Šeit netiek veikta attāla slēgšana, dzēšana vai bankas pieprasījumi.",
   "budget.consent.loading": "Ielādē piekrišanu pārskatu…",

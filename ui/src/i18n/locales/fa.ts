@@ -557,6 +557,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchUnlink": "قطع اتصال / بدون اتصال",
   "budget.receipts.bookingDateNote": "(ثبت‌شده {date})",
   "budget.receipts.candidateListChanged": "فهرست موارد منطبق تغییر کرده است",
+  "budget.receipts.bankEvidenceChanged": "داده‌های بانک تغییر کرده است — دوباره انتخاب کنید",
   "budget.consent.title": "نمای کلی وضعیت و تمدید رضایت‌نامه‌ها",
   "budget.consent.intro": "خلاصهٔ فقط خواندنی از اعتبار رضایت‌نامه‌های بانکی و سوابق مجوز ذخیره‌شده. اینجا هیچ بستن از راه دور، حذف یا درخواست بانکی اجرا نمی‌شود.",
   "budget.consent.loading": "در حال بارگیری نمای رضایت‌نامه‌ها…",

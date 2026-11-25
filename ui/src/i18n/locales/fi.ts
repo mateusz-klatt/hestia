@@ -557,6 +557,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchUnlink": "Poista / ei linkitystä",
   "budget.receipts.bookingDateNote": "(kirjattu {date})",
   "budget.receipts.candidateListChanged": "Vastaavuusluettelo on muuttunut",
+  "budget.receipts.bankEvidenceChanged": "Pankkitiedot ovat muuttuneet — valitse uudelleen",
   "budget.consent.title": "Suostumusten tila & uusimisen yleiskatsaus",
   "budget.consent.intro": "Vain luettavissa oleva yhteenveto pankkisuostumusten voimassaolosta ja tallennetuista valtuutustiedoista. Tässä ei tehdä etäsulkemisia, poistoja tai pankkipyyntöjä.",
   "budget.consent.loading": "Ladataan suostumusten yleiskatsausta…",

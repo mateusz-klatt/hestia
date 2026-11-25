@@ -557,6 +557,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchUnlink": "נתק / ללא קישור",
   "budget.receipts.bookingDateNote": "(נרשם {date})",
   "budget.receipts.candidateListChanged": "רשימת ההתאמות השתנתה",
+  "budget.receipts.bankEvidenceChanged": "נתוני הבנק השתנו — בחרו מחדש",
   "budget.consent.title": "סקירת מצב ההסכמות וחידושן",
   "budget.consent.intro": "סיכום לקריאה בלבד של תוקף ההסכמות לבנקים ורשומות ההרשאה השמורות. לא מתבצעים כאן סגירה מרחוק, מחיקה או בקשה לבנק.",
   "budget.consent.loading": "סקירת ההסכמות נטענת…",
