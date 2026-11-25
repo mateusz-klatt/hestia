@@ -103,16 +103,24 @@ describe("receipts api", () => {
     expect(JSON.parse(del.init.body as string)).toEqual({ receipt_id: "rec-42", expected_version: 3 });
   });
 
-  it("loads WebP receipt images as Blob and parses structured errors cleanly", async () => {
+  it("loads WebP receipt images as Blob without Blob.stream and parses structured errors cleanly", async () => {
+    const webpBytes = new TextEncoder().encode("webp-bytes");
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(new Blob(["webp-bytes"], { type: "image/webp" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(webpBytes, {
+        status: 200,
+        headers: { "Content-Type": "image/webp" },
+      }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: "budget_receipts_disabled" }), { status: 404 }))
       .mockRejectedValueOnce(new TypeError("offline"));
     vi.stubGlobal("fetch", fetchMock);
 
     const okRes = await receiptsApi.receiptImage("rec-img");
     expect(okRes.ok).toBe(true);
-    if (okRes.ok) expect(okRes.data).toBeInstanceOf(Blob);
+    if (okRes.ok) {
+      expect(okRes.data).toBeInstanceOf(Blob);
+      expect(okRes.data.size).toBe(webpBytes.byteLength);
+      expect(okRes.data.type).toBe("image/webp");
+    }
     const [imgUrl, imgInit] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
     expect(imgUrl.pathname).toMatch(/\/api\/budget\/receipts\/image$/);
     expect(Object.fromEntries(imgUrl.searchParams)).toEqual({ receipt_id: "rec-img" });
