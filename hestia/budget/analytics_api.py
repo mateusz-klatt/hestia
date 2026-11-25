@@ -122,7 +122,7 @@ def _encode_bounded(payload, limit):
 def _read(owner, operation, query, secret):
     store = _store(secret)
     result = getattr(store, operation.replace("-", "_").replace("/", "_"))(owner, **query)
-    with store.sessions() as session:
+    with store._read(owner) as session:
         result = DisplayResolver(session, owner, owner).decorate(
             result, include_category_translations=operation == "categories")
     if operation in _BOUNDED_READ_CAPS:
@@ -152,7 +152,7 @@ def _write(owner, operation, values, secret):
     else:
         result = getattr(store, method)(owner, **values)
     if operation in ("category-create", "category-update", "annotation"):
-        with store.sessions() as session:
+        with store._read(owner, permission="budget.edit") as session:
             result = DisplayResolver(session, owner, owner).decorate(result)
     return {"ok": True, response_key: result}
 

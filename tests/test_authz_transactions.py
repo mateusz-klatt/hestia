@@ -54,6 +54,28 @@ class TransactionAuthorizationTests(unittest.IsolatedAsyncioTestCase):
                 self.store.accounts("alice")
         self.assertEqual(denied.exception.status, 403)
 
+    def test_category_decoration_rechecks_view_in_second_snapshot(self):
+        category = self.store.create_category("alice", "Translated")
+        self.store.set_category_translation(
+            "alice", category_id=category["id"], lang="en", name="Translated label",
+        )
+        original = type(self.store).categories
+
+        def revoke_before_decoration(owner):
+            result = original(self.store, owner)
+            with self.sessions.begin() as session:
+                session.execute(delete(db.PermissionGrant).where(
+                    db.PermissionGrant.username == owner,
+                    db.PermissionGrant.permission_id.in_(("budget.view", "budget.edit")),
+                    db.PermissionGrant.target_owner == owner,
+                ))
+            return result
+
+        with mock.patch.object(type(self.store), "categories", side_effect=revoke_before_decoration):
+            with self.assertRaises(BudgetAccessDenied) as denied:
+                analytics_api._read("alice", "categories", {}, budget_fixture.SECRET)
+        self.assertEqual(denied.exception.status, 403)
+
     def test_receipt_profile_does_not_require_full_ledger_view(self):
         with self.sessions.begin() as session:
             session.execute(delete(db.PermissionGrant).where(
