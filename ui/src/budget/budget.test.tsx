@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadLocale } from "../i18n";
 import type { BudgetApi, BudgetResult } from "./api";
 import { Budget } from "./budget";
+import type { ReceiptsApi } from "./receipts_api";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
 import { entriesOf, entry, forecastCurrencyTotal, forecastItem, forecastOf, inboxConsentItem, inboxMarkSaved, inboxOf,
@@ -1536,7 +1537,7 @@ describe("analytics views", () => {
     expect(button("Month").getAttribute("aria-pressed")).toBe("true");
   });
 
-    it("falls back to accounts when a reload withdraws the capability", async () => {
+  it("falls back to accounts when a reload withdraws the capability", async () => {
     const api = fakeApi();
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
     await render(api);
@@ -1545,5 +1546,96 @@ describe("analytics views", () => {
     await click(button("Reload"));
     expect(host.querySelector(".budget-views")).toBeNull();
     expect(host.textContent).toContain("Synthetic Current ••0001");
+  });
+});
+
+describe("receipts tab & capability gate", () => {
+  const withAnalytics = { ...capabilities, analytics: true };
+
+  function fakeReceiptsApi(): ReceiptsApi {
+    return {
+      receiptsList: vi.fn<ReceiptsApi["receiptsList"]>(() => ok({
+        receipts: [{
+          receipt_id: "11111111-1111-4111-8111-111111111111",
+          status: "needs_review",
+          document_kind: "receipt",
+          source_kind: "local_ocr",
+          receipt_kind: "purchase",
+          receipt_date: "2026-11-14",
+          receipt_time: null,
+          raw_shop_name: "Tab Integration Market",
+          raw_nip: null,
+          shop_id: null,
+          chain_key: null,
+          total_amount: "19.50",
+          currency: "PLN",
+          payment_method: "card",
+          math_delta: "0",
+          linked: false,
+          linked_account_id: null,
+          linked_entry_ref: null,
+          version: 1,
+          image_available: false,
+          image_expires_at: null,
+          raw_text_expires_at: null,
+          invoice_number: null,
+          due_date: null,
+          import_expires_at: null,
+          forwarded_manually: false,
+          forwarded_sender_domain: null,
+          created_at: 1_700_000_000,
+          updated_at: 1_700_000_000,
+        }],
+        next_cursor: null,
+      })),
+      receiptsSearch: vi.fn<ReceiptsApi["receiptsSearch"]>(() => ok({ receipts: [], next_cursor: null })),
+      receiptDetail: vi.fn<ReceiptsApi["receiptDetail"]>(),
+      receiptImage: vi.fn<ReceiptsApi["receiptImage"]>(),
+      confirmReceipt: vi.fn<ReceiptsApi["confirmReceipt"]>(),
+      deleteReceipt: vi.fn<ReceiptsApi["deleteReceipt"]>(),
+    };
+  }
+
+  async function renderWithReceipts(api: ReturnType<typeof fakeApi>, rApi: ReceiptsApi): Promise<void> {
+    await act(async () => {
+      root.render(<Budget active api={api} receiptsApi={rApi} pollMs={5} />);
+      await Promise.resolve();
+    });
+    await settle();
+  }
+
+  it("gates the Receipts and documents tab on analytics and stored_reads", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: { ...withAnalytics, stored_reads: false } }));
+    await renderWithReceipts(api, rApi);
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
+    expect(rApi.receiptsList).not.toHaveBeenCalled();
+
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+    await click(button("Reload"));
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(true);
+    await click(button("Receipts and documents"));
+    expect(rApi.receiptsList).toHaveBeenCalledWith({ limit: 50 });
+    expect(host.textContent).toContain("Tab Integration Market");
+  });
+
+  it("keeps the rest of Budget intact on 404 budget_receipts_disabled, but clears all Budget on 403", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => fail(404, "budget_receipts_disabled"));
+
+    await renderWithReceipts(api, rApi);
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Receipts are disabled on this server");
+    expect(host.querySelector(".budget-views")).not.toBeNull();
+
+    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    await click(button("Accounts"));
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("Tab Integration Market");
+    expect(host.querySelector(".budget-views")).toBeNull();
   });
 });
