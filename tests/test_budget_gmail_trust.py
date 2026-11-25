@@ -8,7 +8,10 @@ import unittest
 from unittest.mock import Mock
 
 from hestia.budget.gmail_address import canonical_mailbox
-from hestia.budget.gmail_trust import classify_sender, normalize_sender_rules, unwrap_trusted_forward
+from hestia.budget.gmail_trust import (
+    PaymentSender, classify_sender, forward_sender_domain, normalize_sender_rules, payment_sender_for,
+    unwrap_trusted_forward,
+)
 
 
 MERCHANT = "billing@merchant.example"
@@ -85,6 +88,52 @@ class GmailTrustTests(unittest.TestCase):
             with self.subTest(address=address):
                 self.assertEqual(_classify(_headers(address)), expected)
         self.assertEqual(classify_sender(_headers(SPOUSE), (SPOUSE,), SPOUSES), "spouse_forward")
+
+    def test_payment_rules_require_aligned_auth_and_match_direct_only(self):
+        payments = (PaymentSender("@pay.example.test", "Example Pay", True),
+                    PaymentSender("bill@shop.example.test", "Example Shop"))
+        gateway = "bill@sub.pay.example.test"
+        relaxed = _headers(gateway, dkim="dkim=pass header.d=pay.example.test",
+                           other="spf=pass smtp.mailfrom=pay.example.test")
+        for headers, expected in (
+            (relaxed, "direct_allowlist"),
+            (_headers("bill@shop.example.test"), "direct_allowlist"),
+            (_headers("other@shop.example.test"), "untrusted"),
+            (_headers("bill@notpay.example.test"), "untrusted"),
+            (_headers(gateway, dkim="dkim=fail"), "untrusted"),
+            (_headers(gateway, other="dmarc=pass header.from=pay.example.test"), "untrusted"),
+            (_headers(gateway, other="dmarc=pass header.from=sub.pay.example.test"), "direct_allowlist"),
+        ):
+            with self.subTest(expected=expected, headers=headers):
+                self.assertEqual(classify_sender(headers, DIRECT, SPOUSES, payment_senders=payments), expected)
+        self.assertEqual(classify_sender(relaxed, DIRECT, (gateway,), payment_senders=payments), "untrusted")
+        self.assertEqual(classify_sender(relaxed, DIRECT, (), gateway, payment_senders=payments), "untrusted")
+        self.assertEqual(classify_sender(_headers(gateway), DIRECT, (gateway,), payment_senders=payments),
+                         "spouse_forward")
+        self.assertEqual(classify_sender(_headers(gateway), DIRECT, (), gateway, payment_senders=payments),
+                         "owner_forward")
+        self.assertEqual(classify_sender(relaxed, (gateway,), (), gateway), "owner_forward")
+
+    def test_specific_payment_sender_wins(self):
+        generic = PaymentSender("@pay.example.test", "Example Pay", True)
+        subdomain = PaymentSender("@sub.pay.example.test", "Example Branch")
+        exact = PaymentSender("bill@sub.pay.example.test", "Example Shop")
+        payments = (generic, exact, subdomain)
+        for headers, expected in (
+            (_headers("Bill@Sub.Pay.Example.Test"), exact),
+            (_headers("another@sub.pay.example.test"), subdomain),
+            (_headers("bill@alternate.pay.example.test"), generic),
+            (_headers("bill@other.example.test"), None),
+            (_headers("bill@pay.example.test") + [("from", exact.sender)], None),
+            ([("From", "no-address")], None),
+            ([], None),
+        ):
+            with self.subTest(headers=headers):
+                self.assertEqual(payment_sender_for(headers, payments), expected)
+
+    def test_forward_sender_domain_requires_a_single_author(self):
+        self.assertEqual(forward_sender_domain(_message("bill@shop.example.test")), "shop.example.test")
+        self.assertIsNone(forward_sender_domain(EmailMessage()))
 
     def test_allowlisted_senders_accept_parent_dkim_and_spf_domains(self):
         accepted = (

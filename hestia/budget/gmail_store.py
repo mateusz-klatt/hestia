@@ -1,7 +1,8 @@
-"""SQLite grant fences, invoice storage and keyed Gmail provenance."""
+"""SQLite grant fences, receipt storage and keyed Gmail provenance."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 import hmac
 import json
 import uuid
@@ -10,6 +11,8 @@ from sqlalchemy import and_, case, delete, func, or_, select, update
 
 from ..db import AppMeta, BudgetAnalyticsAudit, BudgetGmailMessage, BudgetGmailState, BudgetReceipt, BudgetReceiptLine
 from .gmail_client import GmailError
+from .gmail_payment import ImportedPayment
+from .receipt_parser import fold_text
 from .store import BudgetStore
 from .views import BudgetHTTPStore
 
@@ -19,6 +22,7 @@ PROVENANCE_TTL = 400 * DAY
 MAX_PENDING_IMPORTS = 200
 GMAIL_MESSAGE_DOMAIN = b"hestia/budget/gmail-msg-id/v1\0"
 RFC_MESSAGE_DOMAIN = b"hestia/budget/gmail-rfc-msg-id/v1\0"
+PAYMENT_SENDER_DOMAIN = b"hestia/budget/gmail-payment-sender/v1\0"
 SCOPE_DOMAIN = b"hestia/budget/gmail-scope-query/v1\0"
 MAILBOX_DOMAIN = b"hestia/budget/gmail-mailbox/v1\0"
 
@@ -41,6 +45,7 @@ STATUS_FIELDS = ("grant_status", "grant_generation", "version", "sync_phase", "a
 _PARSE_FAILED_REASONS_PREFIX = "budget_gmail_parse_failed_reasons:"
 _RETRY_WINDOW_PREFIX = "budget_gmail_retry_full_window:"
 _INC_RESET_PREFIX = "budget_gmail_inc_reset:"
+_PAYMENT_SENDER_PREFIX = "budget_gmail_payment_sender:"
 PARSE_FAILED_REASONS = (
     "charset_error",
     "message_defects",
@@ -85,6 +90,14 @@ def digest(secret, domain, value):
 
 
 @dataclass(frozen=True, repr=False)
+class PendingPayment:
+    fields: ImportedPayment
+    receipt_date: date
+    sender_hmac: str
+    opposite_sender_hmacs: tuple[str, ...]
+
+
+@dataclass(frozen=True, repr=False)
 class PendingMessage:
     gmail_id_hmac: str
     internal_date: float
@@ -96,6 +109,7 @@ class PendingMessage:
     forwarded_manually: bool = False
     sender_domain: str | None = None
     parse_failed_reason: str | None = None
+    payment: PendingPayment | None = None
 
 
 def _linked_manual_forward():
@@ -104,7 +118,17 @@ def _linked_manual_forward():
     ).exists()
 
 
+def _payment_sender_key(receipt_id):
+    return _PAYMENT_SENDER_PREFIX + receipt_id
+
+
+def _forget_payment_senders(session, *predicates):
+    keys = select(_payment_sender_key(BudgetGmailMessage.receipt_id)).where(*predicates)
+    session.execute(delete(AppMeta).where(AppMeta.key.in_(keys)))
+
+
 def _tombstone_messages(session, *predicates):
+    _forget_payment_senders(session, *predicates)
     session.execute(update(BudgetGmailMessage).where(*predicates).values(
         receipt_id=None, outcome="deleted",
         rfc_message_id_hmac=case((_linked_manual_forward(), None), else_=BudgetGmailMessage.rfc_message_id_hmac),
@@ -137,10 +161,11 @@ def _delete_imports(session, owner, expires_at=None):
 
 def retain_imports(session, owner, now):
     _delete_imports(session, owner, now)
-    prune = delete(BudgetGmailMessage).where(BudgetGmailMessage.internal_date < now - PROVENANCE_TTL)
+    expired = (BudgetGmailMessage.internal_date < now - PROVENANCE_TTL,)
     if owner is not None:
-        prune = prune.where(BudgetGmailMessage.owner == owner)
-    session.execute(prune)
+        expired += (BudgetGmailMessage.owner == owner,)
+    _forget_payment_senders(session, *expired)
+    session.execute(delete(BudgetGmailMessage).where(*expired))
 
 
 class GmailStore(BudgetStore):
@@ -264,6 +289,7 @@ class GmailStore(BudgetStore):
                     row.next_sync_at = now
             elif status == "revoked":
                 row.revoked_at = now
+                _forget_payment_senders(session, BudgetGmailMessage.owner == owner)
                 session.execute(update(BudgetGmailMessage).where(BudgetGmailMessage.owner == owner)
                                 .values(receipt_id=None))
                 _delete_imports(session, owner)
@@ -296,6 +322,21 @@ class GmailStore(BudgetStore):
         ).limit(1)) is not None
 
     @staticmethod
+    def _duplicate_payment(session, owner, payment):
+        if not payment.opposite_sender_hmacs:
+            return False
+        fields = payment.fields
+        receipt_day = func.julianday(payment.receipt_date.isoformat())
+        return session.scalar(select(BudgetReceipt.id).join(
+            AppMeta, AppMeta.key == _payment_sender_key(BudgetReceipt.id),
+        ).where(
+            BudgetReceipt.owner == owner, BudgetReceipt.document_kind == "payment_confirmation",
+            BudgetReceipt.total_amount == fields.total_amount, BudgetReceipt.currency == fields.currency,
+            func.abs(func.julianday(BudgetReceipt.receipt_date) - receipt_day) <= 2,
+            AppMeta.value.in_(payment.opposite_sender_hmacs),
+        ).limit(1)) is not None
+
+    @staticmethod
     def _invoice(session, owner, item, now):
         invoice = item.invoice
         receipt = BudgetReceipt(id=str(uuid.uuid4()), owner=owner, raw_shop_name=invoice.issuer, raw_nip=invoice.nip,
@@ -305,6 +346,26 @@ class GmailStore(BudgetStore):
                                 version=1, created_at=now, updated_at=now, import_expires_at=now + IMPORT_TTL)
         session.add(receipt)
         session.flush()
+        return receipt.id
+
+    @staticmethod
+    def _payment(session, owner, payment, now):
+        fields = payment.fields
+        receipt = BudgetReceipt(
+            id=str(uuid.uuid4()), owner=owner, raw_shop_name=fields.merchant,
+            receipt_date=payment.receipt_date.isoformat(), total_amount=fields.total_amount, currency=fields.currency,
+            status="imported", document_kind="payment_confirmation", source_kind="email",
+            version=1, created_at=now, updated_at=now, import_expires_at=now + IMPORT_TTL,
+        )
+        session.add(receipt)
+        session.flush()
+        session.add(BudgetReceiptLine(
+            receipt_id=receipt.id, owner=owner, line_no=1, line_kind="other", raw_name=fields.description,
+            raw_name_key=fold_text(fields.description)[:128], quantity="1",
+            gross_line_total=fields.total_amount, net_line_total=fields.total_amount,
+        ))
+        # Keep only the matched config rule's fingerprint. The current config supplies its role.
+        session.add(AppMeta(key=_payment_sender_key(receipt.id), value=payment.sender_hmac))
         return receipt.id
 
     @staticmethod
@@ -337,14 +398,20 @@ class GmailStore(BudgetStore):
                 outcome = item.outcome
                 # Review placeholders are keyed by their outer Gmail ID.
                 rfc_hmac = None if item.forwarded_manually else item.rfc_message_id_hmac
-                if self._duplicate(session, owner, rfc_hmac):
+                if item.payment is not None and self._duplicate_payment(session, owner, item.payment):
+                    outcome = "skipped_non_receipt"
+                elif self._duplicate(session, owner, rfc_hmac):
                     outcome = "skipped_duplicate"
                 if outcome == "imported":
                     if self._pending_count(session, owner) >= MAX_PENDING_IMPORTS:
                         drained = False
                         break
-                    receipt_id = (self._manual(session, owner, item, now) if item.forwarded_manually
-                                  else self._invoice(session, owner, item, now))
+                    if item.forwarded_manually:
+                        receipt_id = self._manual(session, owner, item, now)
+                    elif item.payment is not None:
+                        receipt_id = self._payment(session, owner, item.payment, now)
+                    else:
+                        receipt_id = self._invoice(session, owner, item, now)
                     imported += 1
                 else:
                     skipped += 1

@@ -1,6 +1,7 @@
 """Authenticate Gmail envelopes and select the original content of spouse forwards."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import getaddresses
 import re
@@ -11,6 +12,7 @@ _PUBLIC_WEBMAIL = frozenset({
     "gmail.com", "icloud.com", "wp.pl", "onet.pl", "o2.pl", "interia.pl", "outlook.com", "yahoo.com",
 })
 _CONFIG_ERROR = "budget_receipt_gmail_sender_config_invalid"
+_MAX_PAYMENT_SENDERS = 200
 
 _QUOTED_VALUE = r'"(?:[^"\\]|\\.)*"'
 _AUTH_TOKEN = re.compile(rf'{_QUOTED_VALUE}|\\.|[();]|[^"\\();]+|["\\]', re.DOTALL)
@@ -29,6 +31,13 @@ _FORWARD_HEADERS = frozenset({
     "from", "od", "date", "data", "sent", "wysłano", "subject", "temat", "to", "do", "cc", "dw",
     "reply-to", "message-id",
 })
+
+
+@dataclass(frozen=True)
+class PaymentSender:
+    sender: str
+    merchant: str
+    gateway: bool = False
 
 
 def _domain_rule(value):
@@ -57,12 +66,45 @@ def _normalize_rules(values, normalize):
     return tuple(sorted(rules))
 
 
-def normalize_sender_rules(sender_allowlist, spouse_forward_senders, known_merchant_domains):
+def _payment_sender_rule(entry) -> PaymentSender:
+    if (not isinstance(entry, dict) or not {"sender", "merchant"} <= entry.keys()
+            or entry.keys() - {"sender", "merchant", "gateway"}):
+        raise ValueError(_CONFIG_ERROR)
+    sender, merchant = entry["sender"], entry["merchant"]
+    gateway = entry.get("gateway", False)
+    rule = _sender_rule(sender) if isinstance(sender, str) else None
+    if rule is None or any(domain_matches(rule.rpartition("@")[2], domain) for domain in _PUBLIC_WEBMAIL):
+        raise ValueError(_CONFIG_ERROR)
+    if not isinstance(merchant, str) or not 1 <= len(merchant) <= 64 or not merchant.isprintable():
+        raise ValueError(_CONFIG_ERROR)
+    if type(gateway) is not bool:
+        raise ValueError(_CONFIG_ERROR)
+    return PaymentSender(rule, merchant, gateway)
+
+
+def normalize_payment_senders(values) -> tuple[PaymentSender, ...]:
+    if not isinstance(values, list) or len(values) > _MAX_PAYMENT_SENDERS:
+        raise ValueError(_CONFIG_ERROR)
+    rules = {}
+    for value in values:
+        entry = _payment_sender_rule(value)
+        if entry.sender in rules:
+            raise ValueError(_CONFIG_ERROR)
+        rules[entry.sender] = entry
+    return tuple(rules.values())
+
+
+def normalize_sender_rules(sender_allowlist, spouse_forward_senders, known_merchant_domains, *, payment_senders=()):
     """Return normalized direct rules, exact spouse mailboxes and merchant domains."""
     direct = _normalize_rules(sender_allowlist, _sender_rule)
     spouse = _normalize_rules(spouse_forward_senders, canonical_mailbox)
     merchants = set(_normalize_rules(known_merchant_domains, _domain_rule))
-    if not direct and not spouse:
+    if not direct and not spouse and not payment_senders:
+        raise ValueError(_CONFIG_ERROR)
+    # Match in both directions to catch either a parent domain or an exact mailbox
+    # covered by the other list's domain rule.
+    if any(_matches_sender(payment.sender, rule) or _matches_sender(rule, payment.sender)
+           for payment in payment_senders for rule in direct):
         raise ValueError(_CONFIG_ERROR)
     merchants.update(rule[1:] for rule in direct if rule.startswith("@"))
     return direct, spouse, tuple(sorted(merchants))
@@ -75,15 +117,26 @@ def _mailbox(value):
     return None
 
 
+def _single_mailbox(values):
+    return _mailbox(values[0]) if len(values) == 1 else None
+
+
 def domain_matches(domain: str, rule: str) -> bool:
     """Match a canonical domain to a rule for that domain and its subdomains."""
     return domain == rule or domain.endswith(f".{rule}")
 
 
-def _on_allowlist(address, rules):
-    domain = address.rpartition("@")[2]
-    return any(address == rule or (rule.startswith("@") and domain_matches(domain, rule[1:]))
-               for rule in rules)
+def _matches_sender(address, rule):
+    return address == rule or (rule.startswith("@") and domain_matches(address.rpartition("@")[2], rule[1:]))
+
+
+def payment_sender_for(headers, payment_senders: tuple[PaymentSender, ...]) -> PaymentSender | None:
+    """Resolve an authenticated From by exact mailbox, then by most specific domain."""
+    address = _single_mailbox([value for name, value in headers if name.lower() == "from"])
+    if address is None:
+        return None
+    matches = (entry for entry in payment_senders if _matches_sender(address, entry.sender))
+    return max(matches, key=lambda entry: (entry.sender == address, len(entry.sender)), default=None)
 
 
 def _split_auth_results(value):
@@ -210,32 +263,34 @@ def _gmail_authenticated(domain, results, signatures, *, relaxed=False):
     return "dkim" in aligned and bool(aligned & {"spf", "dmarc"})
 
 
-def classify_sender(headers, sender_allowlist, spouse_forward_senders, owner_mailbox=None):
+def classify_sender(headers, sender_allowlist, spouse_forward_senders, owner_mailbox=None, *, payment_senders=()):
     """Classify ordered outer headers, preserving duplicates and the topmost AR."""
     by_name = {}
     for name, value in headers:
         by_name.setdefault(name.lower(), []).append(value)
-    authors = by_name.get("from", ())
-    address = _mailbox(authors[0]) if len(authors) == 1 else None
+    address = _single_mailbox(by_name.get("from", ()))
     if not address:
         return "untrusted"
     domain = address.rpartition("@")[2]
     sender_headers = by_name.get("sender", ())
     if sender_headers:
-        sender = _mailbox(sender_headers[0]) if len(sender_headers) == 1 else None
+        sender = _single_mailbox(sender_headers)
         if not sender or sender.rpartition("@")[2] != domain:
             return "untrusted"
+    invoice_sender = any(_matches_sender(address, rule) for rule in sender_allowlist)
+    if address == owner_mailbox:
+        path = "owner_forward"
+    elif address in spouse_forward_senders:
+        path = "spouse_forward"
+    elif invoice_sender or any(_matches_sender(address, entry.sender) for entry in payment_senders):
+        path = "direct_allowlist"
+    else:
+        return "untrusted"
     if not _gmail_authenticated(domain, by_name.get("authentication-results", ()),
                                by_name.get("dkim-signature", ()),
-                               relaxed=_on_allowlist(address, sender_allowlist)):
+                               relaxed=invoice_sender or path == "direct_allowlist"):
         return "untrusted"
-    if owner_mailbox and address == owner_mailbox:
-        return "owner_forward"
-    if address in spouse_forward_senders:
-        return "spouse_forward"
-    if _on_allowlist(address, sender_allowlist):
-        return "direct_allowlist"
-    return "untrusted"
+    return path
 
 
 def _inline_forward(text):
@@ -343,8 +398,7 @@ def _forwarded_original(message, render_html):
 
 
 def _forward_sender(message):
-    authors = [value for name, value in message.raw_items() if name.lower() == "from"]
-    return _mailbox(authors[0]) if len(authors) == 1 else None
+    return _single_mailbox([value for name, value in message.raw_items() if name.lower() == "from"])
 
 
 def forward_sender_domain(message):

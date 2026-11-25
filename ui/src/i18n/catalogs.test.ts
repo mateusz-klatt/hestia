@@ -161,9 +161,21 @@ function placeholders(message: string): string[] {
   return [...new Set(message.match(/\{[^{}]*\}/g) ?? [])].sort();
 }
 
+// Pending Codex translation for receipts v1e. Locales without the label use the English fallback.
+const pendingReceiptLabel = "budget.receipts.documentKind.payment_confirmation" satisfies MessageKey;
+
+function mayOmitTranslation(locale: Locale, key: string): boolean {
+  return key === pendingReceiptLabel && locale !== "en" && locale !== "pl";
+}
+
 describe("translation catalogs", () => {
   it("ships exactly one catalog for every supported locale", () => {
     expect(Object.keys(catalogs).sort()).toEqual(LOCALES.map((locale) => `./locales/${locale}.ts`).sort());
+  });
+
+  it("removes the pending receipt label exception once translation is complete", () => {
+    expect(LOCALES.some((locale) => mayOmitTranslation(locale, pendingReceiptLabel)
+      && catalogs[`./locales/${locale}.ts`]?.[pendingReceiptLabel] === undefined)).toBe(true);
   });
 
   it("keeps identical-string exceptions explicit and current", () => {
@@ -180,13 +192,15 @@ describe("translation catalogs", () => {
   describe.each(LOCALES)("%s", (locale) => {
     const messages = catalogs[`./locales/${locale}.ts`] ?? {};
 
-    it("has every source key and no extra keys", () => {
-      expect(Object.keys(messages).sort()).toEqual(sourceKeys);
+    it("has every required source key and no extra keys", () => {
+      const expected = sourceKeys.filter((key) => key in messages || !mayOmitTranslation(locale, key));
+      expect(Object.keys(messages).sort()).toEqual(expected);
     });
 
     it("has non-empty messages with the source placeholder sets", () => {
       for (const [key, source] of Object.entries(en)) {
         const message = messages[key];
+        if (message === undefined && mayOmitTranslation(locale, key)) continue;
         expect(typeof message, key).toBe("string");
         expect(message?.trim(), key).not.toBe("");
         expect(placeholders(message ?? ""), key).toEqual(placeholders(source));

@@ -393,6 +393,8 @@ const pl: Partial<Messages> = {
   "budget.devices.pairError": "Nie udało się utworzyć kodu parowania.",
   "budget.devices.revokeError": "Nie udało się odwołać urządzenia.",
 
+  "budget.receipts.documentKind.payment_confirmation": "Potwierdzenie płatności",
+
   "budget.consent.title": "Stan zgód i przypomnienia o odnowieniu",
   "budget.consent.intro": "Wyłącznie podgląd ważności zgód bankowych oraz zapisanych prób autoryzacji. Nie zamyka sesji w banku, niczego nie usuwa i nie wysyła żądań do banku.",
   "budget.consent.loading": "Wczytywanie stanu zgód…",

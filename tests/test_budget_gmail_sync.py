@@ -17,7 +17,7 @@ from hestia.budget.gmail_store import (
     DAY, GMAIL_MESSAGE_DOMAIN, IMPORT_TTL, PARSE_FAILED_REASONS, GmailStore, PendingMessage,
     _reasons_key, digest,
 )
-from hestia.budget.gmail_sync import GmailSettings, GmailSync
+from hestia.budget.gmail_sync import GmailSettings, GmailSync, PaymentSender
 from hestia.budget.receipt_reconcile import reconcile_receipt_links
 from hestia.budget.receipt_store import BudgetReceiptStore
 from hestia.calendar_sync.providers import HTTPResponse, ProviderError
@@ -661,6 +661,27 @@ class GmailSyncTests(TestCase):
         self.assertEqual(self.processor.processed, ["a", "b"])
         self.assertEqual(self.store.state(OWNER).history_id, "120")
         self.assertIsNone(self.store.state(OWNER).scope_scan_query_hmac)
+
+    def test_payment_senders_are_searched_in_backfill_and_incremental_scope(self):
+        self.service.settings = replace(SETTINGS, payment_senders=(
+            PaymentSender("@pay.example.test", "Example Pay", True),
+            PaymentSender("bill@shop.example.test", "Example Shop"),
+        ))
+        self.enable()
+        self.sync()
+        self.tick()
+        self.transport.profile["historyId"] = "120"
+        self.transport.routes[("/history", None)] = response(history("shop-message"))
+        self.transport.routes[("/messages", None)] = response(page("shop-message"))
+        self.sync()
+        queries = [params["q"][0] for params in self.transport.requests("/messages")]
+        self.assertEqual(len(queries), 2)
+        for query in queries:
+            self.assertIn('from:"pay.example.test"', query)
+            self.assertIn('from:"bill@shop.example.test"', query)
+            self.assertIn(f'from:"{MAILBOX}"', query)
+            self.assertIn('from:"bills@vendor.test"', query)
+            self.assertIn('from:"spouse@example.test"', query)
 
     def test_scope_change_restarts_history_tokens_from_same_baseline(self):
         self.enable()
