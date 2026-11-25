@@ -555,6 +555,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchChange": "Modifier",
   "budget.receipts.suggestedMatchUnlink": "Dissocier / sans lien",
   "budget.receipts.bookingDateNote": "(comptabilisé {date})",
+  "budget.receipts.candidateListChanged": "La liste des correspondances a changé",
   "budget.consent.title": "État des autorisations & renouvellements",
   "budget.consent.intro": "Résumé en lecture seule de la validité des autorisations bancaires et des enregistrements d'autorisation conservés. Aucune clôture à distance, suppression ou requête bancaire n'est exécutée ici.",
   "budget.consent.loading": "Chargement des autorisations…",

@@ -556,6 +556,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchChange": "Изменить",
   "budget.receipts.suggestedMatchUnlink": "Отвязать / без связи",
   "budget.receipts.bookingDateNote": "(проведено {date})",
+  "budget.receipts.candidateListChanged": "Список совпадений изменился",
   "budget.consent.title": "Состояние согласий и обзор продлений",
   "budget.consent.intro": "Сводка сроков банковских согласий и сохранённых записей авторизации только для просмотра. Здесь не выполняются удалённое закрытие, удаление или запросы к банку.",
   "budget.consent.loading": "Загрузка обзора согласий…",

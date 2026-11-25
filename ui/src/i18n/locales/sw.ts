@@ -556,6 +556,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchChange": "Badilisha",
   "budget.receipts.suggestedMatchUnlink": "Ondoa / bila kiungo",
   "budget.receipts.bookingDateNote": "(imeandikwa {date})",
+  "budget.receipts.candidateListChanged": "Orodha ya zinazolingana imebadilika",
   "budget.consent.title": "Muhtasari wa hali na usasishaji wa idhini",
   "budget.consent.intro": "Muhtasari wa kusoma tu wa uhalali wa idhini ya benki na rekodi za uidhinishaji zilizohifadhiwa. Hakuna kufunga kwa mbali, kufuta au ombi la benki linalofanywa hapa.",
   "budget.consent.loading": "Inapakia muhtasari wa idhini…",

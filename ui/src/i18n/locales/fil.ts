@@ -557,6 +557,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchChange": "Palitan",
   "budget.receipts.suggestedMatchUnlink": "Alisin / walang link",
   "budget.receipts.bookingDateNote": "(nai-book {date})",
+  "budget.receipts.candidateListChanged": "Nagbago ang listahan ng tugma",
   "budget.consent.title": "Buod ng katayuan & pag-renew ng pahintulot",
   "budget.consent.intro": "Buod na para sa pagbasa lamang ng bisa ng pahintulot sa bangko at mga nakaimbak na tala ng awtorisasyon. Walang malayuang pagsasara, pagtanggal o kahilingan sa bangko na isinasagawa rito.",
   "budget.consent.loading": "Nilo-load ang buod ng pahintulot…",

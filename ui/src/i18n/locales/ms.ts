@@ -557,6 +557,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchChange": "Tukar",
   "budget.receipts.suggestedMatchUnlink": "Nyahpaut / tiada pautan",
   "budget.receipts.bookingDateNote": "(direkodkan {date})",
+  "budget.receipts.candidateListChanged": "Senarai padanan telah berubah",
   "budget.consent.title": "Gambaran status & pembaharuan persetujuan",
   "budget.consent.intro": "Ringkasan baca sahaja tentang kesahan persetujuan bank dan rekod kebenaran tersimpan. Tiada penutupan jauh, pemadaman atau permintaan bank dijalankan di sini.",
   "budget.consent.loading": "Memuatkan gambaran persetujuan…",

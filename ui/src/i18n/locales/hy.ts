@@ -557,6 +557,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchChange": "Փոխել",
   "budget.receipts.suggestedMatchUnlink": "Անջատել / առանց կապի",
   "budget.receipts.bookingDateNote": "(գրանցված {date})",
+  "budget.receipts.candidateListChanged": "Համընկնումների ցանկը փոխվել է",
   "budget.consent.title": "Համաձայնությունների վիճակի և երկարաձգման ամփոփում",
   "budget.consent.intro": "Բանկային համաձայնությունների վավերության և պահված լիազորման գրառումների ամփոփում՝ միայն դիտման համար։ Այստեղ հեռակա փակումներ, ջնջումներ կամ բանկային հարցումներ չեն կատարվում։",
   "budget.consent.loading": "Համաձայնությունների ամփոփումը բեռնվում է…",

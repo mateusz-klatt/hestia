@@ -744,6 +744,20 @@ class StoreEdgeTests(AnalyticsCase):
             self.assertEqual(merchant_tokens(category_shop, None), frozenset(), category_shop)
         self.assertEqual(merchant_score_groups("Księgarnia Centrum", None), ((), ("centrum", "ksiegarnia")))
 
+        # E-commerce and billing words/inflections never qualify as distinctive tokens.
+        for ecom_shop in (
+            "SKLEP INTERNETOWY INTERNETOWA INTERNETOWE INTERNETOWEJ",
+            "ZAKUP ZAKUPY ZAKUPÓW ZAMÓWIENIE ZAMOWIENIA ORDER ORDERS",
+            "PŁATNOŚĆ PLATNOSCI PAYMENT PAYMENTS USŁUGA USLUGI USŁUG",
+            "ABONAMENT ABONAMENTU OPŁATA OPŁATY FAKTURA RACHUNEK TRANSAKCJA",
+            "KARTA KARTY PRZELEW PRZELEWU TRANSFER POLECENIE ZAPŁATA ZAPLATA",
+        ):
+            self.assertEqual(merchant_tokens(ecom_shop, None), frozenset(), ecom_shop)
+        self.assertEqual(
+            merchant_score_groups("Sklep Internetowy Zamówienie", None),
+            ((), ("internetowy", "sklep", "zamowienie")),
+        )
+
 
 class ReceiptApiEdgeTests(unittest.TestCase):
     def test_store_refuses_a_non_authoritative_backend(self):

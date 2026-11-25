@@ -2739,6 +2739,28 @@ NR KARTY ****5555
         )
         self.assertEqual(self.receipts.detail("owner", rec_drog_brand)["candidates"][0]["match_strength"], "distinctive")
 
+    def test_round5_ecommerce_billing_words_never_distinctive(self):
+        self.add_transaction(
+            "a", "r5-ecom-shop", amount="220.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["SKLEP INTERNETOWY ZAKUPY PLATNOSC KARTA"],
+        )
+        rec_ecom = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="220.00",
+            shop="SKLEP INTERNETOWY ABONAMENT FAKTURA", nip=None,
+        )
+        cand_ecom = self.receipts.detail("owner", rec_ecom)["candidates"]
+        self.assertEqual(cand_ecom[0]["match_strength"], "generic")
+
+        self.add_transaction(
+            "a", "r5-ecom-brand", amount="221.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["ALFA PRZELEW RACHUNEK"],
+        )
+        rec_brand = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="221.00",
+            shop="SKLEP INTERNETOWY ALFA", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_brand)["candidates"][0]["match_strength"], "distinctive")
+
 
 class ReceiptRetentionSweepTests(fixture.unittest.IsolatedAsyncioTestCase):
     async def test_sweep_calls_retain_expired_when_flag_is_off(self):

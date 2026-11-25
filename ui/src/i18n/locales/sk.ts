@@ -556,6 +556,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchChange": "Zmeniť",
   "budget.receipts.suggestedMatchUnlink": "Odpojiť / bez väzby",
   "budget.receipts.bookingDateNote": "(zaúčtované {date})",
+  "budget.receipts.candidateListChanged": "Zoznam zhôd sa zmenil",
   "budget.consent.title": "Prehľad stavu a obnovy súhlasov",
   "budget.consent.intro": "Prehľad platnosti bankových súhlasov a uložených autorizačných záznamov iba na čítanie. Nevykonáva vzdialené ukončenie, mazanie ani požiadavky na banku.",
   "budget.consent.loading": "Načítava sa prehľad súhlasov…",

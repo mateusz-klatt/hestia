@@ -556,6 +556,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchChange": "Değiştir",
   "budget.receipts.suggestedMatchUnlink": "Bağlantıyı kaldır / bağlama",
   "budget.receipts.bookingDateNote": "(işlendi {date})",
+  "budget.receipts.candidateListChanged": "Eşleşme listesi değişti",
   "budget.consent.title": "İzin durumu ve yenileme özeti",
   "budget.consent.intro": "Banka izinlerinin geçerliliği ve kayıtlı yetkilendirmelerin salt okunur özeti. Burada uzaktan kapatma, silme veya bankaya istek gönderme işlemi yapılmaz.",
   "budget.consent.loading": "İzin özeti yükleniyor…",

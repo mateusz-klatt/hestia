@@ -556,6 +556,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchChange": "Endre",
   "budget.receipts.suggestedMatchUnlink": "Koble fra / ingen kobling",
   "budget.receipts.bookingDateNote": "(bokført {date})",
+  "budget.receipts.candidateListChanged": "Listen over treff har endret seg",
   "budget.consent.title": "Samtykkestatus & fornyelsesoversikt",
   "budget.consent.intro": "Skrivebeskyttet oversikt over banksamtykkenes gyldighet og lagrede godkjenninger. Ingen fjernavslutning, sletting eller bankforespørsler utføres her.",
   "budget.consent.loading": "Laster samtykkeoversikt…",

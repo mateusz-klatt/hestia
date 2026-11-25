@@ -1803,4 +1803,61 @@ describe("ReceiptsView", () => {
     expect(bannerEnVal?.textContent).toContain("2026-11-14 (booked 16.11)");
     expect(bannerEnVal?.textContent).toContain("Same day");
   });
+
+  it("synchronously clears preselection before rendering swapped candidates and blocks stale Confirm click with Lista dopasowań się zmieniła", async () => {
+    const candStrong = receiptCandidate({
+      entry_reference: "1".repeat(64),
+      candidate_token: "tok-strong",
+      amount: "42.50",
+      match_strength: "nip",
+    });
+    const candWeak = receiptCandidate({
+      entry_reference: "2".repeat(64),
+      candidate_token: "tok-weak",
+      amount: "99.00",
+      match_strength: "generic",
+    });
+    const detail = receiptDetail({ receipt_id: "rec-race", status: "imported", linked: false });
+    const refreshDeferred = deferred<ReceiptDetailResult>();
+    const clients = fakeClients([receiptSummary({ receipt_id: "rec-race", status: "imported" })]);
+    let calls = 0;
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) return ok({ receipt: detail, candidates: [candStrong] });
+      return refreshDeferred.promise;
+    });
+
+    await renderReceipts(clients, { locale: "pl", revision: 1 });
+    await click(openDetailButton(0, "Szczegóły"));
+    const confirmBtn = button("Zatwierdź dokument", dialog());
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
+    expect(confirmBtn.disabled).toBe(false);
+
+    // Start refresh; verify Confirm never sees enabled state alongside replacement candWeak DOM,
+    // and clicking Confirm in the microtask gap after detail resolves fails closed with the Polish message.
+    const observedWeakWithEnabledConfirm: boolean[] = [];
+    const observer = new MutationObserver(() => {
+      if (dialog().textContent.includes("99,00")) {
+        const btn = dialog().querySelector<HTMLButtonElement>("form.budget-receipt-confirm button.budget-primary");
+        observedWeakWithEnabledConfirm.push(btn !== null && !btn.disabled);
+      }
+    });
+    observer.observe(dialog(), { subtree: true, childList: true, attributes: true, characterData: true });
+
+    await renderReceipts(clients, { locale: "pl", revision: 2 });
+    await act(async () => {
+      refreshDeferred.resolve({ ok: true, data: { receipt: detail, candidates: [candWeak] } });
+      await Promise.resolve();
+      // Click Confirm right after receiptDetail settled in memory before React renders candWeak.
+      confirmBtn.click();
+    });
+    observer.disconnect();
+
+    expect(clients.rApi.confirmReceipt).not.toHaveBeenCalled();
+    expect(observedWeakWithEnabledConfirm.every((enabled) => !enabled)).toBe(true);
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("Lista dopasowań się zmieniła");
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(false);
+    expect(button("Zatwierdź dokument", dialog()).disabled).toBe(true);
+    expect(dialog().querySelector(".budget-receipt-suggested")).toBeNull();
+  });
 });

@@ -287,10 +287,46 @@ _SHOP_CATEGORY_TOKENS = frozenset({
     "pharmacy", "pharmacies", "bakery", "bakeries", "cafe", "café", "cafes", "cafés", "coffee", "coffees",
     "restaurant", "restaurants", "station", "stations", "fuel", "fuels", "cinema", "cinemas", "clinic", "clinics",
 })
+_ECOMMERCE_GENERIC_TOKENS = frozenset({
+    # Generic Polish and English e-commerce / billing words (with/without diacritics and inflections).
+    "internet", "internetowy", "internetowa", "internetowe", "internetowego", "internetowej", "internetowemu",
+    "internetowym", "internetowych", "internetowymi", "internetową", "internetowo",
+    "zakup", "zakupu", "zakupowi", "zakupem", "zakupie", "zakupy", "zakupow", "zakupów", "zakupom", "zakupami",
+    "zakupach", "zakupowy", "zakupowa", "zakupowe",
+    "zamowienie", "zamówienie", "zamowienia", "zamówienia", "zamowieniu", "zamówieniu", "zamowieniem", "zamówieniem",
+    "zamowien", "zamówień", "zamowieniom", "zamówieniom", "zamowieniami", "zamówieniami", "zamowieniach",
+    "zamówieniach", "order", "orders",
+    "platnosc", "płatność", "platnosci", "płatności", "platnoscia", "płatnością", "platnosciom", "płatnościom",
+    "platnosciami", "płatnościami", "platnosciach", "płatnościach", "platniczy", "płatniczy", "platnicza",
+    "płatnicza", "platnicze", "płatnicze", "payments",
+    "usluga", "usługa", "uslugi", "usługi", "usludze", "usłudze", "usluge", "usługę", "uslugo", "usługo", "uslug",
+    "usług", "uslugom", "usługom", "uslugami", "usługami", "uslugach", "usługach", "uslugowy", "usługowy",
+    "uslugowa", "usługowa", "uslugowe", "usługowe",
+    "abonament", "abonamentu", "abonamentowi", "abonamentem", "abonamencie", "abonamenty", "abonamentow",
+    "abonamentów", "abonamentom", "abonamentami", "abonamentach", "abonamentowy", "abonamentowa", "abonamentowe",
+    "opłata", "oplaty", "opłaty", "oplacie", "opłacie", "oplate", "opłatę", "opłatą", "oplato", "opłato", "oplat",
+    "opłat", "oplatom", "opłatom", "oplatami", "opłatami", "oplatach", "opłatach",
+    "faktura", "faktury", "fakturze", "fakture", "fakturę", "fakturą", "fakturo", "faktur", "fakturom",
+    "fakturami", "fakturach", "fakturowy", "invoice", "invoices",
+    "rachunek", "rachunku", "rachunkowi", "rachunkiem", "rachunki", "rachunkow", "rachunków", "rachunkom",
+    "rachunkami", "rachunkach", "rachunkowy",
+    "transakcja", "transakcji", "transakcje", "transakcję", "transakcją", "transakcjo", "transakcyj", "transakcjom",
+    "transakcjami", "transakcjach", "transakcyjny",
+    "karta", "karty", "karcie", "karte", "kartę", "kartą", "karto", "kart", "kartom", "kartami", "kartach",
+    "kartowy", "kartowa", "kartowe",
+    "przelew", "przelewu", "przelewowi", "przelewem", "przelewie", "przelewy", "przelewow", "przelewów",
+    "przelewom", "przelewami", "przelewach", "przelewowy",
+    "transfer", "transferu", "transferowi", "transferem", "transferze", "transfery", "transferow", "transferów",
+    "transferom", "transferami", "transferach", "transfers",
+    "polecenie", "polecenia", "poleceniu", "poleceniem", "polecen", "poleceń", "poleceniom", "poleceniami",
+    "poleceniach",
+    "zaplata", "zapłata", "zaplaty", "zapłaty", "zaplacie", "zapłacie", "zaplate", "zapłatę", "zapłatą",
+    "zaplato", "zapłato", "zaplat", "zapłat",
+})
 _GENERIC_MERCHANT_TOKENS = frozenset({
     "grocery", "groceries", "grocer", "energy", "energia", "polska", "poland", "services", "service",
     "group", "store", "shop", "sklep", "market", "online", "pay", "payment", "oplata",
-}) | _POLISH_CITY_TOKENS | _LOCATION_STOP_TOKENS | _SHOP_CATEGORY_TOKENS
+}) | _POLISH_CITY_TOKENS | _LOCATION_STOP_TOKENS | _SHOP_CATEGORY_TOKENS | _ECOMMERCE_GENERIC_TOKENS
 _STOP_TOKENS = _NON_MERCHANT_TOKENS | _GENERIC_MERCHANT_TOKENS
 
 

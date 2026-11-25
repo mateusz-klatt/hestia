@@ -557,6 +557,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.suggestedMatchChange": "변경",
   "budget.receipts.suggestedMatchUnlink": "연결 해제 / 연결 안 함",
   "budget.receipts.bookingDateNote": "(기장 {date})",
+  "budget.receipts.candidateListChanged": "일치 후보 목록이 변경되었습니다",
   "budget.consent.title": "동의 상태 및 갱신 개요",
   "budget.consent.intro": "은행 동의 유효 기간과 저장된 인증 기록의 읽기 전용 요약입니다. 여기에서는 원격 종료, 삭제 또는 은행 요청을 실행하지 않습니다.",
   "budget.consent.loading": "동의 개요 불러오는 중…",

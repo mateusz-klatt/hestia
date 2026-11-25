@@ -10,6 +10,7 @@ import {
   buildPlainBulkConfirmRequest,
   buildReceiptListRequest,
   candidateDisplayDate,
+  clearStaleCandidateSelection,
   computeLinesDelta,
   createPendingReceiptStore,
   draftFromDetail,
@@ -36,6 +37,7 @@ import {
   receiptMerchantGroupKey,
   reconcileLinkChoice,
   resolveDraftFromDetailSession,
+  selectCandidateDraft,
   subtractDecimals,
   suggestedCandidateDates,
   validPolishNip,
@@ -406,7 +408,7 @@ describe("receipts_model", () => {
       expect(builtExplicitUnlinked.ok).toBe(true);
       if (builtExplicitUnlinked.ok) expect(builtExplicitUnlinked.request.link).toBeNull();
 
-      const builtExplicitLinked = buildConfirmRequest(unlinkedImport, { ...draftImport, linkChoice: "candidate:0" }, [cand]);
+      const builtExplicitLinked = buildConfirmRequest(unlinkedImport, selectCandidateDraft(draftImport, cand, 0), [cand]);
       expect(builtExplicitLinked.ok).toBe(true);
       if (builtExplicitLinked.ok) {
         expect(builtExplicitLinked.request.link).toEqual({
@@ -415,6 +417,31 @@ describe("receipts_model", () => {
           candidate_token: cand.candidate_token,
         });
       }
+      // Missing binding, replaced candidate token, or altered match_strength fails closed with candidateListChanged.
+      expect(buildConfirmRequest(
+        unlinkedImport,
+        { ...draftImport, linkChoice: "candidate:0", selectedCandidate: null },
+        [cand],
+      )).toEqual({ ok: false, errorKey: "budget.receipts.candidateListChanged" });
+      expect(buildConfirmRequest(
+        unlinkedImport,
+        selectCandidateDraft(draftImport, cand, 0),
+        [{ ...cand, candidate_token: "tok-replaced" }],
+      )).toEqual({ ok: false, errorKey: "budget.receipts.candidateListChanged" });
+      expect(buildConfirmRequest(
+        unlinkedImport,
+        selectCandidateDraft(draftImport, { ...cand, match_strength: "nip" }, 0),
+        [{ ...cand, match_strength: "generic" }],
+      )).toEqual({ ok: false, errorKey: "budget.receipts.candidateListChanged" });
+
+      const draftOtherReceipt = draftFromDetail({ ...unlinkedImport, receipt_id: "other-receipt" }, [cand]);
+      expect(clearStaleCandidateSelection(draftOtherReceipt, unlinkedImport.receipt_id, draftImport.candidateSetKey)).toBeNull();
+      expect(clearStaleCandidateSelection(draftImport, unlinkedImport.receipt_id, draftImport.candidateSetKey)).toBe(draftImport);
+      expect(clearStaleCandidateSelection(
+        selectCandidateDraft(draftImport, cand, 0),
+        unlinkedImport.receipt_id,
+        "changed-set",
+      )).toMatchObject({ linkChoice: "", selectedCandidate: null });
       expect(reconcileLinkChoice(unlinkedImport, "candidate:0", { ...draftImport, rawShopName: "Changed" }, [cand])).toBe("");
 
       const noCandidatesDraft = draftFromDetail(unlinkedImport, []);
@@ -883,22 +910,38 @@ describe("receipts_model", () => {
     expect(afterEmptyReload.draft.linkChoice).toBe("");
     expect(afterEmptyReload.showSuggestedBanner).toBe(false);
 
-    // User chose specific candidate -> rebinds by identity even if order shifts, and drops if gone without preselecting candB.
+    // User chose specific candidate -> rebinds by full identity even if order shifts, and drops if gone or strength changes.
     const touchedCandA = {
       ...first.nextSessionEntry,
       touched: true,
-      choice: { kind: "candidate" as const, account_id: candA.account_id, entry_reference: candA.entry_reference },
+      choice: {
+        kind: "candidate" as const,
+        account_id: candA.account_id,
+        entry_reference: candA.entry_reference,
+        candidate_token: candA.candidate_token,
+        match_strength: candA.match_strength,
+      },
     };
     expect(resolveDraftFromDetailSession(inv, [candB, candA], touchedCandA).draft.linkChoice).toBe("candidate:1");
+    expect(resolveDraftFromDetailSession(
+      inv,
+      [{ ...candA, match_strength: "generic" }],
+      touchedCandA,
+    ).draft.linkChoice).toBe("");
     const afterMissing = resolveDraftFromDetailSession(inv, [candB], touchedCandA);
     expect(afterMissing.draft.linkChoice).toBe("");
     expect(afterMissing.showSuggestedBanner).toBe(false);
 
-    // Untouched, candidate set changes ([candA] -> [candB] or [] -> [candA]) -> never preselects.
+    // Untouched, candidate set changes ([candA] -> [candB], token/strength change, or [] -> [candA]) -> never preselects.
     const changedCandSet = resolveDraftFromDetailSession(inv, [candB], first.nextSessionEntry);
     expect(changedCandSet.draft.linkChoice).toBe("");
     expect(changedCandSet.showSuggestedBanner).toBe(false);
     expect(changedCandSet.nextSessionEntry.candidateSetChanged).toBe(true);
+    expect(resolveDraftFromDetailSession(
+      inv,
+      [{ ...candA, match_strength: "generic" }],
+      first.nextSessionEntry,
+    ).draft.linkChoice).toBe("");
 
     const startedEmpty = resolveDraftFromDetailSession(inv, [], undefined);
     expect(startedEmpty.draft.linkChoice).toBe("unlink");
@@ -912,7 +955,7 @@ describe("receipts_model", () => {
       baselineVersion: 2,
       baselineStatus: "needs_review" as const,
       baselineLinked: true,
-      baselineCandidateKeys: [candA.account_id + ":" + candA.entry_reference],
+      baselineCandidateKeys: [`${candA.account_id}:${candA.entry_reference}:${candA.candidate_token}:${candA.match_strength}`],
       touched: true,
       choice: { kind: "keep" as const },
       candidateSetChanged: false,
