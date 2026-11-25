@@ -1,0 +1,9 @@
+Potwierdzenie zamówienia z 13 lis 2026
+
+Twoje konto: someone@example.test
+Produkt Cena
+Przykładowa Subskrypcja (20 TB) (deweloper: Example LLC) €99.99
+miesięcznie
+Automatycznie odnawiana prenumerata
+Razem: €99.99 miesięcznie
+(Zawiera VAT w kwocie €18.70)

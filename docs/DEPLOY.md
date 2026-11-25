@@ -110,9 +110,9 @@ ProxyAddHeaders On
 
 `mod_remoteip` restores the client address before proxying. The `RequestHeader` directive strips incoming `X-Forwarded-For`, and `ProxyAddHeaders` builds the forwarded header from Apache's restored address. Use the normal request-header phase for this removal so it follows address restoration. Without the trusted loopback setting and client-address restoration, pairing traffic collapses into one per-IP bucket. [Apache remote-IP documentation](https://httpd.apache.org/docs/2.4/mod/mod_remoteip.html), [Apache proxy headers](https://httpd.apache.org/docs/2.4/mod/mod_proxy.html#proxyaddheaders)
 
-## Gmail invoice import (receipts v1d-a and v1d-b)
+## Gmail receipt import (receipts v1d-a, v1d-b, and v1e)
 
-Default off (`HESTIA_BUDGET_GMAIL_IMPORT_ENABLED` unset). The isolated `receipt-parser` service handles invoice HTML, plain text, and PDF attachments (`network_mode: none`, read-only root, `cap_drop: ALL`, `no-new-privileges`, UID 1000, 256 MiB / 32 pids / 0.5 CPU, noexec tmpfs). It is behind the compose profile `receipt-parser`, so an ordinary Hestia deploy does not start it. With the flag on and the service down, the Gmail routes return `503 budget_receipt_gmail_parser_unavailable` before contacting Gmail.
+Default off (`HESTIA_BUDGET_GMAIL_IMPORT_ENABLED` unset). The isolated `receipt-parser` service handles plain text and HTML for Gmail imports and extracts text from invoice PDFs (`network_mode: none`, read-only root, `cap_drop: ALL`, `no-new-privileges`, UID 1000, 256 MiB / 32 pids / 0.5 CPU, noexec tmpfs). It is behind the compose profile `receipt-parser`, so an ordinary Hestia deploy does not start it. With the flag on and the service down, the Gmail routes return `503 budget_receipt_gmail_parser_unavailable` before contacting Gmail.
 
 The service reads all three files through `config._read_secret`. Each must be a regular file owned by container UID 1000 with mode `0400` or `0600`. Symlinks are rejected.
 
@@ -120,7 +120,7 @@ The service reads all three files through `config._read_secret`. Each must be a 
 - **Gmail refresh token**: reuse the existing `gmail.readonly` token (no new grant). Write it into a `0400` file under `./data/secrets/` and point the config's `refresh_token_env` at the env var holding that container path.
 - **Config** `HESTIA_BUDGET_RECEIPTS_GMAIL_CONFIG`: path to the JSON config, up to 16 KiB.
 
-`sender_allowlist` and `spouse_forward_senders` must both appear, and at least one must contain an entry. Environment variable names must match `[A-Z_][A-Z0-9_]{0,127}` and be set inside the container. The examples below are placeholders.
+`sender_allowlist` and `spouse_forward_senders` must both appear. At least one of `sender_allowlist`, `spouse_forward_senders`, and `payment_senders` must contain an entry. Environment variable names must match `[A-Z_][A-Z0-9_]{0,127}` and be set inside the container. The examples below are placeholders.
 
 | JSON key | Type | Meaning | Default or allowed values |
 | --- | --- | --- | --- |
@@ -130,6 +130,7 @@ The service reads all three files through `config._read_secret`. Each must be a 
 | `client_secret_env` | String | Name of the environment variable holding the OAuth client secret, such as `EXAMPLE_GMAIL_CLIENT_SECRET`. | Required. Environment variable name. |
 | `refresh_token_env` | String | Name of the environment variable holding the absolute container path to the refresh-token file, such as `EXAMPLE_GMAIL_REFRESH_TOKEN_FILE`. | Required. Environment variable name. |
 | `sender_allowlist` | Array of strings | Supplier rules for direct imports. Forwarded invoices require exact mailbox entries. | Required. Bare ASCII addresses or domain rules such as `billing@supplier.example.test` and `@supplier.example.test`. Domain rules include subdomains and exclude public webmail domains. |
+| `payment_senders` | Array of objects | Authenticated direct senders of payment confirmations. Each entry supplies a `sender` rule and a display `merchant`. Set `gateway` to `true` to extract the payee from the message when available. | Defaults to `[]` with at most 200 entries. Use the same sender syntax as `sender_allowlist`, for example `@shop.example.test`. Public webmail domains, duplicate rules, and overlap with `sender_allowlist` are rejected. Each `merchant` must contain 1–64 printable characters, including at least one non-whitespace character. `gateway` is a boolean and defaults to `false`. |
 | `spouse_forward_senders` | Array of strings | Mailboxes allowed to send spouse forwards. | Required. Exact bare ASCII addresses such as `forwarder@example.test`. |
 | `known_merchant_domains` | Array of strings | Legacy domain setting. Automatic forward imports depend on exact mailbox entries in `sender_allowlist`. | Defaults to `[]`. ASCII domains with an optional leading `@`, such as `supplier.example.test`. Public webmail domains are excluded. |
 | `require_known_forwarded_merchant` | Boolean | Legacy setting. The importer enforces exact mailbox checks for either value. | Defaults to `true`. |

@@ -3,23 +3,29 @@ from __future__ import annotations
 
 import base64
 from dataclasses import replace
+from datetime import datetime
 from email import policy
 from email.errors import MessageError
 from email.parser import BytesParser
 import logging
 import re
+from zoneinfo import ZoneInfo
 
 from .gmail_address import canonical_mailbox
 from .gmail_client import GmailError
 from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
-from .gmail_store import RFC_MESSAGE_DOMAIN, PendingMessage, digest, normalize_parse_failed_reason
-from .gmail_trust import classify_sender, domain_matches, forward_sender_domain, mime_parts, unwrap_trusted_forward
+from .gmail_payment import _payee_key, inspect_payment
+from .gmail_store import (ORDER_REFERENCE_DOMAIN, PAYMENT_PAYEE_DOMAIN, PAYMENT_SENDER_DOMAIN, RFC_MESSAGE_DOMAIN,
+                          PendingMessage, PendingPayment, digest, normalize_parse_failed_reason)
+from .gmail_trust import (classify_sender, domain_matches, forward_sender_domain, mime_parts, payment_sender_for,
+                          unwrap_trusted_forward)
 from .gmail_worker import MAX_HTML_BYTES, MAX_PDF_BYTES, PDFUnsupported, WorkerRejected, WorkerUnavailable
 
 
 MAX_MESSAGE_BYTES = 10 * 1024 * 1024
 _MAX_BASE64_CHARS = 4 * ((MAX_MESSAGE_BYTES + 2) // 3)
 _INTERNAL_DATE = re.compile(r"[0-9]{1,19}\Z", re.ASCII)
+_WARSAW = ZoneInfo("Europe/Warsaw")
 _ISSUER_SENDER_DOMAINS = {
     "T-Mobile": ("t-mobile.pl",),
     "Orange": ("orange.pl", "orange.com"),
@@ -118,11 +124,15 @@ def _is_pdf_part(part):
     return (part.get_payload(decode=True) or b"").startswith(b"%PDF-")
 
 
-def _document_parts(message):
+def _body_parts(message):
     for subtype, kind in (("plain", "text"), ("html", "html")):
         part = message.get_body((subtype,))
         if part is not None:
             yield kind, part
+
+
+def _document_parts(message):
+    yield from _body_parts(message)
     for part in mime_parts(message):
         if _is_pdf_part(part):
             yield "pdf", part
@@ -155,7 +165,8 @@ class GmailMessageProcessor:
 
     def _trust(self, headers):
         return classify_sender(headers, self.settings.sender_allowlist, self.settings.spouse_forward_senders,
-                               getattr(self.settings, "owner_mailbox", None))
+                               getattr(self.settings, "owner_mailbox", None),
+                               payment_senders=getattr(self.settings, "payment_senders", ()))
 
     def _manual_forward(self, outer, inner, pending):
         attached = any(part.get_content_type() == "message/rfc822" for part in mime_parts(outer))
@@ -187,6 +198,51 @@ class GmailMessageProcessor:
                                parse_failed_reason=None)
         return pending
 
+    def _payment(self, message, pending, sender, payment_senders):
+        subjects = tuple(map(str, message.get_all("Subject", ())))
+        failure = pending
+        for kind, part in _body_parts(message):
+            try:
+                payload = _document_payload(kind, part)
+                if not payload:
+                    continue
+                text = self.worker.parse(kind, payload)
+            except _PartOversized:
+                failure = replace(pending, outcome="skipped_oversized")
+                continue
+            except WorkerRejected as error:
+                failure = _parse_failed(pending, _worker_reason(error))
+                continue
+            if not text.strip():
+                continue
+            inspected = inspect_payment(text, subjects=subjects, merchant=sender.merchant, gateway=sender.gateway)
+            if inspected.missing_total:
+                continue
+            payment = inspected.payment
+            if payment is None:
+                return pending
+            try:
+                receipt_date = datetime.fromtimestamp(pending.internal_date, _WARSAW).date()
+            except (OverflowError, OSError, ValueError):
+                return pending
+            if any(abs((body_date - receipt_date).days) > 3 for body_date in payment.body_dates):
+                return pending
+            secret = self.settings.hmac_secret
+            reference = payment.order_reference
+            provenance = PendingPayment(
+                replace(payment, order_reference=None), receipt_date,
+                digest(secret, PAYMENT_SENDER_DOMAIN, sender.sender),
+                tuple(digest(secret, PAYMENT_SENDER_DOMAIN, rule.sender)
+                      for rule in payment_senders if rule.gateway != sender.gateway),
+                order_reference_hmac=digest(secret, ORDER_REFERENCE_DOMAIN, reference) if reference else None,
+                gateway=sender.gateway,
+                payee_hmac=(digest(secret, PAYMENT_PAYEE_DOMAIN, _payee_key(payment.merchant))
+                            if sender.gateway and not payment.payee_from_config else None),
+            )
+            return replace(pending, outcome="imported", payment=provenance,
+                           rfc_message_id_hmac=_rfc_message_hmac(message, secret))
+        return failure
+
     def _parse(self, raw, pending):
         message = BytesParser(policy=policy.default).parsebytes(raw)
         if self._trust(message.raw_items()) != pending.trust_path:
@@ -209,6 +265,10 @@ class GmailMessageProcessor:
                         and pattern.fullmatch(imported.invoice.invoice_number)):
                     return imported
             return self._manual_forward(message, inner, pending)
+        payment_senders = getattr(self.settings, "payment_senders", ())
+        sender = payment_sender_for(message.raw_items(), payment_senders)
+        if sender is not None:
+            return self._payment(message, pending, sender, payment_senders)
         return self._invoice(message, pending)
 
     def process(self, run, message_id, gmail_hmac):

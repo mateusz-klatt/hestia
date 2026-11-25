@@ -1,0 +1,16 @@
+Receipt from Example Labs Receipt #0000-0000
+
+Amount paid
+399.66zł
+
+Date paid
+Nov 14, 2026
+
+Payment method
+- 0000
+
+Summary
+- - Payment to Example Labs : 399.66zł
+- Amount paid : 399.66zł
+
+If you have any questions, contact us.

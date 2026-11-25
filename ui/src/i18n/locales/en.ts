@@ -415,6 +415,8 @@ const en = {
   "budget.devices.pairError": "The pairing code could not be created.",
   "budget.devices.revokeError": "The device could not be revoked.",
 
+  "budget.receipts.documentKind.payment_confirmation": "Payment confirmation",
+
   "budget.consent.title": "Consent status & renewal overview",
   "budget.consent.intro": "Read-only summary of bank consent validity and stored authorization records. No remote closure, deletion or bank request runs here.",
   "budget.consent.loading": "Loading consent overview…",

@@ -11,7 +11,7 @@ from .client import _reject_constant, _unique_error_fields
 from .gmail_address import canonical_mailbox
 from .gmail_client import GmailCredentials
 from .gmail_sync import GmailSettings
-from .gmail_trust import normalize_sender_rules
+from .gmail_trust import normalize_payment_senders, normalize_sender_rules
 
 CONFIG_FILE = "HESTIA_BUDGET_RECEIPTS_GMAIL_CONFIG"
 HMAC_FILE = "HESTIA_BUDGET_RECEIPTS_HMAC_SECRET_FILE"
@@ -21,7 +21,7 @@ _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]{0,127}\Z")
 _REQUIRED_FIELDS = {"owner", "owner_mailbox", "client_id_env", "client_secret_env", "refresh_token_env",
                     "sender_allowlist", "spouse_forward_senders"}
 _OPTIONAL_FIELDS = {"known_merchant_domains", "require_known_forwarded_merchant", "label_name",
-                    "backfill_days", "backfill_max_messages", "sync_interval_seconds"}
+                    "backfill_days", "backfill_max_messages", "sync_interval_seconds", "payment_senders"}
 
 
 def _read_config(path):
@@ -65,8 +65,11 @@ def load_settings(*, environ=None, session_secret=b"") -> GmailSettings | None:
         mailbox = canonical_mailbox(data["owner_mailbox"])
         if mailbox is None:
             raise ValueError
-        senders, spouse, domains = normalize_sender_rules(data["sender_allowlist"], data["spouse_forward_senders"],
-                                                           data.get("known_merchant_domains", []))
+        payments = normalize_payment_senders(data.get("payment_senders", []))
+        senders, spouse, domains = normalize_sender_rules(
+            data["sender_allowlist"], data["spouse_forward_senders"], data.get("known_merchant_domains", []),
+            payment_senders=payments,
+        )
         require_known = data.get("require_known_forwarded_merchant", True)
         if type(require_known) is not bool:
             raise ValueError
@@ -93,4 +96,5 @@ def load_settings(*, environ=None, session_secret=b"") -> GmailSettings | None:
         raise config.BudgetConfigError("Invalid Gmail receipt configuration") from None
 
     return GmailSettings(owner, mailbox, GmailCredentials(client_id, client_secret, refresh_token), hmac_secret,
-                         senders, spouse, domains, require_known, label_name, backfill_days, backfill_max, interval)
+                         senders, spouse, domains, require_known, label_name, backfill_days, backfill_max, interval,
+                         payment_senders=payments)

@@ -13,6 +13,7 @@ import re
 from .gmail_address import canonical_mailbox
 from .gmail_client import GmailCredentials, GmailError, RunLimit
 from .gmail_store import DAY, GMAIL_MESSAGE_DOMAIN, MAILBOX_DOMAIN, SCOPE_DOMAIN, _PHASE_RESET, digest
+from .gmail_trust import PaymentSender
 from .rate_limit import parse_retry_after
 
 BATCH_COMMIT_SIZE = 25
@@ -36,6 +37,7 @@ class GmailSettings:
     backfill_days: int = 365
     backfill_max_messages: int = 500
     sync_interval_seconds: int = 3600
+    payment_senders: tuple[PaymentSender, ...] = ()
 
 
 def _history_id(value):
@@ -79,6 +81,7 @@ def _history_messages(page):
 
 def _terms(settings):
     senders = set(settings.sender_allowlist + settings.spouse_forward_senders)
+    senders.update(entry.sender for entry in settings.payment_senders)
     senders.add(settings.owner_mailbox)
     return tuple(f'from:"{sender.removeprefix("@")}"' for sender in sorted(senders))
 

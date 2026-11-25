@@ -66,6 +66,12 @@ describe("t / tPlural", () => {
     expect(t("header.title")).toBe("hestia");
   });
 
+  it("provides the payment confirmation label in English and Polish", async () => {
+    expect(t("budget.receipts.documentKind.payment_confirmation")).toBe("Payment confirmation");
+    await loadLocale("pl");
+    expect(t("budget.receipts.documentKind.payment_confirmation")).toBe("Potwierdzenie płatności");
+  });
+
   it("applies CLDR plural categories (en one/other; pl one/few/many)", async () => {
     expect(tPlural("rooms.deviceCount", 1)).toBe("1 device");
     expect(tPlural("rooms.deviceCount", 5)).toBe("5 devices");

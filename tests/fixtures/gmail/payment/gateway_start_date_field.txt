@@ -1,0 +1,5 @@
+Płatność zakończona sukcesem
+
+Data rozpoczęcia transakcji: 05 listopada 2026 godz. 18:25
+Tytuł: Przykładowy zakup
+Kwota transakcji: 38,12 PLN

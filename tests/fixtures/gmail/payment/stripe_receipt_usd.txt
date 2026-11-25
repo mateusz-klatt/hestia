@@ -1,0 +1,5 @@
+Example Cloud, Inc. (https://cloud.example.test/)
+
+Receipt from Example Cloud, Inc. $6.15 Paid August 17, 2026
+
+Receipt #0000-0000-0000 One-time credit purchase Qty 1 $5.00 Subtotal $5.00 Total excluding tax $5.00 VAT - Poland (23%) $1.15 Total $6.15 Amount paid $6.15

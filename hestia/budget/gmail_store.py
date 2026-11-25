@@ -1,15 +1,19 @@
-"""SQLite grant fences, invoice storage and keyed Gmail provenance."""
+"""SQLite grant fences, receipt storage and keyed Gmail provenance."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 import hmac
 import json
 import uuid
 
 from sqlalchemy import and_, case, delete, func, or_, select, update
+from sqlalchemy.orm import aliased
 
 from ..db import AppMeta, BudgetAnalyticsAudit, BudgetGmailMessage, BudgetGmailState, BudgetReceipt, BudgetReceiptLine
 from .gmail_client import GmailError
+from .gmail_payment import ImportedPayment, _payee_key
+from .receipt_parser import fold_text
 from .store import BudgetStore
 from .views import BudgetHTTPStore
 
@@ -19,6 +23,9 @@ PROVENANCE_TTL = 400 * DAY
 MAX_PENDING_IMPORTS = 200
 GMAIL_MESSAGE_DOMAIN = b"hestia/budget/gmail-msg-id/v1\0"
 RFC_MESSAGE_DOMAIN = b"hestia/budget/gmail-rfc-msg-id/v1\0"
+PAYMENT_SENDER_DOMAIN = b"hestia/budget/gmail-payment-sender/v1\0"
+PAYMENT_PAYEE_DOMAIN = b"hestia/budget/gmail-payment-payee/v1\0"
+ORDER_REFERENCE_DOMAIN = b"hestia/budget/gmail-order-reference/v1\0"
 SCOPE_DOMAIN = b"hestia/budget/gmail-scope-query/v1\0"
 MAILBOX_DOMAIN = b"hestia/budget/gmail-mailbox/v1\0"
 
@@ -41,6 +48,9 @@ STATUS_FIELDS = ("grant_status", "grant_generation", "version", "sync_phase", "a
 _PARSE_FAILED_REASONS_PREFIX = "budget_gmail_parse_failed_reasons:"
 _RETRY_WINDOW_PREFIX = "budget_gmail_retry_full_window:"
 _INC_RESET_PREFIX = "budget_gmail_inc_reset:"
+_PAYMENT_SENDER_PREFIX = "budget_gmail_payment_sender:"
+_PAYMENT_ORDER_PREFIX = "budget_gmail_payment_order:"
+_PAYMENT_PAYEE_PREFIX = "budget_gmail_payment_payee:"
 PARSE_FAILED_REASONS = (
     "charset_error",
     "message_defects",
@@ -81,7 +91,18 @@ def _inc_reset_key(owner):
 
 
 def digest(secret, domain, value):
-    return hmac.digest(secret, domain + value.encode("ascii"), "sha256").hex()
+    return hmac.digest(secret, domain + value.encode("utf-8"), "sha256").hex()
+
+
+@dataclass(frozen=True, repr=False)
+class PendingPayment:
+    fields: ImportedPayment
+    receipt_date: date
+    sender_hmac: str
+    opposite_sender_hmacs: tuple[str, ...]
+    order_reference_hmac: str | None = None
+    gateway: bool = False
+    payee_hmac: str | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -96,6 +117,7 @@ class PendingMessage:
     forwarded_manually: bool = False
     sender_domain: str | None = None
     parse_failed_reason: str | None = None
+    payment: PendingPayment | None = None
 
 
 def _linked_manual_forward():
@@ -104,7 +126,31 @@ def _linked_manual_forward():
     ).exists()
 
 
+def _payment_sender_key(receipt_id):
+    return _PAYMENT_SENDER_PREFIX + receipt_id
+
+
+def _payment_order_key(receipt_id):
+    return _PAYMENT_ORDER_PREFIX + receipt_id
+
+
+def _payment_payee_key(receipt_id):
+    return _PAYMENT_PAYEE_PREFIX + receipt_id
+
+
+def _forget_payment_senders(session, *predicates):
+    receipts = select(BudgetGmailMessage.receipt_id).where(
+        BudgetGmailMessage.receipt_id.is_not(None), *predicates,
+    ).subquery()
+    keys = select(_payment_sender_key(receipts.c.receipt_id)).union_all(
+        select(_payment_order_key(receipts.c.receipt_id)),
+        select(_payment_payee_key(receipts.c.receipt_id)),
+    )
+    session.execute(delete(AppMeta).where(AppMeta.key.in_(keys)))
+
+
 def _tombstone_messages(session, *predicates):
+    _forget_payment_senders(session, *predicates)
     session.execute(update(BudgetGmailMessage).where(*predicates).values(
         receipt_id=None, outcome="deleted",
         rfc_message_id_hmac=case((_linked_manual_forward(), None), else_=BudgetGmailMessage.rfc_message_id_hmac),
@@ -137,10 +183,11 @@ def _delete_imports(session, owner, expires_at=None):
 
 def retain_imports(session, owner, now):
     _delete_imports(session, owner, now)
-    prune = delete(BudgetGmailMessage).where(BudgetGmailMessage.internal_date < now - PROVENANCE_TTL)
+    expired = (BudgetGmailMessage.internal_date < now - PROVENANCE_TTL,)
     if owner is not None:
-        prune = prune.where(BudgetGmailMessage.owner == owner)
-    session.execute(prune)
+        expired += (BudgetGmailMessage.owner == owner,)
+    _forget_payment_senders(session, *expired)
+    session.execute(delete(BudgetGmailMessage).where(*expired))
 
 
 class GmailStore(BudgetStore):
@@ -264,6 +311,7 @@ class GmailStore(BudgetStore):
                     row.next_sync_at = now
             elif status == "revoked":
                 row.revoked_at = now
+                _forget_payment_senders(session, BudgetGmailMessage.owner == owner)
                 session.execute(update(BudgetGmailMessage).where(BudgetGmailMessage.owner == owner)
                                 .values(receipt_id=None))
                 _delete_imports(session, owner)
@@ -296,6 +344,57 @@ class GmailStore(BudgetStore):
         ).limit(1)) is not None
 
     @staticmethod
+    def _gateway_payees_match(payment, stored_hmac, stored_merchant):
+        if payment.fields.payee_from_config or stored_hmac == "":
+            return True
+        if stored_hmac is None or payment.payee_hmac is None:
+            # Older receipts lack the original payee provenance.
+            return _payee_key(stored_merchant or "") == _payee_key(payment.fields.merchant)
+        return stored_hmac == payment.payee_hmac
+
+    @staticmethod
+    def _duplicate_payment(session, owner, payment):
+        fields = payment.fields
+        sender, order_reference, payee = aliased(AppMeta), aliased(AppMeta), aliased(AppMeta)
+        receipt_day = func.julianday(payment.receipt_date.isoformat())
+        distance = func.abs(func.julianday(BudgetReceipt.receipt_date) - receipt_day)
+        same_sender = sender.value == payment.sender_hmac
+        incoming_reference = payment.order_reference_hmac
+        # `column == None` compiles to IS NULL; rank exact matches only for a known value.
+        ranking = [same_sender.desc()]
+        if incoming_reference is not None:
+            ranking.append((order_reference.value == incoming_reference).desc())
+        if payment.payee_hmac is not None:
+            ranking.append((payee.value == payment.payee_hmac).desc())
+        candidates = session.execute(select(
+            BudgetReceipt.id, sender.value, order_reference.value, payee.value, BudgetReceipt.raw_shop_name,
+        ).select_from(BudgetReceipt).join(
+            sender, sender.key == _payment_sender_key(BudgetReceipt.id),
+        ).outerjoin(
+            order_reference, order_reference.key == _payment_order_key(BudgetReceipt.id),
+        ).outerjoin(
+            payee, payee.key == _payment_payee_key(BudgetReceipt.id),
+        ).where(
+            BudgetReceipt.owner == owner, BudgetReceipt.document_kind == "payment_confirmation",
+            BudgetReceipt.total_amount == fields.total_amount, BudgetReceipt.currency == fields.currency,
+            or_(and_(same_sender, distance <= 7),
+                and_(sender.value.in_(payment.opposite_sender_hmacs), distance <= 2)),
+        ).order_by(*ranking, distance, BudgetReceipt.id))
+        for receipt_id, sender_hmac, reference_hmac, payee_hmac, merchant in candidates:
+            if sender_hmac != payment.sender_hmac:
+                return "skipped_non_receipt"
+            if reference_hmac is not None and incoming_reference is not None and reference_hmac != incoming_reference:
+                continue
+            if payment.gateway and not GmailStore._gateway_payees_match(payment, payee_hmac, merchant):
+                continue
+            if reference_hmac is None and incoming_reference is not None:
+                session.add(AppMeta(key=_payment_order_key(receipt_id), value=incoming_reference))
+            if payee_hmac == "" and payment.payee_hmac is not None:
+                session.get(AppMeta, _payment_payee_key(receipt_id)).value = payment.payee_hmac
+            return "skipped_duplicate"
+        return None
+
+    @staticmethod
     def _invoice(session, owner, item, now):
         invoice = item.invoice
         receipt = BudgetReceipt(id=str(uuid.uuid4()), owner=owner, raw_shop_name=invoice.issuer, raw_nip=invoice.nip,
@@ -305,6 +404,30 @@ class GmailStore(BudgetStore):
                                 version=1, created_at=now, updated_at=now, import_expires_at=now + IMPORT_TTL)
         session.add(receipt)
         session.flush()
+        return receipt.id
+
+    @staticmethod
+    def _payment(session, owner, payment, now):
+        fields = payment.fields
+        receipt = BudgetReceipt(
+            id=str(uuid.uuid4()), owner=owner, raw_shop_name=fields.merchant,
+            receipt_date=payment.receipt_date.isoformat(), total_amount=fields.total_amount, currency=fields.currency,
+            status="imported", document_kind="payment_confirmation", source_kind="email",
+            version=1, created_at=now, updated_at=now, import_expires_at=now + IMPORT_TTL,
+        )
+        session.add(receipt)
+        session.flush()
+        session.add(BudgetReceiptLine(
+            receipt_id=receipt.id, owner=owner, line_no=1, line_kind="other", raw_name=fields.description,
+            raw_name_key=fold_text(fields.description)[:128], quantity="1",
+            gross_line_total=fields.total_amount, net_line_total=fields.total_amount,
+        ))
+        # The current config supplies the role of the stored sender fingerprint.
+        session.add(AppMeta(key=_payment_sender_key(receipt.id), value=payment.sender_hmac))
+        if payment.order_reference_hmac is not None:
+            session.add(AppMeta(key=_payment_order_key(receipt.id), value=payment.order_reference_hmac))
+        if payment.gateway and (fields.payee_from_config or payment.payee_hmac is not None):
+            session.add(AppMeta(key=_payment_payee_key(receipt.id), value=payment.payee_hmac or ""))
         return receipt.id
 
     @staticmethod
@@ -339,12 +462,18 @@ class GmailStore(BudgetStore):
                 rfc_hmac = None if item.forwarded_manually else item.rfc_message_id_hmac
                 if self._duplicate(session, owner, rfc_hmac):
                     outcome = "skipped_duplicate"
+                elif item.payment is not None:
+                    outcome = self._duplicate_payment(session, owner, item.payment) or outcome
                 if outcome == "imported":
                     if self._pending_count(session, owner) >= MAX_PENDING_IMPORTS:
                         drained = False
                         break
-                    receipt_id = (self._manual(session, owner, item, now) if item.forwarded_manually
-                                  else self._invoice(session, owner, item, now))
+                    if item.forwarded_manually:
+                        receipt_id = self._manual(session, owner, item, now)
+                    elif item.payment is not None:
+                        receipt_id = self._payment(session, owner, item.payment, now)
+                    else:
+                        receipt_id = self._invoice(session, owner, item, now)
                     imported += 1
                 else:
                     skipped += 1

@@ -1,0 +1,23 @@
+Wartość zamówienia
+248,36 zł
+Koszt dostawy
+0 zł
+Sposób płatności
+EXAMPLE-PAY - CREDITCARD
+(248,36 zł)
+PRODUKTY
+CENA(JEDNOSTKOWA)
+ILOŚĆ
+RAZEM
+Example Athletics
+Przykładowe buty treningowe
+7654321
+179,37 zł
+1
+179,37 zł
+Example Athletics
+Przykładowe akcesoria
+7654322
+68,99 zł
+1
+68,99 zł

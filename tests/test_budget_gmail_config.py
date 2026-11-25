@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
 
 from hestia.budget import config, gmail_config
+from hestia.budget.gmail_trust import PaymentSender
 
 REFRESH_TOKEN = "synthetic-refresh"
 MAILBOX = "invoices@example.test"
@@ -61,6 +62,7 @@ class GmailSettingsTests(TestCase):
         self.assertEqual(settings.credentials.refresh_token, REFRESH_TOKEN)
         self.assertEqual(settings.hmac_secret, HMAC_KEY)
         self.assertEqual(settings.sender_allowlist, ("@vendor.example.test",))
+        self.assertEqual(settings.payment_senders, ())
         self.assertEqual(settings.spouse_forward_senders, ("spouse@example.test",))
         self.assertEqual(settings.known_merchant_domains, ("vendor.example.test",))
         self.assertTrue(settings.require_known_forwarded_merchant)
@@ -75,6 +77,60 @@ class GmailSettingsTests(TestCase):
                           custom.sync_interval_seconds), ("Faktury", 1, 10, 7200))
         self.assertFalse(custom.require_known_forwarded_merchant)
         self.assertEqual(custom.known_merchant_domains, ("other.example.test", "vendor.example.test"))
+
+    def test_payment_rules_normalize_and_can_supply_the_entire_direct_scope(self):
+        entries = [
+            {"sender": " @PAY.example.test ", "merchant": "Example Pay", "gateway": True},
+            {"sender": " Billing@Shop.example.test ", "merchant": "Ż" * 64, "gateway": False},
+            {"sender": "@sub.pay.example.test", "merchant": "X"},
+        ]
+        settings = self.load(sender_allowlist=[], spouse_forward_senders=[], payment_senders=entries)
+        self.assertEqual(settings.payment_senders, (
+            PaymentSender("@pay.example.test", "Example Pay", True),
+            PaymentSender("billing@shop.example.test", "Ż" * 64),
+            PaymentSender("@sub.pay.example.test", "X"),
+        ))
+        self.assertEqual(settings.known_merchant_domains, ())
+        self.assertEqual(self.load(payment_senders=[]).payment_senders, ())
+
+    def test_payment_rule_count(self):
+        entries = [{"sender": f"pay{index}@shop.example.test", "merchant": "X"} for index in range(201)]
+        self.assertEqual(len(self.load(payment_senders=entries[:200]).payment_senders), 200)
+        self.settings.write_text(json.dumps(self.data | {"payment_senders": entries}), encoding="utf-8")
+        self.assert_invalid()
+
+    def test_invalid_payment_rules_fail_with_fixed_config_error(self):
+        entry = {"sender": "@shop.example.test", "merchant": "Example Shop"}
+        for invalid in (
+            None, {}, [None], [{"sender": entry["sender"]}], [{"merchant": entry["merchant"]}],
+            [entry | {"unexpected": True}], [entry, entry | {"sender": " @SHOP.example.test "}],
+            *([entry | {"sender": sender}] for sender in (
+                False, "@gmail.com", "mail@gmail.com", "@sub.gmail.com", "mail@sub.gmail.com", "@@shop.example.test",
+                "Example Shop <mail@shop.example.test>", "mail@shop.example.test\n",
+            )),
+            *([entry | {"merchant": merchant}] for merchant in (
+                None, "", "X" * 65, "Example\nShop", "Example\u200dShop", "\ud800",
+            )),
+            *([entry | {"gateway": gateway}] for gateway in (None, 1, "true")),
+        ):
+            with self.subTest(invalid=invalid):
+                self.settings.write_text(json.dumps(self.data | {"payment_senders": invalid}), encoding="utf-8")
+                self.assert_invalid()
+
+    def test_payment_rules_cannot_overlap_invoice_scope(self):
+        for invoice, payment in (
+            ("billing@vendor.example.test", "BILLING@vendor.example.test"),
+            ("@vendor.example.test", "@VENDOR.example.test"),
+            ("billing@sub.vendor.example.test", "@vendor.example.test"),
+            ("@vendor.example.test", "billing@sub.vendor.example.test"),
+            ("@vendor.example.test", "@sub.vendor.example.test"),
+            ("@sub.vendor.example.test", "@vendor.example.test"),
+        ):
+            with self.subTest(invoice=invoice, payment=payment):
+                self.settings.write_text(json.dumps(self.data | {
+                    "sender_allowlist": [invoice], "payment_senders": [{"sender": payment, "merchant": "Example"}],
+                }), encoding="utf-8")
+                self.assert_invalid()
 
     def test_strict_json_and_config_bounds(self):
         kept = {key: value for key, value in self.data.items() if key != "owner"}

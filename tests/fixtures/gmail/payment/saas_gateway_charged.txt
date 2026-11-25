@@ -1,0 +1,2 @@
+Receipt from Example Studio $24.50 Paid November 5, 2026 (https://invoice.example.test/) Download invoice (https://billing.example.test/) Receipt number 1111-2222 Invoice number TEST-0007 Payment method - 0000
+Receipt #1111-2222 Nov 5–Dec 5, 2026 Example Plan Qty 1 $23.00 Subtotal $23.00 Total excluding tax $23.00 VAT $1.50 Total $24.50 Amount paid $24.50 Charged 96.77zł using 1 USD = 3.9498 PLN Questions? Contact us at billing@example.test (billing@example.test).

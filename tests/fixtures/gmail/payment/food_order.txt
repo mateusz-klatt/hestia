@@ -1,0 +1,14 @@
+Twoje zamówienie z lokalu Przykładowa Restauracja zostanie niedługo dostarczone.
+
+Zamówienie potwierdzone
+
+1 Pierogi ruskie
+29.90 zł
+Zupa pomidorowa
+12.90 zł
+Razem: 42.80 zł
+Opłata za usługę: 2.82 zł
+Dostawa: 9.90 zł
+Łącznie: 55.52 zł
+
+Zapłacono: BLIK

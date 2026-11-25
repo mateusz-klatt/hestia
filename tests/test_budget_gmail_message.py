@@ -1,5 +1,6 @@
 """Gmail message processing against synthetic metadata, MIME, and worker fixtures."""
 import base64
+from datetime import UTC, date, datetime
 from email.message import EmailMessage
 from itertools import permutations
 from pathlib import Path
@@ -10,7 +11,9 @@ from unittest.mock import Mock, call, patch
 from hestia.budget import gmail_message
 from hestia.budget.gmail_client import GmailError
 from hestia.budget.gmail_invoice import ImportedInvoice
-from hestia.budget.gmail_store import RFC_MESSAGE_DOMAIN, digest
+from hestia.budget.gmail_store import (ORDER_REFERENCE_DOMAIN, PAYMENT_PAYEE_DOMAIN, PAYMENT_SENDER_DOMAIN,
+                                      RFC_MESSAGE_DOMAIN, digest)
+from hestia.budget.gmail_trust import PaymentSender
 from hestia.budget.gmail_worker import PDFUnsupported, WorkerRejected, WorkerUnavailable
 
 
@@ -94,6 +97,167 @@ class GmailMessageProcessorTests(unittest.TestCase):
         self.assertEqual(pending.source_kind, "email")
         self.assertEqual(pending.invoice, ImportedInvoice("Respect Energy", None, "RE/2026/00042", "123.45",
                                                           "PLN", "2026-11-21", "2026-12-05"))
+
+    def _payment_email(self, text, **body_options):
+        self.settings.payment_senders = (
+            PaymentSender("@shop.example.test", "Example Shop"),
+            PaymentSender("@gateway.example.test", "Example Gateway", gateway=True),
+            PaymentSender("@market.example.test", "Example Market"),
+        )
+        return _email("orders@billing.shop.example.test", text, **body_options)
+
+    def test_payment_uses_warsaw_internal_date_and_decoded_subject(self):
+        message = self._payment_email("Amount paid: 123,45 PLN\nDate paid: 2026-11-22")
+        message["Subject"] = "=?utf-8?q?Op=C5=82ata_za_us=C5=82ug=C4=99?="
+        metadata = _metadata(message)
+        metadata["internalDate"] = str(int(datetime(2026, 11, 24, 23, 30, tzinfo=UTC).timestamp() * 1000))
+        pending = self._process(metadata, _raw(message))
+        self.assertEqual((pending.trust_path, pending.outcome, pending.source_kind, pending.invoice),
+                         ("direct_allowlist", "imported", "email", None))
+        self.assertEqual(pending.payment.receipt_date, date(2026, 11, 25))
+        self.assertEqual((pending.payment.fields.merchant, pending.payment.fields.description,
+                          pending.payment.fields.currency, pending.payment.fields.total_amount),
+                         ("Example Shop", "Opłata za usługę", "PLN", "123.45"))
+        self.assertEqual(pending.payment.sender_hmac, digest(SECRET, PAYMENT_SENDER_DOMAIN, "@shop.example.test"))
+        self.assertEqual(pending.payment.opposite_sender_hmacs,
+                         (digest(SECRET, PAYMENT_SENDER_DOMAIN, "@gateway.example.test"),))
+        self.assertIsNone(pending.payment.order_reference_hmac)
+        self.assertIsNone(pending.payment.payee_hmac)
+
+    def test_long_gateway_summary_uses_card_charge_and_cross_checks_paid_heading_date(self):
+        body = (Path(__file__).parent / "fixtures" / "gmail" / "payment" / "saas_gateway_long_url.txt").read_text(
+            encoding="utf-8",
+        )
+        self.assertGreater(len(body.splitlines()[1]), 512)
+        self.settings.payment_senders = (PaymentSender("@gateway.example.test", "Example Gateway", gateway=True),)
+        message = _email("receipts@gateway.example.test", body)
+        message["Subject"] = "Receipt #3333-4444"
+
+        def process_on(day):
+            internal_date = datetime(2026, 12, day, tzinfo=UTC)
+            metadata = {**_metadata(message), "internalDate": str(int(internal_date.timestamp() * 1000))}
+            return self._process(metadata, _raw(message))
+
+        pending = process_on(11)
+        self.assertEqual(pending.outcome, "imported")
+        self.assertEqual(pending.payment.receipt_date, date(2026, 12, 11))
+        fields = pending.payment.fields
+        self.assertEqual((fields.merchant, fields.total_amount, fields.currency, fields.body_dates),
+                         ("Example Render Studio", "66.19", "PLN", (date(2026, 12, 8),)))
+        self.assertEqual(pending.payment.payee_hmac, digest(SECRET, PAYMENT_PAYEE_DOMAIN, "example render studio"))
+        pending = process_on(12)
+        self.assertEqual((pending.outcome, pending.payment), ("skipped_non_receipt", None))
+
+    def test_payment_gateway_marks_actual_config_fallback(self):
+        self.settings.payment_senders = (PaymentSender("@gateway.example.test", "Example Gateway", gateway=True),)
+        for payee_line, fell_back in (("", True), ("\nOdbiorca: Example Gateway", False)):
+            with self.subTest(fell_back=fell_back):
+                message = _email("receipts@gateway.example.test", f"Total: 12 PLN{payee_line}")
+                payment = self._process(_metadata(message), _raw(message)).payment
+                self.assertEqual(payment.fields.merchant, "Example Gateway")
+                self.assertIs(payment.fields.payee_from_config, fell_back)
+                self.assertEqual(payment.payee_hmac, None if fell_back else digest(
+                    SECRET, PAYMENT_PAYEE_DOMAIN, "example gateway",
+                ))
+
+    def test_payment_order_reference_crosses_processing_boundary_only_as_hmac(self):
+        message = self._payment_email("Amount paid: 123 PLN\nTytuł: Example purchase")
+        message["Subject"] = "Potwierdzenie zamówienia nr 00000000001"
+        pending = self._process(_metadata(message), _raw(message))
+        self.assertEqual(pending.outcome, "imported")
+        self.assertEqual(pending.payment.order_reference_hmac, digest(SECRET, ORDER_REFERENCE_DOMAIN, "00000000001"))
+        self.assertIsNone(pending.payment.fields.order_reference)
+        self.assertEqual(pending.payment.fields.description, "Example purchase")
+
+    def test_payment_checks_all_decoded_subject_headers_for_rejection(self):
+        message = self._payment_email("Amount paid: 123 PLN")
+        message["Subject"] = "Example payment"
+        raw = message.as_bytes().replace(
+            b"Subject: Example payment\n", b"Subject: Example payment\nsUbJeCt: =?utf-8?q?Ref=00und?=\n",
+        )
+        pending = self._process(_metadata(message), _raw(raw))
+        self.assertEqual((pending.outcome, pending.payment), ("skipped_non_receipt", None))
+
+    def test_payment_rejects_distant_dates_and_unrepresentable_internal_date(self):
+        for header, internal_date in (("Data: 2026-11-21", "1795566945123"),
+                                      ("Data: 2026-11-29", "1795566945123"),
+                                      ("Data: 2026-11-25", "9999999999999999999")):
+            with self.subTest(header=header, internal_date=internal_date):
+                message = self._payment_email(f"Amount paid: 1 PLN\n{header}")
+                pending = self._process({**_metadata(message), "internalDate": internal_date}, _raw(message))
+                self.assertEqual((pending.outcome, pending.payment), ("skipped_non_receipt", None))
+
+    def test_explicit_plain_payment_rejection_takes_precedence_over_html(self):
+        for body in ("Payment failed", "Total: -5 PLN", "Total: 1 PLN\nDo zapłaty: 2 PLN", "Amount paid: 0,00 € EUR"):
+            with self.subTest(body=body):
+                self.worker.parse.reset_mock()
+                message = self._payment_email(body)
+                message.add_alternative("Amount paid: 123 PLN", subtype="html")
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual((pending.outcome, pending.payment), ("skipped_non_receipt", None))
+                self.worker.parse.assert_called_once_with("text", (body + "\n").encode("utf-8"))
+
+    def test_payment_uses_valid_plain_total_before_html(self):
+        message = self._payment_email("Amount paid: 25 PLN")
+        message.add_alternative("Amount paid: 123 PLN", subtype="html")
+        pending = self._process(_metadata(message), _raw(message))
+        self.assertEqual((pending.outcome, pending.payment.fields.total_amount), ("imported", "25"))
+        self.worker.parse.assert_called_once_with("text", b"Amount paid: 25 PLN\n")
+
+    def test_payment_uses_html_for_missing_total_or_unreadable_plain_body(self):
+        for plain in ("missing payload", "empty render", "bad charset", "no total"):
+            with self.subTest(plain=plain):
+                self.worker.parse.reset_mock()
+                body = "Example receipt stub\n" if plain == "no total" else " \n"
+                message = self._payment_email(body)
+                message.add_alternative("Amount paid: 123 PLN", subtype="html")
+                part = message.get_body(("plain",))
+                if plain == "missing payload":
+                    part.set_payload("")
+                elif plain == "bad charset":
+                    part.set_param("charset", "unknown-encoding")
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual((pending.outcome, pending.payment.fields.total_amount), ("imported", "123"))
+                worker_calls = [call("html", b"Amount paid: 123 PLN\n")]
+                if plain in ("empty render", "no total"):
+                    worker_calls.insert(0, call("text", body.encode("utf-8")))
+                self.assertEqual(self.worker.parse.call_args_list, worker_calls)
+
+    def test_payment_oversized_and_rejected_body_use_existing_fixed_outcomes(self):
+        message = self._payment_email("synthetic private payment message")
+        with patch.object(gmail_message, "MAX_HTML_BYTES", 8):
+            pending = self._process(_metadata(message), _raw(message))
+        self.assertEqual((pending.outcome, pending.parse_failed_reason), ("skipped_oversized", None))
+        self.worker.parse.assert_not_called()
+
+        self.worker.parse.side_effect = WorkerRejected("synthetic private reason")
+        with self.assertLogs(gmail_message.log, level="WARNING") as logs:
+            pending = self._process(_metadata(message), _raw(message))
+        self.assertEqual((pending.outcome, pending.parse_failed_reason), ("parse_failed", "worker_rejected"))
+        self.assertEqual(logs.output, [
+            "WARNING:hestia.budget.gmail_message:gmail parse_failed reason=worker_rejected",
+        ])
+
+    def test_payment_sender_does_not_pass_pdfs_to_worker_or_use_invoice_parser(self):
+        message = self._payment_email(INVOICE)
+        message.set_content(b"%PDF-1.4 synthetic", maintype="application", subtype="pdf")
+        self.assertEqual(self._process(_metadata(message), _raw(message)).outcome, "skipped_non_receipt")
+        self.worker.parse.assert_not_called()
+
+        message = self._payment_email(INVOICE)
+        with patch.object(gmail_message, "extract_invoice") as invoice_parser:
+            pending = self._process(_metadata(message), _raw(message))
+        invoice_parser.assert_not_called()
+        self.assertEqual((pending.outcome, pending.invoice), ("imported", None))
+
+    def test_payment_rules_do_not_extract_forwarded_payment_bodies(self):
+        original = self._payment_email("Amount paid: 123 PLN")
+        message = _email(SPOUSE, "Synthetic cover note")
+        message.add_attachment(original)
+        pending = self._process(_metadata(message), _raw(message))
+        self.assertEqual((pending.trust_path, pending.forwarded_manually, pending.payment),
+                         ("spouse_forward", True, None))
+        self.worker.parse.assert_not_called()
 
     def test_direct_invoice_accepts_its_provider_domains(self):
         for name, issuer, domains in (

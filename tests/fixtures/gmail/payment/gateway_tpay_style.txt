@@ -1,0 +1,8 @@
+Dziękujemy za dokonanie płatności.
+
+* Tytuł płatności w systemie: TR-AAAA-0000000
+* Opis zamówienia w PRZYKŁADOWA SPÓŁKA AKCYJNA: Zamówienie 0000000001
+* Kwota transakcji: 83,84 PLN
+* Dodatkowe opłaty: 0,00 PLN
+
+Pozdrawiamy

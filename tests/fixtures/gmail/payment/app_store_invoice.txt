@@ -1,0 +1,24 @@
+Faktura
+Data
+14 listopada 2026
+Identyfikator zamówienia
+AAAAAAAAAA
+Dokument
+000000000000
+
+Przykładowa Usługa Chmurowa
+Plan rodzinny
+Roczna
+Odnowienie: 14 listopada 2027
+419,99 zł
+
+Zawiera podatek VAT w wysokości 23%
+78,53 zł
+
+Polska
+Kwota netto
+341,46 zł
+Naliczono podatek VAT w wysokości 23%
+78,53 zł
+Mastercard •••• 0000
+419,99 zł
