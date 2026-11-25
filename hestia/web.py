@@ -46,6 +46,7 @@ from .budget import api as budget_api
 from .budget import consent_api, consent_context, device_token
 from .budget.config import BudgetConfigError
 from .budget.i18n import validate_languages
+from .budget.views import BudgetUsersBackendRequired
 from .classifier import DeviceType
 from .db import AppMeta
 from .automations import rule_vocab
@@ -291,6 +292,7 @@ _ROUTE_MIN_ROLE = {
     ("GET", "/api/whoami"): _VIEWER,
     ("GET", "/api/me/capabilities"): _VIEWER,
     ("POST", auth_qr.CODE_PATH): _VIEWER,
+    ("POST", device_token.EXCHANGE_PATH): _VIEWER,
     ("POST", "/api/me/password"): _VIEWER,         # any signed-in user changes their OWN password (verifies current)
     # room actions: operator and admin (a viewer is read-only — the UI hides these, the server enforces it)
     ("POST", "/api/control"): _OPERATOR,
@@ -336,6 +338,7 @@ _AUTHENTICATED_ROUTES = frozenset({
     ("GET", "/api/whoami"),
     ("GET", "/api/me/capabilities"),
     ("POST", auth_qr.CODE_PATH),
+    ("POST", device_token.EXCHANGE_PATH),
     ("GET", _PATH_SETTINGS),
     ("POST", _PATH_SETTINGS),
     ("POST", "/api/me/password"),
@@ -924,6 +927,19 @@ def _qr_configured_origin() -> "str | None":
     return _canonical_https_origin(os.environ.get("HESTIA_PUBLIC_ORIGIN"), allow_trailing_slash=True)
 
 
+def _native_auth_available() -> bool:
+    if not _AUTH_ENABLED or os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
+        return False
+    try:
+        with store_sql.authorization_snapshot() as session:
+            return (
+                store_sql.auth_session_phase(session) == store_sql.SESSION_PHASE_V2
+                and session.get(AppMeta, store_sql._USERS_AUTHORITATIVE) is not None
+            )
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return False
+
+
 async def _qr_code(request):
     configured = _qr_configured_origin()
     if configured is None:
@@ -983,15 +999,55 @@ async def _qr_redeem(request):
     return response
 
 
+async def _device_exchange(request):
+    ctx = request.get(_SESSION_CONTEXT_KEY)
+    if (
+        ctx is None or ctx.carrier != "bearer" or ctx.version != 2
+        or ctx.purpose != auth.SESSION_PURPOSE_NATIVE
+        or ctx.session_phase != store_sql.SESSION_PHASE_V2
+    ):
+        return _qr_error(HTTPStatus.UNAUTHORIZED, "native_session_required")
+    if not device_token.budget_http_enabled():
+        return _qr_error(HTTPStatus.NOT_FOUND, "budget_disabled")
+    if not device_token.receipts_enabled():
+        return _qr_error(HTTPStatus.NOT_FOUND, "budget_receipts_disabled")
+    body, error = await _read_json_body(request, 4096, reject_duplicates=True)
+    if error:
+        return body
+    if not isinstance(body, dict) or not set(body) <= {"device_name", "prior_token"} or "device_name" not in body:
+        return _qr_error(HTTPStatus.BAD_REQUEST, "budget_invalid_request")
+    prior = body.get("prior_token")
+    if prior is not None and (not isinstance(prior, str) or not prior):
+        return _qr_error(HTTPStatus.BAD_REQUEST, "budget_invalid_request")
+    try:
+        result = await asyncio.to_thread(
+            lambda: device_token.open_store(session_secret=_SESSION_SECRET).exchange(
+                ctx.username, body["device_name"], prior, generation=ctx.generation,
+            ),
+        )
+    except device_token.DeviceTokenError as exc:
+        return _qr_error(exc.status, exc.code)
+    except BudgetUsersBackendRequired:
+        return _qr_error(HTTPStatus.FORBIDDEN, "budget_forbidden")
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return _incompatible_bridge_response()
+    response = _json(HTTPStatus.OK, result)
+    response.headers.update(budget_api.PRIVATE_HEADERS)
+    return response
+
+
 async def _auth_features(request):
     calendar_instances = any(
         route.method == "GET" and route.resource.canonical == "/api/calendars/instances"
         for route in request.app.router.routes()
     )
-    qr_origin = _qr_configured_origin() if _AUTH_ENABLED else None
+    native_auth = _native_auth_available()
+    qr_origin = _qr_configured_origin() if native_auth else None
     features = ["capabilities"]
     if qr_origin is not None:
         features.append("qr_login")
+    if native_auth and device_token.budget_http_enabled() and device_token.receipts_enabled():
+        features.extend(["device_exchange", "budget_native_read"])
     if calendar_instances:
         features.append("calendar_instances")
     response = _json(HTTPStatus.OK, {
@@ -1865,6 +1921,7 @@ def make_app(rt):
     app.router.add_get("/api/auth/features", _auth_features, allow_head=False)
     app.router.add_post(auth_qr.CODE_PATH, _qr_code)
     app.router.add_post(auth_qr.REDEEM_PATH, _qr_redeem)
+    app.router.add_post(device_token.EXCHANGE_PATH, _device_exchange)
     app.router.add_get("/api/whoami", _whoami, allow_head=False)
     app.router.add_get("/api/me/capabilities", _me_capabilities, allow_head=False)
     app.router.add_get("/api/discovery", _discovery, allow_head=False)

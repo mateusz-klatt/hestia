@@ -58,6 +58,7 @@ class CatalogValidationTests(unittest.TestCase):
         self.assertEqual(
             authz.DEVICE_ELIGIBLE_PERMISSIONS,
             {
+                "budget.view",
                 "budget.receipts.add",
                 "budget.receipts.view",
                 "budget.receipts.edit",

@@ -48,6 +48,7 @@ REDEEM_PATH = PREFIX + "/device-token/redeem"
 LOGIN_PATH = PREFIX + "/device-token/login"
 LIST_PATH = PREFIX + "/device-token/list"
 REVOKE_PATH = PREFIX + "/device-token/revoke"
+EXCHANGE_PATH = "/api/auth/device-token"
 PARSE_PATH = PREFIX + "/parse-text"
 CONFIRM_PATH = PREFIX + "/confirm"
 LIST_RECEIPTS_PATH = PREFIX + "/list"
@@ -65,6 +66,14 @@ ALLOWED = frozenset({
     ("GET", IMAGE_PATH),
     ("POST", DELETE_PATH),
     ("POST", REVOKE_PATH),
+})
+NATIVE_READ_ALLOWED = frozenset({
+    ("GET", "/api/budget/status"),
+    ("GET", "/api/budget/analytics/monthly-budget"),
+    ("GET", "/api/budget/analytics/monthly-budget/charts"),
+    ("GET", "/api/budget/analytics/transactions"),
+    ("GET", "/api/budget/analytics/overview"),
+    ("GET", "/api/budget/analytics/categories"),
 })
 
 PAIR_TTL = 300
@@ -92,6 +101,9 @@ _RULE_KEY_FILE = "HESTIA_BUDGET_RULE_KEY_FILE"
 _RULE_KEY_BYTES = 32
 _CODE_DOMAIN = b"hestia/budget/receipt-device-token/pair-code/v1"
 _TOKEN_DOMAIN = b"hestia/budget/receipt-device-token/v1"
+DEVICE_TOKEN_PREFIX = "hdt1."
+_DEVICE_TOKEN_DOMAIN = b"hestia/auth/device-token/v1"
+_OWNER_KEY_DOMAIN = b"hestia/auth/owner-key/v1"
 _BLANK = "0" * 64
 _UUID = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
 _PRIVATE = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
@@ -253,6 +265,26 @@ def _bearer_token(value):
     return value
 
 
+def _modern_bearer(value):
+    if not isinstance(value, str) or not value.startswith(DEVICE_TOKEN_PREFIX):
+        return None
+    encoded = value[len(DEVICE_TOKEN_PREFIX):]
+    return value if _bearer_token(encoded) is not None else None
+
+
+def _session_mac(secret, domain, value):
+    key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=domain).derive(secret)
+    return hmac.new(key, value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def owner_key(secret, owner):
+    digest = hmac.new(
+        HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=_OWNER_KEY_DOMAIN).derive(secret),
+        owner.encode("utf-8"), hashlib.sha256,
+    ).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
 def _device_name(value):
     if not isinstance(value, str) or not 1 <= len(value) <= 64 or not value.isprintable():
         return None
@@ -345,11 +377,14 @@ def disabled_response():
     return json_error({"status": 404, "code": "budget_receipts_disabled"})
 
 
-def write_device_audit(session, owner, token_id, action, moment):
+def write_device_audit(session, owner, token_id, action, moment, *, actor=None, device_name=None):
     """Record device activity in the owner's budget audit."""
+    details = {"actor": "device:" + token_id} if actor is None else {
+        "actor": actor, "device_name": device_name, "token_id": token_id,
+    }
     session.add(BudgetAnalyticsAudit(
         owner=owner, subject_type="receipt_device_token", subject_id=token_id, action=action,
-        before_json="null", after_json=json.dumps({"actor": "device:" + token_id}), changed_at=moment,
+        before_json="null", after_json=json.dumps(details), changed_at=moment,
     ))
 
 
@@ -364,7 +399,7 @@ def revoke_owner_tokens(session, owner, moment=None):
     ).values(consumed_at=when))
 
 
-def open_store(*, clock=None):
+def open_store(*, clock=None, session_secret=None):
     from .views import BudgetUsersBackendRequired
     from ..db import init_db
 
@@ -376,7 +411,9 @@ def open_store(*, clock=None):
         authz.require_supported_policy_phase(session)
     if not store_sql.is_users_db_authoritative(engine):
         raise BudgetUsersBackendRequired()
-    return DeviceTokenStore(sessions, clock=clock or now)
+    if session_secret is None:
+        session_secret = os.environ.get("HESTIA_SESSION_SECRET", "").encode("utf-8")
+    return DeviceTokenStore(sessions, clock=clock or now, session_secret=session_secret)
 
 
 def decide(method, path, headers, cookies, secret, moment):
@@ -393,24 +430,26 @@ def decide(method, path, headers, cookies, secret, moment):
         has_authorization = "Authorization" in headers
     except TypeError:
         return {"action": "pass"}
-    if receipts and has_cookie and has_authorization:
+    token = _bearer(headers)
+    device_shaped = _modern_bearer(token) is not None or _bearer_token(token) is not None
+    if (receipts or device_shaped) and has_cookie and has_authorization:
         return {"action": "response", "status": 400, "code": "budget_auth_ambiguous"}
     if receipts and not budget_http_enabled():
         return {"action": "response", "status": 404, "code": "budget_disabled"}
-    token = _bearer(headers)
     if token is None:
         return {"action": "pass"}
     if auth.decode_session(token, now=moment, secret=secret) is not None:
         return {"action": "pass"}
-    allow = (method, path) in ALLOWED
-    if _bearer_token(token) is None:
-        if allow:
+    modern = _modern_bearer(token) is not None
+    allow = (method, path) in ALLOWED or (modern and (method, path) in NATIVE_READ_ALLOWED)
+    if not modern and _bearer_token(token) is None:
+        if (method, path) in ALLOWED:
             return {"action": "response", "status": 401, "code": "device_token_invalid"}
         return {"action": "pass"}
     if not allow:
         return {"action": "response", "status": 403, "code": "budget_forbidden"}
     try:
-        found = open_store(clock=lambda: moment).identify(
+        found = open_store(clock=lambda: moment, session_secret=secret).identify(
             token, slide=path != REVOKE_PATH, require_profile=path != REVOKE_PATH,
         )
     except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
@@ -430,9 +469,11 @@ def decide(method, path, headers, cookies, secret, moment):
         return {"action": "response", "status": 401, "code": "device_token_expired"}
     if found.get("status") not in ("ok", "revoked") or not found.get("owner") or not found.get("token_id"):
         return {"action": "response", "status": 401, "code": "device_token_invalid"}
+    if (method, path) in NATIVE_READ_ALLOWED and "budget.view" not in found.get("permissions", ()):
+        return {"action": "response", "status": 403, "code": "budget_forbidden"}
     return {
         "action": "accept", "owner": found["owner"], "actor": found["actor"],
-        "token_id": found["token_id"],
+        "token_id": found["token_id"], "permissions": found.get("permissions", ()),
     }
 
 
@@ -452,9 +493,10 @@ def _insert_unique(session, factory):
 
 
 class DeviceTokenStore:
-    def __init__(self, sessions, *, clock):
+    def __init__(self, sessions, *, clock, session_secret=b""):
         self.sessions = sessions
         self.clock = clock
+        self.session_secret = session_secret
 
     @contextmanager
     def _transaction(self):
@@ -622,24 +664,119 @@ class DeviceTokenStore:
         expires_at = datetime.fromtimestamp(row.expires_at, timezone.utc).isoformat(timespec="seconds")
         return {"token": issued["token"], "token_id": row.id, "scope": "receipts", "expires_at": expires_at}
 
+    def exchange(self, actor, name, prior_token=None, *, generation):
+        name = _device_name(name)
+        if name is None or not self.session_secret:
+            raise DeviceTokenError(400, "budget_invalid_request")
+        with self._transaction() as session:
+            if store_sql.auth_session_phase(session) != store_sql.SESSION_PHASE_V2:
+                raise DeviceTokenError(401, "native_session_required")
+            authz.require_supported_policy_phase(session)
+            moment = self._moment()
+            actor_row = session.get(User, actor)
+            if actor_row is not None and actor_row.credential_generation != generation:
+                raise DeviceTokenError(401, "native_session_required")
+            if actor_row is None or actor_row.disabled:
+                raise DeviceTokenError(403, "budget_forbidden")
+            owner = authz.resolve_budget_target(session, actor)
+            if owner is None:
+                raise DeviceTokenError(403, "budget_forbidden")
+            live = authz.effective_permissions(session, actor, owner=owner)
+            issued = live & authz.DEVICE_ELIGIBLE_PERMISSIONS
+            if not issued:
+                raise DeviceTokenError(403, "budget_forbidden")
+            previous = None
+            if prior_token is not None:
+                modern = _modern_bearer(prior_token) is not None
+                legacy = _bearer_token(prior_token)
+                if not modern and legacy is None:
+                    raise DeviceTokenError(409, "device_token_prior_invalid")
+                try:
+                    digest = (
+                        _session_mac(self.session_secret, _DEVICE_TOKEN_DOMAIN, prior_token)
+                        if modern else _mac(_rule_key(), _TOKEN_DOMAIN, legacy)
+                    )
+                except BudgetConfigError:
+                    raise DeviceTokenError(409, "device_token_prior_invalid") from None
+                previous = session.scalar(select(DeviceToken).where(DeviceToken.token_hmac == digest))
+                if not _accepted(None if previous is None else previous.token_hmac, digest):
+                    raise DeviceTokenError(409, "device_token_prior_invalid")
+                if (
+                    previous.revoked_at is not None
+                    or moment >= min(previous.expires_at, previous.hard_expires_at)
+                    or previous.owner != owner
+                    or (previous.actor or previous.owner) != actor
+                ):
+                    raise DeviceTokenError(409, "device_token_prior_invalid")
+                ceiling = _issued_mask(previous)
+                if previous.actor is None and previous.owner == actor:
+                    ceiling = authz.LEGACY_RECEIPT_PERMISSIONS
+                issued &= ceiling
+                if not issued:
+                    raise DeviceTokenError(403, "budget_forbidden")
+
+            token = DEVICE_TOKEN_PREFIX + base64.urlsafe_b64encode(os.urandom(_TOKEN_BYTES)).rstrip(b"=").decode("ascii")
+            digest = _session_mac(self.session_secret, _DEVICE_TOKEN_DOMAIN, token)
+            encoded_permissions = json.dumps(sorted(issued))
+            if previous is not None:
+                previous.actor = actor
+                previous.device_name = name
+                previous.token_hmac = digest
+                previous.issued_permissions = encoded_permissions
+                previous.expires_at = min(moment + SLIDE_TTL, previous.hard_expires_at)
+                previous.sliding_written_at = moment
+                previous.last_used_at = None
+                row = previous
+            else:
+                self_slot = or_(DeviceToken.actor == actor, DeviceToken.actor.is_(None)) if actor == owner else DeviceToken.actor == actor
+                active = session.scalar(select(func.count()).select_from(DeviceToken).where(
+                    DeviceToken.owner == owner, self_slot, DeviceToken.revoked_at.is_(None),
+                    DeviceToken.expires_at > moment, DeviceToken.hard_expires_at > moment,
+                ))
+                if active >= MAX_ACTIVE_TOKENS:
+                    raise DeviceTokenError(409, "device_token_limit_reached")
+                def factory():
+                    return DeviceToken(
+                        id=str(uuid.uuid4()), owner=owner, actor=actor, device_name=name,
+                        token_hmac=digest, issued_permissions=encoded_permissions,
+                        created_at=moment, expires_at=moment + SLIDE_TTL, hard_expires_at=moment + HARD_TTL,
+                        sliding_written_at=moment, last_used_at=None, revoked_at=None,
+                    )
+
+                row = _insert_unique(session, factory)
+                write_device_audit(
+                    session, owner, row.id, NEW_DEVICE_LOGIN, moment, actor=actor, device_name=name,
+                )
+            expires_at = datetime.fromtimestamp(row.expires_at, timezone.utc).isoformat(timespec="seconds")
+            return {
+                "token": token, "token_id": row.id,
+                "scope": "device" if "budget.view" in issued else "receipts",
+                "actor": actor, "owner": owner, "owner_key": owner_key(self.session_secret, owner),
+                "issued_permissions": sorted(issued), "expires_at": expires_at,
+            }
+
     def identify(self, token, *, slide, require_profile=True):
-        canonical = _bearer_token(token)
+        modern = _modern_bearer(token) is not None
+        canonical = token if modern else _bearer_token(token)
         if canonical is None:
             _accepted(None, _BLANK)
             return {"status": "unknown"}
-        digest = _mac(_rule_key(), _TOKEN_DOMAIN, canonical)
+        digest = (
+            _session_mac(self.session_secret, _DEVICE_TOKEN_DOMAIN, canonical)
+            if modern else _mac(_rule_key(), _TOKEN_DOMAIN, canonical)
+        )
         with self.sessions() as session:
             result, needs_write = self._inspect_token(
-                session, digest, slide=slide, write=False, require_profile=require_profile,
+                session, digest, slide=slide, write=False, require_profile=require_profile, modern=modern,
             )
         if needs_write:
             with self._transaction() as session:
                 result, _ = self._inspect_token(
-                    session, digest, slide=slide, write=True, require_profile=require_profile,
+                    session, digest, slide=slide, write=True, require_profile=require_profile, modern=modern,
                 )
         return result
 
-    def _inspect_token(self, session, digest, *, slide, write, require_profile):
+    def _inspect_token(self, session, digest, *, slide, write, require_profile, modern=False):
         store_sql.auth_session_phase(session)
         authz.require_supported_policy_phase(session)
         row = session.scalar(select(DeviceToken).where(DeviceToken.token_hmac == digest))
@@ -651,20 +788,36 @@ class DeviceTokenStore:
                 "token_id": row.id,
             }, False
         moment = self._moment()
-        if not self._owner_ok(session, row.owner):
+        actor = row.actor or row.owner
+        actor_row = session.get(User, actor)
+        if not self._owner_ok(session, row.owner) or (modern and (actor_row is None or actor_row.disabled)):
             if write:
                 row.revoked_at = moment
             return {
-                "status": "revoked", "owner": row.owner, "actor": row.actor or row.owner,
-                "token_id": row.id,
+                "status": "revoked", "owner": row.owner, "actor": actor, "token_id": row.id,
             }, not write
         if moment >= min(row.expires_at, row.hard_expires_at):
             return {"status": "expired", "token_id": row.id}, False
-        if (require_profile and authz.policy_phase(session) != authz.POLICY_PHASE_LEGACY
+        permissions = _issued_mask(row)
+        needs_narrow = False
+        if require_profile and modern:
+            allowed = permissions & authz.effective_permissions(session, actor, owner=row.owner)
+            allowed &= authz.DEVICE_ELIGIBLE_PERMISSIONS
+            if not allowed:
+                if write:
+                    row.revoked_at = moment
+                return {
+                    "status": "forbidden", "owner": row.owner, "actor": actor, "token_id": row.id,
+                }, not write
+            if allowed != permissions:
+                needs_narrow = True
+                permissions = allowed
+                if write:
+                    row.issued_permissions = json.dumps(sorted(permissions))
+        elif (require_profile and authz.policy_phase(session) != authz.POLICY_PHASE_LEGACY
                 and not _legacy_bearer_allowed(session, row)):
             return {
-                "status": "forbidden", "owner": row.owner, "actor": row.actor or row.owner,
-                "token_id": row.id,
+                "status": "forbidden", "owner": row.owner, "actor": actor, "token_id": row.id,
             }, False
         needs_slide = slide and (row.last_used_at is None or moment - row.sliding_written_at >= SLIDE_WRITE_INTERVAL)
         if needs_slide and write:
@@ -672,9 +825,9 @@ class DeviceTokenStore:
             row.last_used_at = moment
             row.sliding_written_at = moment
         return {
-            "status": "ok", "owner": row.owner, "actor": row.actor or row.owner,
-            "token_id": row.id, "expires_at": row.expires_at,
-        }, needs_slide and not write
+            "status": "ok", "owner": row.owner, "actor": actor,
+            "token_id": row.id, "expires_at": row.expires_at, "permissions": permissions,
+        }, (needs_slide or needs_narrow) and not write
 
     def list_tokens(self, owner):
         with self._transaction() as session:

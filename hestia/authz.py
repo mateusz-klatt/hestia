@@ -120,7 +120,7 @@ _CATALOG_SPECS: tuple[PermissionSpec, ...] = (
         storage_scope="owner",
         delegation="self_only",
         requires=(),
-        device_eligible=False,
+        device_eligible=True,
         label="View full budget ledger",
     ),
     PermissionSpec(

@@ -2118,6 +2118,7 @@ SPOUSE_ROUTE_STATUS = {
     ("POST", "/api/logout"): 200,
     ("POST", "/api/auth/qr-code"): 503,
     ("POST", "/api/auth/qr-redeem"): 400,
+    ("POST", "/api/auth/device-token"): 401,
     ("POST", "/api/me/password"): 400,
     ("POST", "/api/name"): 403,
     ("POST", "/api/rooms/icons"): 403,
