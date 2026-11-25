@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 from unittest import TestCase
 
-from hestia.budget.gmail_payment import _parse_amount, extract_payment, inspect_payment
+from hestia.budget.gmail_payment import _HTTP_URL, _parse_amount, _shorten_url, extract_payment, inspect_payment
 
 
 def _inspect(body, *subjects, gateway=False):
@@ -26,6 +26,29 @@ class GmailPaymentReviewTests(TestCase):
         ).payment.description, "Synthetic matching @x x@ label")
         self.assertEqual(_inspect("Total: 1 PLN\nOdbiorca: Example x_https://pay.example.test Studio",
                                   gateway=True).payment.merchant, "Example Studio")
+
+    def test_url_shortening_preserves_hosts_and_surrounding_brackets(self):
+        text = ("[HTTP://sample:password@shop.example.test:8443/full/path?q=example "
+                "https://assets.example.test/image.png] (http://[2001:db8::1]:8080/test) https://:443/no-host")
+        self.assertEqual(_HTTP_URL.sub(_shorten_url, text),
+                         "[https://shop.example.test/ https://assets.example.test/] "
+                         "(https://[2001:db8::1]/) https://:443/no-host")
+
+    def test_overlong_gateway_link_still_supplies_payee(self):
+        url = "http://shop.example.test/" + "placeholder-" * 60
+        for wrapped in (url, f"[{url}]", f"({url})"):
+            with self.subTest(wrapper=wrapped[:1]):
+                payment = _inspect(f"Potwierdzenie dla - {wrapped}\nTotal: 3 PLN", gateway=True).payment
+                self.assertEqual(payment.merchant, "shop.example.test")
+
+    def test_receipt_payee_ends_at_the_first_amount_or_illustration(self):
+        amount_and_date = "$15.24 Paid December 8, 2026"
+        illustration = "(invoice illustration [https://assets.example.test/rendering.png])"
+        for suffix in (f"{amount_and_date} {illustration}", f"{illustration} {amount_and_date}"):
+            with self.subTest(suffix=suffix):
+                payment = _inspect(f"Receipt from Example Studio {suffix}\nCharged: 40.12 PLN", gateway=True).payment
+                self.assertEqual(payment.merchant, "Example Studio")
+                self.assertEqual(payment.body_dates, (date(2026, 12, 8),))
 
     def test_all_subjects_are_normalized_before_marker_matching(self):
         for subject in ("Ref\x00und", "Ref" + "\x00" * 512 + "und", "Re\u034ffund", "Ｒｅｆｕｎｄ",

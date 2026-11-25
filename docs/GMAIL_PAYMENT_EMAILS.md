@@ -58,11 +58,11 @@ extract_payment(text: str, *, subject: str, merchant: str, gateway: bool) -> Imp
 
 - The processor uses the existing sidecar to render text/plain first. An absent or unreadable plain part can fall back to HTML. A readable plain part also falls back when it contains no total. A rejection marker, negative or ambiguous amount, conflicting values, or failed date cross-check ends the import. PDFs stay outside the payment path.
 - Check every decoded Subject header for rejection markers. Normalize each header with `_normalize_receipt_text` before that check. This applies NFKC and removes controls, format characters, and uncomposed combining marks. Cap each normalized subject at 256 chars.
-- Normalize the body as for `gmail_invoice`. Apply NFKC, drop Cf characters, cap lines at 512 chars, and cap the total at 32 KiB. Remove simple `p`, `b`, `strong`, `span`, `div`, `br`, `td`, `tr`, `th`, `table`, `tbody`, and `font` tags that appear literally in plain text. Extract fields from text redacted by `redact_pan`.
+- Cap the raw body at 32 KiB. Before applying the 512-character line limit, shorten HTTP(S) links in one pass to `https://<host>/`, leaving surrounding `)` and `]` untouched. This preserves the gateway host and lets long receipt rows fit the limit when the extra length comes from URL paths or parameters. Then normalize the body as for `gmail_invoice`, applying NFKC and dropping Cf characters. Remove simple `p`, `b`, `strong`, `span`, `div`, `br`, `td`, `tr`, `th`, `table`, `tbody`, and `font` tags that appear literally in plain text. Extract fields from text redacted by `redact_pan`.
 
 ### Rejection markers (checked first)
 
-The message is rejected (None) when the subject or any body line matches one of these, case-insensitively and whitespace-tolerant.
+The message is rejected (None) when the subject matches a marker below, case-insensitively and with flexible whitespace. Body matching has the additional conditions below.
 - Unfinished or started payments:
   - `dokończ płatność`
   - `płatność nie została (jeszcze )?zakończona`
@@ -92,6 +92,13 @@ The message is rejected (None) when the subject or any body line matches one of 
   - `out for delivery`
 
 Body markers apply to lines of at most 120 chars that contain neither an amount nor a labelled field in the form `<label>: <value>`. A body line containing `rozpoczęci[ae] transakcji` triggers rejection only when it starts with `Potwierdzenie rozpoczęcia`. This lets a completed payment include a `Data rozpoczęcia transakcji: …` field. Subject markers apply anywhere in a normalized header.
+
+A body refund or correction marker must start the line with one of these headings. Footer links such as `Zwrot lub wymiana`, `Zwroty i reklamacje`, and `Returns & refunds` do not trigger rejection.
+
+- `Zwrot środków`, `Zwrot płatności`, `Zwrot pieniędzy`, or `Zwrot za zamówienie`
+- `Twój zwrot` or `Otrzymaliśmy zwrot`
+- `Refund issued`, `Refund processed`, `Refund of`, or `Your refund`
+- `Faktura korygująca` or `Korekta faktury`
 
 ### Amount
 
@@ -129,8 +136,8 @@ Collect *labelled totals*. A label matches a whole line, or a line prefix follow
   Skip generic single-word descriptions (`Płatność`, `Payment`, `Zamówienie`, `Order`, `Receipt`, `Faktura`). Prefer candidates without digit runs longer than 10. When the subject is the only candidate, keep its sanitized text. Sanitization uses PAN, IBAN, and PESEL redaction, removes long digit runs, collapses whitespace, and caps the result at 128 chars. An empty result falls back to `Płatność`.
 - **Contact filtering.** In one whitespace-token pass, drop any token containing `://`, `mailto:` or `www.`, or an `@` joining two non-empty parts. This also removes composite tokens such as `order_https://shop.example.test/`.
 - **Gateway sender.** Collect payee candidates from every matching label on a line and from gateway subject forms. A payee must be unique, 2–128 chars and free of digit runs longer than 6. When comparing candidates, ignore supported legal-form suffixes, case, periods, commas, hyphens, and repeated spaces. Keep the spelling of the first valid candidate. Use the config merchant if no candidate qualifies. Conflicting valid payees reject the message. Description extraction follows the same rules as above. `Tytuł:` never supplies a payee.
-  - Body forms include `Odbiorca wpłaty: <X>`, `Odbiorca: <X>`, `Opis zamówienia w <X>:`, `płatność dla <X>`, `dla - <url-host>`, and `zarejestrowaliśmy zlecenie płatności dla <X> (http://…).` Strip the trailing contact token, its parentheses, and the final period from the registered-payment payee.
-  - SaaS receipts can use `Receipt from <X> Receipt #…`, `Receipt from <X>`, `Receipt from <X> <amount> Paid <date>`, or `Payment to <X> : <amount>` in the body. When the receipt heading contains the amount and paid date, extract only `<X>` as the payee and use the paid date for the date cross-check. The subject can use `Your receipt from <X> #1234-5678`, `Your <X> receipt [#1234-5678]`, or `Twoje pokwitowanie od <X> nr 1234-5678`.
+  - Body forms include `Odbiorca wpłaty: <X>`, `Odbiorca: <X>`, `Opis zamówienia w <X>:`, `płatność dla <X>`, `dla - <url-host>`, and `zarejestrowaliśmy zlecenie płatności dla <X> (http://…).` The URL after `dla -` can be wrapped in brackets or parentheses. Strip the trailing contact token, its parentheses, and the final period from the registered-payment payee.
+  - SaaS receipts can use `Receipt from <X> Receipt #…`, `Receipt from <X>`, `Receipt from <X> <amount> Paid <date>`, or `Payment to <X> : <amount>` in the body. When the receipt heading contains the amount and paid date, extract only `<X>` as the payee and use the paid date for the date cross-check. Ignore a parenthesized illustration annotation with a bracketed URL in the heading. The subject can use `Your receipt from <X> #1234-5678`, `Your <X> receipt [#1234-5678]`, or `Twoje pokwitowanie od <X> nr 1234-5678`.
   - `Do <X>` supplies the payee when it follows the completed-payment heading `Przekazaliśmy Twoje pieniądze`. Registration and completion emails can both supply a valid total. The dedupe rules below handle the pair.
 - **Raw text.** No raw body text is persisted. `raw_ocr_text` stays NULL, as for invoices.
 
@@ -191,12 +198,15 @@ The fixtures live in `tests/fixtures/gmail/payment/*.txt`. The expected results:
 | `shop_order_updates.txt` | Repeated notices for `Zamówienie nr 00000000001`, a notice with no reference, and a notice for `Zamówienie nr 00000000002` | no | 67.18 PLN, with the two known references kept separate and repeated notices deduped |
 | `food_description.txt` | `Potwierdzenie zamówienia nr 00000000001` | no | 26.42 PLN, description `Przykładowa Restauracja` |
 | `saas_gateway_charged.txt` | `Receipt #1111-2222` | yes | 96.77 PLN charged for a 24.50 USD invoice, merchant `Example Studio`, paid November 5, 2026 |
+| `saas_gateway_long_url.txt` | `Receipt #3333-4444` | yes | 66.19 PLN charged for a 17.25 USD invoice, merchant `Example Render Studio`, paid December 8, 2026 |
 | `sports_shop_html_order.txt` | `Potwierdzenie zamówienia nr 00000000003` | no | 248.36 PLN from `Wartość zamówienia` in rendered HTML |
+| `sports_shop_payment_footer.txt` | `Zaksięgowaliśmy płatność za Twoje zamówienie` | no | 369.98 PLN from `Wartość zamówienia` with a returns and exchanges link in the footer |
 | `zero_dual_currency.txt` | `Example invoice notice` | no | None |
 
 Also required:
 - disagreement, two amounts on one total line, and negative-value rejects;
 - flattened summaries with currency conversion and conflicting repeated totals, and a terminal rejection for a labelled EUR zero using a symbol and code;
+- long receipt rows with shortened URLs, illustration annotations in payee headings, and refund notices distinguished from footer links;
 - NBSP amounts;
 - a marker inside an item line does not reject;
 - the legal-footer capital line is ignored;

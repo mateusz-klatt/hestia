@@ -39,15 +39,26 @@ _MARKER = re.compile(
     r"|oczekuje\s+na\s+płatność|nie\s+opłacono"
     r"|payment\s+failed|unable\s+to\s+process|was\s+declined|nieudana\s+płatność"
     r"|płatność\s+odrzucona|nie\s+udało\s+się\s+(?:pobrać|obciążyć)"
-    r"|zwrot|refund|korekta|faktura\s+korygująca|credit\s+note|czeka\s+na\s+odbiór"
+    r"|czeka\s+na\s+odbiór"
     r"|gotowe\s+do\s+odbioru|potwierdzenie\s+odbioru|została\s+wysłana|wysłaliśmy"
     r"|shipped|out\s+for\s+delivery)\b",
+    re.IGNORECASE,
+)
+_REFUND_SUBJECT = re.compile(r"\b(?:zwrot|refund|korekta|faktura\s++korygująca|credit\s++note)\b", re.IGNORECASE)
+_REFUND_NOTICE = re.compile(
+    r"(?:Zwrot\s++(?:środków|płatności|pieniędzy|za\s++zamówienie)|Twój\s++zwrot|Otrzymaliśmy\s++zwrot"
+    r"|Refund\s++(?:issued|processed|of)|Your\s++refund|Faktura\s++korygująca|Korekta\s++faktury)\b",
     re.IGNORECASE,
 )
 _STARTED = re.compile(r"\brozpoczęci[ae]\s++transakcji\b", re.IGNORECASE)
 _STARTED_NOTICE = re.compile(r"Potwierdzenie\s++rozpoczęcia\s++transakcji\b", re.IGNORECASE)
 _BODY_FIELD = re.compile(r"[^:]++:(?!//|(?<=[0-9]:)[0-9])\s*+\S")
 _LEGAL = re.compile(r"\b(?:kapitał\w*|KRS|zakładowego)\b", re.IGNORECASE)
+_URL_AUTHORITY_CHAR = r"[^\s/?#)\[\]]"
+_HTTP_URL = re.compile(
+    rf"(?ai:https?)://(?P<authority>{_URL_AUTHORITY_CHAR}*+\[[^\s)\[\]]++\]{_URL_AUTHORITY_CHAR}*+"
+    rf"|{_URL_AUTHORITY_CHAR}++)[^\s)\]]*+",
+)
 _INLINE_TAG = re.compile(
     r"</?(?:p|b|strong|span|div|br|td|tr|th|table|tbody|font)(?: [^<>]*+)?/?>", re.IGNORECASE,
 )
@@ -111,8 +122,8 @@ _PAYEE_LABEL = re.compile(
     r"|(?P<payment>Payment\s++to\s++))",
     re.IGNORECASE,
 )
-_PAYEE_HOST = re.compile(r"(?:https?://)?([a-z0-9.-]+)(?=$|[/:?#\s])", re.IGNORECASE)
-_RECEIPT_SUFFIX = re.compile(r"\s++Receipt\s++#", re.IGNORECASE)
+_PAYEE_HOST = re.compile(r"(?:[(\[]\s*+)?(?:https?://)?([a-z0-9.-]+)(?=$|[/:?#)\]\s])", re.IGNORECASE)
+_RECEIPT_SUFFIX = re.compile(r"\s++(?:Receipt\s++#|\(\s*+invoice\s++illustration\s++\[)", re.IGNORECASE)
 _SUBJECT_RECEIPT_ID = r"[0-9]++(?:-[0-9]++)*+"
 _SUBJECT_PAYEES = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
     rf"Your\s++receipt\s++from\s++(.+?)\s++#{_SUBJECT_RECEIPT_ID}",
@@ -311,8 +322,9 @@ def _payee_candidates(line: str) -> list[str]:
             if _AMOUNT.fullmatch(amount.strip()):
                 candidates.append(name)
         elif kind == "receipt":
-            suffix = _RECEIPT_SUFFIX.search(value) or _AMOUNT.search(value)
-            candidates.append(value[:suffix.start()] if suffix else value)
+            suffixes = (_RECEIPT_SUFFIX.search(value), _AMOUNT.search(value))
+            end = min((suffix.start() for suffix in suffixes if suffix), default=len(value))
+            candidates.append(value[:end])
         elif kind == "registered":
             # The HTML worker can leave an opening parenthesis after removing a URL.
             candidates.append(_clean_field(value).rstrip(" .("))
@@ -382,9 +394,20 @@ def _subject_text(subject: str) -> str:
     return " ".join(_normalize_receipt_text(bounded)[:256].split())
 
 
+def _shorten_url(match: re.Match[str]) -> str:
+    authority = match["authority"].rpartition("@")[2]
+    if authority.startswith("["):
+        host, close, _ = authority.partition("]")
+        host += close
+    else:
+        host = authority.partition(":")[0]
+    return f"https://{host}/" if host else match[0]
+
+
 def _body_marker(line: str) -> bool:
     return (len(line) <= 120 and not _BODY_FIELD.match(_BULLET.sub("", line))
-            and bool(_MARKER.search(line) or _STARTED_NOTICE.match(line)) and not _AMOUNT.search(line))
+            and bool(_MARKER.search(line) or _STARTED_NOTICE.match(line) or _REFUND_NOTICE.match(line))
+            and not _AMOUNT.search(line))
 
 
 def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gateway: bool) -> PaymentInspection:
@@ -395,14 +418,15 @@ def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gate
         if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
             return PaymentInspection()
         subjects = tuple(_subject_text(subject) for subject in subjects)
-        normalized = (_INLINE_TAG.sub("", line).strip() for line in _normalized_invoice_lines(text))
+        # Shorten link tokens before invoice normalization applies its per-line cap.
+        shortened = _HTTP_URL.sub(_shorten_url, text)
+        normalized = (_INLINE_TAG.sub("", line).strip() for line in _normalized_invoice_lines(shortened))
         raw = ["" if _LEGAL.search(line) else line for line in normalized]
         # Rejection predicates do not extract fields. Check the original line
         # shape so identifiers cannot hide warnings and table splits do not
         # turn the priced part of an item into an independent warning.
-        if any(_MARKER.search(subject) or _STARTED.search(subject) for subject in subjects) or any(
-            _body_marker(line) for line in raw
-        ):
+        if any(_MARKER.search(subject) or _REFUND_SUBJECT.search(subject) or _STARTED.search(subject)
+               for subject in subjects) or any(_body_marker(line) for line in raw):
             return PaymentInspection()
         expanded = []
         summary_rows = {}

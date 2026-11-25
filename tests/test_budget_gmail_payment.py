@@ -77,8 +77,14 @@ class PaymentFixtureTests(unittest.TestCase):
             ("saas_gateway_charged", "Receipt #1111-2222", True, ImportedPayment(
                 "Example Studio", "Receipt #1111-2222", "96.77", "PLN", (date(2026, 11, 5),),
             )),
+            ("saas_gateway_long_url", "Receipt #3333-4444", True, ImportedPayment(
+                "Example Render Studio", "Receipt #3333-4444", "66.19", "PLN", (date(2026, 12, 8),),
+            )),
             ("sports_shop_html_order", "Potwierdzenie zamówienia nr 00000000003", False, ImportedPayment(
                 _MERCHANT, "Potwierdzenie zamówienia nr", "248.36", "PLN", (), "00000000003",
+            )),
+            ("sports_shop_payment_footer", "Zaksięgowaliśmy płatność za Twoje zamówienie", False, ImportedPayment(
+                _MERCHANT, "Zaksięgowaliśmy płatność za Twoje zamówienie", "369.98", "PLN", (),
             )),
             ("zero_dual_currency", "Example invoice notice", False, None),
         )
@@ -161,8 +167,8 @@ class PaymentExtractionTests(unittest.TestCase):
             "dokończ płatność", "płatność nie została zakończona", "płatność nie została jeszcze zakończona",
             "oczekuje na płatność", "nie opłacono",
             "payment failed", "unable to process", "was declined", "nieudana płatność", "płatność odrzucona",
-            "nie udało się pobrać", "nie udało się obciążyć", "zwrot", "refund", "korekta", "faktura korygująca",
-            "credit note", "czeka na odbiór", "gotowe do odbioru", "potwierdzenie odbioru", "została wysłana",
+            "nie udało się pobrać", "nie udało się obciążyć",
+            "czeka na odbiór", "gotowe do odbioru", "potwierdzenie odbioru", "została wysłana",
             "wysłaliśmy", "shipped", "out for delivery",
         ):
             with self.subTest(marker=marker):
@@ -173,9 +179,27 @@ class PaymentExtractionTests(unittest.TestCase):
             self.assertIsNone(_extract("Total 2 PLN", f"Example {marker}"))
         self.assertIsNone(_extract("Potwierdzenie rozpoczęcia transakcji\nTotal 2 PLN"))
 
+    def test_refund_and_correction_markers(self):
+        for marker in ("zwrot", "refund", "korekta", "faktura korygująca", "credit note"):
+            with self.subTest(subject=marker):
+                upper = marker.upper().replace(" ", "\u00a0\t ")
+                self.assertIsNone(_extract("Total 2 PLN", f"Example {upper}"))
+        for heading in (
+            "Zwrot środków", "Zwrot płatności", "Zwrot pieniędzy", "Zwrot za zamówienie", "Twój zwrot",
+            "Otrzymaliśmy zwrot", "Refund issued", "Refund processed", "Refund of", "Your refund",
+            "Faktura korygująca", "Korekta faktury",
+        ):
+            with self.subTest(heading=heading):
+                upper = heading.upper().replace(" ", "\u00a0\t ")
+                self.assertIsNone(_extract(f"{upper} – Example\nTotal 2 PLN"))
+                self.assertEqual(_extract(f"Example {heading}\nTotal 2 PLN").total_amount, "2")
+        for footer in ("Zwrot lub wymiana", "Zwroty i reklamacje", "Returns & refunds", "Refund issued: Example note"):
+            with self.subTest(footer=footer):
+                self.assertEqual(_extract(f"Total 2 PLN\n{footer}").total_amount, "2")
+
     def test_marker_does_not_reject_a_priced_or_long_item(self):
-        for item in ("Book about refund 2 PLN", "Book titled Refund (USD 13.00)",
-                     "Article ‘payment failed’ 13,20 zł", "x" * 120 + " refund"):
+        for item in ("Book about refund 2 PLN", "Book titled Refund (USD 13.00)", "Refund issued for 2 PLN",
+                     "Article ‘payment failed’ 13,20 zł", "Refund processed " + "x" * 120):
             with self.subTest(item=item):
                 self.assertEqual(_extract(f"{item}\nTotal 3 PLN").total_amount, "3")
         self.assertIsNone(_extract("Really shipped\nTotal 3 PLN"))

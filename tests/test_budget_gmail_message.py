@@ -122,26 +122,27 @@ class GmailMessageProcessorTests(unittest.TestCase):
                          (digest(SECRET, PAYMENT_SENDER_DOMAIN, "@gateway.example.test"),))
         self.assertIsNone(pending.payment.order_reference_hmac)
 
-    def test_gateway_summary_uses_card_charge_and_cross_checks_paid_heading_date(self):
-        body = (Path(__file__).parent / "fixtures" / "gmail" / "payment" / "saas_gateway_charged.txt").read_text(
+    def test_long_gateway_summary_uses_card_charge_and_cross_checks_paid_heading_date(self):
+        body = (Path(__file__).parent / "fixtures" / "gmail" / "payment" / "saas_gateway_long_url.txt").read_text(
             encoding="utf-8",
         )
+        self.assertGreater(len(body.splitlines()[1]), 512)
         self.settings.payment_senders = (PaymentSender("@gateway.example.test", "Example Gateway", gateway=True),)
         message = _email("receipts@gateway.example.test", body)
-        message["Subject"] = "Receipt #1111-2222"
+        message["Subject"] = "Receipt #3333-4444"
 
         def process_on(day):
-            internal_date = datetime(2026, 11, day, tzinfo=UTC)
+            internal_date = datetime(2026, 12, day, tzinfo=UTC)
             metadata = {**_metadata(message), "internalDate": str(int(internal_date.timestamp() * 1000))}
             return self._process(metadata, _raw(message))
 
-        pending = process_on(8)
+        pending = process_on(11)
         self.assertEqual(pending.outcome, "imported")
-        self.assertEqual(pending.payment.receipt_date, date(2026, 11, 8))
+        self.assertEqual(pending.payment.receipt_date, date(2026, 12, 11))
         fields = pending.payment.fields
         self.assertEqual((fields.merchant, fields.total_amount, fields.currency, fields.body_dates),
-                         ("Example Studio", "96.77", "PLN", (date(2026, 11, 5),)))
-        pending = process_on(9)
+                         ("Example Render Studio", "66.19", "PLN", (date(2026, 12, 8),)))
+        pending = process_on(12)
         self.assertEqual((pending.outcome, pending.payment), ("skipped_non_receipt", None))
 
     def test_payment_order_reference_crosses_processing_boundary_only_as_hmac(self):
