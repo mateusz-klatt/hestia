@@ -11,7 +11,8 @@ from unittest.mock import Mock, call, patch
 from hestia.budget import gmail_message
 from hestia.budget.gmail_client import GmailError
 from hestia.budget.gmail_invoice import ImportedInvoice
-from hestia.budget.gmail_store import ORDER_REFERENCE_DOMAIN, PAYMENT_SENDER_DOMAIN, RFC_MESSAGE_DOMAIN, digest
+from hestia.budget.gmail_store import (ORDER_REFERENCE_DOMAIN, PAYMENT_PAYEE_DOMAIN, PAYMENT_SENDER_DOMAIN,
+                                      RFC_MESSAGE_DOMAIN, digest)
 from hestia.budget.gmail_trust import PaymentSender
 from hestia.budget.gmail_worker import PDFUnsupported, WorkerRejected, WorkerUnavailable
 
@@ -121,6 +122,7 @@ class GmailMessageProcessorTests(unittest.TestCase):
         self.assertEqual(pending.payment.opposite_sender_hmacs,
                          (digest(SECRET, PAYMENT_SENDER_DOMAIN, "@gateway.example.test"),))
         self.assertIsNone(pending.payment.order_reference_hmac)
+        self.assertIsNone(pending.payment.payee_hmac)
 
     def test_long_gateway_summary_uses_card_charge_and_cross_checks_paid_heading_date(self):
         body = (Path(__file__).parent / "fixtures" / "gmail" / "payment" / "saas_gateway_long_url.txt").read_text(
@@ -142,8 +144,21 @@ class GmailMessageProcessorTests(unittest.TestCase):
         fields = pending.payment.fields
         self.assertEqual((fields.merchant, fields.total_amount, fields.currency, fields.body_dates),
                          ("Example Render Studio", "66.19", "PLN", (date(2026, 12, 8),)))
+        self.assertEqual(pending.payment.payee_hmac, digest(SECRET, PAYMENT_PAYEE_DOMAIN, "example render studio"))
         pending = process_on(12)
         self.assertEqual((pending.outcome, pending.payment), ("skipped_non_receipt", None))
+
+    def test_payment_gateway_marks_actual_config_fallback(self):
+        self.settings.payment_senders = (PaymentSender("@gateway.example.test", "Example Gateway", gateway=True),)
+        for payee_line, fell_back in (("", True), ("\nOdbiorca: Example Gateway", False)):
+            with self.subTest(fell_back=fell_back):
+                message = _email("receipts@gateway.example.test", f"Total: 12 PLN{payee_line}")
+                payment = self._process(_metadata(message), _raw(message)).payment
+                self.assertEqual(payment.fields.merchant, "Example Gateway")
+                self.assertIs(payment.fields.payee_from_config, fell_back)
+                self.assertEqual(payment.payee_hmac, None if fell_back else digest(
+                    SECRET, PAYMENT_PAYEE_DOMAIN, "example gateway",
+                ))
 
     def test_payment_order_reference_crosses_processing_boundary_only_as_hmac(self):
         message = self._payment_email("Amount paid: 123 PLN\nTytuł: Example purchase")

@@ -52,10 +52,10 @@ class PaymentFixtureTests(unittest.TestCase):
                 _MERCHANT, "Przejazd opłacony", "42.35", "PLN", (),
             )),
             ("gateway_fee_inclusive", "Potwierdzenie płatności", True, ImportedPayment(
-                _MERCHANT, "Potwierdzenie płatności", "214.7", "PLN", (),
+                _MERCHANT, "Potwierdzenie płatności", "214.7", "PLN", (), payee_from_config=True,
             )),
             ("gateway_start_date_field", "Płatność zakończona", True, ImportedPayment(
-                _MERCHANT, "Przykładowy zakup", "38.12", "PLN", (),
+                _MERCHANT, "Przykładowy zakup", "38.12", "PLN", (), payee_from_config=True,
             )),
             ("gateway_registered", "Zarejestrowaliśmy Twoje zlecenie płatnicze", True, ImportedPayment(
                 "Example Studio", "Materiały do projektu", "47.25", "PLN", (),
@@ -193,7 +193,7 @@ class PaymentExtractionTests(unittest.TestCase):
                 upper = heading.upper().replace(" ", "\u00a0\t ")
                 self.assertIsNone(_extract(f"{upper} – Example\nTotal 2 PLN"))
                 self.assertEqual(_extract(f"Example {heading}\nTotal 2 PLN").total_amount, "2")
-        for footer in ("Zwrot lub wymiana", "Zwroty i reklamacje", "Returns & refunds", "Refund issued: Example note"):
+        for footer in ("Zwrot lub wymiana", "Zwroty i reklamacje", "Returns & refunds"):
             with self.subTest(footer=footer):
                 self.assertEqual(_extract(f"Total 2 PLN\n{footer}").total_amount, "2")
 

@@ -91,7 +91,7 @@ The message is rejected (None) when the subject matches a marker below, case-ins
   - `shipped`
   - `out for delivery`
 
-Body markers apply to lines of at most 120 chars that contain neither an amount nor a labelled field in the form `<label>: <value>`. A body line containing `rozpoczęci[ae] transakcji` triggers rejection only when it starts with `Potwierdzenie rozpoczęcia`. This lets a completed payment include a `Data rozpoczęcia transakcji: …` field. Subject markers apply anywhere in a normalized header.
+Body markers apply to lines of at most 120 chars without an amount. Skip a colon-delimited `Tytuł` field or a field whose label starts with `Opis`, `Odbiorca`, `Data`, `Nr`, `Numer`, `Identyfikator`, `Kwota`, `Termin`, or `Adres`. Lines starting with a rejection phrase or with `Status płatności` or `Status transakcji` are checked even when they contain a colon. Remove one leading bullet before matching. A body line containing `rozpoczęci[ae] transakcji` triggers rejection only when it starts with `Potwierdzenie rozpoczęcia`. This lets a completed payment include a `Data rozpoczęcia transakcji: …` field. Subject markers apply anywhere in a normalized header.
 
 A body refund or correction marker must start the line with one of these headings. Footer links such as `Zwrot lub wymiana`, `Zwroty i reklamacje`, and `Returns & refunds` do not trigger rejection.
 
@@ -112,7 +112,7 @@ Collect *labelled totals*. A label matches a whole line, or a line prefix follow
 
 - **Value grammar.** An amount with currency `zł` / `PLN` / `EUR` / `€` / `USD` / `$` / `GBP` / `£`, the symbol before or after.
   - Decimal comma or dot, optional thousands separators (space, NBSP or the other separator), exactly 0 or 2 decimals. The first group of a thousands-formatted value starts with a nonzero digit, so `0.005` is invalid.
-  - A trailing symbol and its matching currency code identify one amount. For a recognized total label, `0,00 € EUR` parses as EUR zero and is rejected as non-positive. Values must be > 0 and ≤ 1 000 000. A negative value rejects the whole message.
+  - A symbol and its matching trailing currency code identify one amount. A conflicting trailing `PLN`, `EUR`, `USD`, or `GBP` code rejects the message. For a recognized total label, `0,00 € EUR` parses as EUR zero and is rejected as non-positive. Values must be > 0 and ≤ 1 000 000. A negative value rejects the whole message.
   - Trailing words such as `miesięcznie` or `brutto` are allowed after the amount on the same line.
   - A whole-line label such as `RAZEM` contributes a value only when the next non-empty line starts with an amount. A standalone parenthesized amount is ignored.
 - **Multiple values.**
@@ -128,7 +128,7 @@ Collect *labelled totals*. A label matches a whole line, or a line prefix follow
 ### Merchant and description
 
 - **Non-gateway sender.** `merchant` comes from config. Description candidates have the following priority.
-  - `Opis zamówienia w <X>: <D>` → D
+  - `Opis zamówienia w <X>: <D>` → D. Only X can supply a gateway payee from this line.
   - `Tytuł: <D>` or `Opis płatności: <D>`
   - `Twoje zamówienie z lokalu <X>` → X
   - the subject
@@ -158,12 +158,12 @@ The description is stored as exactly one `BudgetReceiptLine` with `line_kind="ot
 
 Check Gmail ID and RFC Message-ID dedupe first. The payment-specific checks then compare an existing `payment_confirmation` receipt for the same owner, `total_amount`, and `currency`.
 
-- **Same payment-sender rule.** A date within ±7 days is `skipped_duplicate` unless both emails have order references and they differ. A missing reference on either side permits the match. This applies to shop and gateway rules.
-- **Same gateway sender rule and payee.** The same payee (case-insensitively) and a date within ±2 days is `skipped_duplicate` even when both order references are present and differ. This covers registration and completion emails with the same payee.
+- **Same payment-sender rule.** A date within ±7 days is `skipped_duplicate` when the order references match or at least one is missing and the gateway payees, if applicable, are compatible. Prefer an exact reference match. When a receipt lacks a reference and a matching email supplies one, bind its HMAC to the receipt in the same import transaction.
+- **Same gateway sender rule.** Compare extracted payees using the same normalized key as extraction, including the legal-form and punctuation rules. Different extracted payees stay separate. An explicit configured-merchant fallback can match an extracted payee. If the retained receipt used that fallback, bind the first matching extracted payee fingerprint to it. Registration and completion messages within ±2 days follow these same rules, including keeping different known references separate. For historical receipts without payee provenance, compare the normalized stored merchant.
 - **Gateway and shop.** A date within ±2 days and exactly one gateway is `skipped_non_receipt`.
 - Distinct shop sender rules can produce separate receipts with equal totals.
 
-An order reference contains at least 6 letters or digits after `zamówieni[ae]( nr| numer)?`, `order( #| no\.?)?`, or `nr zamówienia` in the subject or body. Check subjects first and ignore common status words such as `received` and `potwierdzone` after a bare order label. Compare references case-insensitively. For dedupe, persist only the keyed HMAC of the reference with the matched sender-rule fingerprint in receipt-associated `AppMeta` provenance. Treat existing rows without a reference hash as missing a reference. Dedupe resolves gateway roles from the current config. Sender and order-reference fingerprints follow the Gmail provenance cleanup lifecycle.
+An order reference contains at least 6 letters or digits after `zamówieni[ae]( nr| numer)?`, `order( #| no\.?| number)?`, or `nr zamówienia` in the subject or body. A bare `order` or `zamówienie` label with no separator requires a digit in the reference. Check subjects first and compare references case-insensitively. Store only keyed HMACs for order references, matched sender rules, and extracted gateway payee keys in receipt-associated `AppMeta` provenance. An explicit empty payee marker records a configured-merchant fallback. Treat existing rows without a reference hash as missing a reference. Dedupe resolves gateway roles from the current config. These provenance records follow the Gmail provenance cleanup lifecycle.
 
 ## API, UI, contract
 

@@ -14,9 +14,9 @@ from zoneinfo import ZoneInfo
 from .gmail_address import canonical_mailbox
 from .gmail_client import GmailError
 from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
-from .gmail_payment import inspect_payment
-from .gmail_store import (ORDER_REFERENCE_DOMAIN, PAYMENT_SENDER_DOMAIN, RFC_MESSAGE_DOMAIN, PendingMessage,
-                          PendingPayment, digest, normalize_parse_failed_reason)
+from .gmail_payment import _payee_key, inspect_payment
+from .gmail_store import (ORDER_REFERENCE_DOMAIN, PAYMENT_PAYEE_DOMAIN, PAYMENT_SENDER_DOMAIN, RFC_MESSAGE_DOMAIN,
+                          PendingMessage, PendingPayment, digest, normalize_parse_failed_reason)
 from .gmail_trust import (classify_sender, domain_matches, forward_sender_domain, mime_parts, payment_sender_for,
                           unwrap_trusted_forward)
 from .gmail_worker import MAX_HTML_BYTES, MAX_PDF_BYTES, PDFUnsupported, WorkerRejected, WorkerUnavailable
@@ -236,6 +236,8 @@ class GmailMessageProcessor:
                       for rule in payment_senders if rule.gateway != sender.gateway),
                 order_reference_hmac=digest(secret, ORDER_REFERENCE_DOMAIN, reference) if reference else None,
                 gateway=sender.gateway,
+                payee_hmac=(digest(secret, PAYMENT_PAYEE_DOMAIN, _payee_key(payment.merchant))
+                            if sender.gateway and not payment.payee_from_config else None),
             )
             return replace(pending, outcome="imported", payment=provenance,
                            rfc_message_id_hmac=_rfc_message_hmac(message, secret))

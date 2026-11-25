@@ -12,7 +12,7 @@ from sqlalchemy.orm import aliased
 
 from ..db import AppMeta, BudgetAnalyticsAudit, BudgetGmailMessage, BudgetGmailState, BudgetReceipt, BudgetReceiptLine
 from .gmail_client import GmailError
-from .gmail_payment import ImportedPayment
+from .gmail_payment import ImportedPayment, _payee_key
 from .receipt_parser import fold_text
 from .store import BudgetStore
 from .views import BudgetHTTPStore
@@ -24,6 +24,7 @@ MAX_PENDING_IMPORTS = 200
 GMAIL_MESSAGE_DOMAIN = b"hestia/budget/gmail-msg-id/v1\0"
 RFC_MESSAGE_DOMAIN = b"hestia/budget/gmail-rfc-msg-id/v1\0"
 PAYMENT_SENDER_DOMAIN = b"hestia/budget/gmail-payment-sender/v1\0"
+PAYMENT_PAYEE_DOMAIN = b"hestia/budget/gmail-payment-payee/v1\0"
 ORDER_REFERENCE_DOMAIN = b"hestia/budget/gmail-order-reference/v1\0"
 SCOPE_DOMAIN = b"hestia/budget/gmail-scope-query/v1\0"
 MAILBOX_DOMAIN = b"hestia/budget/gmail-mailbox/v1\0"
@@ -49,6 +50,7 @@ _RETRY_WINDOW_PREFIX = "budget_gmail_retry_full_window:"
 _INC_RESET_PREFIX = "budget_gmail_inc_reset:"
 _PAYMENT_SENDER_PREFIX = "budget_gmail_payment_sender:"
 _PAYMENT_ORDER_PREFIX = "budget_gmail_payment_order:"
+_PAYMENT_PAYEE_PREFIX = "budget_gmail_payment_payee:"
 PARSE_FAILED_REASONS = (
     "charset_error",
     "message_defects",
@@ -100,6 +102,7 @@ class PendingPayment:
     opposite_sender_hmacs: tuple[str, ...]
     order_reference_hmac: str | None = None
     gateway: bool = False
+    payee_hmac: str | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -131,12 +134,17 @@ def _payment_order_key(receipt_id):
     return _PAYMENT_ORDER_PREFIX + receipt_id
 
 
+def _payment_payee_key(receipt_id):
+    return _PAYMENT_PAYEE_PREFIX + receipt_id
+
+
 def _forget_payment_senders(session, *predicates):
     receipts = select(BudgetGmailMessage.receipt_id).where(
         BudgetGmailMessage.receipt_id.is_not(None), *predicates,
     ).subquery()
     keys = select(_payment_sender_key(receipts.c.receipt_id)).union_all(
         select(_payment_order_key(receipts.c.receipt_id)),
+        select(_payment_payee_key(receipts.c.receipt_id)),
     )
     session.execute(delete(AppMeta).where(AppMeta.key.in_(keys)))
 
@@ -336,32 +344,49 @@ class GmailStore(BudgetStore):
         ).limit(1)) is not None
 
     @staticmethod
+    def _gateway_payees_match(payment, stored_hmac, stored_merchant):
+        if payment.fields.payee_from_config or stored_hmac == "":
+            return True
+        if stored_hmac is None or payment.payee_hmac is None:
+            # Older receipts lack the original payee provenance.
+            return _payee_key(stored_merchant or "") == _payee_key(payment.fields.merchant)
+        return stored_hmac == payment.payee_hmac
+
+    @staticmethod
     def _duplicate_payment(session, owner, payment):
         fields = payment.fields
-        sender, order_reference = aliased(AppMeta), aliased(AppMeta)
+        sender, order_reference, payee = aliased(AppMeta), aliased(AppMeta), aliased(AppMeta)
         receipt_day = func.julianday(payment.receipt_date.isoformat())
         distance = func.abs(func.julianday(BudgetReceipt.receipt_date) - receipt_day)
         same_sender = sender.value == payment.sender_hmac
+        incoming_reference = payment.order_reference_hmac
         candidates = session.execute(select(
-            sender.value, order_reference.value, BudgetReceipt.raw_shop_name, (distance <= 2).label("nearby"),
+            BudgetReceipt.id, sender.value, order_reference.value, payee.value, BudgetReceipt.raw_shop_name,
         ).select_from(BudgetReceipt).join(
             sender, sender.key == _payment_sender_key(BudgetReceipt.id),
         ).outerjoin(
             order_reference, order_reference.key == _payment_order_key(BudgetReceipt.id),
+        ).outerjoin(
+            payee, payee.key == _payment_payee_key(BudgetReceipt.id),
         ).where(
             BudgetReceipt.owner == owner, BudgetReceipt.document_kind == "payment_confirmation",
             BudgetReceipt.total_amount == fields.total_amount, BudgetReceipt.currency == fields.currency,
             or_(and_(same_sender, distance <= 7),
                 and_(sender.value.in_(payment.opposite_sender_hmacs), distance <= 2)),
-        ).order_by(same_sender.desc()))
-        for sender_hmac, reference_hmac, merchant, nearby in candidates:
+        ).order_by(same_sender.desc(), (order_reference.value == incoming_reference).desc(),
+                   (payee.value == payment.payee_hmac).desc(), distance, BudgetReceipt.id))
+        for receipt_id, sender_hmac, reference_hmac, payee_hmac, merchant in candidates:
             if sender_hmac != payment.sender_hmac:
                 return "skipped_non_receipt"
-            if (not reference_hmac or not payment.order_reference_hmac
-                    or reference_hmac == payment.order_reference_hmac):
-                return "skipped_duplicate"
-            if payment.gateway and nearby and (merchant or "").casefold() == fields.merchant.casefold():
-                return "skipped_duplicate"
+            if reference_hmac is not None and incoming_reference is not None and reference_hmac != incoming_reference:
+                continue
+            if payment.gateway and not GmailStore._gateway_payees_match(payment, payee_hmac, merchant):
+                continue
+            if reference_hmac is None and incoming_reference is not None:
+                session.add(AppMeta(key=_payment_order_key(receipt_id), value=incoming_reference))
+            if payee_hmac == "" and payment.payee_hmac is not None:
+                session.get(AppMeta, _payment_payee_key(receipt_id)).value = payment.payee_hmac
+            return "skipped_duplicate"
         return None
 
     @staticmethod
@@ -396,6 +421,8 @@ class GmailStore(BudgetStore):
         session.add(AppMeta(key=_payment_sender_key(receipt.id), value=payment.sender_hmac))
         if payment.order_reference_hmac is not None:
             session.add(AppMeta(key=_payment_order_key(receipt.id), value=payment.order_reference_hmac))
+        if payment.gateway and (fields.payee_from_config or payment.payee_hmac is not None):
+            session.add(AppMeta(key=_payment_payee_key(receipt.id), value=payment.payee_hmac or ""))
         return receipt.id
 
     @staticmethod

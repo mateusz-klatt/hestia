@@ -75,7 +75,6 @@ class GmailPaymentReviewTests(TestCase):
             "dla - https://one.example.test/ dla - https://two.example.test/",
             "dla - https://one.example.test/ Odbiorca: Example Two",
             "Receipt from Example One Receipt #1234-5678 Payment to Example Two : 1 PLN",
-            "Opis zamówienia w Example One: synthetic detail Odbiorca: Example Two",
         ):
             with self.subTest(line=line):
                 result = _inspect(f"{line}\nTotal: 1 PLN", gateway=True)
@@ -86,6 +85,19 @@ class GmailPaymentReviewTests(TestCase):
         payment = _inspect("Opis zamówienia w Example One without colon\nPayment to Example Two : error\n"
                            "dla - ?\nTotal: 1 PLN", gateway=True).payment
         self.assertEqual(payment.merchant, "Example Merchant")
+
+    def test_order_description_only_takes_payee_from_order_heading(self):
+        for line, merchant, fallback, description in (
+            ("Opis zamówienia w Real Shop: Płatność dla szkoły", "Real Shop", False, "Płatność dla szkoły"),
+            ("Opis zamówienia w Shop 1234567: Płatność dla Evil Shop", "Example Merchant", True,
+             "Płatność dla Evil Shop"),
+            ("Opis zamówienia w Example One: synthetic detail Odbiorca: Example Two", "Example One", False,
+             "synthetic detail Odbiorca: Example Two"),
+        ):
+            with self.subTest(line=line):
+                payment = _inspect(f"{line}\nTotal: 1 PLN", gateway=True).payment
+                self.assertEqual((payment.merchant, payment.payee_from_config, payment.description),
+                                 (merchant, fallback, description))
 
     def test_flattened_summary_reads_independent_total_cells(self):
         for body in (
@@ -146,6 +158,13 @@ class GmailPaymentReviewTests(TestCase):
         self.assertIsNone(result.payment)
         self.assertFalse(result.missing_total)
 
+    def test_conflicting_trailing_currency_code_is_an_explicit_rejection(self):
+        for value in ("10,00 € USD", "10,00 zł EUR"):
+            with self.subTest(value=value):
+                result = _inspect(f"Amount paid: {value}")
+                self.assertIsNone(result.payment)
+                self.assertFalse(result.missing_total)
+
     def test_second_amount_on_a_labelled_total_is_an_explicit_rejection(self):
         for body in (
             "Total: 1 PLN 1 PLN",
@@ -175,15 +194,25 @@ class GmailPaymentReviewTests(TestCase):
         for line in ("Data rozpoczęcia transakcji: 05 listopada 2026 godz. 18:25",
                      "Data rozpoczęcia transakcji", "Odbiorca: Example Refund",
                      "* Opis: Payment failed text", "Wstęp:Potwierdzenie rozpoczęcia transakcji",
-                     "Status (próba): payment failed", "Nr. weryfikacji: refund"):
+                     "Nr. weryfikacji: refund"):
             with self.subTest(line=line):
                 self.assertTrue(_inspect(f"{line}\nTotal: 1 PLN").payment)
+        for field in ("Tytuł", "Opis płatności", "Odbiorca wpłaty", "Data rozliczenia", "Nr. weryfikacji",
+                      "Numer zamówienia", "Identyfikator przesyłki", "Kwota transakcji", "Termin płatności",
+                      "Adres dostawy"):
+            with self.subTest(field=field):
+                self.assertTrue(_inspect(f"{field}: payment failed\nTotal: 1 PLN").payment)
         for notice in ("Potwierdzenie rozpoczęcia transakcji",
                        "Potwierdzenie rozpoczęcia transakcji dla - https://x.example.test/",
-                       "Payment failed at 18:25 today"):
+                       "Payment failed at 18:25 today", "Dokończ płatność: https://pay.example.test/invoice",
+                       "Status płatności: nie opłacono", "Status transakcji: nie opłacono",
+                       "Payment failed: please update your card", "Zwrot środków: zamówienie 123456",
+                       "* Zwrot środków za zamówienie", "* Potwierdzenie rozpoczęcia transakcji",
+                       "Status (próba): payment failed", "Refund issued: Example note"):
             with self.subTest(notice=notice):
-                self.assertFalse(_inspect(f"{notice}\nTotal: 1 PLN").missing_total)
-                self.assertIsNone(_inspect(f"{notice}\nTotal: 1 PLN").payment)
+                result = _inspect(f"{notice}\nTotal: 1 PLN")
+                self.assertFalse(result.missing_total)
+                self.assertIsNone(result.payment)
 
     def test_inline_tags_leave_labels_and_masked_pan_cannot_be_a_total(self):
         payment = _inspect("<p>Cena podstawowa</p>\n2,10 zł\n3,40 zł\n"
@@ -208,6 +237,10 @@ class GmailPaymentReviewTests(TestCase):
                 self.assertEqual(_inspect(f"{body}\nTotal: 1 PLN", gateway=True).payment.merchant, "Example Studio")
         payment = _inspect("Przekazaliśmy Twoje pieniądze\nDo zapłaty: 1 PLN", gateway=True).payment
         self.assertEqual(payment.merchant, "Example Merchant")
+        self.assertTrue(payment.payee_from_config)
+        payment = _inspect("Receipt from Example Merchant\nTotal: 1 PLN", gateway=True).payment
+        self.assertEqual(payment.merchant, "Example Merchant")
+        self.assertFalse(payment.payee_from_config)
         self.assertEqual(_inspect("Total: 1 PLN\nPotwierdzenie płatności dla Example Studio",
                                   "Your receipt from Example Shop #----", gateway=True).payment.merchant,
                          "Example Merchant")
@@ -225,6 +258,13 @@ class GmailPaymentReviewTests(TestCase):
                          "00000000001")
         self.assertIsNone(_inspect("Total: 1 PLN\nOrder #ABCDEF-GHI", "Order Z0123").payment.order_reference)
         self.assertIsNone(_inspect("Total: 1 PLN", "Order no. 00000000000").payment.order_reference)
+
+    def test_bare_order_label_skips_prose_and_number_label_keeps_reference(self):
+        self.assertIsNone(_inspect("Total: 1 PLN", "Twoje zamówienie zostało opłacone").payment.order_reference)
+        for number in ("111111", "222222"):
+            with self.subTest(number=number):
+                payment = _inspect("Total: 1 PLN", f"Your order number: {number}").payment
+                self.assertEqual(payment.order_reference, number)
 
     def test_description_fallback_through_generic_and_digit_heavy_candidates(self):
         for generic in ("Płatność", "Payment", "Zamówienie!", "Order", "Receipt", "Faktura"):
