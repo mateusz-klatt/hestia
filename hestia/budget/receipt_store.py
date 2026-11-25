@@ -24,7 +24,7 @@ from ..db import (BudgetAccount as Account, BudgetConnection as Connection, Budg
                   BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line, BudgetShop as Shop,
                   BudgetTransaction as Transaction, BudgetTransferLeg as Leg)
 from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint, negate_money, sum_money
-from .device_token import DeviceTokenError, _legacy_bearer_allowed, write_device_audit
+from .device_token import DeviceTokenError, _issued_mask, _legacy_bearer_allowed, write_device_audit
 from .gmail_store import retain_imports, tombstone_receipt
 from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES,
                              ReceiptError, chain_for, merchant_score_groups, merchant_word_tokens,
@@ -35,6 +35,8 @@ from .receipt_reconcile import (audit_payload, creditor_name, entry_reference_di
 from .views import BudgetHTTPStore
 
 MAX_DRAFTS = 20
+MAX_ACTOR_DRAFTS = 3
+OWNER_DRAFT_RESERVE = 5
 MAX_CANDIDATES = 100
 CURSOR_TTL_SECONDS = 900
 MAX_CURSOR_CHARS = 8192
@@ -144,18 +146,20 @@ def _line_dict(row):
 _DIGEST_HEX = re.compile(r"[0-9a-f]{64}")
 
 class BudgetReceiptStore(BudgetHTTPStore):
-    def __init__(self, sessions, *, clock, cursor_secret, device_id=None):
+    def __init__(self, sessions, *, clock, cursor_secret, device_id=None, actor=None):
         super().__init__(sessions, clock=clock, cursor_secret=cursor_secret)
         self._device_id = device_id
+        self._session_actor = actor
         self._actor = f"device:{device_id}" if device_id is not None else None
+        self._match_allowed = False
         self._receipt_cursor_key = hashlib.sha256(_CURSOR_DOMAIN + b"\0" + cursor_secret).digest()
         material = hashlib.sha256(_CANDIDATE_DOMAIN + b"\0" + cursor_secret).digest()
         self._token_key = _subkey(material, _TOKEN_INFO)
         self._evidence_key = _subkey(material, _EVIDENCE_INFO)
 
-    def _owner(self, session, owner):
-        # The middleware authenticates before any body read. Check the token's
-        # current state again under the receipt operation's transaction.
+    def _owner(self, session, owner, permission=None):
+        token = None
+        actor = self._session_actor or owner
         if self._device_id is not None:
             token = session.get(DeviceToken, self._device_id)
             if token is None or token.owner != owner:
@@ -164,15 +168,41 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 raise DeviceTokenError(401, "device_token_revoked")
             if self._now() >= min(token.expires_at, token.hard_expires_at):
                 raise DeviceTokenError(401, "device_token_expired")
-        super()._owner(session, owner)
-        if authz.policy_phase(session) != authz.POLICY_PHASE_LEGACY:
-            allowed = (
-                _legacy_bearer_allowed(session, token)
-                if self._device_id is not None
-                else authz.has_legacy_receipt_profile(session, owner)
-            )
-            if not allowed:
+            actor = token.actor or token.owner
+            target = owner
+        elif authz.policy_phase(session) == authz.POLICY_PHASE_LEGACY:
+            target = owner
+        else:
+            target = authz.resolve_budget_target(session, actor)
+            if target is None:
                 raise DeviceTokenError(403, "budget_forbidden")
+        super()._owner(session, target)
+        self._session_actor = actor
+        phase = authz.policy_phase(session)
+        if phase == authz.POLICY_PHASE_LEGACY:
+            permissions = authz.LEGACY_RECEIPT_PERMISSIONS
+        elif token is not None and token.issued_permissions is None:
+            if not _legacy_bearer_allowed(session, token):
+                raise DeviceTokenError(403, "budget_forbidden")
+            permissions = authz.LEGACY_RECEIPT_PERMISSIONS
+        else:
+            live = authz.effective_permissions(session, actor, owner=target)
+            permissions = live
+            if token is not None:
+                permissions = _issued_mask(token) & live & authz.DEVICE_ELIGIBLE_PERMISSIONS
+                if not permissions:
+                    token.revoked_at = self._now()
+                    raise DeviceTokenError(403, "budget_forbidden")
+                if permissions != _issued_mask(token):
+                    token.issued_permissions = json.dumps(sorted(permissions))
+        if permission is not None and permission not in permissions:
+            raise DeviceTokenError(403, "budget_forbidden")
+        self._permissions = permissions
+        self._match_allowed = "budget.receipts.match" in permissions
+        self._actor = f"device:{self._device_id}" if self._device_id is not None else (
+            actor if actor != target else None
+        )
+        return target
 
     def _now(self):
         now = self.clock()
@@ -220,8 +250,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             "receipt_date": row.receipt_date, "receipt_time": row.receipt_time, "total_amount": row.total_amount,
             "currency": row.currency, "payment_method": row.payment_method, "status": row.status,
             "source_kind": row.source_kind, "linked": row.linked_account_id is not None,
-            "linked_account_id": row.linked_account_id,
-            "linked_entry_ref": entry_reference_digest(row.linked_entry_ref),
+            "linked_account_id": row.linked_account_id if self._match_allowed else None,
+            "linked_entry_ref": entry_reference_digest(row.linked_entry_ref) if self._match_allowed else None,
             "version": row.version, "created_at": row.created_at, "updated_at": row.updated_at,
             "image_available": row.image_relpath is not None, "image_expires_at": row.image_expires_at,
             "raw_text_expires_at": row.raw_text_expires_at, "math_delta": self._math_delta(session, row),
@@ -279,7 +309,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
     def purge_expired(self, owner=None):
         with self.transaction() as session:
             if owner is not None:
-                self._owner(session, owner)
+                owner = self._owner(session, owner)
             now = self._now()
             retain_imports(session, owner, now)
             return self._purge(session, owner, now)
@@ -289,18 +319,29 @@ class BudgetReceiptStore(BudgetHTTPStore):
         if stored_kind is None:
             raise ReceiptError()
         parsed = parse_receipt(text)
+        with self.sessions() as session:
+            owner = self._owner(session, owner, "budget.receipts.add")
         candidates = self._read_candidates(owner, parsed)
         with self.transaction() as session:
-            self._owner(session, owner)
+            owner = self._owner(session, owner, "budget.receipts.add")
             now = self._now()
             self._purge(session, owner, now)
             drafts = session.scalar(select(func.count()).select_from(Receipt).where(
                 Receipt.owner == owner, Receipt.status == "draft"))
-            if drafts >= MAX_DRAFTS:
+            actor_drafts = session.scalar(select(func.count()).select_from(Receipt).where(
+                Receipt.owner == owner, Receipt.status == "draft",
+                Receipt.submitted_by == self._session_actor,
+            ))
+            if (
+                drafts >= MAX_DRAFTS
+                or (self._session_actor != owner and actor_drafts >= MAX_ACTOR_DRAFTS)
+                or (self._session_actor != owner and drafts >= MAX_DRAFTS - OWNER_DRAFT_RESERVE)
+            ):
                 raise ReceiptError("budget_receipt_quota_exceeded", 413)
             identifier = str(uuid.uuid4())
             row = Receipt(
-                id=identifier, owner=owner, shop_id=self._shop_id(session, owner, parsed),
+                id=identifier, owner=owner, submitted_by=self._session_actor,
+                shop_id=self._shop_id(session, owner, parsed),
                 raw_shop_name=parsed["raw_shop_name"], raw_nip=parsed["raw_nip"],
                 receipt_kind=parsed["receipt_kind"], receipt_date=parsed["receipt_date"],
                 receipt_time=parsed["receipt_time"], total_amount=parsed["total_amount"],
@@ -326,6 +367,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
 
         ``confirm`` re-checks the chosen link inside ``BEGIN IMMEDIATE``.
         """
+        if not self._match_allowed:
+            return []
         preview = SimpleNamespace(
             total_amount=parsed["total_amount"], currency=parsed["currency"],
             receipt_date=parsed["receipt_date"], payment_method=parsed["payment_method"],
@@ -580,10 +623,17 @@ class BudgetReceiptStore(BudgetHTTPStore):
     def confirm(self, owner, values):
         cleaned = validate_confirm(values)
         with self.transaction() as session:
-            self._owner(session, owner)
+            owner = self._owner(session, owner, "budget.receipts.add")
             now = self._now()
             self._purge(session, owner, now)
             row = self._owned(session, owner, values["receipt_id"])
+            own_draft = row.submitted_by == self._session_actor or (
+                row.submitted_by is None and self._session_actor == owner
+            )
+            if row.status != "draft" and own_draft and "budget.receipts.edit" not in self._permissions:
+                raise DeviceTokenError(409, "already_submitted")
+            if not own_draft:
+                self._owner(session, owner, "budget.receipts.edit")
             if row.version != values["expected_version"]:
                 raise ReceiptError("budget_receipt_conflict", 409)
             effective = dict(cleaned)
@@ -596,6 +646,14 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 self._check_stored_lines(session, owner, row.id, effective["total_amount"])
             row_was_draft = row.status == "draft"
             link = effective["link"]
+            preserve_link = row.linked_account_id is not None and not self._match_allowed
+            if link is not None and not self._match_allowed:
+                raise DeviceTokenError(403, "budget_forbidden")
+            sensitive_changed = any(
+                effective[key] != getattr(row, key)
+                for key in ("raw_shop_name", "raw_nip", "receipt_kind", "receipt_date",
+                            "total_amount", "currency", "payment_method")
+            )
             fingerprint = None if link is None else self._confirmed_link(session, owner, effective, link, row)
             before = audit_payload(row, "confirm")
             row.shop_id = self._shop_id(session, owner, effective)
@@ -606,13 +664,15 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 session.execute(delete(Line).where(Line.receipt_id == row.id, Line.owner == owner))
                 for line in effective["lines"]:
                     session.add(Line(receipt_id=row.id, owner=owner, **line))
-            if link is None:
-                row.linked_account_id = row.linked_entry_ref = row.linked_fingerprint = row.linked_evidence = None
-            else:
-                row.linked_account_id = link["account_id"]
-                row.linked_entry_ref = link["entry_reference"]
-                row.linked_fingerprint, row.linked_evidence = fingerprint
-            row.status, row.version, row.updated_at = "confirmed", row.version + 1, now
+            if not preserve_link:
+                if link is None:
+                    row.linked_account_id = row.linked_entry_ref = row.linked_fingerprint = row.linked_evidence = None
+                else:
+                    row.linked_account_id = link["account_id"]
+                    row.linked_entry_ref = link["entry_reference"]
+                    row.linked_fingerprint, row.linked_evidence = fingerprint
+            row.status = "needs_review" if preserve_link and (sensitive_changed or row.status == "needs_review") else "confirmed"
+            row.version, row.updated_at = row.version + 1, now
             row.import_expires_at = None
             if row_was_draft:
                 row.image_expires_at = now + CONFIRMED_TEXT_TTL_SECONDS
@@ -625,8 +685,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
 
     def _encode_cursor(self, owner, context, row):
         now = self._now()
-        payload = {"owner": owner, "context": context, "last_date": row.receipt_date, "last_id": row.id,
-                   "expires_at": now + CURSOR_TTL_SECONDS}
+        payload = {"owner": owner, "actor": self._session_actor, "context": context,
+                   "last_date": row.receipt_date, "last_id": row.id, "expires_at": now + CURSOR_TTL_SECONDS}
         raw = json.dumps(payload, sort_keys=True, ensure_ascii=True, allow_nan=False,
                          separators=(",", ":")).encode("ascii")
         encoded = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
@@ -647,8 +707,13 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 raise ValueError
             value = _json(raw)
             if (not isinstance(value, dict)
-                    or set(value) != {"owner", "context", "last_date", "last_id", "expires_at"}
-                    or value["owner"] != owner or value["context"] != context
+                    or set(value) not in (
+                        {"owner", "actor", "context", "last_date", "last_id", "expires_at"},
+                        {"owner", "context", "last_date", "last_id", "expires_at"},
+                    )
+                    or value["owner"] != owner
+                    or value.get("actor", owner) != (self._session_actor or owner)
+                    or value["context"] != context
                     or type(value["expires_at"]) not in (int, float)
                     or not math.isfinite(value["expires_at"]) or not self._now() < value["expires_at"]
                     or not _UUID.fullmatch(value["last_id"])
@@ -722,7 +787,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
     def _list(self, owner, values, *, search):
         limit, month, status, linked, query, kind, evidence, context = self._filters(values, search=search)
         with self.transaction() as session:
-            self._owner(session, owner)
+            owner = self._owner(session, owner, "budget.receipts.view")
             now = self._now()
             self._purge(session, owner, now)
             cursor = self._decode_cursor(owner, context, values.get("cursor"))
@@ -774,14 +839,14 @@ class BudgetReceiptStore(BudgetHTTPStore):
 
     def detail(self, owner, receipt_id):
         with self.transaction() as session:
-            self._owner(session, owner)
+            owner = self._owner(session, owner, "budget.receipts.view")
             now = self._now()
             self._purge(session, owner, now)
             row = self._owned(session, owner, receipt_id)
             receipt = self._detail(session, row)
             # Re-issue outside the writer lock. The token is bound to this receipt's
             # own reservation; confirm checks the link again inside BEGIN IMMEDIATE.
-            preview = None if row.status not in ("imported", "draft", "needs_review") else SimpleNamespace(
+            preview = None if row.status not in ("imported", "draft", "needs_review") or not self._match_allowed else SimpleNamespace(
                 total_amount=row.total_amount, currency=row.currency, receipt_date=row.receipt_date,
                 payment_method=row.payment_method, receipt_kind=row.receipt_kind,
                 raw_shop_name=row.raw_shop_name, raw_nip=row.raw_nip,
@@ -796,7 +861,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
 
     def image(self, owner, receipt_id):
         with self.transaction() as session:
-            self._owner(session, owner)
+            owner = self._owner(session, owner, "budget.receipts.view")
             self._owned(session, owner, receipt_id)
         raise ReceiptError("budget_receipt_not_found", 404)
 
@@ -805,10 +870,16 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 or type(values["expected_version"]) is not int or values["expected_version"] < 1):
             raise ReceiptError()
         with self.transaction() as session:
-            self._owner(session, owner)
+            owner = self._owner(session, owner, "budget.receipts.add")
             now = self._now()
             self._purge(session, owner, now)
             row = self._owned(session, owner, values["receipt_id"])
+            own_draft = row.status == "draft" and (
+                row.submitted_by == self._session_actor
+                or (row.submitted_by is None and self._session_actor == owner)
+            )
+            if not own_draft:
+                self._owner(session, owner, "budget.receipts.edit")
             if row.version != values["expected_version"]:
                 raise ReceiptError("budget_receipt_conflict", 409)
             tombstone_receipt(session, owner, row.id)

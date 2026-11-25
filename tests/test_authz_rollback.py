@@ -89,10 +89,6 @@ class LegacyReceiptRollbackTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_custom_delegate_and_narrowed_profiles_are_side_effect_free(self):
         before = self._state()
-        delegate_cookie = await self._post(
-            device_token.PARSE_PATH, {"text": receipt_text()}, self.headers("viewer", origin=True),
-        )
-        self.assertEqual(delegate_cookie.status, 403)
         delegate_bearer = await self._post(
             device_token.PARSE_PATH, {"text": receipt_text()},
             {"Authorization": f"Bearer {self.delegate_raw}"},
@@ -106,10 +102,6 @@ class LegacyReceiptRollbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(new_namespace.status, 401)
         self.assertEqual((await new_namespace.json())["error"], "device_token_invalid")
 
-        narrowed_cookie = await self._post(
-            device_token.PARSE_PATH, {"text": receipt_text()}, self.headers("alice", origin=True),
-        )
-        self.assertEqual(narrowed_cookie.status, 403)
         narrowed_bearer = await self._post(
             device_token.PARSE_PATH, {"text": receipt_text()},
             {"Authorization": f"Bearer {self.alice_device['token']}"},
@@ -119,9 +111,6 @@ class LegacyReceiptRollbackTests(unittest.IsolatedAsyncioTestCase):
             self.store.issue_code("alice")
         self.assertEqual(pair_guard.exception.code, "budget_forbidden")
         self.assertIsNone(self.store.redeem(self.pair_code["code"], "Narrowed"))
-        with self.assertRaises(device_token.DeviceTokenError) as browser_guard:
-            receipt_api._store(budget_fixture.SECRET).parse_text("alice", receipt_text())
-        self.assertEqual(browser_guard.exception.code, "budget_forbidden")
         with self.assertRaises(device_token.DeviceTokenError) as bearer_guard:
             receipt_api._store(
                 budget_fixture.SECRET, self.alice_device["token_id"],

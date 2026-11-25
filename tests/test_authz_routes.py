@@ -429,7 +429,7 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
         capabilities = await self.client.get("/api/me/capabilities", headers=self._cookie("admin"))
         payload = (await capabilities.json())
         self.assertTrue(payload["own_budget"]["can_view"])
-        self.assertFalse(payload["own_budget"]["can_use_receipts"])
+        self.assertTrue(payload["own_budget"]["can_use_receipts"])
         self.assertTrue(payload["own_budget"]["can_manage_devices"])
         whoami = await self.client.get("/api/whoami", headers=self._cookie("admin"))
         self.assertEqual(await whoami.json(), {"user": "admin", "role": "viewer"})
@@ -483,12 +483,9 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
         denied = await self.client.get("/api/budget/analytics/overview", headers=self._cookie("admin"))
         self.assertEqual(denied.status, 403)
 
-    async def test_custom_delegate_and_stale_actor_receive_contract_error_envelopes(self):
+    async def test_custom_receipt_denial_and_stale_actor_receive_contract_error_envelopes(self):
         with self.sessions.begin() as session:
             session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
-            session.add(db.PermissionGrant(
-                username="viewer", permission_id="budget.receipts.add", target_owner="admin",
-            ))
         denied = await self.client.post(
             "/api/budget/receipts/parse-text", json={"text": "synthetic"},
             headers={**self._cookie("viewer"), "Origin": "https://unused.example"},

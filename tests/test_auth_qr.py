@@ -49,6 +49,27 @@ class QrLoginStoreTests(unittest.TestCase):
         self.assertIsNone(auth_qr.redeem("https://other.example", payloads[-2].split("#")[1], now=201, secret=self.secret))
         self.assertIsNone(auth_qr.redeem(self.canonical, "A" * 19, now=201, secret=self.secret))
 
+    def test_redeem_records_one_private_owner_inbox_event(self):
+        store_sql.activate_catalog_compat(path=self.path)
+        payload = auth_qr.issue("owner", self.canonical, 0, now=100, secret=self.secret)
+        result = auth_qr.redeem(self.canonical, payload.split("#")[1], now=200, secret=self.secret)
+        self.assertTrue(result["ok"])
+        self.assertIsNone(auth_qr.redeem(self.canonical, payload.split("#")[1], now=201, secret=self.secret))
+        from hestia.budget.analytics_views import BudgetAnalyticsViews
+        with self.sessions() as session:
+            code = session.scalar(select(db.NativeLoginCode))
+            audit = session.scalar(select(db.BudgetAnalyticsAudit).where(
+                db.BudgetAnalyticsAudit.subject_id == code.id,
+                db.BudgetAnalyticsAudit.action == device_token.NEW_DEVICE_LOGIN,
+            ))
+            self.assertEqual(json.loads(audit.after_json), {
+                "actor": "owner", "device_name": "Vesta QR", "token_id": code.id,
+            })
+            entries = BudgetAnalyticsViews._inbox_device_entries(session, "owner")
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["ref"], {"token_id": code.id})
+            self.assertEqual(entries[0]["params"]["device_name"], "Vesta QR")
+
     def test_redeem_rejects_expiry_disablement_generation_and_legacy_phase(self):
         payload = auth_qr.issue("owner", self.canonical, 0, now=10, secret=self.secret)
         code = payload.split("#")[1]

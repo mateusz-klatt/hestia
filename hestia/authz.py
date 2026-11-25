@@ -337,8 +337,7 @@ def effective_permissions(session, actor: str, *, owner: "str | None" = None) ->
         if (spec := CATALOG.get(pid)) is not None
         and spec.storage_scope == "owner"
         and (
-            actor == owner
-            or (spec.delegation == "delegable" and not pid.startswith("budget.receipts."))
+            actor == owner or spec.delegation == "delegable"
         )
     }
     return _closure(direct)
@@ -407,6 +406,14 @@ def project_legacy_role(session, actor: str, *, include_disabled: bool = False) 
     ):
         return "admin"
     return "operator" if "ioc.control" in installation else "viewer"
+
+
+def delegated_receipt_permissions(session, actor: str) -> frozenset[str]:
+    """Return sole-target delegated receipt permissions without exposing the owner."""
+    target = resolve_budget_target(session, actor)
+    if target is None or target == actor:
+        return frozenset()
+    return effective_permissions(session, actor, owner=target) & LEGACY_RECEIPT_PERMISSIONS
 
 
 def resolve_budget_target(session, actor: str) -> "str | None":

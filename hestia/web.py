@@ -566,7 +566,13 @@ def _catalog_allows(session, actor: str, requirement: str) -> bool:
     if requirement == _OWNER_ONLY or requirement == _DEVICE_ADMIN:
         return authz.is_active_budget_owner(session, actor)
     if requirement == _LEGACY_RECEIPTS:
-        return authz.has_legacy_receipt_profile(session, actor)
+        if authz.has_legacy_receipt_profile(session, actor):
+            return True
+        target = authz.resolve_budget_target(session, actor)
+        return target is not None and bool(
+            authz.effective_permissions(session, actor, owner=target)
+            & {pid for pid in authz.CATALOG if pid.startswith("budget.receipts.")}
+        )
     return authz.authorize(
         session, actor, requirement,
         owner=actor if requirement.startswith("budget.") else None,
@@ -856,6 +862,7 @@ def _capability_payload(actor: str, state: store_sql.AuthState) -> dict:
     household_enabled = budget_enabled and os.environ.get("HESTIA_BUDGET_ANALYTICS_ENABLED") == "1"
     with store_sql.authorization_snapshot() as session:
         authoritative = session.get(AppMeta, "users_authoritative") is not None
+        delegated = None
         if state.policy_phase == authz.POLICY_PHASE_LEGACY:
             installation = _legacy_role_permissions(state.role)
             legacy_owner = authoritative and state.role == _ADMIN
@@ -876,17 +883,19 @@ def _capability_payload(actor: str, state: store_sql.AuthState) -> dict:
             own = {
                 "permissions": sorted(own_permissions),
                 "can_view": budget_enabled and "budget.view" in own_permissions,
-                "can_use_receipts": (
-                    receipts_enabled and authz.LEGACY_RECEIPT_PERMISSIONS <= own_permissions
-                ),
+                "can_use_receipts": receipts_enabled and bool(own_permissions & authz.LEGACY_RECEIPT_PERMISSIONS),
                 "can_manage_devices": receipts_enabled,
             } if active_owner else None
+            delegated_permissions = authz.delegated_receipt_permissions(session, actor)
+            delegated = {
+                "permissions": sorted(delegated_permissions), "can_use": receipts_enabled,
+            } if delegated_permissions else None
         return {
             "user": actor,
             "actor_tag": budget_api.actor_digest(actor),
             "installation_permissions": sorted(installation),
             "own_budget": own,
-            "delegated_receipts": None,
+            "delegated_receipts": delegated,
             "household_available": household_enabled and authz.household_available(session, actor),
         }
 

@@ -1320,7 +1320,16 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 audit.action == device_token.DEVICE_ROTATE,
             ).exists(),
         ))
-        return [inbox_mod.device_entry(owner, token_id, name, added_at) for token_id, name, added_at in rows]
+        entries = [inbox_mod.device_entry(owner, token_id, name, added_at) for token_id, name, added_at in rows]
+        codes = db.NativeLoginCode
+        redeemed = session.execute(select(codes.id, codes.created_at).where(
+            select(audit.id).where(
+                audit.owner == owner, audit.subject_id == codes.id, audit.subject_type == "receipt_device_token",
+                audit.action == device_token.NEW_DEVICE_LOGIN,
+            ).exists(),
+        ))
+        entries.extend(inbox_mod.device_entry(owner, code_id, "Vesta QR", added_at) for code_id, added_at in redeemed)
+        return entries
 
     def _evaluate_active_inbox(self, session, owner, evaluated_at, evaluation_date, *, use_cache, kinds=None):
         selected = set(inbox_mod.INBOX_KINDS) if kinds is None else kinds

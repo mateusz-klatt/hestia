@@ -161,6 +161,12 @@ def redeem(origin: str, code: str, *, now: float, secret: bytes) -> dict | None:
                 user.username, now=now, secret=secret,
                 generation=user.credential_generation, purpose=auth.SESSION_PURPOSE_NATIVE,
             )
+            owner = authz.resolve_budget_target(session, user.username)
+            if owner is not None:
+                device_token.write_device_audit(
+                    session, owner, row.id, device_token.NEW_DEVICE_LOGIN, now,
+                    actor=user.username, device_name="Vesta QR",
+                )
             return {"ok": True, "user": user.username, "token": token}
     finally:
         engine.dispose()
