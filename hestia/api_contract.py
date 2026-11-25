@@ -813,6 +813,7 @@ class MeCapabilities(BaseModel):
 
     model_config = _READ
     user: str | None
+    actor_tag: Annotated[str, Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]+$")] | None
     installation_permissions: list[str]
     own_budget: OwnBudgetCapabilities | None
     delegated_receipts: DelegatedReceiptCapabilities | None

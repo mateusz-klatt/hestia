@@ -825,7 +825,8 @@ def _capability_payload(actor: str, state: store_sql.AuthState) -> dict:
             "can_view": False, "can_use_receipts": False, "can_manage_devices": False,
         } if state.role == _ADMIN else None
         return {
-            "user": actor, "installation_permissions": sorted(installation), "own_budget": own,
+            "user": actor, "actor_tag": budget_api.actor_digest(actor),
+            "installation_permissions": sorted(installation), "own_budget": own,
             "delegated_receipts": None, "household_available": False,
         }
 
@@ -861,6 +862,7 @@ def _capability_payload(actor: str, state: store_sql.AuthState) -> dict:
             } if active_owner else None
         return {
             "user": actor,
+            "actor_tag": budget_api.actor_digest(actor),
             "installation_permissions": sorted(installation),
             "own_budget": own,
             "delegated_receipts": None,
@@ -876,7 +878,7 @@ async def _me_capabilities(request):
             if spec.storage_scope == "installation" and not spec.protected
         )
         payload = {
-            "user": None, "installation_permissions": installation, "own_budget": None,
+            "user": None, "actor_tag": None, "installation_permissions": installation, "own_budget": None,
             "delegated_receipts": None, "household_available": False,
         }
     else:

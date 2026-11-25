@@ -408,12 +408,13 @@ These details complete Parts A and B for client implementers. Each field below i
 1. **`GET /api/me/capabilities`** (PR 2) is authenticated and `Cache-Control: no-store`. It returns:
    ```json
    {"user": "…"|null,
+    "actor_tag": "…"|null,
     "installation_permissions": ["ioc.view", "…"],
     "own_budget": {"permissions": ["…"], "can_view": true, "can_use_receipts": true, "can_manage_devices": true} | null,
     "delegated_receipts": {"permissions": ["budget.receipts.add"], "can_use": true} | null,
     "household_available": false}
    ```
-   - A delegate never sees the owner's username.
+   - A delegate never sees the owner's username. `actor_tag` is the 43-character base64url SHA-256 digest of `hestia/actor/v1\0` plus the UTF-8 username; it identifies the session actor, never a Budget owner. It is `null` in auth-off mode.
    - In auth-off mode, `user` is `null` and `installation_permissions` lists the full ordinary catalog.
    - A client that gets 404 (an older server) falls back to the legacy `whoami.role` mapping.
 2. **`POST /api/auth/device-token`** (PR 3):

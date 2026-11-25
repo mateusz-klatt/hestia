@@ -710,9 +710,10 @@ class RoleAndBindingContractTests(unittest.TestCase):
         )
         self.assertEqual(api_contract.CONTRACT_VERSION, "0.50.0")
         capabilities = api_contract.MeCapabilities.model_validate({
-            "user": "viewer", "installation_permissions": ["ioc.view"], "own_budget": None,
+            "user": "viewer", "actor_tag": "A" * 43, "installation_permissions": ["ioc.view"], "own_budget": None,
             "delegated_receipts": None, "household_available": True,
         })
+        self.assertEqual(capabilities.actor_tag, "A" * 43)
         self.assertIsNone(capabilities.own_budget)
         features = api_contract.AuthFeatures.model_validate({
             "auth_contract": 2, "features": ["capabilities"], "qr_origin": None,

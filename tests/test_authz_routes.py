@@ -382,9 +382,10 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         payload = await response.json()
         self.assertEqual(set(payload), {
-            "user", "installation_permissions", "own_budget", "delegated_receipts", "household_available",
+            "user", "actor_tag", "installation_permissions", "own_budget", "delegated_receipts", "household_available",
         })
         self.assertEqual(payload["user"], "admin")
+        self.assertEqual(payload["actor_tag"], _actor_header("admin"))
         self.assertEqual(payload["delegated_receipts"], None)
         self.assertFalse(payload["household_available"])
         self.assertEqual(set(payload["own_budget"]), {
@@ -557,6 +558,7 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         payload = await response.json()
         self.assertIsNone(payload["user"])
+        self.assertIsNone(payload["actor_tag"])
         self.assertIsNone(payload["own_budget"])
         self.assertIsNone(payload["delegated_receipts"])
         self.assertFalse(payload["household_available"])

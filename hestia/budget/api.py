@@ -55,7 +55,7 @@ def _error(status, code, **extra):
     return web.json_response({"ok": False, "error": code, **extra}, status=status, headers=PRIVATE_HEADERS)
 
 
-def _actor_digest(username):
+def actor_digest(username):
     payload = b"hestia/actor/v1\0" + username.encode("utf-8")
     return base64.urlsafe_b64encode(hashlib.sha256(payload).digest()).rstrip(b"=").decode("ascii")
 
@@ -69,7 +69,7 @@ def expected_actor_matches(request, user):
     if len(values) != 1:
         return False
     encoded = values[0]
-    return len(encoded) == 43 and encoded.isascii() and hmac.compare_digest(encoded, _actor_digest(user))
+    return len(encoded) == 43 and encoded.isascii() and hmac.compare_digest(encoded, actor_digest(user))
 
 
 def _principal(request, auth_enabled):

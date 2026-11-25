@@ -7262,6 +7262,8 @@ export interface components {
          * @description Effective permissions for the authenticated actor; delegated responses never name an owner.
          */
         MeCapabilities: {
+            /** Actor Tag */
+            actor_tag: string | null;
             delegated_receipts: components["schemas"]["DelegatedReceiptCapabilities"] | null;
             /** Household Available */
             household_available: boolean;

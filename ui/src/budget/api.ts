@@ -74,6 +74,7 @@ export interface OwnBudgetAuthorization {
 }
 export interface AuthorizationCapabilities {
   user: string | null;
+  actor_tag: string | null;
   installation_permissions: string[];
   own_budget: OwnBudgetAuthorization | null;
   delegated_receipts: { permissions: string[]; can_use: boolean } | null;

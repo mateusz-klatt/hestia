@@ -14918,6 +14918,20 @@
       "MeCapabilities": {
         "description": "Effective permissions for the authenticated actor; delegated responses never name an owner.",
         "properties": {
+          "actor_tag": {
+            "anyOf": [
+              {
+                "maxLength": 43,
+                "minLength": 43,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Tag"
+          },
           "delegated_receipts": {
             "anyOf": [
               {
@@ -14963,6 +14977,7 @@
         },
         "required": [
           "user",
+          "actor_tag",
           "installation_permissions",
           "own_budget",
           "delegated_receipts",
