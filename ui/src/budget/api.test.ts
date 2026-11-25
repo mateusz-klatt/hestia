@@ -308,6 +308,22 @@ describe("budget api", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("locks every mutation without blocking read-only POST queries", async () => {
+    const scoped = createBudgetApi("owner");
+    scoped.setAuthorizationLocked(true);
+    const fetchMock = respond(200, {});
+    expect(await scoped.setPaused(connection, true)).toEqual({
+      ok: false, status: 503, error: "budget_server_changed",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await scoped.receiptDevices()).ok).toBe(true);
+    expect((await scoped.analyticsTransactionsByKeys({ row_keys: [], currency: "PLN" })).ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    scoped.setAuthorizationLocked(false);
+    await scoped.setPaused(connection, true);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("maps refusals, empty middleware bodies and network loss without throwing", async () => {
     respond(409, { ok: false, error: "budget_version_conflict", current: { id: "bank" } });
     expect(await budgetApi.connections()).toEqual({ ok: false, status: 409, error: "budget_version_conflict", current: { id: "bank" } });

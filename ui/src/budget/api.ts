@@ -89,6 +89,7 @@ async function actorDigest(actor: string): Promise<string> {
 }
 
 export function createBudgetApi(expectedActor: string | null = null) {
+  let authorizationLocked = false;
   async function call<T>(target: URL, init: RequestInit = {}): Promise<BudgetResult<T>> {
     if (expectedActor === null || !target.pathname.includes("/api/budget/")) return request<T>(target, init);
     let digest: string;
@@ -101,12 +102,17 @@ export function createBudgetApi(expectedActor: string | null = null) {
     headers.set("X-Hestia-Expected-Actor", digest);
     return request<T>(target, { ...init, headers });
   }
-  function post<T>(path: string, body: object, headers: Record<string, string> = {}): Promise<BudgetResult<T>> {
+  function post<T>(path: string, body: object, headers: Record<string, string> = {},
+    mutation = true): Promise<BudgetResult<T>> {
+    if (mutation && authorizationLocked) {
+      return Promise.resolve({ ok: false, status: 503, error: "budget_server_changed" });
+    }
     return call<T>(url(path), {
       method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body),
     });
   }
   return {
+  setAuthorizationLocked: (value: boolean) => { authorizationLocked = value; },
   capabilities: () => call<AuthorizationCapabilities>(apiUrl("me/capabilities")),
   connections: () => call<ConnectionsData>(url("connections")),
   accounts: (connectionId?: string) =>
@@ -143,7 +149,7 @@ export function createBudgetApi(expectedActor: string | null = null) {
     })),
   /** One server-bounded page matching 1..500 exact row keys across periods via JSON POST. */
   analyticsTransactionsByKeys: (request: AnalyticsTransactionsByKeysRequest) =>
-    post<AnalyticsTransactions>("analytics/transactions-by-keys", request),
+    post<AnalyticsTransactions>("analytics/transactions-by-keys", request, {}, false),
   categories: () => call<{ categories: AnalyticsCategory[] }>(url("analytics/categories")),
   /** The owner's explicit category/kind decision for one entry, versioned against concurrent edits. */
   annotate: (request: AnnotationRequest) => post<{ annotation: AnnotationSaved }>("analytics/annotation", request),
@@ -191,7 +197,7 @@ export function createBudgetApi(expectedActor: string | null = null) {
   markInbox: (request: AnalyticsInboxMarkRequest) =>
     post<{ inbox: AnalyticsInboxMarkSaved }>("analytics/inbox-mark", request),
   /** Unrevoked receipts devices. A 404 means the receipts flag is off. */
-  receiptDevices: () => post<ReceiptDevice[]>("receipts/device-token/list", {}),
+  receiptDevices: () => post<ReceiptDevice[]>("receipts/device-token/list", {}, {}, false),
   pairReceiptDevice: () => post<ReceiptPair>("receipts/device-token/pair-code", {}),
   cancelReceiptPairCode: (codeId: string) =>
     post<{ ok: true }>("receipts/device-token/pair-code-cancel", { code_id: codeId }),

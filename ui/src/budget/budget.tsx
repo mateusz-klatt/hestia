@@ -158,12 +158,13 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
     epoch.current += 1;
     generation.current += 1;
     setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
+    api.setAuthorizationLocked(true);
     setAuthorization(null); setAuthorizationLocked(true); setDeviceAccess(true); setDeviceUnavailable(false);
     setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
     setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined); setView("accounts");
     setDevicesFocus(0);
     setLoad(next ?? (disabled ? "disabled" : "denied"));
-  }, []);
+  }, [api]);
   const barrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
     if (!isAccessLoss(result) && !(!result.ok && result.error === "budget_actor_changed")) return false;
     if (alive.current) invalidate(!result.ok && result.error === "budget_disabled");
@@ -183,6 +184,7 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
     if (!me.ok) {
       if (me.status === 404) invalidate(false, "serverChanged");
       else {
+        api.setAuthorizationLocked(true);
         setAuthorizationLocked(true);
         setLoad("error");
       }
@@ -193,6 +195,7 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
       return;
     }
     setAuthorization(me.data);
+    api.setAuthorizationLocked(false);
     setAuthorizationLocked(false);
     setDeviceAccess(me.data.own_budget.can_manage_devices);
     const [connected, listed, queued] = await Promise.all([
@@ -220,7 +223,10 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
     if (!alive.current || barrier(result)) return;
     if (!result.ok) {
       if (result.status === 404) invalidate(false, "serverChanged");
-      else setAuthorizationLocked(true);
+      else {
+        api.setAuthorizationLocked(true);
+        setAuthorizationLocked(true);
+      }
       return;
     }
     if ((principal !== undefined && result.data.user !== principal)
@@ -229,6 +235,7 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
       return;
     }
     setAuthorization(result.data);
+    api.setAuthorizationLocked(false);
     setAuthorizationLocked(false);
     setDeviceAccess(result.data.own_budget.can_manage_devices);
   }, [api, principal, barrier, invalidate]);

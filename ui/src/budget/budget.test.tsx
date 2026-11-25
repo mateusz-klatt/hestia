@@ -52,6 +52,7 @@ const balancesData = {
 
 function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
   return {
+    setAuthorizationLocked: vi.fn(),
     capabilities: vi.fn<BudgetApi["capabilities"]>(() => ok(authorization)),
     connections: vi.fn<BudgetApi["connections"]>(() => ok({ connections: [connection], capabilities })),
     accounts: vi.fn<BudgetApi["accounts"]>(() => ok({ accounts })),
@@ -240,6 +241,7 @@ describe("budget view states", () => {
     api.pairReceiptDevice.mockImplementation(() => fail(403, "budget_forbidden"));
     api.capabilities.mockImplementation(() => fail(status, "budget_unavailable"));
     await click(button("Add device"));
+    expect(api.setAuthorizationLocked).toHaveBeenLastCalledWith(true);
     await click(button("Pause"));
     expect(api.setPaused).not.toHaveBeenCalled();
     expect(host.textContent).toContain("The server has changed — refresh the page");
@@ -247,6 +249,7 @@ describe("budget view states", () => {
     api.capabilities.mockImplementation(() => ok(authorization));
     api.setPaused.mockImplementation(() => ok({ connection: { ...connection, paused: true } }));
     await click(button("Reload"));
+    expect(api.setAuthorizationLocked).toHaveBeenLastCalledWith(false);
     await click(button("Pause"));
     expect(api.setPaused).toHaveBeenCalledTimes(1);
   });
