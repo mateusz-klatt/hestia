@@ -587,7 +587,7 @@ class BudgetGuardTests(unittest.TestCase):
     def test_expected_actor_rejects_duplicate_malformed_and_noncanonical_headers(self):
         request = SimpleNamespace(headers=MultiDict())
         for values in (
-            ["one", "two"], [""], ["A" * 257], ["Ági"], ["AB"], ["/w=="],
+            ["one", "two"], [""], ["A" * 43], ["A" * 257], ["Ági"], ["AB"], ["/w=="],
         ):
             with self.subTest(values=values):
                 request.headers = MultiDict()

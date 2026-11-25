@@ -25,9 +25,14 @@ describe("budget api", () => {
     await scoped.receiptDevices();
     expect(new Headers(sent(fetchMock, 0).init.headers).has("X-Hestia-Expected-Actor")).toBe(false);
     for (const index of [1, 2]) {
-      expect(new Headers(sent(fetchMock, index).init.headers).get("X-Hestia-Expected-Actor")).toBe("b3duZXI");
+      expect(new Headers(sent(fetchMock, index).init.headers).get("X-Hestia-Expected-Actor"))
+        .toBe("ZYtoux-yHqo-dVxLUe_uXkgvKgk2LWgJCV6VODecrlo");
     }
-    for (const [index, actor, encoded] of [[3, "Ági", "w4FnaQ"], [4, "Łukasz", "xYF1a2Fzeg"]] as const) {
+    for (const [index, actor, encoded] of [
+      [3, "Ági", "HLS-1f2FaYa82fa78nYm4ZQVdbWlCUOrqzBQ912Nfjw"],
+      [4, "Łukasz", "5731GtQ6bT3BSlT8lkN8teIo4nASJDab5UivdlVnUCM"],
+      [5, "😀".repeat(65), "wBIGWiX_jbx05eeaf39UUKfxurtuA6X9qYXtXk8vC4c"],
+    ] as const) {
       await createBudgetApi(actor).accounts();
       expect(new Headers(sent(fetchMock, index).init.headers).get("X-Hestia-Expected-Actor")).toBe(encoded);
     }
@@ -287,22 +292,20 @@ describe("budget api", () => {
     expect(sent(fetchMock).url.pathname).toMatch(/\/api\/me\/capabilities$/);
   });
 
-  it("parses nested actor errors and makes legacy mode read-only", async () => {
+  it("parses nested actor errors", async () => {
     respond(409, { error: { code: "budget_actor_changed" } });
     expect(await budgetApi.connections()).toEqual({
       ok: false, status: 409, error: "budget_actor_changed", current: undefined,
     });
+  });
 
-    const scoped = createBudgetApi("owner");
-    scoped.setLegacyReadOnly(true);
+  it("fails closed without sending a request when actor hashing is unavailable", async () => {
     const fetchMock = respond(200, {});
-    expect(await scoped.setPaused(connection, true)).toEqual({
-      ok: false, status: 409, error: "budget_legacy_read_only",
+    vi.stubGlobal("crypto", {});
+    expect(await createBudgetApi("owner").accounts()).toEqual({
+      ok: false, status: 0, error: "budget_actor_unavailable",
     });
     expect(fetchMock).not.toHaveBeenCalled();
-    expect((await scoped.receiptDevices()).ok).toBe(true);
-    expect((await scoped.analyticsTransactionsByKeys({ row_keys: [], currency: "PLN" })).ok).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("maps refusals, empty middleware bodies and network loss without throwing", async () => {

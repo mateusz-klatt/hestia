@@ -80,34 +80,34 @@ export interface AuthorizationCapabilities {
   household_available: boolean;
 }
 
-function encodeActor(actor: string): string {
-  const bytes = new TextEncoder().encode(actor);
+async function actorDigest(actor: string): Promise<string> {
+  const bytes = new TextEncoder().encode(`hestia/actor/v1\0${actor}`);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
   let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
+  for (const byte of new Uint8Array(digest)) binary += String.fromCharCode(byte);
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 export function createBudgetApi(expectedActor: string | null = null) {
-  let legacyReadOnly = false;
-  function call<T>(target: URL, init: RequestInit = {}): Promise<BudgetResult<T>> {
+  async function call<T>(target: URL, init: RequestInit = {}): Promise<BudgetResult<T>> {
     if (expectedActor === null || !target.pathname.includes("/api/budget/")) return request<T>(target, init);
+    let digest: string;
+    try {
+      digest = await actorDigest(expectedActor);
+    } catch {
+      return { ok: false, status: 0, error: "budget_actor_unavailable" };
+    }
     const headers = new Headers(init.headers);
-    headers.set("X-Hestia-Expected-Actor", encodeActor(expectedActor));
+    headers.set("X-Hestia-Expected-Actor", digest);
     return request<T>(target, { ...init, headers });
   }
-  function post<T>(path: string, body: object, headers: Record<string, string> = {},
-    allowRead = false): Promise<BudgetResult<T>> {
-    if (legacyReadOnly && !allowRead) {
-      return Promise.resolve({ ok: false, status: 409, error: "budget_legacy_read_only" });
-    }
+  function post<T>(path: string, body: object, headers: Record<string, string> = {}): Promise<BudgetResult<T>> {
     return call<T>(url(path), {
       method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body),
     });
   }
   return {
-  setLegacyReadOnly: (value: boolean) => { legacyReadOnly = value; },
   capabilities: () => call<AuthorizationCapabilities>(apiUrl("me/capabilities")),
-  whoami: () => call<{ user: string | null; role: string | null }>(apiUrl("whoami")),
   connections: () => call<ConnectionsData>(url("connections")),
   accounts: (connectionId?: string) =>
     call<{ accounts: BudgetAccount[] }>(url("accounts", { connection_id: connectionId })),
@@ -143,7 +143,7 @@ export function createBudgetApi(expectedActor: string | null = null) {
     })),
   /** One server-bounded page matching 1..500 exact row keys across periods via JSON POST. */
   analyticsTransactionsByKeys: (request: AnalyticsTransactionsByKeysRequest) =>
-    post<AnalyticsTransactions>("analytics/transactions-by-keys", request, {}, true),
+    post<AnalyticsTransactions>("analytics/transactions-by-keys", request),
   categories: () => call<{ categories: AnalyticsCategory[] }>(url("analytics/categories")),
   /** The owner's explicit category/kind decision for one entry, versioned against concurrent edits. */
   annotate: (request: AnnotationRequest) => post<{ annotation: AnnotationSaved }>("analytics/annotation", request),
@@ -191,7 +191,7 @@ export function createBudgetApi(expectedActor: string | null = null) {
   markInbox: (request: AnalyticsInboxMarkRequest) =>
     post<{ inbox: AnalyticsInboxMarkSaved }>("analytics/inbox-mark", request),
   /** Unrevoked receipts devices. A 404 means the receipts flag is off. */
-  receiptDevices: () => post<ReceiptDevice[]>("receipts/device-token/list", {}, {}, true),
+  receiptDevices: () => post<ReceiptDevice[]>("receipts/device-token/list", {}),
   pairReceiptDevice: () => post<ReceiptPair>("receipts/device-token/pair-code", {}),
   cancelReceiptPairCode: (codeId: string) =>
     post<{ ok: true }>("receipts/device-token/pair-code-cancel", { code_id: codeId }),

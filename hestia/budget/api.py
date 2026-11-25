@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from datetime import date
+import hashlib
 import hmac
 import logging
 import os
@@ -54,6 +55,11 @@ def _error(status, code, **extra):
     return web.json_response({"ok": False, "error": code, **extra}, status=status, headers=PRIVATE_HEADERS)
 
 
+def _actor_digest(username):
+    payload = b"hestia/actor/v1\0" + username.encode("utf-8")
+    return base64.urlsafe_b64encode(hashlib.sha256(payload).digest()).rstrip(b"=").decode("ascii")
+
+
 def expected_actor_matches(request, user):
     headers = getattr(request, "headers", {})
     getall = getattr(headers, "getall", None)
@@ -63,16 +69,7 @@ def expected_actor_matches(request, user):
     if len(values) != 1:
         return False
     encoded = values[0]
-    try:
-        if not encoded or len(encoded) > 344 or not encoded.isascii():
-            return False
-        decoded = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8")
-        canonical = base64.urlsafe_b64encode(decoded.encode("utf-8")).rstrip(b"=").decode("ascii")
-        if not hmac.compare_digest(encoded, canonical):
-            return False
-    except (ValueError, UnicodeError):
-        return False
-    return hmac.compare_digest(decoded.encode("utf-8"), user.encode("utf-8"))
+    return len(encoded) == 43 and encoded.isascii() and hmac.compare_digest(encoded, _actor_digest(user))
 
 
 def _principal(request, auth_enabled):

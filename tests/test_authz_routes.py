@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import hashlib
 import io
 import json
 import os
@@ -271,7 +272,8 @@ class CapabilityUnitTests(unittest.TestCase):
 
 
 def _actor_header(username):
-    return base64.urlsafe_b64encode(username.encode("utf-8")).rstrip(b"=").decode("ascii")
+    payload = b"hestia/actor/v1\0" + username.encode("utf-8")
+    return base64.urlsafe_b64encode(hashlib.sha256(payload).digest()).rstrip(b"=").decode("ascii")
 
 
 class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
@@ -494,19 +496,19 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stale.status, 409)
         self.assertEqual(await stale.json(), {"error": {"code": "budget_actor_changed"}})
 
-    async def test_unicode_expected_actor_headers_match_after_decoding(self):
+    async def test_unicode_expected_actor_headers_use_fixed_length_digests(self):
         with self.sessions.begin() as session:
             session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
-            for username in ("Ági", "Łukasz", "😀" * 49):
+            for username in ("Ági", "Łukasz", "😀" * 65):
                 session.add(db.User(username=username, password_hash="h", role="viewer", budget_owner=True))
                 session.flush()
                 session.add(db.PermissionGrant(
                     username=username, permission_id="budget.view", target_owner=username,
                 ))
-        for username in ("Ági", "Łukasz", "😀" * 49):
+        for username in ("Ági", "Łukasz", "😀" * 65):
             with self.subTest(username=username):
                 encoded = _actor_header(username)
-                self.assertLessEqual(len(encoded), 344)
+                self.assertEqual(len(encoded), 43)
                 response = await self.client.get(
                     "/api/budget/accounts",
                     headers={**self._cookie(username), "X-Hestia-Expected-Actor": encoded},
