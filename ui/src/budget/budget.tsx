@@ -139,17 +139,12 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   const activeRef = useRef(active);
   const principalRef = useRef(principal);
   const [committedPrincipal, setCommittedPrincipal] = useState(principal);
-  const cookieSnapshotRef = useRef(typeof document === "undefined" ? "" : document.cookie);
   const pendingReceiptActions = useMemo(() => createPendingReceiptStore(), [principal]);
 
   useLayoutEffect(() => {
     activeRef.current = active;
-    const currentCookie = typeof document === "undefined" ? "" : document.cookie;
-    const principalChanged = principalRef.current !== principal;
-    const cookieChanged = currentCookie !== cookieSnapshotRef.current;
-    if (principalChanged || cookieChanged) {
+    if (principalRef.current !== principal) {
       principalRef.current = principal;
-      cookieSnapshotRef.current = currentCookie;
       epoch.current += 1;
       generation.current += 1;
       setSessionEpoch((current) => current + 1);
@@ -232,7 +227,6 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   }, [effectiveReceiptsApi, principal, barrier, authorizationLocked, api]);
 
   const reload = useCallback(async () => {
-    cookieSnapshotRef.current = typeof document === "undefined" ? "" : document.cookie;
     const token = ++generation.current;
     // Each response passes the barrier as soon as it arrives; a slow sibling cannot delay clearing.
     const watch = <T,>(request: Promise<BudgetResult<T>>) => request.then((result) => {

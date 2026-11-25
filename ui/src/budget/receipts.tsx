@@ -29,6 +29,7 @@ import {
   computeLinesDelta,
   createPendingReceiptStore,
   draftFromDetail,
+  editReceiptLine,
   filterReceiptRows,
   findCurrentLinkedCandidate,
   hasActiveReceiptFilter,
@@ -40,7 +41,6 @@ import {
   normalizeDecimalInput,
   receiptAccountLabel,
   reconcileLinkChoice,
-  subtractDecimals,
   validReceiptDateRange,
 } from "./receipts_model";
 import type {
@@ -52,6 +52,7 @@ import type {
   ReceiptDetailResult,
   ReceiptDocumentKind,
   ReceiptFilter,
+  ReceiptLineEditField,
   ReceiptLineInput,
   ReceiptPaymentMethod,
   ReceiptSettledEvent,
@@ -933,19 +934,13 @@ function ReceiptDetailDrawer({
     setConfirmDraft({ ...draft, lines: [...draft.lines, nextLine] });
   };
 
-  const updateLine = (index: number, patch: Partial<ReceiptLineInput>) => {
+  const updateLine = (index: number, field: ReceiptLineEditField, value: string) => {
     setConfirmDraft((current) => {
       if (current === null) return null;
-      const lines = current.lines.map((line, idx) => {
-        if (idx !== index) return line;
-        const next = { ...line, ...patch };
-        if ("gross_line_total" in patch || "discount_amount" in patch) {
-          const computed = subtractDecimals(next.gross_line_total, next.discount_amount);
-          if (computed !== null) next.net_line_total = computed;
-        }
-        return next;
-      });
-      return { ...current, lines };
+      return {
+        ...current,
+        lines: current.lines.map((line, idx) => (idx === index ? editReceiptLine(line, field, value) : line)),
+      };
     });
   };
 
@@ -1330,27 +1325,47 @@ function ReceiptDetailDrawer({
                         <label>
                           {t("budget.receipts.lineName")}
                           <input
+                            name="line_name"
                             type="text"
                             maxLength={128}
                             disabled={actionBusy !== null}
                             value={line.raw_name}
-                            onChange={(event) => { updateLine(idx, { raw_name: event.currentTarget.value }); }}
+                            onChange={(event) => { updateLine(idx, "raw_name", event.currentTarget.value); }}
                           />
                         </label>
                         <label>
+                          {t("budget.receipts.lineGross")}
+                          <input
+                            name="line_gross"
+                            type="text"
+                            inputMode="decimal"
+                            disabled={actionBusy !== null}
+                            value={line.gross_line_total}
+                            onChange={(event) => { updateLine(idx, "gross_line_total", event.currentTarget.value); }}
+                          />
+                        </label>
+                        {line.line_kind === "item" ? (
+                          <label>
+                            {t("budget.receipts.lineDiscount")}
+                            <input
+                              name="line_discount"
+                              type="text"
+                              inputMode="decimal"
+                              disabled={actionBusy !== null}
+                              value={line.discount_amount}
+                              onChange={(event) => { updateLine(idx, "discount_amount", event.currentTarget.value); }}
+                            />
+                          </label>
+                        ) : null}
+                        <label>
                           {t("budget.receipts.lineAmount")}
                           <input
+                            name="line_net"
                             type="text"
                             inputMode="decimal"
                             disabled={actionBusy !== null}
                             value={line.net_line_total}
-                            onChange={(event) => {
-                              updateLine(idx, {
-                                gross_line_total: event.currentTarget.value,
-                                discount_amount: "0",
-                                net_line_total: event.currentTarget.value,
-                              });
-                            }}
+                            onChange={(event) => { updateLine(idx, "net_line_total", event.currentTarget.value); }}
                           />
                         </label>
                         <button type="button" disabled={actionBusy !== null} onClick={() => { removeLine(idx); }}>

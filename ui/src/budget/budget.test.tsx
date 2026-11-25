@@ -1807,57 +1807,80 @@ describe("receipts tab & capability gate", () => {
     expect(host.textContent).toContain("Only the budget's owner");
     expect(host.querySelector(".budget-views")).toBeNull();
 
-    // Synchronous document.cookie change before Load more clears receipt state BEFORE calling whoami or receiptsList.
-    const hasCookieBefore = document.cookie;
+    // Focus and visibilitychange re-check /whoami and clear receipt state at once if the HttpOnly actor changed.
+    api.whoami.mockImplementation(() => ok({ user: "owner", role: "admin" }));
+    await click(button("Reload"));
+    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => ok({
+      receipts: [{
+        receipt_id: "33333333-3333-4333-8333-333333333333",
+        status: "needs_review",
+        document_kind: "receipt",
+        source_kind: "local_ocr",
+        receipt_kind: "purchase",
+        receipt_date: "2026-11-14",
+        receipt_time: null,
+        raw_shop_name: "Focus Check Store",
+        raw_nip: null,
+        shop_id: null,
+        chain_key: null,
+        total_amount: "11.00",
+        currency: "PLN",
+        payment_method: "card",
+        math_delta: "0",
+        linked: false,
+        linked_account_id: null,
+        linked_entry_ref: null,
+        version: 1,
+        image_available: false,
+        image_expires_at: null,
+        raw_text_expires_at: null,
+        invoice_number: null,
+        due_date: null,
+        import_expires_at: null,
+        forwarded_manually: false,
+        forwarded_sender_domain: null,
+        created_at: 1_700_000_000,
+        updated_at: 1_700_000_000,
+      }],
+      next_cursor: "owner-cur-focus",
+    }));
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Focus Check Store");
+
+    api.whoami.mockImplementation(() => ok({ user: "mallory", role: "admin" }));
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).not.toContain("Focus Check Store");
+    expect(host.textContent).toContain("Only the budget's owner");
+
+    // visibilitychange clears when becoming visible with switched/denied actor, ignores hidden transitions.
+    api.whoami.mockImplementation(() => ok({ user: "owner", role: "admin" }));
+    await click(button("Reload"));
+    await click(button("Receipts and documents"));
+    const whoamiCallsBeforeHidden = api.whoami.mock.calls.length;
+    const visSpy = vi.spyOn(document, "visibilityState", "get");
     try {
-      document.cookie = "hestia_actor=owner";
-      api.whoami.mockImplementation(() => ok({ user: "owner", role: "admin" }));
-      await click(button("Reload"));
-      vi.mocked(rApi.receiptsList).mockImplementationOnce(() => ok({
-        receipts: [{
-          receipt_id: "33333333-3333-4333-8333-333333333333",
-          status: "needs_review",
-          document_kind: "receipt",
-          source_kind: "local_ocr",
-          receipt_kind: "purchase",
-          receipt_date: "2026-11-14",
-          receipt_time: null,
-          raw_shop_name: "Cookie Guard Store",
-          raw_nip: null,
-          shop_id: null,
-          chain_key: null,
-          total_amount: "11.00",
-          currency: "PLN",
-          payment_method: "card",
-          math_delta: "0",
-          linked: false,
-          linked_account_id: null,
-          linked_entry_ref: null,
-          version: 1,
-          image_available: false,
-          image_expires_at: null,
-          raw_text_expires_at: null,
-          invoice_number: null,
-          due_date: null,
-          import_expires_at: null,
-          forwarded_manually: false,
-          forwarded_sender_domain: null,
-          created_at: 1_700_000_000,
-          updated_at: 1_700_000_000,
-        }],
-        next_cursor: "owner-cur-sync",
-      }));
-      await click(button("Receipts and documents"));
-      const whoamiCallsBeforeSyncSwitch = api.whoami.mock.calls.length;
-      const listCallsBeforeSyncSwitch = vi.mocked(rApi.receiptsList).mock.calls.length;
-      document.cookie = "hestia_actor=other";
-      await click(button("Load more"));
-      expect(vi.mocked(rApi.receiptsList).mock.calls).toHaveLength(listCallsBeforeSyncSwitch);
-      expect(api.whoami.mock.calls).toHaveLength(whoamiCallsBeforeSyncSwitch);
+      visSpy.mockReturnValue("hidden");
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+      expect(api.whoami.mock.calls).toHaveLength(whoamiCallsBeforeHidden);
+
+      visSpy.mockReturnValue("visible");
+      api.whoami.mockImplementation(() => fail(401, "budget_http_401"));
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+      await settle();
       expect(host.textContent).toContain("Only the budget's owner");
+      expect(host.querySelector(".budget-views")).toBeNull();
     } finally {
-      document.cookie = "hestia_actor=; max-age=0";
-      if (hasCookieBefore !== "") document.cookie = hasCookieBefore;
+      visSpy.mockRestore();
     }
   });
 

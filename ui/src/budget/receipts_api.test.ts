@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RECEIPT_CONTRACT_HEADERS, receiptsApi } from "./receipts_api";
+import { RECEIPT_CONTRACT_HEADERS, createReceiptsApi, receiptsApi, withActorHeader } from "./receipts_api";
 
 function respond(status: number, body: unknown, headers: HeadersInit = {}) {
   const fetchMock = vi.fn(() => Promise.resolve(new Response(
@@ -129,5 +129,11 @@ describe("receipts api", () => {
       status: 0,
       error: "budget_network",
     });
+  });
+
+  it("exposes withActorHeader and createReceiptsApi without mutating default request headers", () => {
+    expect(withActorHeader({ ...RECEIPT_CONTRACT_HEADERS }, "owner")).toEqual(RECEIPT_CONTRACT_HEADERS);
+    const scoped = createReceiptsApi("owner");
+    expect(typeof scoped.receiptsSearch).toBe("function");
   });
 });

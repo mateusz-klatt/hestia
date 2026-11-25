@@ -11,6 +11,7 @@ import {
   computeLinesDelta,
   createPendingReceiptStore,
   draftFromDetail,
+  editReceiptLine,
   filterReceiptRows,
   findCurrentLinkedCandidate,
   hasActiveReceiptFilter,
@@ -353,5 +354,68 @@ describe("receipts_model", () => {
     expect(events).toEqual([null, { receiptId: "r-1", kind: "confirm", outcome: "confirmed" }]);
 
     unsubscribe();
+  });
+
+  it("preserves gross, discount, and net consistency across line edits and no-op decimal reformatting", () => {
+    const itemLine = {
+      line_kind: "item" as const,
+      raw_name: "Coffee",
+      ptu_code: "A" as const,
+      quantity: "1",
+      raw_unit: "szt",
+      unit_price_raw: "10.00",
+      gross_line_total: "10.00",
+      discount_amount: "1.00",
+      net_line_total: "9.00",
+    };
+
+    // Pure reformat of net ("9.00" -> "9," -> "9,00") must not touch gross or discount.
+    const typingComma = editReceiptLine(itemLine, "net_line_total", "9,");
+    expect(typingComma.gross_line_total).toBe("10.00");
+    expect(typingComma.discount_amount).toBe("1.00");
+
+    const reformatted = editReceiptLine(typingComma, "net_line_total", "9,00");
+    expect(reformatted.gross_line_total).toBe("10.00");
+    expect(reformatted.discount_amount).toBe("1.00");
+    expect(reformatted.net_line_total).toBe("9,00");
+    expect(computeLinesDelta([reformatted], "9.00")).toBe("0");
+
+    // True edit to net keeps discount untouched and adjusts gross = net + discount.
+    const editedNet = editReceiptLine(itemLine, "net_line_total", "8.00");
+    expect(editedNet.gross_line_total).toBe("9");
+    expect(editedNet.discount_amount).toBe("1.00");
+    expect(editedNet.net_line_total).toBe("8.00");
+
+    // Edit to gross keeps discount untouched and updates net = gross - discount.
+    const editedGross = editReceiptLine(itemLine, "gross_line_total", "12.00");
+    expect(editedGross.gross_line_total).toBe("12.00");
+    expect(editedGross.discount_amount).toBe("1.00");
+    expect(editedGross.net_line_total).toBe("11");
+
+    // Edit to discount keeps gross untouched and updates net = gross - discount.
+    const editedDiscount = editReceiptLine(itemLine, "discount_amount", "2.50");
+    expect(editedDiscount.gross_line_total).toBe("10.00");
+    expect(editedDiscount.discount_amount).toBe("2.50");
+    expect(editedDiscount.net_line_total).toBe("7.5");
+
+    // Confirm payload preserves normalized values when net was purely reformatted.
+    const rec = detailOf({ total_amount: "9.00", lines: [{ ...itemLine, line_no: 1, raw_name_key: "coffee" }] });
+    const draft = { ...draftFromDetail(rec, []), lines: [reformatted] };
+    const built = buildConfirmRequest(rec, draft, []);
+    expect(built.ok).toBe(true);
+    if (built.ok) {
+      expect(built.request.lines[0]).toMatchObject({
+        gross_line_total: "10",
+        discount_amount: "1",
+        net_line_total: "9",
+      });
+    }
+
+    // Non-item lines enforce discount="0" and net=gross.
+    const otherLine = { ...itemLine, line_kind: "other" as const, discount_amount: "0", net_line_total: "10.00" };
+    const editedOther = editReceiptLine(otherLine, "net_line_total", "15.00");
+    expect(editedOther.gross_line_total).toBe("15");
+    expect(editedOther.discount_amount).toBe("0");
+    expect(editedOther.net_line_total).toBe("15.00");
   });
 });

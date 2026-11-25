@@ -484,10 +484,75 @@ function compareDecimalStrings(a: string, b: string): number | null {
   return lv < rv ? -1 : lv > rv ? 1 : 0;
 }
 
+export type ReceiptLineEditField = "raw_name" | "gross_line_total" | "discount_amount" | "net_line_total";
+
+/**
+ * Edits one receipt line field while keeping `net = gross - discount` consistent with `receipt_parser`.
+ * Reformatting a field with an unchanged decimal value leaves the other fields untouched.
+ */
+export function editReceiptLine(
+  line: ReceiptLineInput,
+  field: ReceiptLineEditField,
+  value: string,
+): ReceiptLineInput {
+  if (field === "raw_name") return { ...line, raw_name: value };
+
+  if (field === "gross_line_total") {
+    const nextNorm = normalizeDecimalInput(value);
+    if (nextNorm === null) return { ...line, gross_line_total: value };
+    const discNorm = normalizeDecimalInput(line.discount_amount) ?? "0";
+    const netNorm = normalizeDecimalInput(line.net_line_total);
+    const impliedGross = netNorm === null ? null : addDecimals([netNorm, discNorm]);
+    if (normalizeDecimalInput(line.gross_line_total) === nextNorm || impliedGross === nextNorm) {
+      return { ...line, gross_line_total: value };
+    }
+    if (line.line_kind !== "item") {
+      return { ...line, gross_line_total: value, discount_amount: "0", net_line_total: nextNorm };
+    }
+    const newNet = subtractDecimals(nextNorm, discNorm);
+    return { ...line, gross_line_total: value, net_line_total: newNet ?? line.net_line_total };
+  }
+
+  if (field === "discount_amount") {
+    if (line.line_kind !== "item") return { ...line, discount_amount: "0" };
+    const nextNorm = normalizeDecimalInput(value);
+    if (nextNorm === null) return { ...line, discount_amount: value };
+    const grossNorm = normalizeDecimalInput(line.gross_line_total);
+    const netNorm = normalizeDecimalInput(line.net_line_total);
+    const impliedDisc = grossNorm === null || netNorm === null ? null : subtractDecimals(grossNorm, netNorm);
+    if (normalizeDecimalInput(line.discount_amount) === nextNorm || impliedDisc === nextNorm) {
+      return { ...line, discount_amount: value };
+    }
+    const newNet = grossNorm === null ? null : subtractDecimals(grossNorm, nextNorm);
+    return { ...line, discount_amount: value, net_line_total: newNet ?? line.net_line_total };
+  }
+
+  // Editing net_line_total: never wipe discount; adjust gross = net + discount when the value actually changes.
+  const nextNorm = normalizeDecimalInput(value);
+  if (nextNorm === null) return { ...line, net_line_total: value };
+  const grossNorm = normalizeDecimalInput(line.gross_line_total);
+  const discNorm = normalizeDecimalInput(line.discount_amount) ?? "0";
+  const impliedNet = grossNorm === null ? null : subtractDecimals(grossNorm, discNorm);
+  if (normalizeDecimalInput(line.net_line_total) === nextNorm || impliedNet === nextNorm) {
+    return { ...line, net_line_total: value };
+  }
+  if (line.line_kind !== "item") {
+    return { ...line, gross_line_total: nextNorm, discount_amount: "0", net_line_total: value };
+  }
+  const newGross = addDecimals([nextNorm, discNorm]);
+  return { ...line, gross_line_total: newGross ?? line.gross_line_total, net_line_total: value };
+}
+
 export function computeLinesDelta(lines: readonly ReceiptLineInput[], totalAmount: string): string | null {
   const total = normalizeDecimalInput(totalAmount);
   if (total === null) return null;
-  const netSum = addDecimals(lines.map((line) => line.net_line_total));
+  const normalizedNets: string[] = [];
+  for (const line of lines) {
+    const net = normalizeDecimalInput(line.net_line_total);
+    if (net === null) return null;
+    normalizedNets.push(net);
+  }
+  const netSum = addDecimals(normalizedNets);
   if (netSum === null) return null;
   return subtractDecimals(netSum, total);
 }

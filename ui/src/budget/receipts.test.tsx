@@ -859,4 +859,78 @@ describe("ReceiptsView", () => {
     });
     expect(accessLossUnmount).toHaveBeenCalledWith({ ok: false, status: 401, error: "budget_http_401" });
   });
+
+  it("preserves discount when net line amount is reformatted or edited, and supports gross/discount/net editing", async () => {
+    const clients = fakeClients([
+      receiptSummary({ receipt_id: "rec-disc", status: "needs_review", total_amount: "9.00", linked: false }),
+    ]);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => ok({
+      receipt: receiptDetail({
+        receipt_id: "rec-disc",
+        status: "needs_review",
+        total_amount: "9.00",
+        linked: false,
+        lines: [{
+          line_no: 1,
+          line_kind: "item",
+          raw_name: "Roasted Coffee",
+          raw_name_key: "roasted coffee",
+          ptu_code: "A",
+          quantity: "1",
+          raw_unit: "szt",
+          unit_price_raw: "10.00",
+          gross_line_total: "10.00",
+          discount_amount: "1.00",
+          net_line_total: "9.00",
+        }],
+      }),
+      candidates: [],
+    }));
+
+    await renderReceipts(clients);
+    await click(openDetailButton(0));
+    const drawer = dialog();
+
+    // Reformatting net "9.00" -> "9," -> "9,00" must preserve gross 10 and discount 1 on save.
+    await typeInto(inputByName("line_net", drawer), "9,");
+    await typeInto(inputByName("line_net", drawer), "9,00");
+    expect(inputByName("line_gross", drawer).value).toBe("10.00");
+    expect(inputByName("line_discount", drawer).value).toBe("1.00");
+
+    await click(button("Confirm receipt", drawer));
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      lines: [expect.objectContaining({
+        gross_line_total: "10",
+        discount_amount: "1",
+        net_line_total: "9",
+      }) as unknown],
+    }));
+
+    // Reopen and edit net -> discount stays 1, gross updates cleanly; then edit discount -> net updates cleanly.
+    await click(button("Close", dialog()));
+    await click(openDetailButton(0));
+    const drawer2 = dialog();
+    await typeInto(inputByName("line_net", drawer2), "8.00");
+    expect(inputByName("line_gross", drawer2).value).toBe("9");
+    expect(inputByName("line_discount", drawer2).value).toBe("1.00");
+
+    await typeInto(inputByName("line_gross", drawer2), "12.00");
+    expect(inputByName("line_discount", drawer2).value).toBe("1.00");
+    expect(inputByName("line_net", drawer2).value).toBe("11");
+
+    await typeInto(inputByName("line_discount", drawer2), "2.50");
+    expect(inputByName("line_gross", drawer2).value).toBe("12.00");
+    expect(inputByName("line_net", drawer2).value).toBe("9.5");
+
+    await typeInto(inputByName("total_amount", drawer2), "9.50");
+    await click(button("Confirm receipt", drawer2));
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
+      total_amount: "9.5",
+      lines: [expect.objectContaining({
+        gross_line_total: "12",
+        discount_amount: "2.5",
+        net_line_total: "9.5",
+      }) as unknown],
+    }));
+  });
 });
