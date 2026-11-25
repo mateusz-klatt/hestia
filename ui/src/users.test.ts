@@ -37,6 +37,8 @@ function grantsFor(username: string): UserGrants {
         requires: [], device_eligible: true, label: "View", protected: false },
       { permission_id: "budget.receipts.edit", domain: "budget", storage_scope: "owner", delegation: "delegable",
         requires: ["budget.receipts.add", "budget.receipts.view"], device_eligible: true, label: "Edit", protected: false },
+      { permission_id: "household.view", domain: "budget", storage_scope: "owner", delegation: "delegable",
+        requires: [], device_eligible: false, label: "Household", protected: false },
       { permission_id: "system.manage_users", domain: "system", storage_scope: "installation", delegation: null,
         requires: [], device_eligible: false, label: "Manage", protected: true },
     ],
@@ -255,6 +257,30 @@ describe("renderUsersPanel", () => {
     expect(api.saveUserGrants).toHaveBeenCalledWith("bob", [
       { permission_id: "ioc.control", target_owner: null },
       { permission_id: "budget.receipts.add", target_owner: "other" },
+    ]);
+  });
+
+  it("excludes self-targeted household grants when a manager selects Full access for a budget owner", async () => {
+    const data = grantsFor("admin");
+    data.direct.push({ permission_id: "household.view", target_owner: "admin" });
+    const api = makeApi(USERS, "another-admin", { fetchUserGrants: vi.fn().mockResolvedValue(data) });
+    const container = document.createElement("div");
+    await renderUsersPanel(container, api).refresh();
+    const row = rowFor(container, "admin");
+    q<HTMLButtonElement>(row, ".user-grants").click();
+    await flush();
+    const editor = q<HTMLElement>(row, ".grant-editor");
+    const household = q<HTMLInputElement>(editor, '[data-permission="household.view"]');
+    expect(household.disabled).toBe(true);
+    q<HTMLButtonElement>(editor, ".grant-full").click();
+    expect(household.checked).toBe(false);
+    editor.dispatchEvent(new Event("submit"));
+    await flush();
+    expect(api.saveUserGrants).toHaveBeenCalledWith("admin", [
+      { permission_id: "ioc.control", target_owner: null },
+      { permission_id: "budget.view", target_owner: "admin" },
+      { permission_id: "budget.receipts.edit", target_owner: "admin" },
+      { permission_id: "system.manage_users", target_owner: null },
     ]);
   });
 

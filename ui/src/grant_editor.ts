@@ -71,10 +71,18 @@ export async function renderGrantEditor(
 
   const initialTargets = data.direct.flatMap((grant) => grant.target_owner === null ? [] : [grant.target_owner]);
   let target = data.budget_owner ? username : (initialTargets[0] ?? data.budget_owners[0] ?? null);
+  const canTarget = (spec: GrantCatalogEntry): boolean => {
+    if (spec.storage_scope === "installation") return true;
+    if (target === null) return false;
+    if (target === username) return data.budget_owner && spec.permission_id !== "household.view";
+    return !data.budget_owner && spec.delegation === "delegable";
+  };
   const direct = new Set(data.direct.map((grant) => grantKey(grant.permission_id, grant.target_owner)));
-  const explicit = new Set(data.direct
-    .filter((grant) => grant.target_owner === null || grant.target_owner === target)
-    .map((grant) => grant.permission_id));
+  const explicit = new Set(data.catalog
+    .filter((spec) => canTarget(spec) && direct.has(grantKey(
+      spec.permission_id, spec.storage_scope === "owner" ? target : null,
+    )))
+    .map((spec) => spec.permission_id));
   const inputs = new Map<string, HTMLInputElement>();
   const byId = new Map(data.catalog.map((spec) => [spec.permission_id, spec]));
 
@@ -127,8 +135,7 @@ export async function renderGrantEditor(
       input.dataset.permission = spec.permission_id;
       input.dataset.scope = spec.storage_scope;
       const protectedSelf = spec.protected && username === currentUser;
-      input.disabled = protectedSelf || (spec.storage_scope === "owner"
-        && (target === null || (!data.budget_owner && spec.delegation === "self_only")));
+      input.disabled = protectedSelf || !canTarget(spec);
       if (protectedSelf) {
         explicit.add(spec.permission_id);
         input.title = t("users.grantSelfAdmin");
@@ -193,12 +200,13 @@ export async function renderGrantEditor(
       if (spec.storage_scope !== "owner") continue;
       const input = inputs.get(spec.permission_id);
       if (input === undefined) continue;
-      if (direct.has(grantKey(spec.permission_id, target))) {
+      const allowed = canTarget(spec);
+      if (allowed && direct.has(grantKey(spec.permission_id, target))) {
         explicit.add(spec.permission_id);
       } else {
         explicit.delete(spec.permission_id);
       }
-      input.disabled = target === null || (!data.budget_owner && spec.delegation === "self_only");
+      input.disabled = !allowed || (spec.protected && username === currentUser);
     }
     syncImplications();
   });
@@ -209,7 +217,7 @@ export async function renderGrantEditor(
       save.disabled = true;
       const grants: GrantSelection[] = [];
       for (const spec of data.catalog) {
-        if (!explicit.has(spec.permission_id)) continue;
+        if (!explicit.has(spec.permission_id) || !canTarget(spec)) continue;
         grants.push({
           permission_id: spec.permission_id,
           target_owner: spec.storage_scope === "owner" ? target : null,
