@@ -35,7 +35,7 @@ CONFIRM_FIELDS = frozenset({
     "receipt_id", "expected_version", "raw_shop_name", "raw_nip", "receipt_kind", "receipt_date",
     "receipt_time", "total_amount", "currency", "payment_method", "lines", "link",
 })
-_CONFIRM_REQUIRED = CONFIRM_FIELDS - frozenset({"lines"})
+_CONFIRM_REQUIRED = CONFIRM_FIELDS - frozenset({"lines", "raw_shop_name", "raw_nip"})
 LINE_FIELDS = frozenset({
     "line_kind", "raw_name", "ptu_code", "quantity", "raw_unit", "unit_price_raw",
     "gross_line_total", "discount_amount", "net_line_total",
@@ -765,6 +765,15 @@ def _validate_line(value, line_no):
     }
 
 
+def validate_confirm_lines(lines, total):
+    if not isinstance(lines, list) or len(lines) > MAX_RECEIPT_LINES:
+        raise ReceiptError()
+    clean_lines = [_validate_line(line, number) for number, line in enumerate(lines, 1)]
+    if sum_money(line["net_line_total"] for line in clean_lines) != total:
+        raise ReceiptError("budget_receipt_total_mismatch")
+    return clean_lines
+
+
 def validate_confirm(values):
     if not isinstance(values, dict) or not _CONFIRM_REQUIRED.issubset(values) or set(values) - CONFIRM_FIELDS:
         raise ReceiptError()
@@ -776,29 +785,33 @@ def validate_confirm(values):
     currency = values["currency"]
     if kind not in RECEIPT_KINDS or payment not in PAYMENT_METHODS or not isinstance(currency, str) or not _CURRENCY.fullmatch(currency):
         raise ReceiptError()
-    shop = _clean_text(values["raw_shop_name"], limit=MAX_SHOP_NAME_LEN, optional=True)
-    nip = values["raw_nip"]
-    if nip == "":
-        nip = None
-    if nip is not None and not valid_nip(nip):
-        raise ReceiptError()
+    cleaned = {
+        "receipt_kind": kind, "receipt_date": _confirm_date(values["receipt_date"]),
+        "currency": currency, "payment_method": payment,
+    }
+    if "raw_shop_name" in values:
+        cleaned["raw_shop_name"] = _clean_text(values["raw_shop_name"], limit=MAX_SHOP_NAME_LEN, optional=True)
+    if "raw_nip" in values:
+        nip = values["raw_nip"]
+        if nip == "":
+            nip = None
+        if nip is not None and not valid_nip(nip):
+            raise ReceiptError()
+        cleaned["raw_nip"] = nip
+    if "raw_shop_name" in cleaned or "raw_nip" in cleaned:
+        cleaned["chain_key"] = chain_for(cleaned.get("raw_shop_name"), cleaned.get("raw_nip"))
     receipt_time = values["receipt_time"]
     if receipt_time == "":
         receipt_time = None
     if receipt_time is not None and (not isinstance(receipt_time, str) or not _TIME.fullmatch(receipt_time)):
         raise ReceiptError()
+    cleaned["receipt_time"] = receipt_time
     total = _confirm_money(values["total_amount"], mismatch=True)
     if compare_money(total, "0") <= 0:
         raise ReceiptError("budget_receipt_total_mismatch")
+    cleaned["total_amount"] = total
     lines = values.get("lines")
-    if lines is None:
-        clean_lines = None
-    else:
-        if not isinstance(lines, list) or len(lines) > MAX_RECEIPT_LINES:
-            raise ReceiptError()
-        clean_lines = [_validate_line(line, number) for number, line in enumerate(lines, 1)]
-        if sum_money(line["net_line_total"] for line in clean_lines) != total:
-            raise ReceiptError("budget_receipt_total_mismatch")
+    cleaned["lines"] = None if lines is None else validate_confirm_lines(lines, total)
     link = values["link"]
     if link is not None:
         token = None if not isinstance(link, dict) else link.get("candidate_token")
@@ -808,8 +821,5 @@ def validate_confirm(values):
                 or not isinstance(link["entry_reference"], str) or not 1 <= len(link["entry_reference"]) <= 1024
                 or not isinstance(token, str) or not 1 <= len(token) <= 4096 or "\n" in token or "\r" in token):
             raise ReceiptError()
-    return {
-        "raw_shop_name": shop, "raw_nip": nip, "receipt_kind": kind, "receipt_date": _confirm_date(values["receipt_date"]),
-        "receipt_time": receipt_time, "total_amount": total, "currency": currency, "payment_method": payment,
-        "lines": clean_lines, "link": link, "chain_key": chain_for(shop, nip),
-    }
+    cleaned["link"] = link
+    return cleaned

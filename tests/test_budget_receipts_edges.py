@@ -185,6 +185,11 @@ class ParserEdgeTests(unittest.TestCase):
         for omitted in ({key: value for key, value in base.items() if key != "lines"}, {**base, "lines": None}):
             cleaned = validate_confirm(omitted)
             self.assertIsNone(cleaned["lines"])
+        omitted_headers = validate_confirm(
+            {key: value for key, value in base.items() if key not in ("raw_shop_name", "raw_nip")},
+        )
+        self.assertNotIn("raw_shop_name", omitted_headers)
+        self.assertNotIn("raw_nip", omitted_headers)
         for bad in ({}, [], None):
             with self.subTest(bad=type(bad).__name__), self.assertRaises(ReceiptError):
                 validate_confirm(bad)

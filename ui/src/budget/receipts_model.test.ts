@@ -562,6 +562,59 @@ describe("receipts_model", () => {
     expect(builtPay.ok).toBe(true);
     if (builtPay.ok) {
       expect("lines" in builtPay.request).toBe(false);
+      expect("raw_shop_name" in builtPay.request).toBe(false);
+      expect("raw_nip" in builtPay.request).toBe(false);
+    }
+
+    // Redacted header fields (raw_shop_name / raw_nip) are omitted on single & bulk confirm, never echoed back,
+    // while explicit edits send new values / null and manually entered "[usunięto]" is rejected.
+    const redactedShopDetail = detailOf({
+      status: "imported",
+      source_kind: "email",
+      document_kind: "payment_confirmation",
+      raw_shop_name: REDACTED_VALUE,
+      raw_nip: REDACTED_VALUE,
+      payment_method: null,
+      total_amount: "30.00",
+      lines: [{
+        line_no: 1,
+        line_kind: "other",
+        raw_name: REDACTED_VALUE,
+        raw_name_key: "[usunieto]",
+        ptu_code: null,
+        quantity: "1",
+        raw_unit: null,
+        unit_price_raw: null,
+        gross_line_total: "30.00",
+        discount_amount: "0",
+        net_line_total: "30.00",
+      }],
+    });
+    const builtRedactedBulk = buildPlainBulkConfirmRequest(redactedShopDetail, "Summary");
+    expect(builtRedactedBulk.ok).toBe(true);
+    if (builtRedactedBulk.ok) {
+      expect("raw_shop_name" in builtRedactedBulk.request).toBe(false);
+      expect("raw_nip" in builtRedactedBulk.request).toBe(false);
+      expect("lines" in builtRedactedBulk.request).toBe(false);
+    }
+    const shopEditedToRedacted = buildConfirmRequest(detailOf({ raw_shop_name: "Safe Shop" }), {
+      ...draftFromDetail(detailOf({ raw_shop_name: "Safe Shop" }), []),
+      rawShopName: REDACTED_VALUE,
+    }, []);
+    expect(shopEditedToRedacted).toEqual({ ok: false, errorKey: "budget.receipts.invalidForm" });
+    const nipEditedToRedacted = buildConfirmRequest(detailOf({ raw_nip: "7791011327" }), {
+      ...draftFromDetail(detailOf({ raw_nip: "7791011327" }), []),
+      rawNip: REDACTED_VALUE,
+    }, []);
+    expect(nipEditedToRedacted).toEqual({ ok: false, errorKey: "budget.receipts.invalidForm" });
+    const shopCleared = buildConfirmRequest(redactedShopDetail, {
+      ...draftFromDetail(redactedShopDetail, []),
+      rawShopName: "",
+    }, []);
+    expect(shopCleared.ok).toBe(true);
+    if (shopCleared.ok) {
+      expect(shopCleared.request.raw_shop_name).toBeNull();
+      expect("raw_nip" in shopCleared.request).toBe(false);
     }
 
     // Zero-line OCR draft & needs_review are rejected (never synthesize lines for non-invoices).

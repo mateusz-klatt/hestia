@@ -5803,10 +5803,16 @@ export interface components {
              * @enum {string}
              */
             payment_method: "card" | "blik" | "cash" | "mixed" | "unknown";
-            /** Raw Nip */
-            raw_nip: string | null;
-            /** Raw Shop Name */
-            raw_shop_name: string | null;
+            /**
+             * Raw Nip
+             * @description Omit to keep the stored NIP unchanged; send null to clear.
+             */
+            raw_nip?: string | null;
+            /**
+             * Raw Shop Name
+             * @description Omit to keep the stored shop name unchanged; send null to clear.
+             */
+            raw_shop_name?: string | null;
             /**
              * Receipt Date
              * Format: date

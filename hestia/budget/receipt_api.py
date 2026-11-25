@@ -147,7 +147,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
             body, error = await read_json_body(request, WRITES[operation][1], reject_duplicates=True)
             if error:
                 return body
-            values = WRITES[operation][0].model_validate(body).model_dump()
+            validated = WRITES[operation][0].model_validate(body)
+            values = validated.model_dump(exclude_unset=True) if operation == "confirm" else validated.model_dump()
             owner = api._principal(request, auth_enabled)
             secret = api._secret(session_secret)
             if device_id is None:

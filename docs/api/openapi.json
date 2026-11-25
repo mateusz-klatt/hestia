@@ -10828,6 +10828,7 @@
                 "type": "null"
               }
             ],
+            "description": "Omit to keep the stored NIP unchanged; send null to clear.",
             "title": "Raw Nip"
           },
           "raw_shop_name": {
@@ -10840,6 +10841,7 @@
                 "type": "null"
               }
             ],
+            "description": "Omit to keep the stored shop name unchanged; send null to clear.",
             "title": "Raw Shop Name"
           },
           "receipt_date": {
@@ -10884,8 +10886,6 @@
         "required": [
           "receipt_id",
           "expected_version",
-          "raw_shop_name",
-          "raw_nip",
           "receipt_kind",
           "receipt_date",
           "receipt_time",

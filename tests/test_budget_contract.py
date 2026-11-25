@@ -792,8 +792,9 @@ class BudgetOpenApiTests(unittest.TestCase):
     def test_receipt_confirm_allows_omitted_or_null_lines_while_preserving_legacy_lines_input(self):
         document = contract.build_openapi()
         confirm_schema = document["components"]["schemas"]["BudgetReceiptConfirmRequest"]
-        self.assertNotIn("lines", confirm_schema["required"])
-        self.assertNotIn("default", confirm_schema["properties"]["lines"])
+        for optional_field in ("lines", "raw_shop_name", "raw_nip"):
+            self.assertNotIn(optional_field, confirm_schema["required"])
+            self.assertNotIn("default", confirm_schema["properties"][optional_field])
         line = {
             "line_kind": "item", "raw_name": "Milk", "ptu_code": "A", "quantity": "1",
             "raw_unit": None, "unit_price_raw": "5.00", "gross_line_total": "5.00",
@@ -801,11 +802,13 @@ class BudgetOpenApiTests(unittest.TestCase):
         }
         base = {
             "receipt_id": "11111111-1111-4111-8111-111111111111", "expected_version": 1,
-            "raw_shop_name": "Shop", "raw_nip": None, "receipt_kind": "purchase",
+            "receipt_kind": "purchase",
             "receipt_date": "2026-11-14", "receipt_time": None, "total_amount": "5.00",
             "currency": "PLN", "payment_method": "card", "link": None,
         }
-        self.assertIsNone(contract.BudgetReceiptConfirmRequest.model_validate(base).lines)
+        validated_omitted = contract.BudgetReceiptConfirmRequest.model_validate(base)
+        self.assertEqual(validated_omitted.model_dump(exclude_unset=True), base)
+        self.assertIsNone(validated_omitted.lines)
         self.assertIsNone(contract.BudgetReceiptConfirmRequest.model_validate({**base, "lines": None}).lines)
         self.assertEqual(len(contract.BudgetReceiptConfirmRequest.model_validate({**base, "lines": [line]}).lines), 1)
         for bad_lines in ("bad", 123, True, [line] * 301):
@@ -814,6 +817,8 @@ class BudgetOpenApiTests(unittest.TestCase):
         ts_path = Path(__file__).resolve().parent.parent / "ui" / "src" / "api" / "openapi.ts"
         confirm_ts = ts_path.read_text(encoding="utf-8").split("BudgetReceiptConfirmRequest: {", 1)[1].split("\n        };", 1)[0]
         self.assertIn("lines?: components[\"schemas\"][\"BudgetReceiptLineInput\"][] | null;", confirm_ts)
+        self.assertIn("raw_shop_name?: string | null;", confirm_ts)
+        self.assertIn("raw_nip?: string | null;", confirm_ts)
 
 
 class BudgetProviderBindingTests(unittest.TestCase):

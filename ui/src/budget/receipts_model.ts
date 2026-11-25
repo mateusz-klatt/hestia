@@ -595,10 +595,16 @@ export function buildConfirmRequest(
   draft: ReceiptConfirmDraft,
   candidates: readonly ReceiptCandidate[],
 ): { ok: true; request: ReceiptConfirmRequest } | { ok: false; errorKey: MessageKey } {
+  const origShop = (detail.raw_shop_name ?? "").trim();
   const shopName = draft.rawShopName.trim();
+  const shopEdited = shopName !== origShop;
   if (shopName.length > 128) return { ok: false, errorKey: "budget.receipts.invalidForm" };
+  if (shopEdited && isRedactedValue(shopName)) return { ok: false, errorKey: "budget.receipts.invalidForm" };
+  const origNip = (detail.raw_nip ?? "").trim();
   const nip = draft.rawNip.trim();
-  if (nip !== "" && !validPolishNip(nip)) return { ok: false, errorKey: "budget.receipts.invalidForm" };
+  const nipEdited = nip !== origNip;
+  if (nipEdited && isRedactedValue(nip)) return { ok: false, errorKey: "budget.receipts.invalidForm" };
+  if (nipEdited && nip !== "" && !validPolishNip(nip)) return { ok: false, errorKey: "budget.receipts.invalidForm" };
   if (!validIsoDate(draft.receiptDate)) return { ok: false, errorKey: "budget.receipts.invalidForm" };
   const time = draft.receiptTime.trim();
   if (time !== "" && !/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(time)) {
@@ -711,8 +717,6 @@ export function buildConfirmRequest(
   const request: ReceiptConfirmRequest = {
     receipt_id: detail.receipt_id,
     expected_version: detail.version,
-    raw_shop_name: shopName === "" ? null : shopName,
-    raw_nip: nip === "" ? null : nip,
     receipt_kind: draft.receiptKind,
     receipt_date: draft.receiptDate,
     receipt_time: time === "" ? null : time,
@@ -721,6 +725,12 @@ export function buildConfirmRequest(
     payment_method: draft.paymentMethod,
     link,
   };
+  if (shopEdited) {
+    request.raw_shop_name = shopName === "" ? null : shopName;
+  }
+  if (nipEdited) {
+    request.raw_nip = nip === "" ? null : nip;
+  }
   if (linesChanged) {
     request.lines = cleanLines;
   }

@@ -143,8 +143,8 @@ function fakeClients(rows: ReceiptSummary[] = [receiptSummary()], detail?: Recei
         receipt: receiptDetail({
           receipt_id: req.receipt_id,
           status: "confirmed",
-          raw_shop_name: req.raw_shop_name,
-          raw_nip: req.raw_nip,
+          ...(req.raw_shop_name === undefined ? {} : { raw_shop_name: req.raw_shop_name }),
+          ...(req.raw_nip === undefined ? {} : { raw_nip: req.raw_nip }),
           receipt_date: req.receipt_date,
           receipt_time: req.receipt_time,
           total_amount: req.total_amount,
@@ -965,6 +965,56 @@ describe("ReceiptsView", () => {
     const sent = vi.mocked(clients.rApi.confirmReceipt).mock.calls[0]?.[0];
     expect(sent).toMatchObject({ receipt_id: "rec-red", raw_shop_name: "Updated Safe Shop" });
     expect("lines" in (sent ?? {})).toBe(false);
+    expect("raw_nip" in (sent ?? {})).toBe(false);
+  });
+
+  it("omits redacted merchant name in bulk confirm instead of echoing [usunięto]", async () => {
+    const redactedImportRow = receiptSummary({
+      receipt_id: "imp-redacted-shop",
+      status: "imported",
+      source_kind: "email",
+      document_kind: "payment_confirmation",
+      raw_shop_name: REDACTED_VALUE,
+      raw_nip: "7791011327",
+      total_amount: "30.00",
+      version: 4,
+    });
+    const clients = fakeClients([redactedImportRow]);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
+      receipt: receiptDetail({
+        receipt_id: "imp-redacted-shop",
+        status: "imported",
+        source_kind: "email",
+        document_kind: "payment_confirmation",
+        raw_shop_name: REDACTED_VALUE,
+        raw_nip: "7791011327",
+        payment_method: null,
+        total_amount: "30.00",
+        lines: [{
+          line_no: 1,
+          line_kind: "other",
+          raw_name: REDACTED_VALUE,
+          raw_name_key: "[usunieto]",
+          ptu_code: null,
+          quantity: "1",
+          raw_unit: null,
+          unit_price_raw: null,
+          gross_line_total: "30.00",
+          discount_amount: "0",
+          net_line_total: "30.00",
+        }],
+        version: 4,
+      }),
+      candidates: [],
+    }));
+    await renderReceipts(clients);
+    await click(button("Confirm all from: NIP 7791011327"));
+    await click(button("Start bulk confirm", alertBox()));
+    const payload = vi.mocked(clients.rApi.confirmReceipt).mock.calls[0]?.[0];
+    expect(payload).toMatchObject({ receipt_id: "imp-redacted-shop", expected_version: 4 });
+    expect("raw_shop_name" in (payload ?? {})).toBe(false);
+    expect("raw_nip" in (payload ?? {})).toBe(false);
+    expect("lines" in (payload ?? {})).toBe(false);
   });
 
   it("restricts bulk confirm to Gmail imports, separates same-name sellers by NIP, omits unedited lines, handles failures/cancel/actor aborts", async () => {
@@ -1084,6 +1134,8 @@ describe("ReceiptsView", () => {
     const secondPayload = vi.mocked(clients.rApi.confirmReceipt).mock.calls[1]?.[0];
     const thirdPayload = vi.mocked(clients.rApi.confirmReceipt).mock.calls[2]?.[0];
     expect("lines" in (secondPayload ?? {})).toBe(false);
+    expect("raw_shop_name" in (secondPayload ?? {})).toBe(false);
+    expect("raw_nip" in (secondPayload ?? {})).toBe(false);
     expect("lines" in (thirdPayload ?? {})).toBe(false);
     expect(host.textContent).toContain("Bulk confirm finished: 2 confirmed, 1 failed.");
     expect(host.textContent).toContain("Failure 409 budget_receipt_conflict: 1");

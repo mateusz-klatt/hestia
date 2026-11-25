@@ -61,6 +61,10 @@ class OpenApiArtifactTests(unittest.TestCase):
         schemas = document["components"]["schemas"]
         self.assertEqual(document["info"]["version"], "0.51.0")
         confirm_schema = schemas["BudgetReceiptConfirmRequest"]
+        for field_name, index in (("raw_shop_name", 2), ("raw_nip", 3)):
+            self.assertNotIn(field_name, confirm_schema["required"])
+            confirm_schema["properties"][field_name].pop("description")
+            confirm_schema["required"].insert(index, field_name)
         confirm_lines = confirm_schema["properties"]["lines"]
         self.assertNotIn("lines", confirm_schema["required"])
         confirm_schema["properties"]["lines"] = {**confirm_lines["anyOf"][0], "title": "Lines"}
