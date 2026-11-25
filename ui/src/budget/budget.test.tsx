@@ -40,7 +40,7 @@ function page(rows: BudgetTransaction[], cursor: string | null = null, accountId
 }
 
 const authorization = {
-  user: "owner", installation_permissions: [],
+  user: "owner", actor_tag: "A".repeat(43), installation_permissions: [],
   own_budget: { permissions: ["budget.view"], can_view: true, can_use_receipts: true, can_manage_devices: true },
   delegated_receipts: null, household_available: false,
 };

@@ -81,35 +81,76 @@ export interface AuthorizationCapabilities {
   household_available: boolean;
 }
 
-async function actorDigest(actor: string): Promise<string> {
-  const bytes = new TextEncoder().encode(`hestia/actor/v1\0${actor}`);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  let binary = "";
-  for (const byte of new Uint8Array(digest)) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
 export function createBudgetApi(expectedActor: string | null = null) {
   let authorizationLocked = false;
-  let authorizationGeneration = 0;
+  let lockGeneration = 0;
+  let verificationGeneration = 0;
+  let capabilitiesGeneration = 0;
+  let verified = false;
+  let snapshotUser: string | null | undefined;
+  let snapshotTag: string | null | undefined;
+  let denialError = "budget_server_changed";
+  const pendingReads = new Set<AbortController>();
+
+  function denial(error = denialError): BudgetResult<never> {
+    return { ok: false, status: error === "budget_actor_changed" ? 409 : 503, error };
+  }
+
+  function unverify(error: string): void {
+    verified = false;
+    denialError = error;
+    verificationGeneration += 1;
+    for (const controller of pendingReads) controller.abort();
+  }
+
+  async function capabilities(): Promise<BudgetResult<AuthorizationCapabilities>> {
+    const ticket = ++capabilitiesGeneration;
+    const result = await request<AuthorizationCapabilities>(apiUrl("me/capabilities"));
+    if (ticket !== capabilitiesGeneration) return denial("budget_server_changed");
+    if (!result.ok) {
+      unverify("budget_server_changed");
+      return result;
+    }
+    const { user, actor_tag: tag } = result.data;
+    const validTag = user === null ? tag === null : typeof tag === "string" && /^[A-Za-z0-9_-]{43}$/.test(tag);
+    const expected = expectedActor === null || user === expectedActor;
+    const sameActor = snapshotUser === undefined || (snapshotUser === user && snapshotTag === tag);
+    if (!validTag || !expected || !sameActor) {
+      unverify("budget_actor_changed");
+      return denial();
+    }
+    snapshotUser = user;
+    snapshotTag = tag;
+    verified = true;
+    denialError = "budget_server_changed";
+    return result;
+  }
+
   async function call<T>(target: URL, init: RequestInit = {}, mutation = false): Promise<BudgetResult<T>> {
-    const generation = authorizationGeneration;
-    if (expectedActor !== null && target.pathname.includes("/api/budget/")) {
-      let digest: string;
-      try {
-        digest = await actorDigest(expectedActor);
-      } catch {
-        return { ok: false, status: 0, error: "budget_actor_unavailable" };
-      }
+    if (!verified) return denial();
+    const verification = verificationGeneration;
+    const lock = lockGeneration;
+    const controller = mutation ? null : new AbortController();
+    if (controller !== null) {
+      pendingReads.add(controller);
+      init = { ...init, signal: controller.signal };
+    }
+    if (expectedActor !== null && snapshotTag != null) {
       const headers = new Headers(init.headers);
-      headers.set("X-Hestia-Expected-Actor", digest);
+      headers.set("X-Hestia-Expected-Actor", snapshotTag);
       init = { ...init, headers };
     }
-    if (mutation && (authorizationLocked || generation !== authorizationGeneration)) {
-      return { ok: false, status: 503, error: "budget_server_changed" };
+    if (mutation && (authorizationLocked || lock !== lockGeneration)) return denial("budget_server_changed");
+    try {
+      const result = await request<T>(target, init);
+      if (verification !== verificationGeneration) return denial();
+      if (mutation && lock !== lockGeneration) return denial("budget_server_changed");
+      return result;
+    } finally {
+      if (controller !== null) pendingReads.delete(controller);
     }
-    return request<T>(target, init);
   }
+
   function post<T>(path: string, body: object, headers: Record<string, string> = {},
     mutation = true): Promise<BudgetResult<T>> {
     if (mutation && authorizationLocked) {
@@ -123,10 +164,10 @@ export function createBudgetApi(expectedActor: string | null = null) {
   setAuthorizationLocked: (value: boolean) => {
     if (authorizationLocked !== value) {
       authorizationLocked = value;
-      authorizationGeneration += 1;
+      lockGeneration += 1;
     }
   },
-  capabilities: () => call<AuthorizationCapabilities>(apiUrl("me/capabilities")),
+  capabilities,
   connections: () => call<ConnectionsData>(url("connections")),
   accounts: (connectionId?: string) =>
     call<{ accounts: BudgetAccount[] }>(url("accounts", { connection_id: connectionId })),

@@ -1,10 +1,26 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { forecastOf, monthlyBudgetChartsOf, monthlyBudgetOf } from "./analytics/fixtures";
-import { budgetApi, createBudgetApi } from "./api";
+import { createBudgetApi } from "./api";
+import type { BudgetApi, BudgetResult } from "./api";
 import { account, connection } from "./fixtures";
 
+const OWNER_TAG = "ZYtoux-yHqo-dVxLUe_uXkgvKgk2LWgJCV6VODecrlo";
+
+function capabilitiesFor(user: string | null = "owner", tag = OWNER_TAG) {
+  return {
+    user, actor_tag: user === null ? null : tag, installation_permissions: [], own_budget: {
+      permissions: ["budget.view"], can_view: true, can_use_receipts: true, can_manage_devices: true,
+    }, delegated_receipts: null, household_available: false,
+  };
+}
+
 function respond(status: number, body: unknown) {
-  const fetchMock = vi.fn(() => Promise.resolve(new Response(body === undefined ? "" : JSON.stringify(body), { status })));
+  const fetchMock = vi.fn((input: unknown) => {
+    if ((input as URL).pathname.endsWith("/api/me/capabilities")) {
+      return Promise.resolve(new Response(JSON.stringify(capabilitiesFor()), { status: 200 }));
+    }
+    return Promise.resolve(new Response(body === undefined ? "" : JSON.stringify(body), { status }));
+  });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -14,10 +30,16 @@ function sent(fetchMock: ReturnType<typeof respond>, index = 0): { url: URL; ini
   return { url, init };
 }
 
+let budgetApi: BudgetApi;
+beforeEach(async () => {
+  budgetApi = createBudgetApi();
+  respond(200, {});
+  await budgetApi.capabilities();
+});
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("budget api", () => {
-  it("binds only owner-budget requests to the mounted actor", async () => {
+  it("echoes the server actor tag only on owner-budget requests", async () => {
     const fetchMock = respond(200, {});
     const scoped = createBudgetApi("owner");
     await scoped.capabilities();
@@ -25,16 +47,20 @@ describe("budget api", () => {
     await scoped.receiptDevices();
     expect(new Headers(sent(fetchMock, 0).init.headers).has("X-Hestia-Expected-Actor")).toBe(false);
     for (const index of [1, 2]) {
-      expect(new Headers(sent(fetchMock, index).init.headers).get("X-Hestia-Expected-Actor"))
-        .toBe("ZYtoux-yHqo-dVxLUe_uXkgvKgk2LWgJCV6VODecrlo");
+      expect(new Headers(sent(fetchMock, index).init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
     }
-    for (const [index, actor, encoded] of [
-      [3, "Ági", "HLS-1f2FaYa82fa78nYm4ZQVdbWlCUOrqzBQ912Nfjw"],
-      [4, "Łukasz", "5731GtQ6bT3BSlT8lkN8teIo4nASJDab5UivdlVnUCM"],
-      [5, "😀".repeat(65), "wBIGWiX_jbx05eeaf39UUKfxurtuA6X9qYXtXk8vC4c"],
+    for (const [actor, tag] of [
+      ["Ági", "HLS-1f2FaYa82fa78nYm4ZQVdbWlCUOrqzBQ912Nfjw"],
+      ["Łukasz", "5731GtQ6bT3BSlT8lkN8teIo4nASJDab5UivdlVnUCM"],
+      ["😀".repeat(65), "wBIGWiX_jbx05eeaf39UUKfxurtuA6X9qYXtXk8vC4c"],
     ] as const) {
-      await createBudgetApi(actor).accounts();
-      expect(new Headers(sent(fetchMock, index).init.headers).get("X-Hestia-Expected-Actor")).toBe(encoded);
+      const index = fetchMock.mock.calls.length;
+      fetchMock.mockImplementationOnce(() => Promise.resolve(new Response(JSON.stringify(capabilitiesFor(actor, tag)), { status: 200 })));
+      const bound = createBudgetApi(actor);
+      await bound.capabilities();
+      await bound.accounts();
+      expect(new Headers(sent(fetchMock, index).init.headers).has("X-Hestia-Expected-Actor")).toBe(false);
+      expect(new Headers(sent(fetchMock, index + 1).init.headers).get("X-Hestia-Expected-Actor")).toBe(tag);
     }
   });
 
@@ -64,10 +90,12 @@ describe("budget api", () => {
     requests.forEach(({ path, body }, index) => {
       const { url, init } = sent(fetchMock, index);
       expect(url.pathname).toBe(`/api/budget/receipts/device-token/${path}`);
-      expect(init).toEqual({
+      expect(init).toMatchObject({
         credentials: "same-origin", cache: "no-store", method: "POST",
         headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
+      if (path === "list") expect(init.signal).toBeInstanceOf(AbortSignal);
+      else expect(init.signal).toBeUndefined();
     });
   });
 
@@ -188,7 +216,8 @@ describe("budget api", () => {
     const { url, init } = sent(fetchMock);
     expect(url.pathname).toMatch(/\/api\/budget\/analytics\/forecast$/);
     expect(url.search).toBe("");
-    expect(init).toEqual({ credentials: "same-origin", cache: "no-store" });
+    expect(init).toMatchObject({ credentials: "same-origin", cache: "no-store" });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
 
     await budgetApi.forecast(6, "EUR");
     expect(Object.fromEntries(sent(fetchMock, 1).url.searchParams)).toEqual({ months: "6", currency: "EUR" });
@@ -205,7 +234,8 @@ describe("budget api", () => {
     const { url, init } = sent(fetchMock);
     expect(url.pathname).toMatch(/\/api\/budget\/analytics\/monthly-budget$/);
     expect(url.search).toBe("");
-    expect(init).toEqual({ credentials: "same-origin", cache: "no-store" });
+    expect(init).toMatchObject({ credentials: "same-origin", cache: "no-store" });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
 
     await budgetApi.monthlyBudget("2026-10", "EUR");
     expect(Object.fromEntries(sent(fetchMock, 1).url.searchParams)).toEqual({ period: "2026-10", currency: "EUR" });
@@ -222,7 +252,8 @@ describe("budget api", () => {
     const { url, init } = sent(fetchMock);
     expect(url.pathname).toMatch(/\/api\/budget\/analytics\/monthly-budget\/charts$/);
     expect(url.search).toBe("");
-    expect(init).toEqual({ credentials: "same-origin", cache: "no-store" });
+    expect(init).toMatchObject({ credentials: "same-origin", cache: "no-store" });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
 
     await budgetApi.monthlyBudgetCharts("2026-10", "EUR", 12);
     expect(Object.fromEntries(sent(fetchMock, 1).url.searchParams)).toEqual({
@@ -299,19 +330,21 @@ describe("budget api", () => {
     });
   });
 
-  it("fails closed without sending a request when actor hashing is unavailable", async () => {
+  it("works when crypto.subtle is undefined", async () => {
     const fetchMock = respond(200, {});
     vi.stubGlobal("crypto", {});
-    expect(await createBudgetApi("owner").accounts()).toEqual({
-      ok: false, status: 0, error: "budget_actor_unavailable",
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
+    const scoped = createBudgetApi("owner");
+    expect((await scoped.capabilities()).ok).toBe(true);
+    expect((await scoped.accounts()).ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("locks every mutation without blocking read-only POST queries", async () => {
     const scoped = createBudgetApi("owner");
-    scoped.setAuthorizationLocked(true);
     const fetchMock = respond(200, {});
+    await scoped.capabilities();
+    fetchMock.mockClear();
+    scoped.setAuthorizationLocked(true);
     expect(await scoped.setPaused(connection, true)).toEqual({
       ok: false, status: 503, error: "budget_server_changed",
     });
@@ -324,19 +357,39 @@ describe("budget api", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it("refuses a mutation locked while its actor hash is pending", async () => {
-    let resolveHash!: (digest: ArrayBuffer) => void;
-    const pendingHash = new Promise<ArrayBuffer>((resolve) => { resolveHash = resolve; });
-    const digest = vi.fn(() => pendingHash);
-    vi.stubGlobal("crypto", { subtle: { digest } });
+  it("refuses every exported Budget read while unverified", async () => {
     const fetchMock = respond(200, {});
-    const scoped = createBudgetApi("owner");
-    const mutation = scoped.setPaused(connection, true);
-    await Promise.resolve();
-    expect(digest).toHaveBeenCalledTimes(1);
-    scoped.setAuthorizationLocked(true);
-    resolveHash(new Uint8Array(32).buffer);
-    expect(await mutation).toEqual({ ok: false, status: 503, error: "budget_server_changed" });
+    const api = createBudgetApi("owner");
+    const reads: Array<[string, () => Promise<BudgetResult<unknown>>]> = [
+      ["connections", () => api.connections()],
+      ["accounts", () => api.accounts()],
+      ["transactions", () => api.transactions("account")],
+      ["balances", () => api.balances("account")],
+      ["limits", () => api.limits()],
+      ["consentStatus", () => api.consentStatus()],
+      ["consentPending", () => api.consentPending()],
+      ["consentRenewalReminders", () => api.consentRenewalReminders()],
+      ["consentReconcile", () => api.consentReconcile()],
+      ["jobs", () => api.jobs()],
+      ["overview", () => api.overview("2026-11")],
+      ["analyticsTransactions", () => api.analyticsTransactions("2026-11", {} as never)],
+      ["analyticsTransactionsByKeys", () => api.analyticsTransactionsByKeys({ row_keys: [], currency: "PLN" })],
+      ["categories", () => api.categories()],
+      ["transfers", () => api.transfers("2026-11", "pending" as never)],
+      ["rules", () => api.rules()],
+      ["recurring", () => api.recurring()],
+      ["quarantine", () => api.quarantine()],
+      ["spendingLimits", () => api.spendingLimits("2026-11")],
+      ["mortgages", () => api.mortgages()],
+      ["forecast", () => api.forecast()],
+      ["monthlyBudget", () => api.monthlyBudget()],
+      ["monthlyBudgetCharts", () => api.monthlyBudgetCharts()],
+      ["inbox", () => api.inbox()],
+      ["receiptDevices", () => api.receiptDevices()],
+    ];
+    for (const [name, read] of reads) {
+      expect(await read(), name).toEqual({ ok: false, status: 503, error: "budget_server_changed" });
+    }
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
