@@ -1,0 +1,5 @@
+Twoja transakcja ZZ99-YYY-XXX-WWV straciła ważność.
+
+Transakcja ZZ99-YYY-XXX-WWV
+Odbiorca: SKLEP PAYNOW PRZYKŁAD
+Kwota transakcji: 80,00 PLN

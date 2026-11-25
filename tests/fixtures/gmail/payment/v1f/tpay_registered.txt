@@ -1,0 +1,8 @@
+Dziękujemy za zarejestrowanie transakcji.
+
+* Tytuł płatności w systemie: TR-ABCD-1234XYZX
+* Opis zamówienia w SKLEP PRZYKŁADOWY: Zamówienie 500600700
+* Kwota transakcji: 83,84 PLN
+* Dodatkowe opłaty: 0,00 PLN
+
+Pozdrawiamy

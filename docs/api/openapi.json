@@ -11015,6 +11015,31 @@
             "default": null,
             "title": "Due Date"
           },
+          "evidence_for_receipt_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Evidence For Receipt Id"
+          },
+          "fee_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Fee Amount"
+          },
           "forwarded_manually": {
             "default": false,
             "title": "Forwarded Manually",
@@ -11033,6 +11058,41 @@
             ],
             "default": null,
             "title": "Forwarded Sender Domain"
+          },
+          "gateway": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Gateway"
+          },
+          "gateway_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "registered",
+                  "paid"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Gateway Status"
+          },
+          "has_document": {
+            "default": true,
+            "title": "Has Document",
+            "type": "boolean"
           },
           "image_available": {
             "title": "Image Available",
@@ -11118,6 +11178,28 @@
               }
             ],
             "title": "Math Delta"
+          },
+          "payee_host": {
+            "anyOf": [
+              {
+                "maxLength": 253,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Payee Host"
+          },
+          "payment_evidence": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/BudgetReceiptPaymentEvidence"
+            },
+            "title": "Payment Evidence",
+            "type": "array"
           },
           "payment_method": {
             "anyOf": [
@@ -12090,6 +12172,16 @@
             "default": null,
             "title": "Document Kind"
           },
+          "evidence": {
+            "default": "exclude",
+            "enum": [
+              "exclude",
+              "only",
+              "include"
+            ],
+            "title": "Evidence",
+            "type": "string"
+          },
           "limit": {
             "default": 50,
             "maximum": 200,
@@ -12229,6 +12321,84 @@
         "title": "BudgetReceiptParseTextRequest",
         "type": "object"
       },
+      "BudgetReceiptPaymentEvidence": {
+        "properties": {
+          "fee_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee Amount"
+          },
+          "gateway": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gateway"
+          },
+          "gateway_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "registered",
+                  "paid"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gateway Status"
+          },
+          "receipt_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Date"
+          },
+          "receipt_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "total_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Amount"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "gateway",
+          "gateway_status",
+          "total_amount",
+          "fee_amount",
+          "receipt_date"
+        ],
+        "title": "BudgetReceiptPaymentEvidence",
+        "type": "object"
+      },
       "BudgetReceiptSearchRequest": {
         "additionalProperties": false,
         "properties": {
@@ -12325,6 +12495,31 @@
             "default": null,
             "title": "Due Date"
           },
+          "evidence_for_receipt_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Evidence For Receipt Id"
+          },
+          "fee_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Fee Amount"
+          },
           "forwarded_manually": {
             "default": false,
             "title": "Forwarded Manually",
@@ -12343,6 +12538,41 @@
             ],
             "default": null,
             "title": "Forwarded Sender Domain"
+          },
+          "gateway": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Gateway"
+          },
+          "gateway_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "registered",
+                  "paid"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Gateway Status"
+          },
+          "has_document": {
+            "default": true,
+            "title": "Has Document",
+            "type": "boolean"
           },
           "image_available": {
             "title": "Image Available",
@@ -12421,6 +12651,20 @@
               }
             ],
             "title": "Math Delta"
+          },
+          "payee_host": {
+            "anyOf": [
+              {
+                "maxLength": 253,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Payee Host"
           },
           "payment_method": {
             "anyOf": [
@@ -16371,7 +16615,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.51.0"
+    "version": "0.52.0"
   },
   "openapi": "3.1.0",
   "paths": {

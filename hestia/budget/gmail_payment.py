@@ -23,12 +23,17 @@ class ImportedPayment:
     body_dates: tuple[date, ...]
     order_reference: str | None = None
     payee_from_config: bool = False
+    fee_amount: str | None = None
+    payee_host: str | None = None
 
 
 @dataclass(frozen=True)
 class PaymentInspection:
     payment: ImportedPayment | None = None
     missing_total: bool = False
+    status: str | None = None
+    reject_reason: str | None = None
+    gateway_ref: str | None = None
 
 
 class _RejectedPayment(ValueError):
@@ -75,11 +80,59 @@ _FEE = re.compile(
 _BULLET = re.compile(r"^[-*•]\s+")
 _TOTAL = re.compile(
     r"(?:(?P<charged>Charged)|(?P<paid>Amount\s+paid|Kwota\s+zapłacona|Zapłacono(?:\s++łącznie)?|Paid)"
-    r"|(?P<total>Do\s+zapłaty|Łącznie|Razem\s+do\s+zapłaty"
+    r"|(?P<total>Do\s+zapłaty|Łączna\s+kwota(?:\s++(?:do\s+zapłaty|transakcji))?"
+    r"|Łącznie|Razem\s+do\s+zapłaty"
     r"|Suma\s+do\s+zapłaty|Total|Cena\s+z\s+dostawą|Wartość\s++zamówienia)"
     r"|(?P<sum>Razem|Suma|Kwota(?:\s++(?:zamówienia|transakcji))?))(?=$|[:\s])\s*+:?\s*+",
     re.IGNORECASE,
 )
+# Charged labels (v1f): the amount actually debited, base + fee. A subset of the
+# v1e "total" level, split out for gateway rows so the base stays visible.
+_DUE = re.compile(r"(?:Do\s+zapłaty|Łączna\s+kwota(?:\s++(?:do\s+zapłaty|transakcji))?)(?=$|[:\s])",
+                  re.IGNORECASE)
+_FEE_VALUE = re.compile(
+    r"(?:Dodatkowe\s+opłaty(?:\s++obciążające\s++klienta)?|Opłata\s+za\s+realizację\s+transakcji)"
+    r"(?=$|[:\s])\s*+:?\s*+",
+    re.IGNORECASE,
+)
+# Gateway status classification (v1f). Paid wins over registered; an unknown
+# gateway email with a valid amount is registered. The Autopay "Potwierdzenie
+# rozpoczęcia transakcji" form is a registration, not a completed payment.
+_PAID_SUBJECT = re.compile(
+    r"^(?:Potwierdzenie\b(?!\s++rozpoczęcia\s++transakcji\b)"
+    r"|Przekazaliśmy\s++Twoją\s++płatność\b|Receipt\s++#)",
+    re.IGNORECASE,
+)
+_PAID_BODY = re.compile(
+    r"(?:potwierdzeniu\s++realizacji\s++płatności"
+    r"|Płatność\s++zakończona\s++sukcesem"
+    r"|Przekazaliśmy\s++Twoje\s++pieniądze"
+    r"|wpłata\s++została\s++przekazana\s++odbiorcy"
+    r"|\bopłacona\b"
+    r"|zakończona\s++sukcesem"
+    r"|Receipt\s++from\s"
+    r"|Payment\s++to\s)",
+    re.IGNORECASE,
+)
+_AUTOPAY_REGISTERED_SUBJECT = re.compile(r"Potwierdzenie\s++rozpoczęcia\s++transakcji\b", re.IGNORECASE)
+_CARD_VERIFICATION = re.compile(r"Rejestracja\s++karty", re.IGNORECASE)
+_CARD_VERIFICATION_CANCEL = re.compile(r"zostanie\s++anulowana", re.IGNORECASE)
+_FAILED_BODY = re.compile(r"(?:straciła\s++ważność|anulowan|odrzucon)", re.IGNORECASE)
+# Gateway transaction ids. PayU keeps its numeric id in the subject parentheses
+# or the transId of the status link (never the token).
+_REF_P24 = re.compile(r"\bP24-[A-Z0-9]{3}-[A-Z0-9]{3}-[A-Z0-9]{3}\b")
+_REF_TPAY = re.compile(r"\bTR-[A-Z0-9]+-[A-Z0-9]+\b")
+_REF_AUTOPAY = re.compile(r"Identyfikator\s+transakcji(?:\s+Autopay)?\s*:\s*([A-Z0-9]+(?:-[A-Z0-9]+)*)",
+                          re.IGNORECASE)
+_REF_PAYU_SUBJECT = re.compile(r"\((\d{6,})\)")
+_REF_PAYU_LINK = re.compile(r"[?&]transId=(\d+)", re.IGNORECASE)
+_REF_PAYNOW = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{3}-[A-Z0-9]{3}-[A-Z0-9]{3}\b")
+# Payee hosts: an "Adres www:" label, a parenthesized URL after the payee, or
+# "dla https://host/" in the subject.
+_ADDRESS_WWW = re.compile(r"Adres\s+www\s*:\s*(\S+)", re.IGNORECASE)
+_PAYEE_URL = re.compile(r"\(\s*https?://([a-z0-9.-]+)", re.IGNORECASE)
+_SUBJECT_HOST = re.compile(r"\bdla\s+(?:-\s+)?(?:https?://|www\.)([a-z0-9.-]+)", re.IGNORECASE)
+_TRAILING_ID = re.compile(r"\s+\d{6,}$")
 _CARD = re.compile(r"(?<!\w)(?:[•]{4}|[*]{4}|x{4}|(?<!\S)-)\s+[0-9]{4}$", re.IGNORECASE)
 _CURRENCY_CODE = r"(?:PLN|EUR|USD|GBP)"
 _CURRENCY = rf"(?:{_CURRENCY_CODE}|zł|€|\$|£)"
@@ -195,8 +248,10 @@ def _parse_amount(value: str, *, labelled: bool = False, flattened_cell: bool = 
     return Decimal(digits), currency
 
 
-def _payment_total(lines: list[str], following: list[str], summary_rows: dict[int, int]) -> tuple[str, str] | None:
+def _payment_total(lines: list[str], following: list[str], summary_rows: dict[int, int],
+                   *, gateway: bool = False):
     totals: dict[str, set[tuple[Decimal, str]]] = {key: set() for key in ("charged", "paid", "total", "sum", "card")}
+    due: set[tuple[Decimal, str]] = set()
     summary_totals: dict[tuple[int, str], tuple[Decimal, str]] = {}
     for index, ((line, adjacent), next_value) in enumerate(zip(_line_pairs(lines), following)):
         label_line = _BULLET.sub("", line)
@@ -212,10 +267,15 @@ def _payment_total(lines: list[str], following: list[str], summary_rows: dict[in
             if parsed := _parse_amount(value, labelled=bool(inline), flattened_cell=row is not None):
                 if row is not None and summary_totals.setdefault((row, level), parsed) != parsed:
                     raise _RejectedPayment
-                totals[level].add(parsed)
+                if gateway and level == "total" and _DUE.match(label_line):
+                    due.add(parsed)
+                else:
+                    totals[level].add(parsed)
                 continue
         if row is None and _CARD.search(line) and (parsed := _parse_amount(adjacent)):
             totals["card"].add(parsed)
+    if gateway:
+        return totals, due
     for values in totals.values():
         if values:
             if len(values) != 1:
@@ -224,6 +284,106 @@ def _payment_total(lines: list[str], following: list[str], summary_rows: dict[in
             if 0 < amount <= 1_000_000:
                 return canonical_money(format(amount, "f")), currency
             raise _RejectedPayment
+    return None
+
+
+def _single_amount(values: set[tuple[Decimal, str]]) -> tuple[Decimal, str] | None:
+    if len(values) > 1:
+        raise _RejectedPayment
+    return next(iter(values), None)
+
+
+def _gateway_fee(lines: list[str], following: list[str]) -> tuple[Decimal, str] | None:
+    """The first parseable gateway fee label; a missing label means no fee."""
+    for line, next_value in zip(lines, following):
+        label_line = _BULLET.sub("", line)
+        if label := _FEE_VALUE.match(label_line):
+            inline = label_line[label.end():]
+            if parsed := _parse_amount(inline or next_value, labelled=bool(inline)):
+                return parsed
+    return None
+
+
+def _gateway_payment_total(lines: list[str], following: list[str], summary_rows: dict[int, int]):
+    """The charged amount (base + fee) and the fee for a gateway email."""
+    totals, due = _payment_total(lines, following, summary_rows, gateway=True)
+    fee = _gateway_fee(lines, following)
+    base = None
+    for values in totals.values():
+        if values:
+            base = _single_amount(values)
+            break
+    charged = _single_amount(due)
+    if base is None and charged is None:
+        return None
+    if fee is not None and base is not None and fee[1] != base[1]:
+        raise _RejectedPayment
+    if charged is not None:
+        total = charged
+        if base is not None and fee is not None and (charged[1] != base[1] or charged[0] != base[0] + fee[0]):
+            raise _RejectedPayment
+    else:
+        total = (base[0] + fee[0], base[1]) if fee is not None else base
+    amount, currency = total
+    if not 0 < amount <= 1_000_000:
+        raise _RejectedPayment
+    stored_fee = None if fee is None else canonical_money(format(fee[0], "f"))
+    return canonical_money(format(amount, "f")), currency, stored_fee
+
+
+def _gateway_status(subjects: tuple[str, ...], lines: list[str]) -> str:
+    """Paid when any paid marker matches; every other gateway email is registered."""
+    if any(_PAID_SUBJECT.search(subject) for subject in subjects):
+        return "paid"
+    if any(pattern.fullmatch(subject) for subject in subjects for pattern in _SUBJECT_PAYEES):
+        return "paid"
+    if _PAID_BODY.search("\n".join(lines)):
+        return "paid"
+    return "registered"
+
+
+def _gateway_ref(subjects: tuple[str, ...], lines: list[str], raw_text: str) -> str | None:
+    haystack = "\n".join(subjects) + "\n" + "\n".join(lines)
+    for pattern in (_REF_P24, _REF_TPAY):
+        if match := pattern.search(haystack):
+            return match[0].upper()
+    if match := _REF_AUTOPAY.search(haystack):
+        return match[1].upper()
+    if match := _REF_PAYU_SUBJECT.search("\n".join(subjects)):
+        return match[1]
+    if match := _REF_PAYU_LINK.search(raw_text):
+        return match[1]
+    if match := _REF_PAYNOW.search(haystack):
+        return match[0].upper()
+    return None
+
+
+def _failed_line(line: str) -> bool:
+    if len(line) > 120:
+        return False
+    line = _BULLET.sub("", line)
+    return (not _BODY_FIELD.match(line) and bool(_FAILED_BODY.search(line)) and not _AMOUNT.search(line))
+
+
+def _host(value: str) -> str | None:
+    return canonical_domain(value.lower().removeprefix("www."))
+
+
+def _gateway_host(lines: list[str], subjects: tuple[str, ...]) -> str | None:
+    for line in lines:
+        if label := _ADDRESS_WWW.search(line):
+            if host := _PAYEE_HOST.match(label[1]):
+                if domain := _host(host[1]):
+                    return domain
+    for line in lines:
+        if label := _PAYEE_LABEL.search(line):
+            if match := _PAYEE_URL.search(line[label.end():]):
+                if domain := _host(match[1]):
+                    return domain
+    for subject in subjects:
+        if match := _SUBJECT_HOST.search(subject):
+            if domain := _host(match[1]):
+                return domain
     return None
 
 
@@ -289,6 +449,12 @@ def _description(candidates: list[str]) -> str:
 
 def _payee(value: str) -> str:
     value = _clean_field(value)
+    # One trailing whitespace-separated all-digit token of 6+ digits is a gateway
+    # internal id, not part of the payee name ("SHOP SP. Z O.O. 4500000000").
+    # The stem must keep a letter, so an all-digit identifier is never a payee.
+    stripped = _TRAILING_ID.sub("", value)
+    if stripped != value and re.search(r"[^\W\d_]", stripped):
+        value = stripped
     if 2 <= len(value) <= 128 and not _PAYEE_DIGITS.search(value) and redact_pan(value) != _REDACTED:
         return value
     return ""
@@ -411,13 +577,24 @@ def _shorten_url(match: re.Match[str]) -> str:
     return f"https://{host}/" if host else match[0]
 
 
-def _body_marker(line: str) -> bool:
+def _body_marker(line: str, *, gateway: bool = False) -> bool:
     if len(line) > 120:
         return False
     line = _BULLET.sub("", line)
+    # For gateways, a "Potwierdzenie rozpoczęcia transakcji" heading is a
+    # registration notice (v1f), not a started-payment rejection.
+    started = not gateway and _STARTED_NOTICE.match(line)
     return (not _BODY_FIELD.match(line)
-            and bool(_MARKER.search(line) or _STARTED_NOTICE.match(line) or _REFUND_NOTICE.match(line))
+            and bool(_MARKER.search(line) or started or _REFUND_NOTICE.match(line))
             and not _AMOUNT.search(line))
+
+
+def _subject_rejected(subject: str, gateway: bool) -> bool:
+    if _MARKER.search(subject) or _REFUND_SUBJECT.search(subject):
+        return True
+    # The Autopay "Potwierdzenie rozpoczęcia transakcji" subject is a
+    # registration notice for gateways (v1f), not a started-payment rejection.
+    return bool(_STARTED.search(subject)) and not (gateway and _AUTOPAY_REGISTERED_SUBJECT.match(subject))
 
 
 def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gateway: bool) -> PaymentInspection:
@@ -435,8 +612,18 @@ def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gate
         # Rejection predicates do not extract fields. Check the original line
         # shape so identifiers cannot hide warnings and table splits do not
         # turn the priced part of an item into an independent warning.
-        if any(_MARKER.search(subject) or _REFUND_SUBJECT.search(subject) or _STARTED.search(subject)
-               for subject in subjects) or any(_body_marker(line) for line in raw):
+        if any(_subject_rejected(subject, gateway) for subject in subjects):
+            return PaymentInspection()
+        if gateway:
+            body = "\n".join(raw)
+            if _CARD_VERIFICATION.search(body) and _CARD_VERIFICATION_CANCEL.search(body):
+                return PaymentInspection(reject_reason="card_verification")
+            # A failed transaction outranks the v1e rejection markers ("płatność
+            # odrzucona"): it deletes the registered row for the same reference.
+            if any(_failed_line(line) for line in raw):
+                return PaymentInspection(reject_reason="failed",
+                                         gateway_ref=_gateway_ref(subjects, raw, text))
+        if any(_body_marker(line, gateway=gateway) for line in raw):
             return PaymentInspection()
         expanded = []
         summary_rows = {}
@@ -451,14 +638,23 @@ def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gate
         clean = redact_pan(joined).split("\n") if joined else expanded
         lines = [_SKIPPED_LINE if line == _SKIPPED_LINE else value for line, value in zip(expanded, clean)]
         following = _following_values(lines)
-        if (total := _payment_total(lines, following, summary_rows)) is None:
+        fee = status = gateway_ref = host = None
+        if gateway:
+            if (result := _gateway_payment_total(lines, following, summary_rows)) is None:
+                return PaymentInspection(missing_total=True)
+            total, fee = result[:2], result[2]
+            status = _gateway_status(subjects, lines)
+            gateway_ref = _gateway_ref(subjects, raw, text)
+            host = _gateway_host(lines, subjects)
+        elif (total := _payment_total(lines, following, summary_rows)) is None:
             return PaymentInspection(missing_total=True)
         safe_subjects = tuple(redact_pan(subject) if subject else "" for subject in subjects)
         payee, description = _receipt_fields(lines, safe_subjects, gateway)
         reference = _order_reference([*safe_subjects, *lines])
         payment = ImportedPayment(payee or merchant, description, *total, _body_dates(lines, following), reference,
-                                  payee_from_config=gateway and payee is None)
-        return PaymentInspection(payment)
+                                  payee_from_config=gateway and payee is None,
+                                  fee_amount=fee, payee_host=host)
+        return PaymentInspection(payment, status=status, gateway_ref=gateway_ref)
     except (_RejectedPayment, ReceiptError, UnicodeEncodeError):
         return PaymentInspection()
 

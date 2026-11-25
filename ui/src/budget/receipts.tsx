@@ -186,6 +186,25 @@ function receiptTotalDisplay(receipt: Pick<ReceiptSummary, "total_amount" | "cur
   return formatAmount(receipt.total_amount, receipt.currency, locale);
 }
 
+function gatewayChips(receipt: Pick<ReceiptSummary, "gateway_status" | "has_document" | "payee_host">) {
+  return (
+    <>
+      {receipt.gateway_status === "registered" ? (
+        <span className="budget-chip budget-receipt-gateway" data-gateway-status="registered">
+          {t("budget.receipts.gateway.registered")}
+        </span>
+      ) : null}
+      {receipt.has_document ? null : (
+        <span className="budget-chip budget-receipt-gateway" data-gateway-status="no_document">
+          {receipt.payee_host === null
+            ? t("budget.receipts.gateway.noDocumentNoHost")
+            : t("budget.receipts.gateway.noDocument", { host: receipt.payee_host })}
+        </span>
+      )}
+    </>
+  );
+}
+
 function confirmErrorText(error: string): string {
   switch (error) {
     case "budget_receipt_conflict": return t("budget.receipts.conflict");
@@ -1081,6 +1100,7 @@ export function ReceiptsView({
                         {row.document_kind === null ? null : (
                           <span className="budget-chip">{labelOf(RECEIPT_DOC_KIND_KEYS, row.document_kind)}</span>
                         )}
+                        {gatewayChips(row)}
                         {row.receipt_kind === "refund" ? (
                           <span className="budget-chip">{t("budget.receipts.receiptKind.refund")}</span>
                         ) : null}
@@ -1445,6 +1465,7 @@ function ReceiptDetailDrawer({
                     {detail.document_kind === null ? null : (
                       <span className="budget-chip">{labelOf(RECEIPT_DOC_KIND_KEYS, detail.document_kind)}</span>
                     )}
+                    {gatewayChips(detail)}
                     <span className="budget-chip budget-receipt-status" data-status={detail.status}>
                       {labelOf(RECEIPT_STATUS_KEYS, detail.status)}
                     </span>
@@ -1502,6 +1523,39 @@ function ReceiptDetailDrawer({
                   </>
                 ) : null}
               </dl>
+
+              {detail.payment_evidence.length === 0 ? null : (
+                <section className="budget-receipt-section" aria-label={t("budget.receipts.paymentEvidence")}>
+                  <h5>{t("budget.receipts.paymentEvidence")}</h5>
+                  <ul className="budget-receipt-evidence">
+                    {detail.payment_evidence.map((evidence) => (
+                      <li key={evidence.receipt_id}>
+                        <span className="budget-muted">{evidence.receipt_date ?? t("budget.receipts.noDate")}</span>
+                        <span>{evidence.gateway ?? t("budget.receipts.unknownMerchant")}</span>
+                        {evidence.gateway_status === "registered" ? (
+                          <span className="budget-chip budget-receipt-gateway" data-gateway-status="registered">
+                            {t("budget.receipts.gateway.registered")}
+                          </span>
+                        ) : null}
+                        <strong>
+                          {evidence.total_amount === null || detail.currency === null
+                            ? t("budget.receipts.noAmount")
+                            : formatAmount(evidence.total_amount, detail.currency, locale)}
+                        </strong>
+                        {evidence.fee_amount === null ? null : (
+                          <span className="budget-muted">
+                            {t("budget.receipts.paymentEvidenceFee", {
+                              amount: detail.currency === null
+                                ? evidence.fee_amount
+                                : formatAmount(evidence.fee_amount, detail.currency, locale),
+                            })}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
 
               <section className="budget-receipt-section" aria-label={t("budget.receipts.linkSection")}>
                 <h5>{t("budget.receipts.linkSection")}</h5>

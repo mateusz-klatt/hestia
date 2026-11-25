@@ -1,0 +1,7 @@
+Płatność zakończona sukcesem
+
+Identyfikator transakcji: SYNTH0002BB
+Odbiorca: SKLEP AUTOPAY PRZYKŁAD
+Kwota transakcji: 212,34 PLN
+Opłata za realizację transakcji: 2,36 PLN
+Łączna kwota: 214,70 PLN

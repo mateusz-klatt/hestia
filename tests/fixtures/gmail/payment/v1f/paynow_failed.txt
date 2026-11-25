@@ -1,0 +1,5 @@
+Twoja transakcja AB12-CDE-FGH-IJK straciła ważność.
+
+Transakcja AB12-CDE-FGH-IJK
+Odbiorca: SKLEP PAYNOW PRZYKŁAD
+Kwota transakcji: 75,00 PLN

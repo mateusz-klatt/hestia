@@ -359,6 +359,48 @@ class GmailSync:
                                       "attention": attention, "last_http_status": error.http_status,
                                       "last_error": error.code})
 
+    def _reprocess_terms(self):
+        return tuple(f'from:"{rule.sender.removeprefix("@")}"'
+                     for rule in self.settings.payment_senders if rule.gateway)
+
+    def _reprocess(self, owner, progress):
+        """Re-classify gateway payment provenance and apply the v1f merge rules."""
+        terms = self._reprocess_terms()
+        if not terms:
+            self.store.clear_reprocess(owner)
+            return
+        token = self.store.reprocess_token(owner)
+        query = _query(self.settings, terms)
+        restarted = False
+        while True:
+            try:
+                page = progress.run.messages(query, token)
+            except GmailError as error:
+                if error.http_status != 400 or token is None or restarted:
+                    raise
+                restarted = True
+                token = None
+                self.store.set_reprocess_token(owner, None)
+                continue
+            next_token = _page_token(page, token)
+            candidates = [_message_id(item.get("id")) for item in _objects(page, "messages")]
+            for message_id in dict.fromkeys(candidates):
+                msg_hash = digest(self.settings.hmac_secret, GMAIL_MESSAGE_DOMAIN, message_id)
+                if not self.store.reprocess_candidate(owner, msg_hash):
+                    continue
+                if progress.attempted >= MAX_SYNC_MESSAGES_PER_RUN:
+                    raise RunLimit()
+                progress.run.require_message_budget()
+                progress.attempted += 1
+                item = self.processor.process(progress.run, message_id, msg_hash)
+                if item is not None:
+                    self.store.reprocess_message(owner, progress.generation, msg_hash, item)
+            if next_token is None:
+                self.store.finish_reprocess(owner)
+                return
+            token = next_token
+            self.store.set_reprocess_token(owner, token)
+
     def sync(self, owner, *, force_full_resync=False, poll=False):
         self._require_owner(owner)
         with _sync_lock(self.database_path):
@@ -403,6 +445,8 @@ class GmailSync:
                     if not (state.run_requested and state.force_full_resync):
                         break
                     force = True
+                if self.store.reprocess_pending(owner):
+                    self._reprocess(owner, progress)
             except RunLimit:
                 self._commit(owner, progress, {"next_sync_at": self.store.clock() + self.settings.sync_interval_seconds,
                                               "backoff_until": 0, "failures": 0, "attention": None, "run_requested": 0,
@@ -423,3 +467,8 @@ class GmailSync:
         return self.store.schedule_sync(owner, now=self.store.clock(), force_full_resync=force_full_resync,
                                         retry_parse_failed=retry_parse_failed,
                                         backfill_days=self.settings.backfill_days, cooldown=MANUAL_COOLDOWN)
+
+    def schedule_reprocess(self, owner):
+        """Record a due reprocess-payments scan. Work stays on the background loop."""
+        self._require_owner(owner)
+        return self.store.schedule_reprocess(owner, now=self.store.clock(), cooldown=MANUAL_COOLDOWN)

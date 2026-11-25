@@ -20,12 +20,18 @@ class PaymentFixtureTests(unittest.TestCase):
         cases = (
             ("gateway_p24_style", "Nowa transakcja płatnicza (P24-AAA-BBB-CCC)", True, ImportedPayment(
                 "PRZYKŁADOWY SKLEP SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ", "Zamówienie 100200300", "217", "PLN", (),
-                "100200300",
+                "100200300", fee_amount="0",
             )),
             ("gateway_tpay_style", "Potwierdzenie transakcji TR-AAAA-0000000", True, ImportedPayment(
                 "PRZYKŁADOWA SPÓŁKA AKCYJNA", "Zamówienie 0000000001", "83.84", "PLN", (), "0000000001",
+                fee_amount="0",
             )),
-            ("gateway_started", "Potwierdzenie rozpoczęcia transakcji dla - https://sklep.example.test/", True, None),
+            # v1f: the Autopay registration notice imports as a registered payment.
+            ("gateway_started", "Potwierdzenie rozpoczęcia transakcji dla - https://sklep.example.test/", True,
+             ImportedPayment(
+                 "sklep.example.test", "Potwierdzenie rozpoczęcia transakcji dla -", "146.37", "PLN", (),
+                 fee_amount="0", payee_host="sklep.example.test",
+             )),
             ("gateway_unfinished", "Dokończ płatność", True, None),
             ("food_order", "Zamówienie potwierdzone", False, ImportedPayment(
                 _MERCHANT, "Przykładowa Restauracja", "55.52", "PLN", (),
@@ -52,13 +58,13 @@ class PaymentFixtureTests(unittest.TestCase):
                 _MERCHANT, "Przejazd opłacony", "42.35", "PLN", (),
             )),
             ("gateway_fee_inclusive", "Potwierdzenie płatności", True, ImportedPayment(
-                _MERCHANT, "Potwierdzenie płatności", "214.7", "PLN", (), payee_from_config=True,
+                _MERCHANT, "Potwierdzenie płatności", "214.7", "PLN", (), payee_from_config=True, fee_amount="2.36",
             )),
             ("gateway_start_date_field", "Płatność zakończona", True, ImportedPayment(
                 _MERCHANT, "Przykładowy zakup", "38.12", "PLN", (), payee_from_config=True,
             )),
             ("gateway_registered", "Zarejestrowaliśmy Twoje zlecenie płatnicze", True, ImportedPayment(
-                "Example Studio", "Materiały do projektu", "47.25", "PLN", (),
+                "Example Studio", "Materiały do projektu", "47.25", "PLN", (), payee_host="studio.example.test",
             )),
             ("gateway_completed", "Przekazaliśmy Twoje pieniądze", True, ImportedPayment(
                 "Example Studio", "Materiały do projektu", "47.25", "PLN", (),
@@ -76,9 +82,11 @@ class PaymentFixtureTests(unittest.TestCase):
             )),
             ("saas_gateway_charged", "Receipt #1111-2222", True, ImportedPayment(
                 "Example Studio", "Receipt #1111-2222", "96.77", "PLN", (date(2026, 11, 5),),
+                payee_host="invoice.example.test",
             )),
             ("saas_gateway_long_url", "Receipt #3333-4444", True, ImportedPayment(
                 "Example Render Studio", "Receipt #3333-4444", "66.19", "PLN", (date(2026, 12, 8),),
+                payee_host="billing.example.test",
             )),
             ("sports_shop_html_order", "Potwierdzenie zamówienia nr 00000000003", False, ImportedPayment(
                 _MERCHANT, "Potwierdzenie zamówienia nr", "248.36", "PLN", (), "00000000003",
@@ -233,8 +241,9 @@ class PaymentExtractionTests(unittest.TestCase):
             ("Potwierdzenie dla - https://example..test/", _MERCHANT),
             ("Odbiorca wpłaty: A", _MERCHANT),
             ("Odbiorca wpłaty: " + "x" * 129, _MERCHANT),
-            ("Odbiorca wpłaty: Example 0000002", _MERCHANT),
-            ("Odbiorca wpłaty: Example 000002", "Example 000002"),
+            # v1f: one trailing all-digit token of 6+ digits is a gateway id, stripped from the payee.
+            ("Odbiorca wpłaty: Example 0000002", "Example"),
+            ("Odbiorca wpłaty: Example 000002", "Example"),
             ("Odbiorca wpłaty: 000000 person@example.test 000000", _MERCHANT),
         )
         for line, merchant in cases:

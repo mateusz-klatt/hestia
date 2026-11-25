@@ -1,0 +1,4 @@
+Rejestracja karty w aplikacji mobilnej.
+Transakacja zostanie anulowana.
+
+Kwota transakcji: 0,01 PLN

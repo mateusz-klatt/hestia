@@ -1,0 +1,6 @@
+Płatność zakończona sukcesem
+
+Identyfikator transakcji: SYNTH0004DD
+Odbiorca: SKLEP INTERNETOWY PRZYKŁAD
+Adres www: shop.example.test
+Kwota transakcji: 66,00 PLN

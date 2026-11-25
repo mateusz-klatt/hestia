@@ -89,7 +89,7 @@ class GmailPaymentReviewTests(TestCase):
     def test_order_description_only_takes_payee_from_order_heading(self):
         for line, merchant, fallback, description in (
             ("Opis zamówienia w Real Shop: Płatność dla szkoły", "Real Shop", False, "Płatność dla szkoły"),
-            ("Opis zamówienia w Shop 1234567: Płatność dla Evil Shop", "Example Merchant", True,
+            ("Opis zamówienia w Shop 1234567: Płatność dla Evil Shop", "Shop", False,
              "Płatność dla Evil Shop"),
             ("Opis zamówienia w Example One: synthetic detail Odbiorca: Example Two", "Example One", False,
              "synthetic detail Odbiorca: Example Two"),

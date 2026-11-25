@@ -1,0 +1,5 @@
+Zarejestrowaliśmy Twoje zlecenie płatnicze.
+
+Identyfikator transakcji: SYNTH0003CC
+Odbiorca: FUNDACJA PRZYKŁADOWA
+Kwota transakcji: 47,25 PLN

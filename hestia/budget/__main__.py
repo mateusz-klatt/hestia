@@ -74,8 +74,11 @@ def _run_gmail(args):
         if not store_sql.is_users_db_authoritative(engine):
             raise BudgetUsersBackendRequired()
         service = GmailSync(settings, GmailStore(sessions, clock=time.time), None, None, target)
-        result = service.schedule(settings.owner, force_full_resync=args.force_full_resync,
-                                  retry_parse_failed=args.retry_parse_failed)
+        if args.action == "reprocess-payments":
+            result = service.schedule_reprocess(settings.owner)
+        else:
+            result = service.schedule(settings.owner, force_full_resync=args.force_full_resync,
+                                      retry_parse_failed=args.retry_parse_failed)
     except GmailError as exc:
         print(exc.code, file=sys.stderr)
         return 2
@@ -135,6 +138,8 @@ def main(argv=None):
                             help="Scan the recent resync window instead of incremental history")
     gmail_sync.add_argument("--retry-parse-failed", action="store_true",
                             help="Delete parse_failed markers and scan the full backfill window")
+    gmail_actions.add_parser("reprocess-payments",
+                             help="Schedule a reclassification scan of gateway payment evidence")
     args = parser.parse_args(argv)
     if args.command == "household":
         # Before bank config, the acquisition lock, imports and configure(). No init_db.

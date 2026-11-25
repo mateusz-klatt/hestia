@@ -1,0 +1,15 @@
+Dzień dobry,
+
+dziękujemy za płatność. Potwierdzamy potwierdzeniu realizacji płatności.
+
+Szczegóły transakcji
+Odbiorca wpłaty: T-MOBILE POLSKA S.A. 4500000000
+Tytuł: Faktura 501234567890
+Kwota transakcji: 100,00 PLN
+Dodatkowe opłaty:
+1,50 PLN
+Do zapłaty: 101,50 PLN
+
+Przykładowa Bramka S.A. • 00-001 Poznań, ul. Testowa 8
+Sąd Rejonowy Poznań, KRS 0000000000,
+wysokość kapitału zakładowego: 4 737 100,00 PLN, opłacony w całości

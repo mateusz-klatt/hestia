@@ -1,0 +1,3 @@
+Zarejestrowaliśmy zlecenie płatności dla FUNDACJA EXAMPLE (http://www.example.test).
+
+Kwota transakcji: 25,00 PLN

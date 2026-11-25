@@ -116,7 +116,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.49.0: per-card credit_limit ({amount, currency}) control on accounts + additive card_debt on monthly budget (legacy card_exposure kept at 0.47.0 shape for Vesta).
 # 0.50.0: additive authorization capabilities, public feature detection, and per-operation catalog requirements.
 # 0.51.0: optional/nullable lines and optional raw_shop_name/raw_nip on BudgetReceiptConfirmRequest to keep stored values unchanged.
-CONTRACT_VERSION = "0.51.0"
+# 0.52.0: gateway payment evidence — receipt gateway/status/fee/payee_host/evidence fields, payment_evidence on detail, and the evidence list filter.
+CONTRACT_VERSION = "0.52.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2995,6 +2996,7 @@ class BudgetReceiptListRequest(BaseModel):
     status: Literal["draft", "confirmed", "needs_review", "imported"] | None = None
     document_kind: BudgetReceiptDocumentKind | None = None
     linked: bool | None = None
+    evidence: Literal["exclude", "only", "include"] = "exclude"
     limit: Annotated[int, Field(ge=1, le=200)] = 50
     cursor: BudgetReceiptCursor | None = None
 
@@ -3050,10 +3052,27 @@ class BudgetReceiptSummary(BaseModel):
     import_expires_at: float | None = None
     forwarded_manually: bool = False
     forwarded_sender_domain: Annotated[str, Field(min_length=1, max_length=253)] | None = None
+    gateway: Annotated[str, Field(min_length=1, max_length=64)] | None = None
+    gateway_status: Literal["registered", "paid"] | None = None
+    fee_amount: str | None = None
+    payee_host: Annotated[str, Field(min_length=1, max_length=253)] | None = None
+    evidence_for_receipt_id: BudgetReceiptId | None = None
+    has_document: bool = True
+
+
+class BudgetReceiptPaymentEvidence(BaseModel):
+    model_config = _READ
+    receipt_id: BudgetReceiptId
+    gateway: str | None
+    gateway_status: Literal["registered", "paid"] | None
+    total_amount: str | None
+    fee_amount: str | None
+    receipt_date: str | None
 
 
 class BudgetReceiptDetail(BudgetReceiptSummary):
     lines: list[BudgetReceiptLine]
+    payment_evidence: list[BudgetReceiptPaymentEvidence] = []
 
 
 class BudgetReceiptCandidate(BaseModel):

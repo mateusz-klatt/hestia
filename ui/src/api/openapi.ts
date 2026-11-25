@@ -5878,6 +5878,16 @@ export interface components {
              */
             due_date: string | null;
             /**
+             * Evidence For Receipt Id
+             * @default null
+             */
+            evidence_for_receipt_id: string | null;
+            /**
+             * Fee Amount
+             * @default null
+             */
+            fee_amount: string | null;
+            /**
              * Forwarded Manually
              * @default false
              */
@@ -5887,6 +5897,21 @@ export interface components {
              * @default null
              */
             forwarded_sender_domain: string | null;
+            /**
+             * Gateway
+             * @default null
+             */
+            gateway: string | null;
+            /**
+             * Gateway Status
+             * @default null
+             */
+            gateway_status: ("registered" | "paid") | null;
+            /**
+             * Has Document
+             * @default true
+             */
+            has_document: boolean;
             /** Image Available */
             image_available: boolean;
             /** Image Expires At */
@@ -5911,6 +5936,16 @@ export interface components {
             linked_entry_ref: string | null;
             /** Math Delta */
             math_delta: string | null;
+            /**
+             * Payee Host
+             * @default null
+             */
+            payee_host: string | null;
+            /**
+             * Payment Evidence
+             * @default []
+             */
+            payment_evidence: components["schemas"]["BudgetReceiptPaymentEvidence"][];
             /** Payment Method */
             payment_method: string | null;
             /** Raw Nip */
@@ -6234,6 +6269,12 @@ export interface components {
              */
             document_kind: ("receipt" | "invoice" | "payment_confirmation") | null;
             /**
+             * Evidence
+             * @default exclude
+             * @enum {string}
+             */
+            evidence: "exclude" | "only" | "include";
+            /**
              * Limit
              * @default 50
              */
@@ -6285,6 +6326,21 @@ export interface components {
              */
             text: string;
         };
+        /** BudgetReceiptPaymentEvidence */
+        BudgetReceiptPaymentEvidence: {
+            /** Fee Amount */
+            fee_amount: string | null;
+            /** Gateway */
+            gateway: string | null;
+            /** Gateway Status */
+            gateway_status: ("registered" | "paid") | null;
+            /** Receipt Date */
+            receipt_date: string | null;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Total Amount */
+            total_amount: string | null;
+        };
         /** BudgetReceiptSearchRequest */
         BudgetReceiptSearchRequest: {
             /**
@@ -6319,6 +6375,16 @@ export interface components {
              */
             due_date: string | null;
             /**
+             * Evidence For Receipt Id
+             * @default null
+             */
+            evidence_for_receipt_id: string | null;
+            /**
+             * Fee Amount
+             * @default null
+             */
+            fee_amount: string | null;
+            /**
              * Forwarded Manually
              * @default false
              */
@@ -6328,6 +6394,21 @@ export interface components {
              * @default null
              */
             forwarded_sender_domain: string | null;
+            /**
+             * Gateway
+             * @default null
+             */
+            gateway: string | null;
+            /**
+             * Gateway Status
+             * @default null
+             */
+            gateway_status: ("registered" | "paid") | null;
+            /**
+             * Has Document
+             * @default true
+             */
+            has_document: boolean;
             /** Image Available */
             image_available: boolean;
             /** Image Expires At */
@@ -6350,6 +6431,11 @@ export interface components {
             linked_entry_ref: string | null;
             /** Math Delta */
             math_delta: string | null;
+            /**
+             * Payee Host
+             * @default null
+             */
+            payee_host: string | null;
             /** Payment Method */
             payment_method: string | null;
             /** Raw Nip */

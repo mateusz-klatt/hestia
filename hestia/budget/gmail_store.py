@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
+from decimal import Decimal
 import hmac
 import json
 import uuid
@@ -14,6 +15,7 @@ from ..db import AppMeta, BudgetAnalyticsAudit, BudgetGmailMessage, BudgetGmailS
 from .gmail_client import GmailError
 from .gmail_payment import ImportedPayment, _payee_key
 from .receipt_parser import fold_text
+from .receipt_reconcile import audit_payload, write_audit
 from .store import BudgetStore
 from .views import BudgetHTTPStore
 
@@ -26,6 +28,7 @@ RFC_MESSAGE_DOMAIN = b"hestia/budget/gmail-rfc-msg-id/v1\0"
 PAYMENT_SENDER_DOMAIN = b"hestia/budget/gmail-payment-sender/v1\0"
 PAYMENT_PAYEE_DOMAIN = b"hestia/budget/gmail-payment-payee/v1\0"
 ORDER_REFERENCE_DOMAIN = b"hestia/budget/gmail-order-reference/v1\0"
+GATEWAY_REF_DOMAIN = b"hestia/budget/gmail-gateway-ref/v1\0"
 SCOPE_DOMAIN = b"hestia/budget/gmail-scope-query/v1\0"
 MAILBOX_DOMAIN = b"hestia/budget/gmail-mailbox/v1\0"
 
@@ -51,6 +54,7 @@ _INC_RESET_PREFIX = "budget_gmail_inc_reset:"
 _PAYMENT_SENDER_PREFIX = "budget_gmail_payment_sender:"
 _PAYMENT_ORDER_PREFIX = "budget_gmail_payment_order:"
 _PAYMENT_PAYEE_PREFIX = "budget_gmail_payment_payee:"
+_REPROCESS_PREFIX = "budget_gmail_reprocess_payments:"
 PARSE_FAILED_REASONS = (
     "charset_error",
     "message_defects",
@@ -90,6 +94,10 @@ def _inc_reset_key(owner):
     return _INC_RESET_PREFIX + owner
 
 
+def _reprocess_key(owner):
+    return _REPROCESS_PREFIX + owner
+
+
 def digest(secret, domain, value):
     return hmac.digest(secret, domain + value.encode("utf-8"), "sha256").hex()
 
@@ -103,6 +111,9 @@ class PendingPayment:
     order_reference_hmac: str | None = None
     gateway: bool = False
     payee_hmac: str | None = None
+    status: str | None = None
+    gateway_ref_hmac: str | None = None
+    gateway_name: str | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -118,6 +129,7 @@ class PendingMessage:
     sender_domain: str | None = None
     parse_failed_reason: str | None = None
     payment: PendingPayment | None = None
+    failed_gateway: tuple[str, str] | None = None
 
 
 def _linked_manual_forward():
@@ -268,8 +280,10 @@ class GmailStore(BudgetStore):
 
     @staticmethod
     def _pending_count(session, owner):
+        # Evidence rows attached to a shop document are not pending imports.
         return session.scalar(select(func.count()).select_from(BudgetReceipt).where(
-            BudgetReceipt.owner == owner, _unconfirmed_import()))
+            BudgetReceipt.owner == owner, _unconfirmed_import(),
+            BudgetReceipt.evidence_for_receipt_id.is_(None)))
 
     @staticmethod
     def _parse_failed_reasons(session, owner):
@@ -287,6 +301,152 @@ class GmailStore(BudgetStore):
     def at_pending_cap(self, owner):
         with self.sessions() as session:
             return self._pending_count(session, owner) >= MAX_PENDING_IMPORTS
+
+    def schedule_reprocess(self, owner, *, now, cooldown):
+        """Queue a reprocess-payments scan over gateway payment provenance."""
+        with self.transaction() as session:
+            BudgetHTTPStore._owner(session, owner)
+            row = self._state(session, owner)
+            if row.grant_status != "active":
+                raise GmailError("budget_receipt_gmail_disabled", 409)
+            if row.attention == "identity_mismatch":
+                raise GmailError("mailbox_mismatch", 403, attention="identity_mismatch")
+            if row.backoff_until > now:
+                raise GmailError("budget_receipt_gmail_backoff", 429)
+            if not row.run_requested and row.last_attempt_at is not None and row.last_attempt_at + cooldown > now:
+                raise GmailError("budget_receipt_gmail_cooldown", 429)
+            session.merge(AppMeta(key=_reprocess_key(owner), value=json.dumps({"page_token": None})))
+            if not row.run_requested:
+                session.add(row)
+                row.next_sync_at = now
+                row.run_requested = 1
+                row.version += 1
+            return {"ok": True, "sync_phase": row.sync_phase, "version": row.version}
+
+    def reprocess_pending(self, owner):
+        with self.sessions() as session:
+            return session.get(AppMeta, _reprocess_key(owner)) is not None
+
+    def reprocess_token(self, owner):
+        with self.sessions() as session:
+            meta = session.get(AppMeta, _reprocess_key(owner))
+            return None if meta is None else json.loads(meta.value)["page_token"]
+
+    def set_reprocess_token(self, owner, token):
+        with self.transaction() as session:
+            BudgetHTTPStore._owner(session, owner)
+            meta = session.get(AppMeta, _reprocess_key(owner))
+            if meta is not None:
+                meta.value = json.dumps({**json.loads(meta.value), "page_token": token})
+
+    def clear_reprocess(self, owner):
+        with self.transaction() as session:
+            BudgetHTTPStore._owner(session, owner)
+            session.execute(delete(AppMeta).where(AppMeta.key == _reprocess_key(owner)))
+
+    def finish_reprocess(self, owner):
+        """Apply the failed-transaction deletions collected during the scan, then clear it.
+
+        Failed emails are newer than the registered ones they cancel, so their
+        references are deleted only after every registered row has been re-tagged.
+        """
+        with self.transaction() as session:
+            BudgetHTTPStore._owner(session, owner)
+            meta = session.get(AppMeta, _reprocess_key(owner))
+            if meta is None:
+                return
+            for gateway_name, ref_hmac in json.loads(meta.value).get("failed", ()):
+                row = session.scalar(select(BudgetReceipt).where(
+                    BudgetReceipt.owner == owner, BudgetReceipt.gateway == gateway_name,
+                    BudgetReceipt.gateway_ref_hmac == ref_hmac))
+                if (row is not None and row.gateway_status == "registered" and row.status == "imported"
+                        and row.linked_account_id is None):
+                    self._delete_receipt(session, owner, row.id)
+            session.delete(meta)
+
+    def reprocess_candidate(self, owner, gmail_hmac):
+        with self.sessions() as session:
+            row = session.get(BudgetGmailMessage, (owner, gmail_hmac))
+            return row is not None and row.outcome in ("imported", "skipped_duplicate")
+
+    @staticmethod
+    def _delete_receipt(session, owner, receipt_id):
+        tombstone_receipt(session, owner, receipt_id)
+        session.execute(delete(BudgetReceiptLine).where(
+            BudgetReceiptLine.receipt_id == receipt_id, BudgetReceiptLine.owner == owner))
+        session.delete(session.get(BudgetReceipt, receipt_id))
+
+    def reprocess_message(self, owner, generation, gmail_hmac, item):
+        """Re-classify one fetched message and apply the merge rules to its receipt."""
+        with self.transaction() as session:
+            BudgetHTTPStore._owner(session, owner)
+            self._active(self._state(session, owner), generation)
+            message = session.get(BudgetGmailMessage, (owner, gmail_hmac))
+            if message is None or message.outcome not in ("imported", "skipped_duplicate"):
+                return
+            now = self.clock()
+            if item.failed_gateway is not None:
+                self._reprocess_failed(session, owner, message, item.failed_gateway)
+                return
+            payment = item.payment
+            if payment is None or payment.gateway_name is None or payment.gateway_ref_hmac is None:
+                return
+            produced = None if message.receipt_id is None else session.get(BudgetReceipt, message.receipt_id)
+            if produced is not None and produced.status != "imported":
+                return  # Confirmed rows are never touched.
+            if produced is None:
+                # A v1e duplicate never inserts; only the paid upgrade of a registered row applies.
+                existing = self._gateway_row(session, owner, payment)
+                if (existing is not None and payment.status == "paid"
+                        and existing.gateway_status == "registered" and existing.status == "imported"):
+                    self._upgrade_gateway(session, owner, existing, payment, now)
+                return
+            existing = self._gateway_row(session, owner, payment)
+            if existing is not None and existing.id != produced.id:
+                # Another row already holds the reference: merge the produced row into it.
+                if (payment.status == "paid" and existing.gateway_status == "registered"
+                        and existing.status == "imported"):
+                    self._upgrade_gateway(session, owner, existing, payment, now)
+                elif (payment.status == "paid" and existing.gateway_status == "registered"
+                        and existing.total_amount == payment.fields.total_amount
+                        and existing.currency == payment.fields.currency):
+                    existing.gateway_status = "paid"
+                self._delete_receipt(session, owner, produced.id)
+                return
+            if (produced.gateway, produced.gateway_ref_hmac) == (payment.gateway_name, payment.gateway_ref_hmac):
+                return  # Already reprocessed.
+            before = audit_payload(produced, "gateway_reprocess")
+            produced.gateway = payment.gateway_name
+            produced.gateway_status = payment.status
+            produced.gateway_ref_hmac = payment.gateway_ref_hmac
+            produced.raw_shop_name = payment.fields.merchant
+            produced.fee_amount = payment.fields.fee_amount
+            produced.total_amount = payment.fields.total_amount
+            produced.payee_host = payment.fields.payee_host
+            line = session.scalar(select(BudgetReceiptLine).where(
+                BudgetReceiptLine.receipt_id == produced.id, BudgetReceiptLine.owner == owner))
+            if line is not None:
+                line.gross_line_total = payment.fields.total_amount
+                line.net_line_total = payment.fields.total_amount
+            produced.version += 1
+            produced.updated_at = now
+            write_audit(session, owner, produced, "gateway_reprocess", before,
+                        audit_payload(produced, "gateway_reprocess"), now)
+            self._attach_evidence(session, owner, produced)
+
+    def _reprocess_failed(self, session, owner, message, failed):
+        gateway_name, ref_hmac = failed
+        if message.receipt_id is not None:
+            produced = session.get(BudgetReceipt, message.receipt_id)
+            if produced is not None and produced.status == "imported" and produced.linked_account_id is None:
+                self._delete_receipt(session, owner, produced.id)
+        # The registered row for the same reference may only be re-tagged later in
+        # the scan, so the deletion by reference runs when the scan finishes.
+        meta = session.get(AppMeta, _reprocess_key(owner))
+        if meta is not None:
+            value = json.loads(meta.value)
+            value.setdefault("failed", []).append([gateway_name, ref_hmac])
+            meta.value = json.dumps(value)
 
     def transition(self, owner, expected, status, mailbox_hmac=None, *, queue_sync=False):
         with self.transaction() as session:
@@ -395,6 +555,115 @@ class GmailStore(BudgetStore):
         return None
 
     @staticmethod
+    def _gateway_row(session, owner, payment):
+        return session.scalar(select(BudgetReceipt).where(
+            BudgetReceipt.owner == owner, BudgetReceipt.gateway == payment.gateway_name,
+            BudgetReceipt.gateway_ref_hmac == payment.gateway_ref_hmac))
+
+    def _merge_gateway(self, session, owner, payment, now):
+        """Merge by gateway transaction id. Returns None when the row must be inserted."""
+        row = self._gateway_row(session, owner, payment)
+        if payment.status == "registered":
+            return "skipped_duplicate" if row is not None else None
+        if row is None:
+            return None
+        if row.gateway_status == "registered":
+            if row.status == "imported":
+                self._upgrade_gateway(session, owner, row, payment, now)
+            elif row.total_amount == payment.fields.total_amount and row.currency == payment.fields.currency:
+                # Owner-confirmed amounts never move; only the status annotation may.
+                row.gateway_status = "paid"
+        return "skipped_duplicate"
+
+    def _upgrade_gateway(self, session, owner, row, payment, now):
+        fields = payment.fields
+        before = audit_payload(row, "gateway_upgrade")
+        row.gateway_status = "paid"
+        row.raw_shop_name = fields.merchant
+        row.fee_amount = fields.fee_amount
+        row.total_amount = fields.total_amount
+        row.payee_host = fields.payee_host
+        line = session.scalar(select(BudgetReceiptLine).where(
+            BudgetReceiptLine.receipt_id == row.id, BudgetReceiptLine.owner == owner))
+        if line is not None:
+            line.gross_line_total = fields.total_amount
+            line.net_line_total = fields.total_amount
+        row.version += 1
+        row.updated_at = now
+        write_audit(session, owner, row, "gateway_upgrade", before, audit_payload(row, "gateway_upgrade"), now)
+        self._attach_evidence(session, owner, row)
+
+    def _failed_gateway(self, session, owner, failed):
+        """A failed transaction deletes its unconfirmed, unlinked registered row."""
+        gateway_name, ref_hmac = failed
+        row = session.scalar(select(BudgetReceipt).where(
+            BudgetReceipt.owner == owner, BudgetReceipt.gateway == gateway_name,
+            BudgetReceipt.gateway_ref_hmac == ref_hmac))
+        if (row is not None and row.gateway_status == "registered" and row.status == "imported"
+                and row.linked_account_id is None):
+            tombstone_receipt(session, owner, row.id)
+            session.execute(delete(BudgetReceiptLine).where(
+                BudgetReceiptLine.receipt_id == row.id, BudgetReceiptLine.owner == owner))
+            session.delete(row)
+        return "skipped_non_receipt"
+
+    @staticmethod
+    def _evidence_match(gateway_row, document):
+        if gateway_row.currency is None or gateway_row.currency != document.currency:
+            return False
+        if gateway_row.total_amount is None or document.total_amount is None:
+            return False
+        if gateway_row.receipt_date is None or document.receipt_date is None:
+            return False
+        total = Decimal(gateway_row.total_amount)
+        document_total = Decimal(document.total_amount)
+        fee = None if gateway_row.fee_amount is None else Decimal(gateway_row.fee_amount)
+        if document_total != total and (fee is None or document_total != total - fee):
+            return False
+        gateway_date = date.fromisoformat(gateway_row.receipt_date)
+        document_date = date.fromisoformat(document.receipt_date)
+        if document.document_kind == "invoice":
+            due = date.fromisoformat(document.due_date) if document.due_date else document_date
+            return document_date - timedelta(days=1) <= gateway_date <= max(due, document_date) + timedelta(days=14)
+        return abs((gateway_date - document_date).days) <= 1
+
+    def _evidence_candidates(self, session, owner, gateway_row):
+        documents = session.scalars(select(BudgetReceipt).where(
+            BudgetReceipt.owner == owner, BudgetReceipt.gateway.is_(None),
+            BudgetReceipt.evidence_for_receipt_id.is_(None), BudgetReceipt.status != "draft",
+            BudgetReceipt.document_kind.in_(("invoice", "receipt", "payment_confirmation")),
+            BudgetReceipt.currency == gateway_row.currency,
+        )).all()
+        qualified = [document for document in documents if self._evidence_match(gateway_row, document)]
+        preferred = [document for document in qualified
+                     if (document.raw_shop_name and gateway_row.raw_shop_name
+                         and _payee_key(document.raw_shop_name) == _payee_key(gateway_row.raw_shop_name))
+                     or (document.raw_nip and gateway_row.raw_nip and document.raw_nip == gateway_row.raw_nip)]
+        return preferred or qualified
+
+    def _attach_evidence(self, session, owner, gateway_row):
+        """Attach a gateway row to its shop document only when exactly one qualifies."""
+        if gateway_row.evidence_for_receipt_id is not None or gateway_row.status != "imported":
+            return
+        candidates = self._evidence_candidates(session, owner, gateway_row)
+        if len(candidates) == 1:
+            gateway_row.evidence_for_receipt_id = candidates[0].id
+
+    def _attach_gateway_for_document(self, session, owner, document):
+        """Reverse check on document insert: attach a unique unattached gateway row."""
+        if document.gateway is not None or document.evidence_for_receipt_id is not None:
+            return
+        gateway_rows = session.scalars(select(BudgetReceipt).where(
+            BudgetReceipt.owner == owner, BudgetReceipt.gateway.is_not(None),
+            BudgetReceipt.evidence_for_receipt_id.is_(None), BudgetReceipt.status == "imported",
+            BudgetReceipt.currency == document.currency,
+        )).all()
+        for gateway_row in gateway_rows:
+            candidates = self._evidence_candidates(session, owner, gateway_row)
+            if len(candidates) == 1 and candidates[0].id == document.id:
+                gateway_row.evidence_for_receipt_id = document.id
+
+    @staticmethod
     def _invoice(session, owner, item, now):
         invoice = item.invoice
         receipt = BudgetReceipt(id=str(uuid.uuid4()), owner=owner, raw_shop_name=invoice.issuer, raw_nip=invoice.nip,
@@ -413,6 +682,9 @@ class GmailStore(BudgetStore):
             id=str(uuid.uuid4()), owner=owner, raw_shop_name=fields.merchant,
             receipt_date=payment.receipt_date.isoformat(), total_amount=fields.total_amount, currency=fields.currency,
             status="imported", document_kind="payment_confirmation", source_kind="email",
+            gateway=payment.gateway_name, gateway_status=payment.status,
+            gateway_ref_hmac=payment.gateway_ref_hmac, fee_amount=fields.fee_amount,
+            payee_host=fields.payee_host,
             version=1, created_at=now, updated_at=now, import_expires_at=now + IMPORT_TTL,
         )
         session.add(receipt)
@@ -462,8 +734,13 @@ class GmailStore(BudgetStore):
                 rfc_hmac = None if item.forwarded_manually else item.rfc_message_id_hmac
                 if self._duplicate(session, owner, rfc_hmac):
                     outcome = "skipped_duplicate"
+                elif item.failed_gateway is not None:
+                    outcome = self._failed_gateway(session, owner, item.failed_gateway)
                 elif item.payment is not None:
-                    outcome = self._duplicate_payment(session, owner, item.payment) or outcome
+                    if item.payment.gateway_ref_hmac is not None:
+                        outcome = self._merge_gateway(session, owner, item.payment, now) or outcome
+                    else:
+                        outcome = self._duplicate_payment(session, owner, item.payment) or outcome
                 if outcome == "imported":
                     if self._pending_count(session, owner) >= MAX_PENDING_IMPORTS:
                         drained = False
@@ -475,6 +752,11 @@ class GmailStore(BudgetStore):
                     else:
                         receipt_id = self._invoice(session, owner, item, now)
                     imported += 1
+                    receipt_row = session.get(BudgetReceipt, receipt_id)
+                    if item.payment is not None and item.payment.gateway_name is not None:
+                        self._attach_evidence(session, owner, receipt_row)
+                    elif not item.forwarded_manually:
+                        self._attach_gateway_for_document(session, owner, receipt_row)
                 else:
                     skipped += 1
                     if outcome == "parse_failed":
