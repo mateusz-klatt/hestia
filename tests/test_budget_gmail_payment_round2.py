@@ -34,12 +34,12 @@ class GmailPaymentReviewTests(TestCase):
                          "[https://shop.example.test/ https://assets.example.test/] "
                          "(https://[2001:db8::1]/) https://:443/no-host")
 
-    def test_overlong_gateway_link_still_supplies_payee(self):
+    def test_overlong_gateway_link_still_supplies_payee_host(self):
         url = "http://shop.example.test/" + "placeholder-" * 60
         for wrapped in (url, f"[{url}]", f"({url})"):
             with self.subTest(wrapper=wrapped[:1]):
                 payment = _inspect(f"Potwierdzenie dla - {wrapped}\nTotal: 3 PLN", gateway=True).payment
-                self.assertEqual(payment.merchant, "shop.example.test")
+                self.assertEqual((payment.merchant, payment.payee_host), ("Example Merchant", "shop.example.test"))
 
     def test_receipt_payee_ends_at_the_first_amount_or_illustration(self):
         amount_and_date = "$15.24 Paid December 8, 2026"
@@ -69,19 +69,20 @@ class GmailPaymentReviewTests(TestCase):
         self.assertEqual(_inspect("Total: 1 PLN\nTytuł: płatność dla Hidden Payee", gateway=True).payment.merchant,
                          "Example Merchant")
 
-    def test_multiple_payees_on_one_line_must_agree(self):
-        for line in (
-            "Odbiorca: Example One; Odbiorca wpłaty: Example Two",
-            "dla - https://one.example.test/ dla - https://two.example.test/",
-            "dla - https://one.example.test/ Odbiorca: Example Two",
-            "Receipt from Example One Receipt #1234-5678 Payment to Example Two : 1 PLN",
+    def test_only_multiple_labelled_payees_on_one_line_must_agree(self):
+        result = _inspect("Odbiorca: Example One; Odbiorca wpłaty: Example Two\nTotal: 1 PLN", gateway=True)
+        self.assertIsNone(result.payment)
+        self.assertFalse(result.missing_total)
+        for line, merchant, host in (
+            ("dla - https://one.example.test/ dla - https://two.example.test/", "Example Merchant", "one.example.test"),
+            ("dla - https://one.example.test/ Odbiorca: Example Two", "Example Two", "one.example.test"),
+            ("Receipt from Example One Receipt #1234-5678 Payment to Example Two : 1 PLN", "Example One", None),
         ):
             with self.subTest(line=line):
-                result = _inspect(f"{line}\nTotal: 1 PLN", gateway=True)
-                self.assertIsNone(result.payment)
-                self.assertFalse(result.missing_total)
+                payment = _inspect(f"{line}\nTotal: 1 PLN", gateway=True).payment
+                self.assertEqual((payment.merchant, payment.payee_host), (merchant, host))
         payment = _inspect("dla - x.example.test; dla - https://x.example.test/\nTotal: 1 PLN", gateway=True).payment
-        self.assertEqual(payment.merchant, "x.example.test")
+        self.assertEqual((payment.merchant, payment.payee_host), ("Example Merchant", "x.example.test"))
         payment = _inspect("Opis zamówienia w Example One without colon\nPayment to Example Two : error\n"
                            "dla - ?\nTotal: 1 PLN", gateway=True).payment
         self.assertEqual(payment.merchant, "Example Merchant")
@@ -227,7 +228,8 @@ class GmailPaymentReviewTests(TestCase):
             with self.subTest(subject=subject):
                 self.assertEqual(_inspect("Total: 1 PLN", subject, gateway=True).payment.merchant, "Example Studio")
                 self.assertEqual(_inspect("Total: 1 PLN", subject).payment.merchant, "Example Merchant")
-                self.assertIsNone(_inspect("Total: 1 PLN\nReceipt from Example Shop", subject, gateway=True).payment)
+                payment = _inspect("Total: 1 PLN\nReceipt from Example Shop", subject, gateway=True).payment
+                self.assertEqual(payment.merchant, "Example Shop")
         for body in ("Receipt from Example Studio", "Receipt from Example Studio Receipt #1234-5678",
                      "Receipt from Example Studio $1.00 Paid 1 Nov 2026", "Payment to Example Studio : 1 PLN",
                      "Przekazaliśmy Twoje pieniądze\nDo Example Studio\nPłatność zakończona sukcesem",

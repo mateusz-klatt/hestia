@@ -6,10 +6,12 @@ from datetime import date
 from decimal import Decimal
 from itertools import islice
 import re
+from typing import Literal
 import unicodedata
 
 from .gmail_address import canonical_domain
 from .gmail_invoice import _MONTHS, _SKIPPED_LINE, _line_pairs, _normalized_invoice_lines
+from .gmail_trust import PaymentProvider
 from .receipt_parser import (MAX_LINE_CHARS, MAX_TEXT_BYTES, ReceiptError, _normalize_receipt_text,
                              canonical_money, redact_digit_field, redact_pan)
 
@@ -31,7 +33,7 @@ class ImportedPayment:
 class PaymentInspection:
     payment: ImportedPayment | None = None
     missing_total: bool = False
-    status: str | None = None
+    status: Literal["registered", "paid"] | None = None
     reject_reason: str | None = None
     gateway_ref: str | None = None
 
@@ -57,7 +59,6 @@ _REFUND_NOTICE = re.compile(
     re.IGNORECASE,
 )
 _STARTED = re.compile(r"\brozpoczęci[ae]\s++transakcji\b", re.IGNORECASE)
-_STARTED_NOTICE = re.compile(r"Potwierdzenie\s++rozpoczęcia\s++transakcji\b", re.IGNORECASE)
 _BODY_FIELD = re.compile(
     r"(?:Tytuł\s*+|(?:Opis|Odbiorca|Data|Nr|Numer|Identyfikator|Kwota|Termin|Adres)\b[^:]*+):"
     r"(?!//|(?<=[0-9]:)[0-9])\s*+\S",
@@ -95,43 +96,64 @@ _FEE_VALUE = re.compile(
     r"(?=$|[:\s])\s*+:?\s*+",
     re.IGNORECASE,
 )
-# Gateway status classification (v1f). Paid wins over registered; an unknown
-# gateway email with a valid amount is registered. The Autopay "Potwierdzenie
-# rozpoczęcia transakcji" form is a registration, not a completed payment.
-_PAID_SUBJECT = re.compile(
-    r"^(?:Potwierdzenie\b(?!\s++rozpoczęcia\s++transakcji\b)"
-    r"|Przekazaliśmy\s++Twoją\s++płatność\b|Receipt\s++#)",
-    re.IGNORECASE,
-)
-_PAID_BODY = re.compile(
-    r"(?:potwierdzeniu\s++realizacji\s++płatności"
-    r"|Płatność\s++zakończona\s++sukcesem"
-    r"|Przekazaliśmy\s++Twoje\s++pieniądze"
-    r"|wpłata\s++została\s++przekazana\s++odbiorcy"
-    r"|\bopłacona\b"
-    r"|zakończona\s++sukcesem"
-    r"|Receipt\s++from\s"
-    r"|Payment\s++to\s)",
-    re.IGNORECASE,
-)
 _AUTOPAY_REGISTERED_SUBJECT = re.compile(r"Potwierdzenie\s++rozpoczęcia\s++transakcji\b", re.IGNORECASE)
+_PAID_SUBJECTS = {
+    "p24": re.compile(r"Potwierdzenie\b", re.IGNORECASE),
+    "tpay": re.compile(r"Potwierdzenie\s++transakcji\b", re.IGNORECASE),
+    "autopay": re.compile(r"(?:Przekazaliśmy\s++Twoją\s++płatność"
+                          r"|Potwierdzenie\s++przekazania\s++pieniędzy)\b", re.IGNORECASE),
+}
+_REGISTERED_MARKERS = {
+    "p24": re.compile(r"\b(?:Nowa\s++transakcja\s++płatnicza"
+                      r"|zarejestrowaniu\s++nowej\s++transakcji)\b", re.IGNORECASE),
+    "tpay": re.compile(r"\b(?:Nowa\s++transakcja\s++płatnicza"
+                       r"|zarejestrowanie\s++nowej\s++transakcji)\b", re.IGNORECASE),
+    "autopay": re.compile(r"\b(?:Zarejestrowaliśmy\s++Twoje\s++zlecenie"
+                          rf"|{_AUTOPAY_REGISTERED_SUBJECT.pattern})\b", re.IGNORECASE),
+    "payu": re.compile(r"\bzarejestrowaliśmy\s++zlecenie\s++płatności\b", re.IGNORECASE),
+    "paynow": re.compile(r"\bzarejestrowaliśmy\s++zlecenie\s++płatności\b", re.IGNORECASE),
+}
+_STATUS_LABEL = r"(?:status(?:\s++(?:płatności|transakcji))?\s*+:\s*+)?"
+_PAID_BODY_MARKERS = {
+    "p24": re.compile(
+        r"niniejsza\s++wiadomość\s++jest\s++informacją\s++o\s++potwierdzeniu\s++realizacji\s++płatności[.!]?",
+        re.IGNORECASE,
+    ),
+    "autopay": re.compile(
+        rf"{_STATUS_LABEL}(?:Płatność\s++zakończona\s++sukcesem|Przekazaliśmy\s++Twoje\s++pieniądze"
+        r"|Twoja\s++wpłata\s++została\s++przekazana\s++odbiorcy)[.!]?",
+        re.IGNORECASE,
+    ),
+    "paynow": re.compile(rf"{_STATUS_LABEL}(?:Transakcja\s++została\s++)?opłacona[.!]?", re.IGNORECASE),
+}
 _CARD_VERIFICATION = re.compile(r"Rejestracja\s++karty", re.IGNORECASE)
 _CARD_VERIFICATION_CANCEL = re.compile(r"zostanie\s++anulowana", re.IGNORECASE)
-_FAILED_BODY = re.compile(r"(?:straciła\s++ważność|anulowan|odrzucon)", re.IGNORECASE)
-# Gateway transaction ids. PayU keeps its numeric id in the subject parentheses
-# or the transId of the status link (never the token).
-_REF_P24 = re.compile(r"\bP24-[A-Z0-9]{3}-[A-Z0-9]{3}-[A-Z0-9]{3}\b")
-_REF_TPAY = re.compile(r"\bTR-[A-Z0-9]+-[A-Z0-9]+\b")
-_REF_AUTOPAY = re.compile(r"Identyfikator\s+transakcji(?:\s+Autopay)?\s*:\s*([A-Z0-9]+(?:-[A-Z0-9]+)*)",
-                          re.IGNORECASE)
-_REF_PAYU_SUBJECT = re.compile(r"\((\d{6,})\)")
-_REF_PAYU_LINK = re.compile(r"[?&]transId=(\d+)", re.IGNORECASE)
-_REF_PAYNOW = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{3}-[A-Z0-9]{3}-[A-Z0-9]{3}\b")
+_PAYNOW_ID = r"[A-Z0-9]{4}(?:-[A-Z0-9]{3}){3}"
+_PAYNOW_FAILED = re.compile(
+    rf"{_STATUS_LABEL}(?:(?:Twoja\s++)?(?:transakcja|płatność)(?:\s++{_PAYNOW_ID})?"
+    r"(?:\s++została)?\s++)?(?:straciła\s++ważność|odrzucona|anulowana)[.!]?",
+    re.IGNORECASE,
+)
+_GATEWAY_REFS = {
+    "p24": re.compile(r"(?<![\w-])(P24(?:-[A-Z0-9]{3}){3})(?![\w-])", re.IGNORECASE),
+    "tpay": re.compile(r"(?<![\w-])(TR-[A-Z0-9]+-[A-Z0-9]+)(?![\w-])", re.IGNORECASE),
+    "autopay": re.compile(
+        r"^(?:[-*•]\s+)?Identyfikator[ \t]+transakcji(?:[ \t]+Autopay)?[ \t]*:[ \t]*"
+        r"([A-Z0-9]+(?:-[A-Z0-9]+)*)(?![\w-])",
+        re.IGNORECASE | re.MULTILINE,
+    ),
+    "paynow": re.compile(rf"(?<![\w-])({_PAYNOW_ID})(?![\w-])", re.IGNORECASE),
+}
+_REF_PAYU_SUBJECT = re.compile(r"\(([0-9]+)\)")
+_REF_PAYU_LINK = re.compile(
+    r"https?://[^\s?#]+\?(?:[^\s#]*?&(?:amp;)?)?transId=([A-Z0-9]+)(?=$|[&#)\]\s])",
+    re.IGNORECASE,
+)
 # Payee hosts: an "Adres www:" label, a parenthesized URL after the payee, or
 # "dla https://host/" in the subject.
 _ADDRESS_WWW = re.compile(r"Adres\s+www\s*:\s*(\S+)", re.IGNORECASE)
-_PAYEE_URL = re.compile(r"\(\s*https?://([a-z0-9.-]+)", re.IGNORECASE)
-_SUBJECT_HOST = re.compile(r"\bdla\s+(?:-\s+)?(?:https?://|www\.)([a-z0-9.-]+)", re.IGNORECASE)
+_PAYEE_URL = re.compile(r"\(\s*(https?://[^\s)]+)", re.IGNORECASE)
+_SUBJECT_PAYEE = re.compile(r"\bdla\s++(?:-\s++)?(.+)", re.IGNORECASE)
 _TRAILING_ID = re.compile(r"\s+\d{6,}$")
 _CARD = re.compile(r"(?<!\w)(?:[•]{4}|[*]{4}|x{4}|(?<!\S)-)\s+[0-9]{4}$", re.IGNORECASE)
 _CURRENCY_CODE = r"(?:PLN|EUR|USD|GBP)"
@@ -175,14 +197,14 @@ _DESCRIPTION_LABEL = re.compile(r"(?:Tytuł|Opis)\b", re.IGNORECASE)
 _VENUE = re.compile(r"Twoje\s++zamówienie\s++z\s++lokalu\s++(.+)", re.IGNORECASE)
 _VENUE_SUFFIX = re.compile(r"\s++zostanie\b", re.IGNORECASE)
 _PAYEE_LABEL = re.compile(
-    r"\b(?:Odbiorca(?:\s++wpłaty)?\s*+:\s*+"
+    r"\b(?:(?P<recipient>Odbiorca(?:\s++wpłaty)?\s*+:\s*+)"
     r"|(?P<host>dla\s*+-\s*+)|płatność\s++dla\s++(?!-)"
     r"|(?P<registered>Zarejestrowaliśmy\s++zlecenie\s++płatności\s++dla\s++(?!-))"
     r"|(?P<receipt>Receipt\s++from\s++)"
     r"|(?P<payment>Payment\s++to\s++))",
     re.IGNORECASE,
 )
-_PAYEE_HOST = re.compile(r"(?:[(\[]\s*+)?(?:https?://)?([a-z0-9.-]+)(?=$|[/:?#)\]\s])", re.IGNORECASE)
+_PAYEE_HOST = re.compile(r"(?P<scheme>https?://)?(?P<domain>[a-z0-9.-]+)(?:[/:?#]\S*)?", re.IGNORECASE)
 _RECEIPT_SUFFIX = re.compile(r"\s++(?:Receipt\s++#|\(\s*+invoice\s++illustration\s++\[)", re.IGNORECASE)
 _SUBJECT_RECEIPT_ID = r"[0-9]++(?:-[0-9]++)*+"
 _SUBJECT_PAYEES = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
@@ -294,14 +316,14 @@ def _single_amount(values: set[tuple[Decimal, str]]) -> tuple[Decimal, str] | No
 
 
 def _gateway_fee(lines: list[str], following: list[str]) -> tuple[Decimal, str] | None:
-    """The first parseable gateway fee label; a missing label means no fee."""
+    fees = set()
     for line, next_value in zip(lines, following):
         label_line = _BULLET.sub("", line)
         if label := _FEE_VALUE.match(label_line):
             inline = label_line[label.end():]
             if parsed := _parse_amount(inline or next_value, labelled=bool(inline)):
-                return parsed
-    return None
+                fees.add(parsed)
+    return _single_amount(fees)
 
 
 def _gateway_payment_total(lines: list[str], following: list[str], summary_rows: dict[int, int]):
@@ -316,11 +338,11 @@ def _gateway_payment_total(lines: list[str], following: list[str], summary_rows:
     charged = _single_amount(due)
     if base is None and charged is None:
         return None
-    if fee is not None and base is not None and fee[1] != base[1]:
+    if fee is not None and any(value is not None and value[1] != fee[1] for value in (base, charged)):
         raise _RejectedPayment
     if charged is not None:
         total = charged
-        if base is not None and fee is not None and (charged[1] != base[1] or charged[0] != base[0] + fee[0]):
+        if base is not None and fee is not None and charged[0] != base[0] + fee[0]:
             raise _RejectedPayment
     else:
         total = (base[0] + fee[0], base[1]) if fee is not None else base
@@ -331,60 +353,37 @@ def _gateway_payment_total(lines: list[str], following: list[str], summary_rows:
     return canonical_money(format(amount, "f")), currency, stored_fee
 
 
-def _gateway_status(subjects: tuple[str, ...], lines: list[str]) -> str:
-    """Paid when any paid marker matches; every other gateway email is registered."""
-    if any(_PAID_SUBJECT.search(subject) for subject in subjects):
+def _gateway_status(provider: PaymentProvider | None, subjects: tuple[str, ...], lines: list[str]):
+    if provider == "stripe":
         return "paid"
-    if any(pattern.fullmatch(subject) for subject in subjects for pattern in _SUBJECT_PAYEES):
+    paid_subject = _PAID_SUBJECTS.get(provider)
+    if paid_subject and any(paid_subject.match(subject) for subject in subjects):
         return "paid"
-    if _PAID_BODY.search("\n".join(lines)):
+    registered = _REGISTERED_MARKERS.get(provider)
+    if registered and any(registered.search(line) for line in (*subjects, *lines)):
+        return "registered"
+    paid_body = _PAID_BODY_MARKERS.get(provider)
+    if paid_body and any(paid_body.fullmatch(_BULLET.sub("", line)) for line in lines):
         return "paid"
     return "registered"
 
 
-def _gateway_ref(subjects: tuple[str, ...], lines: list[str], raw_text: str) -> str | None:
-    haystack = "\n".join(subjects) + "\n" + "\n".join(lines)
-    for pattern in (_REF_P24, _REF_TPAY):
-        if match := pattern.search(haystack):
-            return match[0].upper()
-    if match := _REF_AUTOPAY.search(haystack):
-        return match[1].upper()
-    if match := _REF_PAYU_SUBJECT.search("\n".join(subjects)):
-        return match[1]
-    if match := _REF_PAYU_LINK.search(raw_text):
-        return match[1]
-    if match := _REF_PAYNOW.search(haystack):
-        return match[0].upper()
-    return None
+def _gateway_ref(provider: PaymentProvider | None, subjects: tuple[str, ...], lines: list[str],
+                 raw_text: str) -> str | None:
+    if provider == "payu":
+        match = _REF_PAYU_SUBJECT.search("\n".join(subjects)) or _REF_PAYU_LINK.search(raw_text)
+    else:
+        pattern = _GATEWAY_REFS.get(provider)
+        match = pattern.search("\n".join((*subjects, *lines))) if pattern else None
+    return match[1].upper() if match else None
 
 
-def _failed_line(line: str) -> bool:
-    if len(line) > 120:
-        return False
-    line = _BULLET.sub("", line)
-    return (not _BODY_FIELD.match(line) and bool(_FAILED_BODY.search(line)) and not _AMOUNT.search(line))
-
-
-def _host(value: str) -> str | None:
-    return canonical_domain(value.lower().removeprefix("www."))
-
-
-def _gateway_host(lines: list[str], subjects: tuple[str, ...]) -> str | None:
-    for line in lines:
-        if label := _ADDRESS_WWW.search(line):
-            if host := _PAYEE_HOST.match(label[1]):
-                if domain := _host(host[1]):
-                    return domain
-    for line in lines:
-        if label := _PAYEE_LABEL.search(line):
-            if match := _PAYEE_URL.search(line[label.end():]):
-                if domain := _host(match[1]):
-                    return domain
-    for subject in subjects:
-        if match := _SUBJECT_HOST.search(subject):
-            if domain := _host(match[1]):
-                return domain
-    return None
+def _candidate_host(value: str) -> tuple[bool, str | None]:
+    match = _PAYEE_HOST.fullmatch(value.strip(" ()[]"))
+    if match and (match["scheme"] or "." in match["domain"]):
+        domain = match["domain"].lower().removeprefix("www.")
+        return True, canonical_domain(domain)
+    return False, None
 
 
 def _parse_date(value: str) -> date | None:
@@ -477,44 +476,65 @@ def _payee_key(value: str) -> str:
     return _PAYEE_PUNCT.sub(" ", stem or value).strip().casefold()
 
 
-def _payee_candidates(line: str) -> list[str]:
-    candidates = []
+def _payee_candidates(line: str, next_line: str):
     labels = list(_PAYEE_LABEL.finditer(line))
     boundaries = [label.start() for label in labels[1:]] + [len(line)]
     for label, end in zip(labels, boundaries):
         value = line[label.end():end].rstrip(" ;|")
         kind = label.lastgroup
-        if kind == "host":
-            if (host := _PAYEE_HOST.match(value)) and (domain := canonical_domain(host[1])):
-                candidates.append(domain)
+        if kind == "recipient" and not value:
+            if end == len(line) and not (_BODY_FIELD.match(next_line) or _TOTAL.match(next_line)):
+                yield kind, next_line
         elif kind == "payment":
             name, _, amount = value.rpartition(":")
             if _AMOUNT.fullmatch(amount.strip()):
-                candidates.append(name)
+                yield kind, name
         elif kind == "receipt":
             suffixes = (_RECEIPT_SUFFIX.search(value), _AMOUNT.search(value))
             end = min((suffix.start() for suffix in suffixes if suffix), default=len(value))
-            candidates.append(value[:end])
+            yield kind, value[:end].rstrip()
+            if link := _PAYEE_URL.search(value[end:]):
+                yield "host", link[1]
         elif kind == "registered":
             # The HTML worker can leave an opening parenthesis after removing a URL.
-            candidates.append(_clean_field(value).rstrip(" .("))
+            yield kind, value.rstrip(" .(")
         else:
-            candidates.append(value)
-    return candidates
+            yield kind, value
 
 
-def _receipt_fields(lines: list[str], subjects: tuple[str, ...], gateway: bool) -> tuple[str | None, str]:
+def _resolve_payee(candidates, address_host):
+    labelled = {}
+    fallback = host = None
+    for kind, value in candidates:
+        host_like, candidate_host = _candidate_host(value)
+        if host_like or kind == "host":
+            host = host or candidate_host
+            continue
+        if link := _PAYEE_URL.search(value):
+            host = host or _candidate_host(link[1])[1]
+            value = value[:link.start()].rstrip()
+        if payee := _payee(value):
+            if kind == "recipient":
+                labelled.setdefault(_payee_key(payee), payee)
+            else:
+                fallback = fallback or payee
+    if len(labelled) > 1:
+        raise _RejectedPayment
+    return next(iter(labelled.values()), fallback), address_host or host
+
+
+def _receipt_fields(lines: list[str], subjects: tuple[str, ...], gateway: bool):
     descriptions: list[str] = []
     titles: list[str] = []
     venues: list[str] = []
-    candidates: list[str] = []
-    payees: dict[str, str] = {}
+    candidates: list[tuple[str | None, str]] = []
+    address_host = None
     for line, next_line in zip(lines, _following_values(lines)):
         line = _BULLET.sub("", line)
         if order := _ORDER.fullmatch(line):
             descriptions.append(order[2])
             if gateway:
-                candidates.append(order[1])
+                candidates.append((None, order[1]))
             continue
         if title := _TITLE.fullmatch(line):
             titles.append(title[1])
@@ -523,18 +543,18 @@ def _receipt_fields(lines: list[str], subjects: tuple[str, ...], gateway: bool) 
             venues.append(_VENUE_SUFFIX.split(venue[1], maxsplit=1)[0])
         if not gateway:
             continue
-        candidates.extend(_payee_candidates(line))
+        if label := _ADDRESS_WWW.search(line):
+            address_host = address_host or _candidate_host(label[1])[1]
+        candidates.extend(_payee_candidates(line, next_line))
         if _TRANSFERRED.fullmatch(line) and (payee := _TRANSFER_PAYEE.fullmatch(next_line)):
-            candidates.append(payee[1])
+            candidates.append((None, payee[1]))
     if gateway:
         for subject in subjects:
-            candidates.extend(match[1] for pattern in _SUBJECT_PAYEES if (match := pattern.fullmatch(subject)))
-        for candidate in candidates:
-            if clean := _payee(candidate):
-                payees.setdefault(_payee_key(clean), clean)
-    if len(payees) > 1:
-        raise _RejectedPayment
-    return next(iter(payees.values()), None), _description([*descriptions, *titles, *venues, *subjects])
+            candidates.extend((None, match[1]) for pattern in _SUBJECT_PAYEES if (match := pattern.fullmatch(subject)))
+            if match := _SUBJECT_PAYEE.search(subject):
+                candidates.append((None, match[1]))
+    payee, host = _resolve_payee(candidates, address_host)
+    return payee, _description([*descriptions, *titles, *venues, *subjects]), host
 
 
 def _order_reference(fields: list[str]) -> str | None:
@@ -577,33 +597,31 @@ def _shorten_url(match: re.Match[str]) -> str:
     return f"https://{host}/" if host else match[0]
 
 
-def _body_marker(line: str, *, gateway: bool = False) -> bool:
+def _body_marker(line: str, provider: PaymentProvider | None) -> bool:
     if len(line) > 120:
         return False
     line = _BULLET.sub("", line)
-    # For gateways, a "Potwierdzenie rozpoczęcia transakcji" heading is a
-    # registration notice (v1f), not a started-payment rejection.
-    started = not gateway and _STARTED_NOTICE.match(line)
+    started = provider != "autopay" and _AUTOPAY_REGISTERED_SUBJECT.match(line)
     return (not _BODY_FIELD.match(line)
             and bool(_MARKER.search(line) or started or _REFUND_NOTICE.match(line))
             and not _AMOUNT.search(line))
 
 
-def _subject_rejected(subject: str, gateway: bool) -> bool:
+def _subject_rejected(subject: str, provider: PaymentProvider | None) -> bool:
     if _MARKER.search(subject) or _REFUND_SUBJECT.search(subject):
         return True
-    # The Autopay "Potwierdzenie rozpoczęcia transakcji" subject is a
-    # registration notice for gateways (v1f), not a started-payment rejection.
-    return bool(_STARTED.search(subject)) and not (gateway and _AUTOPAY_REGISTERED_SUBJECT.match(subject))
+    return bool(_STARTED.search(subject)) and not (provider == "autopay" and _AUTOPAY_REGISTERED_SUBJECT.match(subject))
 
 
-def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gateway: bool) -> PaymentInspection:
+def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gateway: bool,
+                    provider: PaymentProvider | None = None) -> PaymentInspection:
     """Distinguish an absent total from a rejection in one rendered MIME body."""
     if not isinstance(text, str) or len(text) > MAX_TEXT_BYTES:
         return PaymentInspection()
     try:
         if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
             return PaymentInspection()
+        provider = provider if gateway else None
         subjects = tuple(_subject_text(subject) for subject in subjects)
         # Shorten link tokens before invoice normalization applies its per-line cap.
         shortened = _HTTP_URL.sub(_shorten_url, text)
@@ -612,18 +630,15 @@ def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gate
         # Rejection predicates do not extract fields. Check the original line
         # shape so identifiers cannot hide warnings and table splits do not
         # turn the priced part of an item into an independent warning.
-        if any(_subject_rejected(subject, gateway) for subject in subjects):
-            return PaymentInspection()
-        if gateway:
+        if provider == "paynow" and any(_PAYNOW_FAILED.fullmatch(_BULLET.sub("", line)) for line in raw):
+            return PaymentInspection(reject_reason="failed", gateway_ref=_gateway_ref(provider, subjects, raw, text))
+        if provider == "p24":
             body = "\n".join(raw)
             if _CARD_VERIFICATION.search(body) and _CARD_VERIFICATION_CANCEL.search(body):
                 return PaymentInspection(reject_reason="card_verification")
-            # A failed transaction outranks the v1e rejection markers ("płatność
-            # odrzucona"): it deletes the registered row for the same reference.
-            if any(_failed_line(line) for line in raw):
-                return PaymentInspection(reject_reason="failed",
-                                         gateway_ref=_gateway_ref(subjects, raw, text))
-        if any(_body_marker(line, gateway=gateway) for line in raw):
+        if any(_subject_rejected(subject, provider) for subject in subjects):
+            return PaymentInspection()
+        if any(_body_marker(line, provider) for line in raw):
             return PaymentInspection()
         expanded = []
         summary_rows = {}
@@ -638,18 +653,17 @@ def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gate
         clean = redact_pan(joined).split("\n") if joined else expanded
         lines = [_SKIPPED_LINE if line == _SKIPPED_LINE else value for line, value in zip(expanded, clean)]
         following = _following_values(lines)
-        fee = status = gateway_ref = host = None
+        fee = status = gateway_ref = None
         if gateway:
             if (result := _gateway_payment_total(lines, following, summary_rows)) is None:
                 return PaymentInspection(missing_total=True)
             total, fee = result[:2], result[2]
-            status = _gateway_status(subjects, lines)
-            gateway_ref = _gateway_ref(subjects, raw, text)
-            host = _gateway_host(lines, subjects)
+            status = _gateway_status(provider, subjects, lines)
+            gateway_ref = _gateway_ref(provider, subjects, raw, text)
         elif (total := _payment_total(lines, following, summary_rows)) is None:
             return PaymentInspection(missing_total=True)
         safe_subjects = tuple(redact_pan(subject) if subject else "" for subject in subjects)
-        payee, description = _receipt_fields(lines, safe_subjects, gateway)
+        payee, description, host = _receipt_fields(lines, safe_subjects, gateway)
         reference = _order_reference([*safe_subjects, *lines])
         payment = ImportedPayment(payee or merchant, description, *total, _body_dates(lines, following), reference,
                                   payee_from_config=gateway and payee is None,
@@ -659,6 +673,7 @@ def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gate
         return PaymentInspection()
 
 
-def extract_payment(text: str, *, subject: str, merchant: str, gateway: bool) -> ImportedPayment | None:
+def extract_payment(text: str, *, subject: str, merchant: str, gateway: bool,
+                    provider: PaymentProvider | None = None) -> ImportedPayment | None:
     """Read only bounded, redacted fields from an authenticated payment email."""
-    return inspect_payment(text, subjects=(subject,), merchant=merchant, gateway=gateway).payment
+    return inspect_payment(text, subjects=(subject,), merchant=merchant, gateway=gateway, provider=provider).payment
