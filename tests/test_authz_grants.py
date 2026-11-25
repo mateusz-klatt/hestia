@@ -329,6 +329,13 @@ class GrantEditorStoreTests(unittest.TestCase):
             ))
         self._assert_error("target_conflict", [], username="other")
 
+    def test_custom_activation_rejects_an_existing_target_without_a_budget(self):
+        with self.sessions.begin() as session:
+            session.add(db.PermissionGrant(
+                username="delegate", permission_id="household.view", target_owner="other",
+            ))
+        self._assert_error("target_conflict", [_grant("calendar.edit")], username="other")
+
     def test_partial_receipt_withdrawal_narrows_then_empty_intersection_revokes(self):
         full = sorted(authz.DEVICE_ELIGIBLE_PERMISSIONS)
         with self.sessions.begin() as session:
@@ -375,6 +382,52 @@ class GrantEditorStoreTests(unittest.TestCase):
             self.assertIsNotNone(renewed)
             self.assertNotEqual(renewed.grant_id, original_scope)
         self.assertEqual(self._ids("delegate")[_grant_key("calendar.edit")], calendar_id)
+
+    def test_retargeting_household_access_replaces_the_scope(self):
+        previous = household.grant_member("delegate", "owner", path=str(self.path))
+        current = self._get()["direct"]
+        selected = [grant for grant in current if grant["permission_id"] != "household.view"]
+        self._replace(selected + [_grant("household.view", "owner2")])
+
+        self.assertNotIn(("household.view", "owner"), self._ids("delegate"))
+        self.assertIn(("household.view", "owner2"), self._ids("delegate"))
+        with self.sessions() as session:
+            metadata = session.get(db.BudgetHouseholdMember, "delegate")
+            self.assertEqual(metadata.owner, "owner2")
+            self.assertNotEqual(metadata.grant_id, previous["grant_id"])
+
+    def test_restoring_a_missing_household_grant_rotates_the_existing_metadata_scope(self):
+        previous = household.grant_member("delegate", "owner", path=str(self.path))
+        with self.sessions.begin() as session:
+            grant = session.scalar(select(db.PermissionGrant).filter_by(
+                username="delegate", permission_id="household.view", target_owner="owner",
+            ))
+            session.delete(grant)
+
+        self._replace(self._get()["direct"] + [_grant("household.view", "owner")])
+
+        self.assertIn(("household.view", "owner"), self._ids("delegate"))
+        with self.sessions() as session:
+            metadata = session.get(db.BudgetHouseholdMember, "delegate")
+            self.assertEqual(metadata.owner, "owner")
+            self.assertNotEqual(metadata.grant_id, previous["grant_id"])
+
+    def test_repairing_only_household_metadata_preserves_grants_and_skips_device_narrowing(self):
+        previous = household.grant_member("delegate", "owner", path=str(self.path))
+        selected = self._get()["direct"]
+        previous_ids = self._ids("delegate")
+        with self.sessions.begin() as session:
+            session.delete(session.get(db.BudgetHouseholdMember, "delegate"))
+
+        with mock.patch.object(store_sql, "_revoke_changed_grant_devices") as narrow:
+            self._replace(selected)
+        narrow.assert_not_called()
+
+        self.assertEqual(self._ids("delegate"), previous_ids)
+        with self.sessions() as session:
+            metadata = session.get(db.BudgetHouseholdMember, "delegate")
+            self.assertEqual(metadata.owner, "owner")
+            self.assertNotEqual(metadata.grant_id, previous["grant_id"])
 
     def test_phase_and_authoritative_backend_are_required(self):
         fresh = Path(self._dir.name) / "fresh.db"
@@ -585,6 +638,52 @@ class GrantEditorHTTPTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(session.query(db.PermissionGrant).filter_by(
                 username="viewer", permission_id="ioc.control",
             ).first())
+
+    async def test_grant_endpoints_require_an_authoritative_sqlite_backend(self):
+        with mock.patch.object(store_sql, "users_db_authoritative", return_value=False):
+            read = await self.client.get("/api/users/grants?username=viewer", headers=self._headers())
+            write = await self.client.post(
+                "/api/users/grants",
+                json={"username": "viewer", "grants": []},
+                headers=self._headers(origin=True),
+            )
+        for response in (read, write):
+            self.assertEqual(response.status, 409)
+            self.assertEqual(await response.json(), {
+                "ok": False, "error": "user management requires the SQLite backend",
+            })
+
+    async def test_grant_endpoints_reject_unknown_users_and_invalid_write_bodies(self):
+        missing = await self.client.get("/api/users/grants?username=unknown", headers=self._headers())
+        self.assertEqual(missing.status, 404)
+        self.assertEqual(await missing.json(), {"ok": False, "error": "not_found"})
+        malformed = await self.client.post(
+            "/api/users/grants",
+            data='{"username":"admin","username":"viewer","grants":[]}',
+            headers={**self._headers(origin=True), "Content-Type": "application/json"},
+        )
+        self.assertEqual(malformed.status, 400)
+        self.assertEqual(await malformed.json(), {"ok": False, "error": "invalid JSON"})
+        incomplete = await self.client.post(
+            "/api/users/grants", json={"username": "viewer"}, headers=self._headers(origin=True),
+        )
+        self.assertEqual(incomplete.status, 400)
+        self.assertEqual(await incomplete.json(), {"ok": False, "error": "invalid_grant_request"})
+
+    async def test_grant_endpoints_reject_unsupported_phases_from_the_editor(self):
+        with mock.patch.object(store_sql, "get_user_grants", side_effect=authz.PolicyPhaseUnsupported("future")):
+            read = await self.client.get("/api/users/grants?username=viewer", headers=self._headers())
+        with mock.patch.object(
+            store_sql, "replace_user_grants", side_effect=store_sql.SessionPhaseUnsupported("future"),
+        ):
+            write = await self.client.post(
+                "/api/users/grants",
+                json={"username": "viewer", "grants": []},
+                headers=self._headers(origin=True),
+            )
+        for response in (read, write):
+            self.assertEqual(response.status, 503)
+            self.assertEqual(await response.json(), {"ok": False, "error": "authorization_bridge_incompatible"})
 
     async def test_self_manage_users_cannot_be_removed_over_http(self):
         current = await self.client.get("/api/users/grants?username=admin", headers=self._headers())
