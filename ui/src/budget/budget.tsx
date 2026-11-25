@@ -29,6 +29,7 @@ import type { RuleCandidate } from "./analytics/model";
 import { ReceiptDevices } from "./devices";
 import { ReceiptsView } from "./receipts";
 import type { ReceiptsApi } from "./receipts_api";
+import { createPendingReceiptStore } from "./receipts_model";
 import "./budget.css";
 
 const PRESET_KEYS = {
@@ -137,10 +138,29 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   const lifecycle = useRef(0);
   const activeRef = useRef(active);
   const principalRef = useRef(principal);
+  const [committedPrincipal, setCommittedPrincipal] = useState(principal);
+  const cookieSnapshotRef = useRef(typeof document === "undefined" ? "" : document.cookie);
+  const pendingReceiptActions = useMemo(() => createPendingReceiptStore(), [principal]);
+
   useLayoutEffect(() => {
     activeRef.current = active;
-    if (principalRef.current !== principal) epoch.current += 1;
-    principalRef.current = principal;
+    const currentCookie = typeof document === "undefined" ? "" : document.cookie;
+    const principalChanged = principalRef.current !== principal;
+    const cookieChanged = currentCookie !== cookieSnapshotRef.current;
+    if (principalChanged || cookieChanged) {
+      principalRef.current = principal;
+      cookieSnapshotRef.current = currentCookie;
+      epoch.current += 1;
+      generation.current += 1;
+      setSessionEpoch((current) => current + 1);
+      setCommittedPrincipal(principal);
+      setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
+      setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
+      setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined);
+      setView("accounts");
+      setDevicesFocus(0);
+      setLoad("loading");
+    }
     lifecycle.current += 1;
   }, [active, principal]);
   const [pollTick, setPollTick] = useState(0);
@@ -212,6 +232,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   }, [effectiveReceiptsApi, principal, barrier, authorizationLocked, api]);
 
   const reload = useCallback(async () => {
+    cookieSnapshotRef.current = typeof document === "undefined" ? "" : document.cookie;
     const token = ++generation.current;
     // Each response passes the barrier as soon as it arrives; a slow sibling cannot delay clearing.
     const watch = <T,>(request: Promise<BudgetResult<T>>) => request.then((result) => {
@@ -446,14 +467,15 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   }, [active, showLimits, revision, api, barrier]);
 
   if (!active) return null;
-  if (load === "serverChanged") {
+  const shownLoad: Load = principal === committedPrincipal ? load : "loading";
+  if (shownLoad === "serverChanged") {
     return <section className="budget-app"><p className="budget-notice" role="alert">{t("budget.main.serverChanged")}</p></section>;
   }
-  const analysis = hasAnalytics(capabilities);
+  const analysis = shownLoad === "ready" && hasAnalytics(capabilities);
   const receiptsFlag = capabilities === null
     ? undefined
     : Object.entries(capabilities).find(([key]) => key === "receipts")?.[1];
-  const receiptsAllowed = load === "ready"
+  const receiptsAllowed = shownLoad === "ready"
     && capabilities !== null
     && capabilities.stored_reads
     && receiptsFlag !== false
@@ -466,24 +488,24 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     <header className="budget-header">
       <div><h2>{t("budget.main.title")}</h2><p>{t("budget.main.subtitle")}</p></div>
       <div className="budget-actions">
-        {load === "ready" && consentEnabled ? (
+        {shownLoad === "ready" && consentEnabled ? (
           <button type="button" aria-pressed={showConsentHealth}
             onClick={() => { authorizeView(() => { setShowConsentHealth((current) => !current); }); }}>
             {showConsentHealth ? t("budget.main.consentHealthHide") : t("budget.main.consentHealth")}
           </button>
         ) : null}
-        {load === "ready" && canManageDevices ? (
+        {shownLoad === "ready" && canManageDevices ? (
           <button type="button" onClick={() => { authorizeView(() => { setView("accounts"); setDevicesFocus((current) => current + 1); }); }}>
             {t("budget.main.devices")}
           </button>
         ) : null}
-        {load === "ready" && !analysis && receiptsAllowed ? (
+        {shownLoad === "ready" && !analysis && receiptsAllowed ? (
           <button type="button" aria-pressed={shownView === "receipts"}
             onClick={() => { authorizeView(() => { setView((current) => (current === "receipts" ? "accounts" : "receipts")); }); }}>
             {t("budget.main.views.receipts")}
           </button>
         ) : null}
-        {load === "ready" ? (
+        {shownLoad === "ready" ? (
           <button type="button" aria-pressed={showLimits}
             onClick={() => { authorizeView(() => { setShowLimits((current) => !current); }); }}>
             {showLimits ? t("budget.main.limitsHide") : t("budget.main.limits")}
@@ -493,8 +515,8 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       </div>
     </header>
   );
-  if (load !== "ready") {
-    const message = { loading: t("budget.main.loading"), disabled: t("budget.main.disabled"), denied: t("budget.main.denied"), error: t("budget.main.error") }[load];
+  if (shownLoad !== "ready") {
+    const message = { loading: t("budget.main.loading"), disabled: t("budget.main.disabled"), denied: t("budget.main.denied"), error: t("budget.main.error") }[shownLoad];
     return <section className="budget-app">{header}<p className="budget-status" role="status">{message}</p></section>;
   }
   const opened = accounts.find((account) => account.id === detail) ?? null;
@@ -594,8 +616,8 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
           onAccessLoss={barrier} initialRule={focusRule ?? null} />
       ) : shownView === "receipts" ? (
         <ReceiptsView key={`${principal ?? ""}:${String(sessionEpoch)}`} receiptsApi={guardedReceiptsApi}
-          actorKey={principal ?? ""} accounts={accounts} connections={connections}
-          locale={locale} revision={revision} onAccessLoss={barrier} />
+          pendingStore={pendingReceiptActions} actorKey={principal ?? ""} accounts={accounts}
+          connections={connections} locale={locale} revision={revision} onAccessLoss={barrier} />
       ) : (
         <>
         {canManageDevices ? <ReceiptDevices key={principal ?? ""} api={api} locale={locale} revision={revision}

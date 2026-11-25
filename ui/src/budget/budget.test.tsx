@@ -1620,7 +1620,19 @@ describe("receipts tab & capability gate", () => {
           forwarded_sender_domain: null,
           created_at: 1_700_000_000,
           updated_at: 1_700_000_000,
-          lines: [],
+          lines: [{
+            line_no: 1,
+            line_kind: "item",
+            raw_name: "Synthetic Grocery",
+            raw_name_key: "synthetic grocery",
+            ptu_code: "A",
+            quantity: "1",
+            raw_unit: "szt",
+            unit_price_raw: "19.50",
+            gross_line_total: "19.50",
+            discount_amount: "0",
+            net_line_total: "19.50",
+          }],
         },
         candidates: [],
       })),
@@ -1707,7 +1719,7 @@ describe("receipts tab & capability gate", () => {
     expect(host.querySelector(".budget-views")).toBeNull();
   });
 
-  it("unmounts the previous actor drawer on principal switch and blocks receipt search via parent whoami guard", async () => {
+  it("unmounts previous actor drawer on principal switch, blocks Search/Load more under cookie switch, and clears at once on 401 even if whoami stalls", async () => {
     const api = fakeApi();
     const rApi = fakeReceiptsApi();
     api.whoami.mockImplementation(() => ok({ user: "alice", role: "admin" }));
@@ -1718,16 +1730,63 @@ describe("receipts tab & capability gate", () => {
     await click(button("Details"));
     expect(host.querySelector('[role="dialog"]')).not.toBeNull();
 
-    // Switching principal prop unmounts alice's detail drawer cleanly.
+    // Switching principal prop unmounts alice's drawer and resets cleanly to bob before issuing receipt requests.
     api.whoami.mockImplementation(() => ok({ user: "bob", role: "admin" }));
     await renderWithReceipts(api, rApi, "bob");
     expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.textContent).toContain("Synthetic Current");
 
-    // If cookie changes behind the SPA before search submits, parent whoami precheck blocks search and clears Budget.
+    // Open Receipts as bob with a cursor; simulate cookie switch before Load more -> old cursor never sent.
+    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => ok({
+      receipts: [{
+        receipt_id: "22222222-2222-4222-8222-222222222222",
+        status: "needs_review",
+        document_kind: "receipt",
+        source_kind: "local_ocr",
+        receipt_kind: "purchase",
+        receipt_date: "2026-11-14",
+        receipt_time: null,
+        raw_shop_name: "Bob Market",
+        raw_nip: null,
+        shop_id: null,
+        chain_key: null,
+        total_amount: "10.00",
+        currency: "PLN",
+        payment_method: "card",
+        math_delta: "0",
+        linked: false,
+        linked_account_id: null,
+        linked_entry_ref: null,
+        version: 1,
+        image_available: false,
+        image_expires_at: null,
+        raw_text_expires_at: null,
+        invoice_number: null,
+        due_date: null,
+        import_expires_at: null,
+        forwarded_manually: false,
+        forwarded_sender_domain: null,
+        created_at: 1_700_000_000,
+        updated_at: 1_700_000_000,
+      }],
+      next_cursor: "bob-cursor-1",
+    }));
+    await click(button("Receipts and documents"));
     api.whoami.mockImplementation(() => ok({ user: "mallory", role: "admin" }));
+    const callsBeforeLoadMore = vi.mocked(rApi.receiptsList).mock.calls.length;
+    await click(button("Load more"));
+    expect(vi.mocked(rApi.receiptsList).mock.calls).toHaveLength(callsBeforeLoadMore);
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.querySelector(".budget-views")).toBeNull();
+
+    // Recover via Reload as owner, search triggers cookie change -> synchronous clear before Search even fires.
+    api.whoami.mockImplementation(() => ok({ user: "owner", role: "admin" }));
+    await renderWithReceipts(api, rApi, "owner");
+    await click(button("Receipts and documents"));
     const queryInput = host.querySelector<HTMLInputElement>('input[name="query"]');
     const searchForm = host.querySelector<HTMLFormElement>(".budget-range");
     if (queryInput === null || searchForm === null) throw new Error("receipt search form missing");
+    api.whoami.mockImplementation(() => ok({ user: "mallory", role: "admin" }));
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(queryInput, "Secret");
       queryInput.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1737,6 +1796,139 @@ describe("receipts tab & capability gate", () => {
     await settle();
     expect(rApi.receiptsSearch).not.toHaveBeenCalled();
     expect(host.textContent).toContain("Only the budget's owner");
+
+    // 401 on receipt read clears Budget immediately even if /whoami stalls.
+    api.whoami.mockImplementation(() => ok({ user: "owner", role: "admin" }));
+    await click(button("Reload"));
+    const stalledWhoami = deferred<Loaded<BudgetApi["whoami"]>>();
+    api.whoami.mockImplementation(() => stalledWhoami.promise);
+    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => fail(401, "budget_http_401"));
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Only the budget's owner");
     expect(host.querySelector(".budget-views")).toBeNull();
+
+    // Synchronous document.cookie change before Load more clears receipt state BEFORE calling whoami or receiptsList.
+    const hasCookieBefore = document.cookie;
+    try {
+      document.cookie = "hestia_actor=owner";
+      api.whoami.mockImplementation(() => ok({ user: "owner", role: "admin" }));
+      await click(button("Reload"));
+      vi.mocked(rApi.receiptsList).mockImplementationOnce(() => ok({
+        receipts: [{
+          receipt_id: "33333333-3333-4333-8333-333333333333",
+          status: "needs_review",
+          document_kind: "receipt",
+          source_kind: "local_ocr",
+          receipt_kind: "purchase",
+          receipt_date: "2026-11-14",
+          receipt_time: null,
+          raw_shop_name: "Cookie Guard Store",
+          raw_nip: null,
+          shop_id: null,
+          chain_key: null,
+          total_amount: "11.00",
+          currency: "PLN",
+          payment_method: "card",
+          math_delta: "0",
+          linked: false,
+          linked_account_id: null,
+          linked_entry_ref: null,
+          version: 1,
+          image_available: false,
+          image_expires_at: null,
+          raw_text_expires_at: null,
+          invoice_number: null,
+          due_date: null,
+          import_expires_at: null,
+          forwarded_manually: false,
+          forwarded_sender_domain: null,
+          created_at: 1_700_000_000,
+          updated_at: 1_700_000_000,
+        }],
+        next_cursor: "owner-cur-sync",
+      }));
+      await click(button("Receipts and documents"));
+      const whoamiCallsBeforeSyncSwitch = api.whoami.mock.calls.length;
+      const listCallsBeforeSyncSwitch = vi.mocked(rApi.receiptsList).mock.calls.length;
+      document.cookie = "hestia_actor=other";
+      await click(button("Load more"));
+      expect(vi.mocked(rApi.receiptsList).mock.calls).toHaveLength(listCallsBeforeSyncSwitch);
+      expect(api.whoami.mock.calls).toHaveLength(whoamiCallsBeforeSyncSwitch);
+      expect(host.textContent).toContain("Only the budget's owner");
+    } finally {
+      document.cookie = "hestia_actor=; max-age=0";
+      if (hasCookieBefore !== "") document.cookie = hasCookieBefore;
+    }
+  });
+
+  it("keeps receipt mutation locks across Accounts <-> Receipts switches until settled", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+    const pendingConfirm = deferred<Loaded<ReceiptsApi["confirmReceipt"]>>();
+    vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => pendingConfirm.promise);
+
+    await renderWithReceipts(api, rApi);
+    await click(button("Receipts and documents"));
+    await click(button("Details"));
+    await click(button("Confirm receipt"));
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+
+    // Leave Receipts to Accounts, then return -> lock survives unmount and still blocks re-submit.
+    await click(button("Accounts"));
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Confirming…");
+    await click(button("Details"));
+    expect(button("Confirming…").disabled).toBe(true);
+    const form = host.querySelector<HTMLFormElement>("form.budget-receipt-confirm");
+    await act(async () => {
+      form?.requestSubmit();
+      await Promise.resolve();
+    });
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      pendingConfirm.settle({
+        ok: true,
+        data: {
+          ok: true,
+          receipt: {
+            receipt_id: "11111111-1111-4111-8111-111111111111",
+            status: "confirmed",
+            document_kind: "receipt",
+            source_kind: "local_ocr",
+            receipt_kind: "purchase",
+            receipt_date: "2026-11-14",
+            receipt_time: null,
+            raw_shop_name: "Tab Integration Market",
+            raw_nip: null,
+            shop_id: null,
+            chain_key: null,
+            total_amount: "19.50",
+            currency: "PLN",
+            payment_method: "card",
+            math_delta: "0",
+            linked: false,
+            linked_account_id: null,
+            linked_entry_ref: null,
+            version: 2,
+            image_available: false,
+            image_expires_at: null,
+            raw_text_expires_at: null,
+            invoice_number: null,
+            due_date: null,
+            import_expires_at: null,
+            forwarded_manually: false,
+            forwarded_sender_domain: null,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_000,
+            lines: [],
+          },
+        },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(button("Confirm receipt").disabled).toBe(false);
   });
 });

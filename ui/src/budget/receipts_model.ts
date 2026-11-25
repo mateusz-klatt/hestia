@@ -218,6 +218,56 @@ export function receiptAccountLabel(
 
 // ---- Per-status link actions, confirm validation & exact decimal arithmetic ----
 
+export type ReceiptActionKind = "confirm" | "delete";
+
+export interface ReceiptSettledEvent {
+  receiptId: string;
+  kind: ReceiptActionKind;
+  outcome: "confirmed" | "deleted" | "not_found" | "error";
+}
+
+export interface PendingReceiptStore {
+  snapshot: () => ReadonlyMap<string, ReceiptActionKind>;
+  get: (receiptId: string) => ReceiptActionKind | null;
+  tryAcquire: (receiptId: string, kind: ReceiptActionKind) => symbol | null;
+  release: (receiptId: string, token: symbol, outcome?: ReceiptSettledEvent["outcome"]) => void;
+  subscribe: (listener: (event?: ReceiptSettledEvent) => void) => () => void;
+}
+
+/** Shared in-memory mutation lock registry keyed by receipt_id so locks survive panel unmount/remount. */
+export function createPendingReceiptStore(): PendingReceiptStore {
+  const active = new Map<string, { kind: ReceiptActionKind; token: symbol }>();
+  const listeners = new Set<(event?: ReceiptSettledEvent) => void>();
+  const notify = (event?: ReceiptSettledEvent) => {
+    for (const listener of [...listeners]) listener(event);
+  };
+  return {
+    snapshot: () => {
+      const copy = new Map<string, ReceiptActionKind>();
+      for (const [id, entry] of active.entries()) copy.set(id, entry.kind);
+      return copy;
+    },
+    get: (receiptId) => active.get(receiptId)?.kind ?? null,
+    tryAcquire: (receiptId, kind) => {
+      if (active.has(receiptId)) return null;
+      const token = Symbol(receiptId);
+      active.set(receiptId, { kind, token });
+      notify();
+      return token;
+    },
+    release: (receiptId, token, outcome) => {
+      const current = active.get(receiptId);
+      if (current?.token !== token) return;
+      active.delete(receiptId);
+      notify(outcome === undefined ? undefined : { receiptId, kind: current.kind, outcome });
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+  };
+}
+
 export interface ReceiptConfirmDraft {
   rawShopName: string;
   rawNip: string;
@@ -228,12 +278,13 @@ export interface ReceiptConfirmDraft {
   currency: string;
   paymentMethod: ReceiptPaymentMethod;
   lines: ReceiptLineInput[];
-  /** "keep" | "unlink" | "candidate:<index>" */
+  /** "" (explicit choice required on linked receipt without keep token) | "keep" | "unlink" | "candidate:<index>" */
   linkChoice: string;
 }
 
 export interface ReceiptLinkOptions {
   paymentAllowsLink: boolean;
+  matchingFieldsChanged: boolean;
   canKeep: boolean;
   canPickCandidates: boolean;
   mustUnlinkToConfirm: boolean;
@@ -250,21 +301,41 @@ export function findCurrentLinkedCandidate(
   ) ?? null;
 }
 
+/** True when any link-matching receipt header field (merchant, NIP, amount, date, currency, kind) was edited. */
+export function hasMatchingFieldsChanged(
+  detail: Pick<ReceiptDetail, "raw_shop_name" | "raw_nip" | "total_amount" | "currency" | "receipt_date" | "receipt_kind">,
+  draft: Pick<ReceiptConfirmDraft, "rawShopName" | "rawNip" | "totalAmount" | "currency" | "receiptDate" | "receiptKind">,
+): boolean {
+  if (draft.rawShopName.trim() !== (detail.raw_shop_name ?? "").trim()) return true;
+  if (draft.rawNip.trim() !== (detail.raw_nip ?? "").trim()) return true;
+  if (draft.receiptDate !== (detail.receipt_date ?? "")) return true;
+  if (draft.currency.trim().toUpperCase() !== (detail.currency ?? "").toUpperCase()) return true;
+  if (draft.receiptKind !== detail.receipt_kind) return true;
+  const origNorm = detail.total_amount === null ? null : normalizeDecimalInput(detail.total_amount);
+  const draftNorm = normalizeDecimalInput(draft.totalAmount);
+  if (origNorm !== null && draftNorm !== null) return origNorm !== draftNorm;
+  return draft.totalAmount.trim() !== (detail.total_amount ?? "").trim();
+}
+
 /** Models the exact link transitions `receipt_store.confirm` and `receipt_store.detail` support per status. */
 export function availableLinkOptions(
   detail: Pick<ReceiptDetail, "status" | "linked" | "linked_account_id" | "linked_entry_ref">,
   candidates: readonly ReceiptCandidate[],
   paymentMethod: ReceiptPaymentMethod,
+  matchingFieldsChanged = false,
 ): ReceiptLinkOptions {
   const paymentAllowsLink = paymentMethod !== "cash" && paymentMethod !== "mixed";
+  const tokensValid = paymentAllowsLink && !matchingFieldsChanged;
   const currentCandidate = findCurrentLinkedCandidate(detail, candidates);
 
   if (detail.status === "needs_review") {
+    const canKeep = tokensValid && detail.linked && currentCandidate !== null;
     return {
       paymentAllowsLink,
-      canKeep: paymentAllowsLink && detail.linked && currentCandidate !== null,
-      canPickCandidates: paymentAllowsLink && candidates.length > 0,
-      mustUnlinkToConfirm: false,
+      matchingFieldsChanged,
+      canKeep,
+      canPickCandidates: tokensValid && candidates.length > 0,
+      mustUnlinkToConfirm: detail.linked && !canKeep,
       currentCandidate,
     };
   }
@@ -272,6 +343,7 @@ export function availableLinkOptions(
   if (detail.status === "confirmed") {
     return {
       paymentAllowsLink,
+      matchingFieldsChanged,
       canKeep: false,
       canPickCandidates: false,
       mustUnlinkToConfirm: detail.linked,
@@ -280,11 +352,13 @@ export function availableLinkOptions(
   }
 
   // draft / imported rows never carry server candidates; only keep if a matching token were ever supplied.
+  const canKeep = tokensValid && detail.linked && currentCandidate !== null;
   return {
     paymentAllowsLink,
-    canKeep: paymentAllowsLink && detail.linked && currentCandidate !== null,
+    matchingFieldsChanged,
+    canKeep,
     canPickCandidates: false,
-    mustUnlinkToConfirm: false,
+    mustUnlinkToConfirm: detail.linked && !canKeep,
     currentCandidate: detail.linked ? currentCandidate : null,
   };
 }
@@ -297,11 +371,14 @@ export function draftFromDetail(
     detail.payment_method !== null && (RECEIPT_PAYMENT_METHODS as readonly string[]).includes(detail.payment_method)
       ? (detail.payment_method as ReceiptPaymentMethod)
       : "unknown";
-  const options = availableLinkOptions(detail, candidates, paymentMethod);
+  const options = availableLinkOptions(detail, candidates, paymentMethod, false);
   let linkChoice = "unlink";
   if (options.canKeep) {
     linkChoice = "keep";
-  } else if (detail.status === "needs_review" && !detail.linked && options.canPickCandidates) {
+  } else if (detail.linked) {
+    // Never default a linked receipt without a keep token to implicit unlink.
+    linkChoice = "";
+  } else if (detail.status === "needs_review" && options.canPickCandidates) {
     linkChoice = "candidate:0";
   }
   return {
@@ -326,6 +403,25 @@ export function draftFromDetail(
     })),
     linkChoice,
   };
+}
+
+/** Keeps link choices valid after field edits: disables stale tokens without silently unlinking linked receipts. */
+export function reconcileLinkChoice(
+  detail: ReceiptDetail,
+  prevChoice: string,
+  nextDraft: Pick<ReceiptConfirmDraft, "rawShopName" | "rawNip" | "totalAmount" | "currency" | "receiptDate" | "receiptKind" | "paymentMethod">,
+  candidates: readonly ReceiptCandidate[],
+): string {
+  if (prevChoice === "unlink") return "unlink";
+  const changed = hasMatchingFieldsChanged(detail, nextDraft);
+  const nextOptions = availableLinkOptions(detail, candidates, nextDraft.paymentMethod, changed);
+  if (prevChoice === "keep") {
+    return nextOptions.canKeep ? "keep" : (detail.linked ? "" : "unlink");
+  }
+  if (prevChoice.startsWith("candidate:")) {
+    return nextOptions.canPickCandidates ? prevChoice : (detail.linked ? "" : "unlink");
+  }
+  return "";
 }
 
 export function validPolishNip(nip: string): boolean {
@@ -471,31 +567,39 @@ export function buildConfirmRequest(
   const netSum = addDecimals(cleanLines.map((line) => line.net_line_total));
   if (netSum !== total) return { ok: false, errorKey: "budget.receipts.totalMismatch" };
 
-  const options = availableLinkOptions(detail, candidates, draft.paymentMethod);
-  let link: ReceiptLinkRequest | null = null;
-  if (options.paymentAllowsLink) {
-    if (draft.linkChoice === "keep") {
-      if (!options.canKeep || options.currentCandidate === null) {
-        return { ok: false, errorKey: "budget.receipts.invalidForm" };
-      }
-      link = {
-        account_id: options.currentCandidate.account_id,
-        entry_reference: options.currentCandidate.entry_reference,
-        candidate_token: options.currentCandidate.candidate_token,
-      };
-    } else if (draft.linkChoice.startsWith("candidate:")) {
-      if (!options.canPickCandidates) {
-        return { ok: false, errorKey: "budget.receipts.invalidForm" };
-      }
-      const idx = Number(draft.linkChoice.slice("candidate:".length));
-      const chosen = Number.isInteger(idx) ? candidates[idx] : undefined;
-      if (chosen === undefined) return { ok: false, errorKey: "budget.receipts.invalidForm" };
-      link = {
-        account_id: chosen.account_id,
-        entry_reference: chosen.entry_reference,
-        candidate_token: chosen.candidate_token,
-      };
+  if (draft.linkChoice === "") {
+    return { ok: false, errorKey: "budget.receipts.explicitUnlinkRequired" };
+  }
+
+  const fieldsChanged = hasMatchingFieldsChanged(detail, draft);
+  const options = availableLinkOptions(detail, candidates, draft.paymentMethod, fieldsChanged);
+  let link: ReceiptLinkRequest | null;
+
+  if (draft.linkChoice === "unlink") {
+    link = null;
+  } else if (draft.linkChoice === "keep") {
+    if (!options.paymentAllowsLink || !options.canKeep || options.currentCandidate === null) {
+      return { ok: false, errorKey: "budget.receipts.invalidForm" };
     }
+    link = {
+      account_id: options.currentCandidate.account_id,
+      entry_reference: options.currentCandidate.entry_reference,
+      candidate_token: options.currentCandidate.candidate_token,
+    };
+  } else if (draft.linkChoice.startsWith("candidate:")) {
+    if (!options.paymentAllowsLink || !options.canPickCandidates) {
+      return { ok: false, errorKey: "budget.receipts.invalidForm" };
+    }
+    const idx = Number(draft.linkChoice.slice("candidate:".length));
+    const chosen = Number.isInteger(idx) ? candidates[idx] : undefined;
+    if (chosen === undefined) return { ok: false, errorKey: "budget.receipts.invalidForm" };
+    link = {
+      account_id: chosen.account_id,
+      entry_reference: chosen.entry_reference,
+      candidate_token: chosen.candidate_token,
+    };
+  } else {
+    return { ok: false, errorKey: "budget.receipts.invalidForm" };
   }
 
   return {

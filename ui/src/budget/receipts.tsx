@@ -27,19 +27,25 @@ import {
   buildReceiptListRequest,
   candidateDisplayDate,
   computeLinesDelta,
+  createPendingReceiptStore,
   draftFromDetail,
   filterReceiptRows,
+  findCurrentLinkedCandidate,
   hasActiveReceiptFilter,
   hasClientSideFilter,
+  hasMatchingFieldsChanged,
   isRedactedValue,
   isStaleCursorError,
   mergeReceiptRows,
   normalizeDecimalInput,
   receiptAccountLabel,
+  reconcileLinkChoice,
   subtractDecimals,
   validReceiptDateRange,
 } from "./receipts_model";
 import type {
+  PendingReceiptStore,
+  ReceiptActionKind,
   ReceiptCandidate,
   ReceiptConfirmDraft,
   ReceiptDetail,
@@ -48,6 +54,7 @@ import type {
   ReceiptFilter,
   ReceiptLineInput,
   ReceiptPaymentMethod,
+  ReceiptSettledEvent,
   ReceiptSourceKind,
   ReceiptStatus,
   ReceiptSummary,
@@ -55,8 +62,20 @@ import type {
 
 type AccessBarrier = (result: { ok: boolean; status?: number; error?: string }) => boolean;
 
+const fallbackPendingStores = new WeakMap<ReceiptsApi, PendingReceiptStore>();
+
+function getFallbackPendingStore(api: ReceiptsApi): PendingReceiptStore {
+  let store = fallbackPendingStores.get(api);
+  if (store === undefined) {
+    store = createPendingReceiptStore();
+    fallbackPendingStores.set(api, store);
+  }
+  return store;
+}
+
 export interface ReceiptsViewProps {
   receiptsApi?: ReceiptsApi | undefined;
+  pendingStore?: PendingReceiptStore | undefined;
   actorKey?: string | undefined;
   accounts: readonly BudgetAccount[];
   connections?: readonly BudgetConnection[] | undefined;
@@ -171,6 +190,7 @@ function confirmErrorText(error: string): string {
 
 export function ReceiptsView({
   receiptsApi = defaultReceiptsApi,
+  pendingStore,
   actorKey = "",
   accounts,
   connections = [],
@@ -178,6 +198,8 @@ export function ReceiptsView({
   revision,
   onAccessLoss,
 }: ReceiptsViewProps) {
+  const store = pendingStore ?? getFallbackPendingStore(receiptsApi);
+
   const [draft, setDraft] = useState<ReceiptFilter>(EMPTY_RECEIPT_FILTER);
   const [filter, setFilter] = useState<ReceiptFilter>(EMPTY_RECEIPT_FILTER);
   const [listState, setListState] = useState<ListState>({ kind: "loading" });
@@ -189,15 +211,15 @@ export function ReceiptsView({
   const [detailState, setDetailState] = useState<DetailState>({ kind: "loading" });
   const [detailRefresh, setDetailRefresh] = useState(0);
   const [imageState, setImageState] = useState<ImageState>({ kind: "none" });
-  const [actionBusy, setActionBusy] = useState<"confirm" | "delete" | null>(null);
+  const [pendingMap, setPendingMap] = useState<ReadonlyMap<string, ReceiptActionKind>>(() => store.snapshot());
 
   const mounted = useRef(true);
   const listGeneration = useRef(0);
   const detailGeneration = useRef(0);
   const imageGeneration = useRef(0);
-  const actionGeneration = useRef(0);
-  const actionInFlightRef = useRef<string | null>(null);
+  const receiptFloorGenRef = useRef<Map<string, number>>(new Map());
   const openReceiptIdRef = useRef<string | null>(null);
+  const loadedReceiptIdRef = useRef<string | null>(null);
   const staleCursorReloadedRef = useRef(false);
   const activeImageUrl = useRef<string | null>(null);
 
@@ -212,23 +234,26 @@ export function ReceiptsView({
     setImageState({ kind: "none" });
   }, []);
 
-  const clearAllReceiptsState = useCallback((disabled: boolean, disabledRevision: number | null = null) => {
-    listGeneration.current += 1;
+  const resetDrawer = useCallback(() => {
     detailGeneration.current += 1;
-    actionGeneration.current += 1;
-    actionInFlightRef.current = null;
     openReceiptIdRef.current = null;
-    staleCursorReloadedRef.current = false;
+    loadedReceiptIdRef.current = null;
     clearImage();
-    setActionBusy(null);
     setSelectedId(null);
     setDetailState({ kind: "loading" });
+  }, [clearImage]);
+
+  const clearAllReceiptsState = useCallback((disabled: boolean, disabledRevision: number | null = null) => {
+    listGeneration.current += 1;
+    receiptFloorGenRef.current.clear();
+    staleCursorReloadedRef.current = false;
+    resetDrawer();
     setDraft(EMPTY_RECEIPT_FILTER);
     setFilter(EMPTY_RECEIPT_FILTER);
     setNotice(null);
     setDisabledAtRevision(disabled ? disabledRevision : null);
     setListState(disabled ? { kind: "disabled" } : { kind: "error" });
-  }, [clearImage]);
+  }, [resetDrawer]);
 
   const checkBarrier = useCallback((
     result: { ok: boolean; status?: number; error?: string },
@@ -253,13 +278,29 @@ export function ReceiptsView({
       listGeneration.current += 1;
       detailGeneration.current += 1;
       imageGeneration.current += 1;
-      actionGeneration.current += 1;
-      actionInFlightRef.current = null;
       openReceiptIdRef.current = null;
       revokeObjectUrl(activeImageUrl.current);
       activeImageUrl.current = null;
     };
   }, []);
+
+  // Subscribe to persistent store so locks survive unmount/remount and late settlements refresh the panel.
+  useEffect(() => {
+    setPendingMap(store.snapshot());
+    return store.subscribe((event?: ReceiptSettledEvent) => {
+      if (!mounted.current) return;
+      setPendingMap(store.snapshot());
+      if (event !== undefined
+        && (event.outcome === "confirmed" || event.outcome === "deleted" || event.outcome === "not_found")) {
+        staleCursorReloadedRef.current = false;
+        setListRefresh((current) => current + 1);
+        if (openReceiptIdRef.current === event.receiptId && event.outcome === "confirmed") {
+          receiptFloorGenRef.current.set(event.receiptId, ++detailGeneration.current);
+          setDetailRefresh((current) => current + 1);
+        }
+      }
+    });
+  }, [store]);
 
   const searchMode = filter.query.trim() !== "";
 
@@ -338,38 +379,45 @@ export function ReceiptsView({
   useEffect(() => {
     if (selectedId === null) {
       detailGeneration.current += 1;
+      loadedReceiptIdRef.current = null;
       clearImage();
+      setDetailState({ kind: "loading" });
       return;
     }
     const targetId = selectedId;
     const token = ++detailGeneration.current;
-    setDetailState({ kind: "loading" });
-    clearImage();
+    if (loadedReceiptIdRef.current !== targetId) {
+      setDetailState({ kind: "loading" });
+      clearImage();
+    }
     void receiptsApi.receiptDetail(targetId).then((result: BudgetResult<ReceiptDetailResult>) => {
+      const floorToken = receiptFloorGenRef.current.get(targetId) ?? 0;
       if (checkBarrier(result) || !mounted.current || token !== detailGeneration.current
-        || openReceiptIdRef.current !== targetId) return;
+        || token <= floorToken || openReceiptIdRef.current !== targetId) return;
       if (!result.ok) {
         if (result.status === 404) {
-          openReceiptIdRef.current = null;
-          setSelectedId(null);
+          resetDrawer();
           setNotice(t("budget.receipts.notFound"));
           staleCursorReloadedRef.current = false;
           setListRefresh((current) => current + 1);
           return;
         }
+        loadedReceiptIdRef.current = null;
         setDetailState({ kind: "error" });
         return;
       }
       const receipt = result.data.receipt;
       const candidates = result.data.candidates ?? [];
+      loadedReceiptIdRef.current = receipt.receipt_id;
       setDetailState({ kind: "ready", detail: receipt, candidates });
       if (receipt.image_available) {
         const imgToken = ++imageGeneration.current;
         setImageState({ kind: "loading" });
         void receiptsApi.receiptImage(receipt.receipt_id).then((imgResult) => {
+          const latestFloor = receiptFloorGenRef.current.get(targetId) ?? 0;
           if (checkBarrier(imgResult, { isImageRequest: true }) || !mounted.current
             || imgToken !== imageGeneration.current || token !== detailGeneration.current
-            || openReceiptIdRef.current !== targetId) return;
+            || token <= latestFloor || openReceiptIdRef.current !== targetId) return;
           if (!imgResult.ok) {
             setImageState(imgResult.status === 404 ? { kind: "none" } : { kind: "unavailable" });
             return;
@@ -385,37 +433,25 @@ export function ReceiptsView({
         });
       }
     });
-  }, [receiptsApi, selectedId, revision, detailRefresh, checkBarrier, clearImage]);
+  }, [receiptsApi, selectedId, revision, detailRefresh, checkBarrier, clearImage, resetDrawer]);
+
+  const drawerActionBusy: ReceiptActionKind | null =
+    selectedId === null ? null : (pendingMap.get(selectedId) ?? null);
 
   const openReceipt = useCallback((receiptId: string) => {
-    if (actionInFlightRef.current !== null || openReceiptIdRef.current === receiptId) return;
+    if ((openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null)
+      || openReceiptIdRef.current === receiptId) return;
     openReceiptIdRef.current = receiptId;
+    loadedReceiptIdRef.current = null;
+    setDetailState({ kind: "loading" });
     setNotice(null);
     setSelectedId(receiptId);
-  }, []);
+  }, [store]);
 
   const closeDetail = useCallback(() => {
-    if (actionInFlightRef.current !== null) return;
-    detailGeneration.current += 1;
-    openReceiptIdRef.current = null;
-    clearImage();
-    setSelectedId(null);
-  }, [clearImage]);
-
-  const beginAction = useCallback((receiptId: string, kind: "confirm" | "delete"): number | null => {
-    if (actionInFlightRef.current !== null || openReceiptIdRef.current !== receiptId) return null;
-    actionInFlightRef.current = receiptId;
-    setActionBusy(kind);
-    return ++actionGeneration.current;
-  }, []);
-
-  const settleAction = useCallback((token: number, receiptId: string): boolean => {
-    if (token === actionGeneration.current && actionInFlightRef.current === receiptId) {
-      actionInFlightRef.current = null;
-      if (mounted.current) setActionBusy(null);
-    }
-    return mounted.current && token === actionGeneration.current && openReceiptIdRef.current === receiptId;
-  }, []);
+    if (openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null) return;
+    resetDrawer();
+  }, [store, resetDrawer]);
 
   const applyFilter = (next: ReceiptFilter) => {
     if (!validReceiptDateRange(next)) return;
@@ -581,48 +617,56 @@ export function ReceiptsView({
             <>
               <p className="budget-muted">{t("budget.receipts.shownCount", { count: shownRows.length })}</p>
               <ul className="budget-entry-list" aria-label={title}>
-                {shownRows.map((row) => (
-                  <li key={row.receipt_id} className="budget-entry budget-receipt-row">
-                    <div className="budget-receipt-row-main">
-                      <span className="budget-muted">
-                        {row.receipt_date ?? t("budget.receipts.noDate")}
-                        {row.receipt_time !== null && row.receipt_time !== "" ? ` ${row.receipt_time}` : ""}
-                      </span>
-                      <strong className="budget-receipt-merchant">
-                        <RedactedOrText
-                          value={row.raw_shop_name}
-                          fallback={row.forwarded_sender_domain ?? t("budget.receipts.unknownMerchant")}
-                        />
-                      </strong>
-                      <strong className="budget-receipt-total">{receiptTotalDisplay(row, locale)}</strong>
-                    </div>
-                    <div className="budget-entry-facts">
-                      <span className="budget-receipt-source" data-source-kind={row.source_kind}>
-                        <SourceIcon kind={row.source_kind} />
-                        <span>{labelOf(RECEIPT_SOURCE_KIND_KEYS, row.source_kind)}</span>
-                      </span>
-                      {row.document_kind === null ? null : (
-                        <span className="budget-chip">{labelOf(RECEIPT_DOC_KIND_KEYS, row.document_kind)}</span>
-                      )}
-                      {row.receipt_kind === "refund" ? (
-                        <span className="budget-chip">{t("budget.receipts.receiptKind.refund")}</span>
-                      ) : null}
-                      <span className="budget-chip budget-receipt-status" data-status={row.status}>
-                        {labelOf(RECEIPT_STATUS_KEYS, row.status)}
-                      </span>
-                      <span className="budget-chip budget-receipt-link-badge" data-linked={row.linked ? "true" : "false"}>
-                        {row.linked ? t("budget.receipts.linkedBadge") : t("budget.receipts.unlinkedBadge")}
-                      </span>
-                      <button
-                        type="button"
-                        disabled={actionBusy !== null}
-                        onClick={() => { openReceipt(row.receipt_id); }}
-                      >
-                        {t("budget.receipts.open")}
-                      </button>
-                    </div>
-                  </li>
-                ))}
+                {shownRows.map((row) => {
+                  const rowPending = pendingMap.get(row.receipt_id) ?? null;
+                  return (
+                    <li key={row.receipt_id} className="budget-entry budget-receipt-row">
+                      <div className="budget-receipt-row-main">
+                        <span className="budget-muted">
+                          {row.receipt_date ?? t("budget.receipts.noDate")}
+                          {row.receipt_time !== null && row.receipt_time !== "" ? ` ${row.receipt_time}` : ""}
+                        </span>
+                        <strong className="budget-receipt-merchant">
+                          <RedactedOrText
+                            value={row.raw_shop_name}
+                            fallback={row.forwarded_sender_domain ?? t("budget.receipts.unknownMerchant")}
+                          />
+                        </strong>
+                        <strong className="budget-receipt-total">{receiptTotalDisplay(row, locale)}</strong>
+                      </div>
+                      <div className="budget-entry-facts">
+                        <span className="budget-receipt-source" data-source-kind={row.source_kind}>
+                          <SourceIcon kind={row.source_kind} />
+                          <span>{labelOf(RECEIPT_SOURCE_KIND_KEYS, row.source_kind)}</span>
+                        </span>
+                        {row.document_kind === null ? null : (
+                          <span className="budget-chip">{labelOf(RECEIPT_DOC_KIND_KEYS, row.document_kind)}</span>
+                        )}
+                        {row.receipt_kind === "refund" ? (
+                          <span className="budget-chip">{t("budget.receipts.receiptKind.refund")}</span>
+                        ) : null}
+                        <span className="budget-chip budget-receipt-status" data-status={row.status}>
+                          {labelOf(RECEIPT_STATUS_KEYS, row.status)}
+                        </span>
+                        <span className="budget-chip budget-receipt-link-badge" data-linked={row.linked ? "true" : "false"}>
+                          {row.linked ? t("budget.receipts.linkedBadge") : t("budget.receipts.unlinkedBadge")}
+                        </span>
+                        {rowPending === null ? null : (
+                          <span className="budget-chip budget-muted" role="status">
+                            {rowPending === "confirm" ? t("budget.receipts.confirming") : t("budget.receipts.deleting")}
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          disabled={drawerActionBusy !== null}
+                          onClick={() => { openReceipt(row.receipt_id); }}
+                        >
+                          {t("budget.receipts.open")}
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             </>
           )}
@@ -646,42 +690,44 @@ export function ReceiptsView({
         <ReceiptDetailDrawer
           key={`${actorKey}:${selectedId}`}
           api={receiptsApi}
+          store={store}
           accounts={accounts}
           connections={connections}
           locale={locale}
           detailState={detailState}
           imageState={imageState}
-          actionBusy={actionBusy}
-          beginAction={beginAction}
-          settleAction={settleAction}
+          actionBusy={drawerActionBusy}
+          isOpenReceipt={(receiptId) => openReceiptIdRef.current === receiptId}
           onAccessLoss={checkBarrier}
           onClose={closeDetail}
           onRetryDetail={() => { setDetailRefresh((current) => current + 1); }}
           onConfirmed={(updated) => {
+            const floorToken = ++detailGeneration.current;
+            receiptFloorGenRef.current.set(updated.receipt_id, floorToken);
             setDetailState({ kind: "ready", detail: updated, candidates: [] });
             setNotice(t("budget.receipts.confirmSuccess"));
             staleCursorReloadedRef.current = false;
             setListRefresh((current) => current + 1);
           }}
-          onConflictOrStale={() => {
+          onConflictOrStale={(receiptId) => {
+            const floorToken = ++detailGeneration.current;
+            receiptFloorGenRef.current.set(receiptId, floorToken);
             setDetailRefresh((current) => current + 1);
             staleCursorReloadedRef.current = false;
             setListRefresh((current) => current + 1);
           }}
-          onNotFound={() => {
-            detailGeneration.current += 1;
-            openReceiptIdRef.current = null;
-            clearImage();
-            setSelectedId(null);
+          onNotFound={(receiptId) => {
+            const floorToken = ++detailGeneration.current;
+            receiptFloorGenRef.current.set(receiptId, floorToken);
+            resetDrawer();
             setNotice(t("budget.receipts.notFound"));
             staleCursorReloadedRef.current = false;
             setListRefresh((current) => current + 1);
           }}
-          onDeleted={() => {
-            detailGeneration.current += 1;
-            openReceiptIdRef.current = null;
-            clearImage();
-            setSelectedId(null);
+          onDeleted={(receiptId) => {
+            const floorToken = ++detailGeneration.current;
+            receiptFloorGenRef.current.set(receiptId, floorToken);
+            resetDrawer();
             staleCursorReloadedRef.current = false;
             setListRefresh((current) => current + 1);
           }}
@@ -693,33 +739,33 @@ export function ReceiptsView({
 
 interface DrawerProps {
   api: Pick<ReceiptsApi, "confirmReceipt" | "deleteReceipt">;
+  store: PendingReceiptStore;
   accounts: readonly BudgetAccount[];
   connections: readonly BudgetConnection[];
   locale: string;
   detailState: DetailState;
   imageState: ImageState;
-  actionBusy: "confirm" | "delete" | null;
-  beginAction: (receiptId: string, kind: "confirm" | "delete") => number | null;
-  settleAction: (token: number, receiptId: string) => boolean;
+  actionBusy: ReceiptActionKind | null;
+  isOpenReceipt: (receiptId: string) => boolean;
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
   onClose: () => void;
   onRetryDetail: () => void;
   onConfirmed: (receipt: ReceiptDetail) => void;
-  onConflictOrStale: () => void;
-  onNotFound: () => void;
-  onDeleted: () => void;
+  onConflictOrStale: (receiptId: string) => void;
+  onNotFound: (receiptId: string) => void;
+  onDeleted: (receiptId: string) => void;
 }
 
 function ReceiptDetailDrawer({
   api,
+  store,
   accounts,
   connections,
   locale,
   detailState,
   imageState,
   actionBusy,
-  beginAction,
-  settleAction,
+  isOpenReceipt,
   onAccessLoss,
   onClose,
   onRetryDetail,
@@ -732,6 +778,12 @@ function ReceiptDetailDrawer({
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const keepActionErrorRef = useRef(false);
+  const drawerMountedRef = useRef(true);
+
+  useEffect(() => {
+    drawerMountedRef.current = true;
+    return () => { drawerMountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -764,65 +816,100 @@ function ReceiptDetailDrawer({
 
   const title = t("budget.receipts.detailTitle");
 
+  const updateDraftFields = (
+    detail: ReceiptDetail,
+    candidates: readonly ReceiptCandidate[],
+    patch: Partial<ReceiptConfirmDraft>,
+  ) => {
+    setConfirmDraft((current) => {
+      if (current === null) return null;
+      const next = { ...current, ...patch };
+      return {
+        ...next,
+        linkChoice: reconcileLinkChoice(detail, current.linkChoice, next, candidates),
+      };
+    });
+  };
+
   const submitConfirm = async (detail: ReceiptDetail, candidates: readonly ReceiptCandidate[], draft: ReceiptConfirmDraft) => {
     const built = buildConfirmRequest(detail, draft, candidates);
     if (!built.ok) {
       setActionError(t(built.errorKey));
       return;
     }
-    const token = beginAction(detail.receipt_id, "confirm");
-    if (token === null) return;
+    if (!isOpenReceipt(detail.receipt_id)) return;
+    const lockToken = store.tryAcquire(detail.receipt_id, "confirm");
+    if (lockToken === null) return;
     keepActionErrorRef.current = false;
     setActionError(null);
-    const result = await api.confirmReceipt(built.request);
-    if (onAccessLoss(result)) {
-      settleAction(token, detail.receipt_id);
-      return;
-    }
-    if (!settleAction(token, detail.receipt_id)) return;
-    if (!result.ok) {
-      if (result.status === 404) {
-        onNotFound();
+    let outcome: ReceiptSettledEvent["outcome"] = "error";
+    let handledInMountedDrawer = false;
+    try {
+      const result = await api.confirmReceipt(built.request);
+      if (result.ok) {
+        outcome = "confirmed";
+      } else if (result.status === 404) {
+        outcome = "not_found";
+      }
+      const stillOpen = drawerMountedRef.current && isOpenReceipt(detail.receipt_id);
+      if (onAccessLoss(result) || !stillOpen) return;
+      handledInMountedDrawer = true;
+      if (!result.ok) {
+        if (result.status === 404) {
+          onNotFound(detail.receipt_id);
+          return;
+        }
+        setActionError(confirmErrorText(result.error));
+        if (result.error === "budget_receipt_conflict"
+          || result.error === "budget_receipt_tx_already_linked"
+          || result.error === "budget_receipt_stale_source") {
+          keepActionErrorRef.current = true;
+          onConflictOrStale(detail.receipt_id);
+        }
         return;
       }
-      setActionError(confirmErrorText(result.error));
-      if (result.error === "budget_receipt_conflict"
-        || result.error === "budget_receipt_tx_already_linked"
-        || result.error === "budget_receipt_stale_source") {
-        keepActionErrorRef.current = true;
-        onConflictOrStale();
-      }
-      return;
+      onConfirmed(result.data.receipt);
+    } finally {
+      store.release(detail.receipt_id, lockToken, handledInMountedDrawer ? undefined : outcome);
     }
-    onConfirmed(result.data.receipt);
   };
 
   const submitDelete = async (detail: ReceiptDetail) => {
-    const token = beginAction(detail.receipt_id, "delete");
-    if (token === null) return;
+    if (!isOpenReceipt(detail.receipt_id)) return;
+    const lockToken = store.tryAcquire(detail.receipt_id, "delete");
+    if (lockToken === null) return;
     keepActionErrorRef.current = false;
     setActionError(null);
-    const result = await api.deleteReceipt({ receipt_id: detail.receipt_id, expected_version: detail.version });
-    if (onAccessLoss(result)) {
-      settleAction(token, detail.receipt_id);
-      return;
-    }
-    if (!settleAction(token, detail.receipt_id)) return;
-    if (!result.ok) {
-      if (result.status === 404) {
-        onNotFound();
+    let outcome: ReceiptSettledEvent["outcome"] = "error";
+    let handledInMountedDrawer = false;
+    try {
+      const result = await api.deleteReceipt({ receipt_id: detail.receipt_id, expected_version: detail.version });
+      if (result.ok) {
+        outcome = "deleted";
+      } else if (result.status === 404) {
+        outcome = "not_found";
+      }
+      const stillOpen = drawerMountedRef.current && isOpenReceipt(detail.receipt_id);
+      if (onAccessLoss(result) || !stillOpen) return;
+      handledInMountedDrawer = true;
+      if (!result.ok) {
+        if (result.status === 404) {
+          onNotFound(detail.receipt_id);
+          return;
+        }
+        setActionError(result.error === "budget_receipt_conflict"
+          ? t("budget.receipts.conflict")
+          : t("budget.receipts.deleteError"));
+        if (result.error === "budget_receipt_conflict") {
+          keepActionErrorRef.current = true;
+          onConflictOrStale(detail.receipt_id);
+        }
         return;
       }
-      setActionError(result.error === "budget_receipt_conflict"
-        ? t("budget.receipts.conflict")
-        : t("budget.receipts.deleteError"));
-      if (result.error === "budget_receipt_conflict") {
-        keepActionErrorRef.current = true;
-        onConflictOrStale();
-      }
-      return;
+      onDeleted(detail.receipt_id);
+    } finally {
+      store.release(detail.receipt_id, lockToken, handledInMountedDrawer ? undefined : outcome);
     }
-    onDeleted();
   };
 
   const addSummaryLine = (detail: ReceiptDetail, draft: ReceiptConfirmDraft) => {
@@ -893,16 +980,19 @@ function ReceiptDetailDrawer({
         ) : (() => {
           const { detail, candidates } = detailState;
           const draftMethod: ReceiptPaymentMethod = confirmDraft?.paymentMethod ?? "unknown";
-          const linkOptions = availableLinkOptions(detail, candidates, draftMethod);
+          const matchingChanged = confirmDraft !== null && hasMatchingFieldsChanged(detail, confirmDraft);
+          const linkOptions = availableLinkOptions(detail, candidates, draftMethod, matchingChanged);
           const { currentCandidate } = linkOptions;
+          const hasStoredKeepCandidate = findCurrentLinkedCandidate(detail, candidates) !== null;
           const lineDelta = confirmDraft === null ? null : computeLinesDelta(confirmDraft.lines, confirmDraft.totalAmount);
-          const usesCandidateChoice = confirmDraft !== null
-            && linkOptions.paymentAllowsLink
-            && (confirmDraft.linkChoice === "keep" || confirmDraft.linkChoice.startsWith("candidate:"));
-          const merchantOrNipEdited = confirmDraft !== null && (
-            confirmDraft.rawShopName.trim() !== (detail.raw_shop_name ?? "").trim()
-            || confirmDraft.rawNip.trim() !== (detail.raw_nip ?? "").trim()
-          );
+          const deltaCurrency = (confirmDraft?.currency.trim() || detail.currency) ?? "PLN";
+          const lineDeltaDisplay = lineDelta !== null && lineDelta !== "0"
+            ? formatAmount(lineDelta, deltaCurrency, locale)
+            : null;
+          const showKeepRadio = linkOptions.canKeep || (hasStoredKeepCandidate && detail.status !== "confirmed");
+          const showCandidateRadios = detail.status === "needs_review" && candidates.length > 0;
+          const tokensDisabledByEdit = matchingChanged && (showKeepRadio || showCandidateRadios || detail.linked);
+          const disableTokens = actionBusy !== null || !linkOptions.paymentAllowsLink || matchingChanged;
 
           return (
             <div className="budget-receipt-drawer-body">
@@ -1097,7 +1187,7 @@ function ReceiptDetailDrawer({
                         disabled={actionBusy !== null}
                         value={confirmDraft.rawShopName}
                         onChange={(event) => {
-                          setConfirmDraft({ ...confirmDraft, rawShopName: event.currentTarget.value });
+                          updateDraftFields(detail, candidates, { rawShopName: event.currentTarget.value });
                         }}
                       />
                     </label>
@@ -1110,7 +1200,7 @@ function ReceiptDetailDrawer({
                         disabled={actionBusy !== null}
                         value={confirmDraft.rawNip}
                         onChange={(event) => {
-                          setConfirmDraft({ ...confirmDraft, rawNip: event.currentTarget.value });
+                          updateDraftFields(detail, candidates, { rawNip: event.currentTarget.value });
                         }}
                       />
                     </label>
@@ -1121,8 +1211,7 @@ function ReceiptDetailDrawer({
                         disabled={actionBusy !== null}
                         value={confirmDraft.receiptKind}
                         onChange={(event) => {
-                          setConfirmDraft({
-                            ...confirmDraft,
+                          updateDraftFields(detail, candidates, {
                             receiptKind: event.currentTarget.value as ReceiptConfirmDraft["receiptKind"],
                           });
                         }}
@@ -1141,7 +1230,7 @@ function ReceiptDetailDrawer({
                         disabled={actionBusy !== null}
                         value={confirmDraft.receiptDate}
                         onChange={(event) => {
-                          setConfirmDraft({ ...confirmDraft, receiptDate: event.currentTarget.value });
+                          updateDraftFields(detail, candidates, { receiptDate: event.currentTarget.value });
                         }}
                       />
                     </label>
@@ -1169,7 +1258,7 @@ function ReceiptDetailDrawer({
                         disabled={actionBusy !== null}
                         value={confirmDraft.totalAmount}
                         onChange={(event) => {
-                          setConfirmDraft({ ...confirmDraft, totalAmount: event.currentTarget.value });
+                          updateDraftFields(detail, candidates, { totalAmount: event.currentTarget.value });
                         }}
                       />
                     </label>
@@ -1183,7 +1272,7 @@ function ReceiptDetailDrawer({
                         disabled={actionBusy !== null}
                         value={confirmDraft.currency}
                         onChange={(event) => {
-                          setConfirmDraft({ ...confirmDraft, currency: event.currentTarget.value.toUpperCase() });
+                          updateDraftFields(detail, candidates, { currency: event.currentTarget.value.toUpperCase() });
                         }}
                       />
                     </label>
@@ -1194,15 +1283,8 @@ function ReceiptDetailDrawer({
                         disabled={actionBusy !== null}
                         value={confirmDraft.paymentMethod}
                         onChange={(event) => {
-                          const nextMethod = event.currentTarget.value as ReceiptPaymentMethod;
-                          const nextOptions = availableLinkOptions(detail, candidates, nextMethod);
-                          const keepAllowed = confirmDraft.linkChoice === "keep" && nextOptions.canKeep;
-                          const candAllowed = confirmDraft.linkChoice.startsWith("candidate:")
-                            && nextOptions.canPickCandidates;
-                          setConfirmDraft({
-                            ...confirmDraft,
-                            paymentMethod: nextMethod,
-                            linkChoice: keepAllowed || candAllowed ? confirmDraft.linkChoice : "unlink",
+                          updateDraftFields(detail, candidates, {
+                            paymentMethod: event.currentTarget.value as ReceiptPaymentMethod,
                           });
                         }}
                       >
@@ -1238,11 +1320,13 @@ function ReceiptDetailDrawer({
                         )}
                       </div>
                     </div>
-                    {lineDelta !== null && lineDelta !== "0" ? (
-                      <p className="budget-warn" role="note">{t("budget.receipts.totalMismatch")}</p>
-                    ) : null}
+                    {lineDeltaDisplay === null ? null : (
+                      <p className="budget-warn">
+                        {t("budget.receipts.mathDelta")}: {lineDeltaDisplay}
+                      </p>
+                    )}
                     {confirmDraft.lines.map((line, idx) => (
-                      <div key={idx} className="budget-receipt-edit-line">
+                      <div key={idx} className="budget-receipt-line-edit">
                         <label>
                           {t("budget.receipts.lineName")}
                           <input
@@ -1261,11 +1345,10 @@ function ReceiptDetailDrawer({
                             disabled={actionBusy !== null}
                             value={line.net_line_total}
                             onChange={(event) => {
-                              const value = event.currentTarget.value;
                               updateLine(idx, {
-                                gross_line_total: value,
+                                gross_line_total: event.currentTarget.value,
                                 discount_amount: "0",
-                                net_line_total: value,
+                                net_line_total: event.currentTarget.value,
                               });
                             }}
                           />
@@ -1282,24 +1365,30 @@ function ReceiptDetailDrawer({
                     {!linkOptions.paymentAllowsLink ? (
                       <p className="budget-muted">{t("budget.receipts.cashNoLinkNote")}</p>
                     ) : null}
-                    {linkOptions.mustUnlinkToConfirm ? (
+                    {linkOptions.mustUnlinkToConfirm && detail.status === "confirmed" ? (
                       <p className="budget-warn" role="note">{t("budget.receipts.confirmedUnlinkNote")}</p>
+                    ) : null}
+                    {detail.status === "needs_review" && detail.linked && currentCandidate === null && !matchingChanged ? (
+                      <p className="budget-warn" role="note">{t("budget.receipts.needsReviewNoKeepNote")}</p>
                     ) : null}
                     {detail.status === "draft" || detail.status === "imported" ? (
                       <p className="budget-muted">{t("budget.receipts.draftNoCandidatesNote")}</p>
                     ) : null}
-                    {usesCandidateChoice && merchantOrNipEdited ? (
+                    {tokensDisabledByEdit ? (
                       <p className="budget-warn" role="note">{t("budget.receipts.staleSourceEditHint")}</p>
                     ) : null}
+                    {confirmDraft.linkChoice === "" ? (
+                      <p className="budget-warn" role="note">{t("budget.receipts.explicitUnlinkRequired")}</p>
+                    ) : null}
 
-                    {linkOptions.canKeep ? (
+                    {showKeepRadio ? (
                       <label className="budget-toggle">
                         <input
                           type="radio"
                           name="link_choice"
                           value="keep"
-                          disabled={actionBusy !== null}
-                          checked={confirmDraft.linkChoice === "keep"}
+                          disabled={disableTokens}
+                          checked={confirmDraft.linkChoice === "keep" && linkOptions.canKeep}
                           onChange={() => { setConfirmDraft({ ...confirmDraft, linkChoice: "keep" }); }}
                         />
                         <span>{t("budget.receipts.linkChoiceKeep")}</span>
@@ -1320,7 +1409,7 @@ function ReceiptDetailDrawer({
                       </span>
                     </label>
 
-                    {linkOptions.canPickCandidates ? candidates.map((candidate, index) => {
+                    {showCandidateRadios ? candidates.map((candidate, index) => {
                       if (currentCandidate !== null
                         && candidate.account_id === currentCandidate.account_id
                         && candidate.entry_reference === currentCandidate.entry_reference) {
@@ -1344,8 +1433,8 @@ function ReceiptDetailDrawer({
                             type="radio"
                             name="link_choice"
                             value={choiceValue}
-                            disabled={actionBusy !== null}
-                            checked={confirmDraft.linkChoice === choiceValue}
+                            disabled={disableTokens}
+                            checked={confirmDraft.linkChoice === choiceValue && linkOptions.canPickCandidates}
                             onChange={() => { setConfirmDraft({ ...confirmDraft, linkChoice: choiceValue }); }}
                           />
                           <span>
@@ -1364,7 +1453,7 @@ function ReceiptDetailDrawer({
                     <button
                       type="submit"
                       className="budget-primary"
-                      disabled={actionBusy !== null}
+                      disabled={actionBusy !== null || confirmDraft.linkChoice === ""}
                     >
                       {actionBusy === "confirm"
                         ? t("budget.receipts.confirming")

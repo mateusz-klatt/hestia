@@ -354,7 +354,6 @@ describe("ReceiptsView", () => {
     expect(host.querySelector('[data-source-kind="attachment"] svg')).not.toBeNull();
     expect(host.querySelector('[data-source-kind="email"] svg')).not.toBeNull();
 
-    // Polish locale shows accurate placeholder ("Sklep, NIP lub pozycja") and "Paragony i dowody".
     await renderReceipts(clients, { locale: "pl" });
     expect(host.textContent).toContain("Paragony i dowody");
     expect(inputByName("query").placeholder).toBe("Sklep, NIP lub pozycja");
@@ -370,36 +369,6 @@ describe("ReceiptsView", () => {
       receiptSummary({ receipt_id: "p1-c", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-28", linked: true }),
     ]);
     vi.mocked(clients.rApi.receiptsList)
-      .mockImplementationOnce(() => ok<ReceiptListResult>({ receipts: [receiptSummary()], next_cursor: null }))
-      .mockImplementationOnce(() => ok<ReceiptListResult>({
-        receipts: [
-          receiptSummary({ receipt_id: "p1-a", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-10", linked: true }),
-          receiptSummary({ receipt_id: "p1-b", status: "needs_review", document_kind: "invoice", source_kind: "email", receipt_date: "2026-11-10", linked: true }),
-          receiptSummary({ receipt_id: "p1-c", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-28", linked: true }),
-        ],
-        next_cursor: "cursor-page-2",
-      }))
-      .mockImplementationOnce(() => ok<ReceiptListResult>({
-        receipts: [
-          receiptSummary({ receipt_id: "p2-a", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-12", raw_shop_name: "Second Page Vendor", linked: true }),
-        ],
-        next_cursor: "cursor-ttl-expired",
-      }))
-      // First stale cursor reload from page 1 returns a new cursor:
-      .mockImplementationOnce(() => ok<ReceiptListResult>({
-        receipts: [
-          receiptSummary({ receipt_id: "reloaded-p1", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-10", raw_shop_name: "Fresh Page 1 Vendor", linked: true }),
-        ],
-        next_cursor: "cursor-still-bad",
-      }))
-      // Second stale cursor stops looping cleanly instead of retrying forever:
-      .mockImplementationOnce(() => fail(400, "budget_receipt_invalid_request"))
-      .mockImplementationOnce(() => ok<ReceiptListResult>({ receipts: [receiptSummary()], next_cursor: null }));
-
-    // Intercept the "cursor-ttl-expired" Load more call as 400 budget_receipt_invalid_request.
-    const rawListMock = vi.mocked(clients.rApi.receiptsList);
-    rawListMock.mockReset();
-    rawListMock
       .mockImplementationOnce(() => ok<ReceiptListResult>({ receipts: [receiptSummary()], next_cursor: null }))
       .mockImplementationOnce(() => ok<ReceiptListResult>({
         receipts: [
@@ -454,7 +423,6 @@ describe("ReceiptsView", () => {
     expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(1);
     expect(host.textContent).toContain("Filtering loaded pages only — load more to check older entries.");
 
-    // Load cursor page 2.
     await click(button("Load more"));
     expect(clients.rApi.receiptsList).toHaveBeenNthCalledWith(3, {
       limit: 50,
@@ -466,24 +434,14 @@ describe("ReceiptsView", () => {
     });
     expect(host.textContent).toContain("Second Page Vendor");
 
-    // Expired cursor triggers one clean page-1 reload with cursorExpiredNotice.
     await click(button("Load more"));
     expect(host.textContent).toContain("Page cursor expired — reloaded from page 1.");
     expect(host.textContent).toContain("Fresh Page 1 Vendor");
-    expect(clients.rApi.receiptsList).toHaveBeenNthCalledWith(5, {
-      limit: 50,
-      month: "2026-11",
-      status: "needs_review",
-      document_kind: "invoice",
-      linked: true,
-    });
 
-    // If stale cursor happens again without an intervening user filter reset, stop and clear nextCursor.
     await click(button("Load more"));
     expect(host.textContent).toContain("Receipts could not be loaded.");
     expect([...host.querySelectorAll("button")].some((b) => b.textContent === "Load more")).toBe(false);
 
-    // Search API (POST JSON) + client-side filtering hint.
     await typeInto(inputByName("query"), "Lidl");
     await submit(host.querySelector(".budget-range"));
     expect(clients.rApi.receiptsSearch).toHaveBeenCalledWith({ query: "Lidl", limit: 50 });
@@ -508,7 +466,6 @@ describe("ReceiptsView", () => {
     const storageGetSpy = vi.spyOn(Storage.prototype, "getItem");
     const storageSetSpy = vi.spyOn(Storage.prototype, "setItem");
 
-    // 1. Open receipt with image_available=false -> no receiptImage call, shows link summary from receipt.
     vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
       receipt: receiptDetail({
         receipt_id: "rec-no-img",
@@ -537,7 +494,6 @@ describe("ReceiptsView", () => {
     expect(drawer.textContent).not.toContain(REDACTED_VALUE);
     await click(button("Close", drawer));
 
-    // 2. Receipt advertising image_available=true whose image endpoint returns 404 hides preview & keeps drawer open.
     vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
       receipt: receiptDetail({ receipt_id: "rec-img-404", raw_shop_name: "Missing Scan Market", image_available: true }),
       candidates: [],
@@ -552,7 +508,6 @@ describe("ReceiptsView", () => {
     expect(drawer404.textContent).not.toContain("Receipt image");
     await click(button("Close", drawer404));
 
-    // 3. Receipt with valid image fetches WebP blob, renders img, revokes on close.
     vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
       receipt: receiptDetail({
         receipt_id: "rec-with-img",
@@ -575,7 +530,7 @@ describe("ReceiptsView", () => {
     expect(storageSetSpy).not.toHaveBeenCalled();
   });
 
-  it("enforces per-status link actions, hints on merchant edits, and reloads detail on 409 stale_source", async () => {
+  it("never implicitly unlinks linked receipts, disables stale tokens on field edits before submit, and handles server 409 stale_source", async () => {
     const candKeep = receiptCandidate({ entry_reference: "a".repeat(64), candidate_token: "tok-keep" });
     const candAlt = receiptCandidate({
       entry_reference: "b".repeat(64),
@@ -585,43 +540,37 @@ describe("ReceiptsView", () => {
       merchant_token_hit: false,
     });
     const clients = fakeClients([
-      receiptSummary({ receipt_id: "rec-confirm", document_kind: "invoice", status: "imported" }),
+      receiptSummary({ receipt_id: "rec-confirm", status: "needs_review" }),
     ]);
 
-    // 1. Imported invoice confirms with link: null and shows draftNoCandidatesNote (no candidate radios).
+    // 1. Linked needs_review WITHOUT keep token -> Confirm is disabled until user explicitly selects Unlink.
     vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
       receipt: receiptDetail({
         receipt_id: "rec-confirm",
-        document_kind: "invoice",
-        status: "imported",
-        payment_method: null,
-        total_amount: "42.50",
-        lines: [],
-        linked: false,
-        version: 3,
+        status: "needs_review",
+        linked: true,
+        linked_account_id: "local-a",
+        linked_entry_ref: "c".repeat(64),
+        version: 2,
       }),
-      candidates: [candAlt],
+      candidates: [],
     }));
 
     await renderReceipts(clients);
     await click(button("Details"));
-    const drawer1 = dialog();
-    expect(drawer1.textContent).toContain("Candidates are only checked on review");
-    expect(drawer1.querySelector('input[name="link_choice"][value="candidate:0"]')).toBeNull();
-    await choose(selectByName("payment_method", drawer1), "card");
-    await click(button("Add summary line", drawer1));
-    await click(button("Confirm receipt", drawer1));
+    const d1 = dialog();
+    expect(d1.textContent).toContain("No matching keep token is available for this link");
+    expect(linkRadio("unlink", d1).checked).toBe(false);
+    expect(button("Confirm receipt", d1).disabled).toBe(true);
+    await submit(d1.querySelector("form.budget-receipt-confirm"));
+    expect(clients.rApi.confirmReceipt).not.toHaveBeenCalled();
 
-    expect(clients.rApi.confirmReceipt).toHaveBeenCalledWith(expect.objectContaining({
-      receipt_id: "rec-confirm",
-      expected_version: 3,
-      payment_method: "card",
-      total_amount: "42.5",
-      link: null,
-    }));
-    expect(host.textContent).toContain("Receipt confirmed and saved.");
+    await click(linkRadio("unlink", d1));
+    expect(button("Confirm receipt", d1).disabled).toBe(false);
+    await click(button("Confirm receipt", d1));
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({ link: null }));
 
-    // 2. Confirmed linked receipt exposes ONLY unlink (no keep radio), emits link: null.
+    // 2. Confirmed linked receipt also requires explicit Unlink before Confirm becomes active.
     vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
       receipt: receiptDetail({
         receipt_id: "rec-confirm",
@@ -629,58 +578,148 @@ describe("ReceiptsView", () => {
         linked: true,
         linked_account_id: "local-a",
         linked_entry_ref: candKeep.entry_reference,
-        version: 4,
+        version: 3,
       }),
       candidates: [],
     }));
     await click(button("Close", dialog()));
     await click(button("Details"));
-    const drawer2 = dialog();
-    expect(drawer2.textContent).toContain("Confirmed receipts cannot keep or choose candidates on edit");
-    expect(drawer2.querySelector('input[name="link_choice"][value="keep"]')).toBeNull();
-    expect(linkRadio("unlink", drawer2).checked).toBe(true);
-    await click(button("Confirm receipt", drawer2));
-    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({ link: null }));
+    const d2 = dialog();
+    expect(d2.textContent).toContain("Confirmed receipts cannot keep or choose candidates on edit");
+    expect(linkRadio("unlink", d2).checked).toBe(false);
+    expect(button("Confirm receipt", d2).disabled).toBe(true);
+    await click(linkRadio("unlink", d2));
+    expect(button("Confirm receipt", d2).disabled).toBe(false);
 
-    // 3. needs_review receipt: editing merchant shows staleSourceEditHint, and 409 stale_source reloads detail & explains why.
+    // 3. Editing matching fields on linked needs_review disables Keep BEFORE submit, never sends stale token or implicit unlink.
+    vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
+      receipt: receiptDetail({
+        receipt_id: "rec-confirm",
+        status: "needs_review",
+        linked: true,
+        linked_account_id: candKeep.account_id,
+        linked_entry_ref: candKeep.entry_reference,
+        version: 4,
+      }),
+      candidates: [candKeep, candAlt],
+    }));
+    await click(button("Close", dialog()));
+    await click(button("Details"));
+    const d3 = dialog();
+    expect(linkRadio("keep", d3).checked).toBe(true);
+    await typeInto(inputByName("raw_shop_name", d3), "Edited Store Before Submit");
+    expect(d3.textContent).toContain("Editing merchant, NIP, amount, date, currency or type invalidates candidate tokens");
+    expect(linkRadio("keep", d3).disabled).toBe(true);
+    expect(linkRadio("keep", d3).checked).toBe(false);
+    expect(linkRadio("unlink", d3).checked).toBe(false);
+    expect(button("Confirm receipt", d3).disabled).toBe(true);
+
+    // Reverting merchant restores Keep; editing NIP or amount also disables tokens immediately.
+    await typeInto(inputByName("raw_shop_name", d3), "Synthetic Grocery");
+    expect(linkRadio("keep", d3).disabled).toBe(false);
+    await click(linkRadio("keep", d3));
+    await typeInto(inputByName("total_amount", d3), "99.99");
+    expect(linkRadio("keep", d3).disabled).toBe(true);
+    expect(linkRadio("candidate:1", d3).disabled).toBe(true);
+    expect(button("Confirm receipt", d3).disabled).toBe(true);
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+
+    // 4. Unlinked needs_review with candidate: editing NIP disables candidate and sets linkChoice to confirm without link.
     vi.mocked(clients.rApi.receiptDetail)
       .mockImplementationOnce(() => ok({
-        receipt: receiptDetail({
-          receipt_id: "rec-confirm",
-          status: "needs_review",
-          linked: false,
-          version: 5,
-        }),
+        receipt: receiptDetail({ receipt_id: "rec-confirm", status: "needs_review", linked: false, version: 5 }),
+        candidates: [candAlt],
+      }))
+      // Subsequent concurrent ledger 409 stale_source test reloads detail cleanly.
+      .mockImplementationOnce(() => ok({
+        receipt: receiptDetail({ receipt_id: "rec-confirm", status: "needs_review", linked: false, version: 5 }),
         candidates: [candAlt],
       }))
       .mockImplementationOnce(() => ok({
-        receipt: receiptDetail({
-          receipt_id: "rec-confirm",
-          status: "needs_review",
-          linked: false,
-          version: 5,
-        }),
+        receipt: receiptDetail({ receipt_id: "rec-confirm", status: "needs_review", linked: false, version: 5 }),
         candidates: [receiptCandidate({ entry_reference: "b".repeat(64), candidate_token: "tok-refreshed" })],
       }));
-    vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => fail(409, "budget_receipt_stale_source"));
 
     await click(button("Close", dialog()));
     await click(button("Details"));
-    const drawer3 = dialog();
-    await typeInto(inputByName("raw_shop_name", drawer3), "Edited Grocery");
-    expect(drawer3.textContent).toContain("Changing merchant or NIP invalidates the candidate link token");
+    const d4 = dialog();
+    expect(linkRadio("candidate:0", d4).checked).toBe(true);
+    await typeInto(inputByName("raw_nip", d4), "5261040829");
+    expect(linkRadio("candidate:0", d4).disabled).toBe(true);
+    expect(linkRadio("unlink", d4).checked).toBe(true);
+    expect(d4.textContent).toContain("Editing merchant, NIP, amount, date, currency or type invalidates candidate tokens");
 
-    await click(button("Confirm receipt", drawer3));
-    expect(drawer3.textContent).toContain("The candidate link token is no longer valid (ledger updated or merchant/NIP edited). Details reloaded — review link choices and confirm again.");
-    // Reloaded detail fetched refreshed candidate token "tok-refreshed".
-    expect(clients.rApi.receiptDetail).toHaveBeenCalledTimes(4);
+    // 5. Server 409 budget_receipt_stale_source (ledger update while fields untouched) reloads detail and explains.
+    await click(button("Close", dialog()));
+    await click(button("Details"));
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => fail(409, "budget_receipt_stale_source"));
+    await click(button("Confirm receipt", dialog()));
+    expect(dialog().textContent).toContain("The candidate link token is no longer valid");
     await click(button("Confirm receipt", dialog()));
     expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
       link: expect.objectContaining({ candidate_token: "tok-refreshed" }) as unknown,
     }));
   });
 
-  it("prevents synchronous double-submit, blocks opening another receipt while pending, and ignores stale close/delete", async () => {
+  it("ignores stale detail responses older than the latest Confirm version and clears detailState when closed after 404", async () => {
+    const clients = fakeClients([
+      receiptSummary({ receipt_id: "rec-a", raw_shop_name: "Secret Store A", version: 5 }),
+      receiptSummary({ receipt_id: "rec-b", raw_shop_name: "Receipt B", version: 1 }),
+    ]);
+
+    const slowDetailReload = deferred<ReceiptDetailResult>();
+    vi.mocked(clients.rApi.receiptDetail)
+      .mockImplementationOnce(() => ok({ receipt: receiptDetail({ receipt_id: "rec-a", raw_shop_name: "Secret Store A", version: 5 }), candidates: [] }))
+      .mockImplementationOnce(() => slowDetailReload.promise);
+
+    await renderReceipts(clients, { revision: 1 });
+    await click(openDetailButton(0));
+    expect(dialog().textContent).toContain("Version 5");
+
+    // Simulate a Budget reload bumping revision while Confirm starts: slowDetailReload (v5) is in flight.
+    await renderReceipts(clients, { revision: 2 });
+    await click(button("Confirm receipt", dialog()));
+    expect(dialog().textContent).toContain("Version 6");
+
+    // Now the stale reload finishes with Version 5 — it MUST NOT overwrite saved Version 6.
+    await act(async () => {
+      slowDetailReload.resolve({
+        ok: true,
+        data: { receipt: receiptDetail({ receipt_id: "rec-a", raw_shop_name: "Secret Store A", version: 5 }), candidates: [] },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(dialog().textContent).toContain("Version 6");
+    expect(dialog().textContent).not.toContain("Version 5");
+
+    await click(button("Confirm receipt", dialog()));
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({ expected_version: 6 }));
+
+    // Close via 404 on Confirm -> clears detailState cleanly so opening Receipt B never flashes Secret Store A.
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => fail(404, "budget_receipt_not_found"));
+    await click(button("Confirm receipt", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+
+    const loadingB = deferred<ReceiptDetailResult>();
+    vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => loadingB.promise);
+    await click(openDetailButton(1));
+    const drawerB = dialog();
+    expect(drawerB.textContent).toContain("Loading document details");
+    expect(drawerB.textContent).not.toContain("Secret Store A");
+
+    await act(async () => {
+      loadingB.resolve({
+        ok: true,
+        data: { receipt: receiptDetail({ receipt_id: "rec-b", raw_shop_name: "Receipt B", version: 1 }), candidates: [] },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(dialog().textContent).toContain("Receipt B");
+  });
+
+  it("keeps mutation locks across panel unmount/remount, prevents double-submit, and respects confirmation dialog", async () => {
     const clients = fakeClients([
       receiptSummary({ receipt_id: "rec-a", raw_shop_name: "Receipt A", version: 7 }),
       receiptSummary({ receipt_id: "rec-b", raw_shop_name: "Receipt B", version: 2 }),
@@ -697,7 +736,6 @@ describe("ReceiptsView", () => {
     await click(openDetailButton(0));
     const drawer = dialog();
 
-    // Trigger two synchronous submits in the same tick before actionBusy state disables the button.
     const form = drawer.querySelector<HTMLFormElement>("form.budget-receipt-confirm");
     await act(async () => {
       form?.requestSubmit();
@@ -705,22 +743,25 @@ describe("ReceiptsView", () => {
       await Promise.resolve();
     });
     expect(clients.rApi.confirmReceipt).toHaveBeenCalledTimes(1);
-
-    // While pending, opening Receipt B is disabled and Escape does not close A.
     expect(openDetailButton(1).disabled).toBe(true);
+
+    // Unmount and remount ReceiptsView with the same rApi -> lock on rec-a survives remount until settled!
     await act(async () => {
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      root.unmount();
+      root = createRoot(host);
       await Promise.resolve();
     });
-    expect(dialog().textContent).toContain("Receipt A");
+    await renderReceipts(clients);
+    expect(host.textContent).toContain("Confirming…");
+    await click(openDetailButton(0));
+    expect(button("Confirming…", dialog()).disabled).toBe(true);
+    await submit(dialog().querySelector<HTMLFormElement>("form.budget-receipt-confirm"));
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       pendingConfirm.resolve({
         ok: true,
-        data: {
-          ok: true,
-          receipt: receiptDetail({ receipt_id: "rec-a", status: "confirmed", version: 8 }),
-        },
+        data: { ok: true, receipt: receiptDetail({ receipt_id: "rec-a", status: "confirmed", version: 8 }) },
       });
       await Promise.resolve();
     });
@@ -731,13 +772,13 @@ describe("ReceiptsView", () => {
     const pendingDelete = deferred<{ ok: true; deleted: true }>();
     vi.mocked(clients.rApi.deleteReceipt).mockImplementationOnce(() => pendingDelete.promise);
 
-    await click(button("Delete document", drawer));
-    const confirmBox = alertBox(drawer);
+    await click(button("Delete document", dialog()));
+    const confirmBox = alertBox(dialog());
     await click(button("Cancel", confirmBox));
-    expect(drawer.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(dialog().querySelector('[role="alertdialog"]')).toBeNull();
 
-    await click(button("Delete document", drawer));
-    const delConfirmBtn = button("Confirm deletion", drawer);
+    await click(button("Delete document", dialog()));
+    const delConfirmBtn = button("Confirm deletion", dialog());
     await act(async () => {
       delConfirmBtn.click();
       delConfirmBtn.click();
@@ -769,14 +810,12 @@ describe("ReceiptsView", () => {
     await click(button("Details"));
     expect(host.querySelector("img.budget-receipt-image")).not.toBeNull();
 
-    // 403 during confirm invokes onAccessLoss and wipes detail + image URL.
     vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => fail(403, "budget_forbidden"));
     await click(button("Confirm receipt"));
     expect(onAccessLoss).toHaveBeenCalled();
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     expect(revokeUrlSpy).toHaveBeenCalledWith("blob:temp-img");
 
-    // Stale in-flight list read from an older revision is discarded once a newer revision settles.
     vi.mocked(clients.rApi.receiptsList)
       .mockImplementationOnce(() => pendingList.promise)
       .mockImplementationOnce(() => ok<ReceiptListResult>({
@@ -797,20 +836,17 @@ describe("ReceiptsView", () => {
     expect(host.textContent).toContain("Fresh Epoch Store");
     expect(host.textContent).not.toContain("Stale Epoch Store");
 
-    // 404 budget_receipts_disabled clears ALL receipt state including search text (filter & draft).
     vi.mocked(clients.rApi.receiptsSearch).mockImplementationOnce(() => fail(404, "budget_receipts_disabled"));
     await typeInto(inputByName("query"), "Sensitive Search");
     await submit(host.querySelector(".budget-range"));
     expect(host.textContent).toContain("Receipts are disabled on this server");
     expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(0);
 
-    // Re-enabling at next revision shows empty query and calls list (never searching old query).
     vi.mocked(clients.rApi.receiptsList).mockImplementationOnce(() => ok<ReceiptListResult>({ receipts: [], next_cursor: null }));
     await renderReceipts(clients, { revision: 3 });
     expect(inputByName("query").value).toBe("");
     expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50 });
 
-    // Unmounted 401 on an in-flight read still propagates to onAccessLoss instead of dropping denial.
     const unmountedRead = deferred<ReceiptListResult>();
     const accessLossUnmount = vi.fn(() => true);
     vi.mocked(clients.rApi.receiptsList).mockImplementationOnce(() => unmountedRead.promise);

@@ -9,17 +9,20 @@ import {
   buildReceiptListRequest,
   candidateDisplayDate,
   computeLinesDelta,
+  createPendingReceiptStore,
   draftFromDetail,
   filterReceiptRows,
   findCurrentLinkedCandidate,
   hasActiveReceiptFilter,
   hasClientSideFilter,
+  hasMatchingFieldsChanged,
   isRedactedValue,
   isStaleCursorError,
   listMonthForFilter,
   mergeReceiptRows,
   normalizeDecimalInput,
   receiptAccountLabel,
+  reconcileLinkChoice,
   subtractDecimals,
   validPolishNip,
   validReceiptDateRange,
@@ -200,11 +203,11 @@ describe("receipts_model", () => {
     expect(computeLinesDelta(detailOf().lines, "40.00")).toBe("2.5");
   });
 
-  it("enforces backend per-status link transitions for draft, imported, needs_review and confirmed", () => {
+  it("enforces per-status link rules, prevents implicit unlinks, and disables stale tokens when matching fields change", () => {
     const linkedDigest = "b".repeat(64);
     const cand = candidateOf({ entry_reference: linkedDigest });
 
-    // 1. needs_review + linked + matching candidate -> keep, candidate, or unlink.
+    // 1. needs_review + linked + matching candidate -> keep, candidate, or explicit unlink.
     const reviewLinked = detailOf({
       status: "needs_review",
       linked: true,
@@ -214,6 +217,7 @@ describe("receipts_model", () => {
     expect(findCurrentLinkedCandidate(reviewLinked, [cand])).toEqual(cand);
     expect(availableLinkOptions(reviewLinked, [cand], "card")).toEqual({
       paymentAllowsLink: true,
+      matchingFieldsChanged: false,
       canKeep: true,
       canPickCandidates: true,
       mustUnlinkToConfirm: false,
@@ -231,55 +235,83 @@ describe("receipts_model", () => {
       });
     }
 
-    // Switching to unlink emits link: null.
-    const builtUnlink = buildConfirmRequest(reviewLinked, { ...draftKeep, linkChoice: "unlink" }, [cand]);
-    expect(builtUnlink.ok).toBe(true);
-    if (builtUnlink.ok) expect(builtUnlink.request.link).toBeNull();
+    // 2. Linked needs_review WITHOUT matching keep candidate never defaults to implicit unlink.
+    const reviewLinkedNoKeep = detailOf({
+      status: "needs_review",
+      linked: true,
+      linked_account_id: "acc-1",
+      linked_entry_ref: "c".repeat(64),
+    });
+    const noKeepDraft = draftFromDetail(reviewLinkedNoKeep, [cand]);
+    expect(noKeepDraft.linkChoice).toBe("");
+    expect(buildConfirmRequest(reviewLinkedNoKeep, noKeepDraft, [cand])).toEqual({
+      ok: false,
+      errorKey: "budget.receipts.explicitUnlinkRequired",
+    });
+    const explicitUnlink = buildConfirmRequest(reviewLinkedNoKeep, { ...noKeepDraft, linkChoice: "unlink" }, [cand]);
+    expect(explicitUnlink.ok).toBe(true);
+    if (explicitUnlink.ok) expect(explicitUnlink.request.link).toBeNull();
 
-    // Cash or mixed payment disables links cleanly.
+    // 3. Switching payment method to cash on a linked receipt must still require explicit unlink (not auto-drop link).
     expect(availableLinkOptions(reviewLinked, [cand], "mixed").paymentAllowsLink).toBe(false);
-    const cashBuilt = buildConfirmRequest(reviewLinked, { ...draftKeep, paymentMethod: "cash" }, [cand]);
-    expect(cashBuilt.ok).toBe(true);
-    if (cashBuilt.ok) expect(cashBuilt.request.link).toBeNull();
+    expect(buildConfirmRequest(reviewLinked, { ...draftKeep, paymentMethod: "cash" }, [cand])).toEqual({
+      ok: false,
+      errorKey: "budget.receipts.invalidForm",
+    });
+    const explicitCashUnlink = buildConfirmRequest(
+      reviewLinked,
+      { ...draftKeep, paymentMethod: "cash", linkChoice: "unlink" },
+      [cand],
+    );
+    expect(explicitCashUnlink.ok).toBe(true);
+    if (explicitCashUnlink.ok) expect(explicitCashUnlink.request.link).toBeNull();
 
-    // 2. confirmed + linked -> only unlink is valid (no candidates/keep).
+    // 4. Editing merchant, NIP, or amount invalidates matching fields & rejects stale tokens without implicit unlink.
+    expect(hasMatchingFieldsChanged(reviewLinked, draftKeep)).toBe(false);
+    expect(hasMatchingFieldsChanged(reviewLinked, { ...draftKeep, totalAmount: "42.5" })).toBe(false);
+    expect(hasMatchingFieldsChanged(reviewLinked, { ...draftKeep, rawShopName: "Changed Store" })).toBe(true);
+    expect(hasMatchingFieldsChanged(reviewLinked, { ...draftKeep, rawNip: "5261040829" })).toBe(true);
+    expect(hasMatchingFieldsChanged(reviewLinked, { ...draftKeep, totalAmount: "50.00" })).toBe(true);
+    expect(availableLinkOptions(reviewLinked, [cand], "card", true)).toEqual({
+      paymentAllowsLink: true,
+      matchingFieldsChanged: true,
+      canKeep: false,
+      canPickCandidates: false,
+      mustUnlinkToConfirm: true,
+      currentCandidate: cand,
+    });
+    expect(reconcileLinkChoice(reviewLinked, "keep", { ...draftKeep, rawShopName: "Changed Store" }, [cand])).toBe("");
+    const unlinkedReview = detailOf({ status: "needs_review", linked: false });
+    expect(reconcileLinkChoice(unlinkedReview, "candidate:0", { ...draftKeep, rawNip: "" }, [cand])).toBe("unlink");
+    expect(buildConfirmRequest(reviewLinked, { ...draftKeep, rawShopName: "Changed Store" }, [cand])).toEqual({
+      ok: false,
+      errorKey: "budget.receipts.invalidForm",
+    });
+
+    // 5. confirmed + linked -> defaults to "", only explicit unlink is accepted.
     const confirmedLinked = detailOf({
       status: "confirmed",
       linked: true,
       linked_account_id: "acc-1",
       linked_entry_ref: linkedDigest,
     });
-    expect(availableLinkOptions(confirmedLinked, [cand], "card")).toEqual({
-      paymentAllowsLink: true,
-      canKeep: false,
-      canPickCandidates: false,
-      mustUnlinkToConfirm: true,
-      currentCandidate: null,
-    });
     const confirmedDraft = draftFromDetail(confirmedLinked, [cand]);
-    expect(confirmedDraft.linkChoice).toBe("unlink");
+    expect(confirmedDraft.linkChoice).toBe("");
+    expect(buildConfirmRequest(confirmedLinked, confirmedDraft, [cand])).toEqual({
+      ok: false,
+      errorKey: "budget.receipts.explicitUnlinkRequired",
+    });
     expect(buildConfirmRequest(confirmedLinked, { ...confirmedDraft, linkChoice: "keep" }, [cand])).toEqual({
       ok: false,
       errorKey: "budget.receipts.invalidForm",
     });
-    expect(buildConfirmRequest(confirmedLinked, { ...confirmedDraft, linkChoice: "candidate:0" }, [cand])).toEqual({
-      ok: false,
-      errorKey: "budget.receipts.invalidForm",
-    });
-    const confirmedBuilt = buildConfirmRequest(confirmedLinked, confirmedDraft, [cand]);
+    const confirmedBuilt = buildConfirmRequest(confirmedLinked, { ...confirmedDraft, linkChoice: "unlink" }, [cand]);
     expect(confirmedBuilt.ok).toBe(true);
     if (confirmedBuilt.ok) expect(confirmedBuilt.request.link).toBeNull();
 
-    // 3. draft & imported -> never pick candidates; defaults to link: null.
+    // 6. unlinked draft & imported -> never pick candidates; defaults to link: null.
     for (const status of ["draft", "imported"] as const) {
       const unlinkedImport = detailOf({ status, linked: false });
-      expect(availableLinkOptions(unlinkedImport, [cand], "card")).toEqual({
-        paymentAllowsLink: true,
-        canKeep: false,
-        canPickCandidates: false,
-        mustUnlinkToConfirm: false,
-        currentCandidate: null,
-      });
       const draftImport = draftFromDetail(unlinkedImport, [cand]);
       expect(draftImport.linkChoice).toBe("unlink");
       expect(buildConfirmRequest(unlinkedImport, { ...draftImport, linkChoice: "candidate:0" }, [cand])).toEqual({
@@ -291,7 +323,7 @@ describe("receipts_model", () => {
       if (builtImport.ok) expect(builtImport.request.link).toBeNull();
     }
 
-    // 4. Total mismatch & invalid NIP rejected before network calls.
+    // 7. Total mismatch & invalid NIP rejected before network calls.
     expect(buildConfirmRequest(reviewLinked, { ...draftKeep, totalAmount: "99.99" }, [cand])).toEqual({
       ok: false,
       errorKey: "budget.receipts.totalMismatch",
@@ -300,5 +332,26 @@ describe("receipts_model", () => {
       ok: false,
       errorKey: "budget.receipts.invalidForm",
     });
+  });
+
+  it("tracks persistent pending receipt locks and settled notifications cleanly", () => {
+    const store = createPendingReceiptStore();
+    const events: unknown[] = [];
+    const unsubscribe = store.subscribe((ev) => { events.push(ev ?? null); });
+
+    const tok1 = store.tryAcquire("r-1", "confirm");
+    expect(tok1).not.toBeNull();
+    expect(store.get("r-1")).toBe("confirm");
+    expect(store.tryAcquire("r-1", "confirm")).toBeNull();
+
+    if (tok1 === null) throw new Error("expected lock token");
+    store.release("r-1", Symbol("wrong"));
+    expect(store.get("r-1")).toBe("confirm");
+
+    store.release("r-1", tok1, "confirmed");
+    expect(store.get("r-1")).toBeNull();
+    expect(events).toEqual([null, { receiptId: "r-1", kind: "confirm", outcome: "confirmed" }]);
+
+    unsubscribe();
   });
 });
