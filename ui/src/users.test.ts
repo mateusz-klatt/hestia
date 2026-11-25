@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { UserAccount } from "./api/types";
+import type { UserGrants } from "./grant_editor";
 import { nth, q } from "./test-dom";
 import { renderUsersPanel, type UsersApi } from "./users";
 
@@ -19,6 +20,37 @@ const USERS: UserAccount[] = [
   { username: "carol", role: "viewer", disabled: true },
 ];
 
+function grantsFor(username: string): UserGrants {
+  const owner = username === "admin";
+  return {
+    phase: "catalog_compat", username, budget_owner: owner, budget_owners: ["admin"],
+    catalog: [
+      { permission_id: "ioc.view", domain: "ioc", storage_scope: "installation", delegation: null,
+        requires: [], device_eligible: false, label: "View", protected: false },
+      { permission_id: "ioc.control", domain: "ioc", storage_scope: "installation", delegation: null,
+        requires: ["ioc.view"], device_eligible: false, label: "Control", protected: false },
+      { permission_id: "budget.view", domain: "budget", storage_scope: "owner", delegation: "self_only",
+        requires: [], device_eligible: false, label: "Budget", protected: false },
+      { permission_id: "budget.receipts.add", domain: "budget", storage_scope: "owner", delegation: "delegable",
+        requires: [], device_eligible: true, label: "Add", protected: false },
+      { permission_id: "budget.receipts.view", domain: "budget", storage_scope: "owner", delegation: "delegable",
+        requires: [], device_eligible: true, label: "View", protected: false },
+      { permission_id: "budget.receipts.edit", domain: "budget", storage_scope: "owner", delegation: "delegable",
+        requires: ["budget.receipts.add", "budget.receipts.view"], device_eligible: true, label: "Edit", protected: false },
+      { permission_id: "system.manage_users", domain: "system", storage_scope: "installation", delegation: null,
+        requires: [], device_eligible: false, label: "Manage", protected: true },
+    ],
+    direct: [
+      { permission_id: "ioc.control", target_owner: null },
+      ...(owner ? [{ permission_id: "system.manage_users", target_owner: null }] : []),
+    ],
+    effective: [
+      { permission_id: "ioc.control", target_owner: null },
+      { permission_id: "ioc.view", target_owner: null },
+    ],
+  };
+}
+
 function makeApi(users: UserAccount[] | null, me: string | null, overrides: Partial<UsersApi> = {}): UsersApi {
   return {
     fetchUsers: vi.fn().mockResolvedValue(users),
@@ -26,6 +58,8 @@ function makeApi(users: UserAccount[] | null, me: string | null, overrides: Part
     setUserRole: vi.fn().mockResolvedValue({ ok: true, error: null }),
     setUserDisabled: vi.fn().mockResolvedValue({ ok: true, error: null }),
     resetUserPassword: vi.fn().mockResolvedValue({ ok: true, error: null }),
+    fetchUserGrants: vi.fn().mockImplementation((username: string) => Promise.resolve(grantsFor(username))),
+    saveUserGrants: vi.fn().mockResolvedValue({ ok: true, error: null }),
     currentUser: () => me,
     ...overrides,
   };
@@ -52,10 +86,10 @@ describe("renderUsersPanel", () => {
 
     const self = rowFor(container, "admin");
     expect(self.querySelector(".user-name")?.textContent).toContain("(you)");
-    expect(q<HTMLSelectElement>(self, ".user-role").disabled).toBe(true);
+    expect(self.querySelector(".user-role-label")?.textContent).toBe("Admin");
     expect(self.querySelector(".user-toggle")).toBeNull(); // no self-disable
     expect(self.querySelector(".user-reset")).toBeNull(); // self uses the ⚙ change-password flow
-    expect(q<HTMLSelectElement>(self, ".user-role").value).toBe("admin");
+    expect(self.querySelector(".user-grants")).not.toBeNull();
 
     const carol = rowFor(container, "carol");
     expect(carol.classList.contains("user-disabled")).toBe(true);
@@ -106,25 +140,98 @@ describe("renderUsersPanel", () => {
     expect(container.querySelector(".users-add .status")?.textContent).toBe("dup");
   });
 
-  it("changes a role and refreshes; reverts on failure", async () => {
+  it("opens grant checkboxes, applies implications, and saves direct grants", async () => {
     const container = document.createElement("div");
-    const ok = makeApi(USERS, "admin");
-    await renderUsersPanel(container, ok).refresh();
-    const sel = q<HTMLSelectElement>(rowFor(container, "bob"), ".user-role");
-    sel.value = "admin";
-    sel.dispatchEvent(new Event("change"));
+    const api = makeApi(USERS, "admin");
+    await renderUsersPanel(container, api).refresh();
+    q<HTMLButtonElement>(rowFor(container, "bob"), ".user-grants").click();
     await flush();
-    expect(ok.setUserRole).toHaveBeenCalledWith("bob", "admin");
+    expect(api.fetchUserGrants).toHaveBeenCalledWith("bob");
+    const editor = q<HTMLElement>(rowFor(container, "bob"), ".grant-editor");
+    const view = q<HTMLInputElement>(editor, '[data-permission="ioc.view"]');
+    const control = q<HTMLInputElement>(editor, '[data-permission="ioc.control"]');
+    expect(view.checked).toBe(true); // implied by the direct control grant
+    view.checked = false;
+    view.dispatchEvent(new Event("change"));
+    expect(control.checked).toBe(false);
+    const edit = q<HTMLInputElement>(editor, '[data-permission="budget.receipts.edit"]');
+    edit.checked = true;
+    edit.dispatchEvent(new Event("change"));
+    expect(q<HTMLInputElement>(editor, '[data-permission="budget.receipts.add"]').checked).toBe(true);
+    expect(q<HTMLInputElement>(editor, '[data-permission="budget.receipts.view"]').checked).toBe(true);
+    editor.dispatchEvent(new Event("submit"));
+    await flush();
+    expect(api.saveUserGrants).toHaveBeenCalledWith("bob", expect.arrayContaining([
+      { permission_id: "budget.receipts.edit", target_owner: "admin" },
+      { permission_id: "budget.receipts.add", target_owner: "admin" },
+      { permission_id: "budget.receipts.view", target_owner: "admin" },
+    ]));
+    expect(api.fetchUsers).toHaveBeenCalledTimes(2);
+  });
 
-    const fail = makeApi(USERS, "admin", { setUserRole: vi.fn().mockResolvedValue({ ok: false, error: "no" }) });
-    const c2 = document.createElement("div");
-    await renderUsersPanel(c2, fail).refresh();
-    const sel2 = q<HTMLSelectElement>(rowFor(c2, "bob"), ".user-role");
-    sel2.value = "admin";
-    sel2.dispatchEvent(new Event("change"));
+  it("protects self-admin, limits presets, and surfaces grant errors", async () => {
+    const container = document.createElement("div");
+    const api = makeApi(USERS, "admin");
+    await renderUsersPanel(container, api).refresh();
+    q<HTMLButtonElement>(rowFor(container, "admin"), ".user-grants").click();
     await flush();
-    expect(sel2.value).toBe("operator"); // reverted
-    expect(rowFor(c2, "bob").querySelector(".status")?.textContent).toBe("no");
+    const selfEditor = q<HTMLElement>(rowFor(container, "admin"), ".grant-editor");
+    expect(q<HTMLInputElement>(selfEditor, '[data-permission="system.manage_users"]').disabled).toBe(true);
+    expect(q<HTMLInputElement>(selfEditor, '[data-permission="system.manage_users"]').checked).toBe(true);
+    q<HTMLButtonElement>(selfEditor, ".grant-full").click();
+    expect(q<HTMLInputElement>(selfEditor, '[data-permission="budget.view"]').checked).toBe(true);
+
+    const failing = makeApi(USERS, "admin", {
+      fetchUserGrants: vi.fn().mockResolvedValue(null),
+    });
+    const c2 = document.createElement("div");
+    await renderUsersPanel(c2, failing).refresh();
+    q<HTMLButtonElement>(rowFor(c2, "bob"), ".user-grants").click();
+    await flush();
+    expect(rowFor(c2, "bob").querySelector(".user-grant-editor")?.textContent).toBe("Something went wrong");
+
+    const saveFail = makeApi(USERS, "admin", {
+      saveUserGrants: vi.fn().mockResolvedValue({ ok: false, error: "denied" }),
+    });
+    const c3 = document.createElement("div");
+    await renderUsersPanel(c3, saveFail).refresh();
+    q<HTMLButtonElement>(rowFor(c3, "bob"), ".user-grants").click();
+    await flush();
+    const editor = q<HTMLElement>(rowFor(c3, "bob"), ".grant-editor");
+    editor.dispatchEvent(new Event("submit"));
+    await flush();
+    expect(editor.querySelector(".status")?.textContent).toBe("denied");
+    expect(q<HTMLButtonElement>(editor, ".grant-save").disabled).toBe(false);
+  });
+
+  it("disables delegate self-only grants, excludes protected presets, and changes owner targets", async () => {
+    const data = grantsFor("bob");
+    data.budget_owners = ["admin", "other"];
+    const api = makeApi(USERS, "admin", { fetchUserGrants: vi.fn().mockResolvedValue(data) });
+    const container = document.createElement("div");
+    await renderUsersPanel(container, api).refresh();
+    const row = rowFor(container, "bob");
+    q<HTMLButtonElement>(row, ".user-grants").click();
+    await flush();
+    const editor = q<HTMLElement>(row, ".grant-editor");
+    expect(q<HTMLInputElement>(editor, '[data-permission="budget.view"]').disabled).toBe(true);
+    q<HTMLButtonElement>(editor, ".grant-full").click();
+    expect(q<HTMLInputElement>(editor, '[data-permission="system.manage_users"]').checked).toBe(false);
+    expect(q<HTMLInputElement>(editor, '[data-permission="budget.view"]').checked).toBe(false);
+    expect(q<HTMLInputElement>(editor, '[data-permission="ioc.control"]').checked).toBe(true);
+    const target = q<HTMLSelectElement>(editor, ".grant-target select");
+    target.value = "other";
+    target.dispatchEvent(new Event("change"));
+    expect(q<HTMLInputElement>(editor, '[data-permission="budget.receipts.add"]').checked).toBe(false);
+    const add = q<HTMLInputElement>(editor, '[data-permission="budget.receipts.add"]');
+    add.checked = true;
+    add.dispatchEvent(new Event("change"));
+    editor.dispatchEvent(new Event("submit"));
+    await flush();
+    expect(api.saveUserGrants).toHaveBeenCalledWith("bob", expect.arrayContaining([
+      { permission_id: "budget.receipts.add", target_owner: "other" },
+      { permission_id: "ioc.control", target_owner: null },
+    ]));
   });
 
   it("toggles enable/disable", async () => {

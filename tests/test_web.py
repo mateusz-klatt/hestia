@@ -2051,6 +2051,7 @@ SPOUSE_ROUTE_STATUS = {
     ("GET", "/api/rooms/icons"): 200,
     ("GET", "/api/settings"): 200,
     ("GET", "/api/users"): 403,
+    ("GET", "/api/users/grants"): 403,
     ("GET", "/api/whoami"): 200,
     ("GET", "/api/whole-home"): 403,
     ("GET", "/assets/asset.js"): 404,
@@ -2125,6 +2126,7 @@ SPOUSE_ROUTE_STATUS = {
     ("POST", "/api/scene"): 403,
     ("POST", "/api/settings"): 200,
     ("POST", "/api/users"): 403,
+    ("POST", "/api/users/grants"): 403,
     ("POST", "/api/users/disabled"): 403,
     ("POST", "/api/users/reset-password"): 403,
     ("POST", "/api/users/role"): 403,
@@ -2923,10 +2925,11 @@ class SessionBridgeWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(u_nat.status, 403)
         self.assertEqual((await u_nat.json())["error"], "browser_session_required")
 
-        # Exact 11 core browser mutation routes enforce v2 cookie + direct LAN Origin (ignoring forwarded headers).
+        # Every core browser mutation route enforces v2 cookie + direct LAN Origin (ignoring forwarded headers).
         direct_origin = self._origin()
         core_mutations = (
             ("/api/users", {}),
+            ("/api/users/grants", {}),
             ("/api/users/role", {}),
             ("/api/users/disabled", {}),
             ("/api/users/reset-password", {}),

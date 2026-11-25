@@ -15,6 +15,7 @@ import {
   fetchRf433,
   fetchRoomIcons,
   fetchSettings,
+  fetchUserGrants,
   fetchUsers,
   fetchWholeHome,
   postControl,
@@ -25,6 +26,7 @@ import {
   resetUserPassword,
   saveRoomIcon as saveRoomIconOnServer,
   saveSettings as saveUserSettings,
+  saveUserGrants,
   setUserDisabled,
   setUserRole,
   setWholeHomeExclude,
@@ -79,6 +81,7 @@ let roomIcons: Record<string, string> = {};
 // The server is the real boundary (#73) — this gating is convenience, never the security check.
 let canControl = false;
 let isAdmin = false;
+let canManageUsers = false;
 let canViewBudget = false;
 let currentUsername: string | null = null; // the signed-in user (null when auth is off); the admin Users panel marks/guards this row
 
@@ -187,11 +190,10 @@ function startApp(): void {
   const audit = renderAuditFeed(el("audit-feed"), fetchAudit, () => latestDevices);
   const rf433 = renderRf433(el("rf433"), fetchRf433);
   const dbStats = renderDbStats(el("dbstats"), fetchDbStats);
-  // Admin-only Users panel (server-gated; the tab only exists for admins anyway). Mounted lazily so a
-  // non-admin never builds it.
-  const users = isAdmin
+  // The Users panel follows live account-management capability, independently of the legacy role projection.
+  const users = canManageUsers
     ? renderUsersPanel(el("users"), {
-        fetchUsers, addUser, setUserRole, setUserDisabled, resetUserPassword,
+        fetchUsers, fetchUserGrants, saveUserGrants, addUser, setUserRole, setUserDisabled, resetUserPassword,
         currentUser: () => currentUsername,
       })
     : null;
@@ -221,12 +223,14 @@ function startApp(): void {
       } else if (view === "events") {
         void audit.refresh(); // 📜 the event log is its own top-level view now
       } else if (view === "admin") {
-        void rf433.refresh();
-        void dbStats.refresh();
+        if (isAdmin) {
+          void rf433.refresh();
+          void dbStats.refresh();
+        }
         void users?.refresh();
       }
     },
-    { showAdmin: isAdmin }, // a non-admin gets only 🏠 Rooms + 📜 Activity (no engineer view)
+    { showAdmin: isAdmin || canManageUsers },
   );
   if (budget !== null) {
     switcher.setBudgetAvailable(true);
@@ -386,6 +390,8 @@ void (async () => {
   isAdmin = authOff || me.role === "admin";
   canControl = authOff || me.role === "operator" || me.role === "admin";
   const discovered = await budgetApi.capabilities();
+  canManageUsers = authOff || (discovered.ok
+    && discovered.data.installation_permissions.includes("system.manage_users"));
   canViewBudget = discovered.ok ? discovered.data.own_budget?.can_view === true : discovered.status === 404;
   // Always render the user/settings chip; auth-off (me.user === null) shows a settings-only menu
   // (language + temperature scale, no logout — see renderUser).

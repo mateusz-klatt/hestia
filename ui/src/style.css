@@ -1074,3 +1074,48 @@ td.seen.fresh {
   color: var(--muted);
   margin: 0.4rem 0;
 }
+
+.user-grant-editor {
+  flex-basis: 100%;
+}
+
+.grant-editor {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.65rem 0;
+}
+
+.grant-editor h4 {
+  margin: 0;
+}
+
+.grant-target {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.grant-domain {
+  display: grid;
+  gap: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.grant-permission {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.grant-permission small {
+  flex-basis: 100%;
+  padding-inline-start: 1.6rem;
+  color: var(--muted);
+}
+
+.grant-full,
+.grant-save {
+  justify-self: start;
+}

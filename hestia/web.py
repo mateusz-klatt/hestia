@@ -192,6 +192,7 @@ _PATH_SETTINGS = "/api/settings"
 _PATH_ROOM_ICONS = "/api/rooms/icons"
 _PATH_AUTOMATIONS = "/api/automations"
 _PATH_USERS = "/api/users"
+_PATH_USER_GRANTS = "/api/users/grants"
 _PATH_WHOLE_HOME = "/api/whole-home"
 _USERNAME_REQUIRED = "username is required"   # shared 400 message across the admin user verbs
 _ROUTE_MIN_ROLE = {
@@ -313,6 +314,8 @@ _ROUTE_MIN_ROLE = {
     # user administration: admin only (add/list accounts, change roles, disable, reset another's password)
     ("GET", _PATH_USERS): _ADMIN,
     ("POST", _PATH_USERS): _ADMIN,
+    ("GET", _PATH_USER_GRANTS): _ADMIN,
+    ("POST", _PATH_USER_GRANTS): _ADMIN,
     ("POST", "/api/users/role"): _ADMIN,
     ("POST", "/api/users/disabled"): _ADMIN,
     ("POST", "/api/users/reset-password"): _ADMIN,
@@ -412,9 +415,11 @@ assert set(_ROUTE_REQUIREMENTS) == {
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _CORE_BROWSER_READ_ROUTES = frozenset({
     ("GET", _PATH_USERS),
+    ("GET", _PATH_USER_GRANTS),
 })
 _CORE_BROWSER_MUTATION_ROUTES = frozenset({
     ("POST", _PATH_USERS),
+    ("POST", _PATH_USER_GRANTS),
     ("POST", "/api/users/role"),
     ("POST", "/api/users/disabled"),
     ("POST", "/api/users/reset-password"),
@@ -1243,7 +1248,8 @@ async def _room_icon_set(request):
 # The SERVER is the security boundary. Floors: /api/me/password = any signed-in user (verifies the
 # current password); every /api/users* route = admin (the middleware enforces it before these run).
 # All require the SQLite users backend (roles/disable live there) → 409 otherwise. Self-targeting is
-# blocked on the admin verbs so an admin can't lock themselves out or bypass the current-password check.
+# blocked on the legacy admin verbs. Grant editing allows ordinary self-edit but protects the caller's
+# own system.manage_users grant and the last enabled manager.
 
 _MIN_PASSWORD = 8
 _MAX_PASSWORD = 1024
@@ -1341,6 +1347,69 @@ async def _users_list(request):
         return _requires_sqlite()
     users = await asyncio.get_running_loop().run_in_executor(None, store_sql.list_users)
     return _json(HTTPStatus.OK, {"users": users})
+
+
+_GRANT_ERROR_STATUS = {
+    "users_not_authoritative": HTTPStatus.CONFLICT,
+    "catalog_not_active": HTTPStatus.CONFLICT,
+    "manage_users_required": HTTPStatus.FORBIDDEN,
+    "not_found": HTTPStatus.NOT_FOUND,
+    "user_disabled": HTTPStatus.CONFLICT,
+    "self_manage_users": HTTPStatus.FORBIDDEN,
+    "last_admin": HTTPStatus.CONFLICT,
+}
+
+
+def _grant_editor_error(error: store_sql.GrantEditorError):
+    status = _GRANT_ERROR_STATUS.get(error.code, HTTPStatus.BAD_REQUEST)
+    return _json(status, {"ok": False, "error": error.code})
+
+
+async def _users_grants_read(request):
+    """GET /api/users/grants?username=... — direct grants and their effective closure."""
+    usernames = request.query.getall("username", [])
+    if set(request.query) != {"username"} or len(usernames) != 1:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_username"})
+    try:
+        if not await _users_backend_ready():
+            return _requires_sqlite()
+        payload = await asyncio.to_thread(
+            store_sql.get_user_grants,
+            usernames[0],
+            actor=request.get(_USER_KEY),
+        )
+    except store_sql.GrantEditorError as exc:
+        return _grant_editor_error(exc)
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return _incompatible_bridge_response()
+    response = _json(HTTPStatus.OK, payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+async def _users_grants_write(request):
+    """POST /api/users/grants — replace one account's direct grant selection atomically."""
+    body, err = await _read_json_body(request, reject_duplicates=True)
+    if err:
+        return body
+    if not isinstance(body, dict) or set(body) != {"username", "grants"}:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_grant_request"})
+    username = body["username"]
+    try:
+        if not await _users_backend_ready():
+            return _requires_sqlite()
+        result = await asyncio.to_thread(
+            store_sql.replace_user_grants,
+            username,
+            body["grants"],
+            actor=request.get(_USER_KEY),
+        )
+    except store_sql.GrantEditorError as exc:
+        return _grant_editor_error(exc)
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return _incompatible_bridge_response()
+    _audit(_rt(request), _actor(request), "user_grants", target=username, detail=f"phase={result['phase']}")
+    return _json(HTTPStatus.OK, result)
 
 
 async def _users_add(request):
@@ -1955,6 +2024,8 @@ def make_app(rt):
     app.router.add_post("/api/me/password", _me_password)
     app.router.add_get(_PATH_USERS, _users_list, allow_head=False)
     app.router.add_post(_PATH_USERS, _users_add)
+    app.router.add_get(_PATH_USER_GRANTS, _users_grants_read, allow_head=False)
+    app.router.add_post(_PATH_USER_GRANTS, _users_grants_write)
     app.router.add_post("/api/users/role", _users_role)
     app.router.add_post("/api/users/disabled", _users_disabled)
     app.router.add_post("/api/users/reset-password", _users_reset_password)

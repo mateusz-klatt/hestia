@@ -22,6 +22,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import secrets
 import time
 
 from sqlalchemy import delete, event, func, select, text, update
@@ -945,6 +946,275 @@ def list_users(*, path=None) -> "list[dict]":
                          if phase == authz.POLICY_PHASE_CUSTOM else u.role),
                 "disabled": bool(u.disabled),
             } for u in rows]
+    finally:
+        engine.dispose()
+
+
+class GrantEditorError(ValueError):
+    """A fixed grant-editor rejection that can be mapped to an HTTP response."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+def _grant_editor_state(session: Session, actor: str) -> str:
+    auth_session_phase(session)
+    phase = authz.require_supported_policy_phase(session)
+    if session.get(AppMeta, _USERS_AUTHORITATIVE) is None:
+        raise GrantEditorError("users_not_authoritative")
+    if phase not in (authz.POLICY_PHASE_COMPAT, authz.POLICY_PHASE_CUSTOM):
+        raise GrantEditorError("catalog_not_active")
+    if not _valid_username(actor) or not authz.authorize(session, actor, "system.manage_users"):
+        raise GrantEditorError("manage_users_required")
+    return phase
+
+
+def _grant_editor_user(session: Session, username: str) -> User:
+    if not _valid_username(username):
+        raise GrantEditorError("invalid_username")
+    row = session.get(User, username)
+    if row is None:
+        raise GrantEditorError("not_found")
+    if row.disabled:
+        raise GrantEditorError("user_disabled")
+    return row
+
+
+def _grant_sort_key(key: tuple[str, "str | None"]):
+    permission_id, target_owner = key
+    return target_owner is not None, target_owner or "", permission_id
+
+
+def _grant_dicts(keys: set[tuple[str, "str | None"]]) -> list[dict]:
+    return [
+        {"permission_id": permission_id, "target_owner": target_owner}
+        for permission_id, target_owner in sorted(keys, key=_grant_sort_key)
+    ]
+
+
+def _grant_editor_payload(session: Session, username: str, phase: str, user_row: User) -> dict:
+    rows = session.execute(
+        select(PermissionGrant).where(PermissionGrant.username == username).order_by(PermissionGrant.id)
+    ).scalars().all()
+    direct = {(row.permission_id, row.target_owner) for row in rows}
+    effective = {
+        (permission_id, None)
+        for permission_id in authz.effective_permissions(session, username)
+    }
+    for target_owner in {owner for _pid, owner in direct if owner is not None}:
+        effective.update(
+            (permission_id, target_owner)
+            for permission_id in authz.effective_permissions(session, username, owner=target_owner)
+        )
+    owners = session.execute(
+        select(User).where(User.disabled.is_(False), User.budget_owner.is_(True)).order_by(User.username)
+    ).scalars()
+    return {
+        "phase": phase,
+        "username": username,
+        "budget_owner": bool(user_row.budget_owner),
+        "budget_owners": [
+            row.username for row in owners
+            if phase == authz.POLICY_PHASE_CUSTOM or row.role == "admin"
+        ],
+        "catalog": [{
+            "permission_id": spec.permission_id,
+            "domain": spec.domain,
+            "storage_scope": spec.storage_scope,
+            "delegation": spec.delegation,
+            "requires": list(spec.requires),
+            "device_eligible": spec.device_eligible,
+            "label": spec.label,
+            "protected": spec.protected,
+        } for spec in authz.CATALOG.values()],
+        "direct": _grant_dicts(direct),
+        "effective": _grant_dicts(effective),
+    }
+
+
+def get_user_grants(username: str, *, actor: str, path=None) -> dict:
+    """Read one account's direct and effective grants from one authoritative snapshot."""
+    engine, _ = init_db(path)
+    try:
+        with _read_snapshot(engine) as session:
+            phase = _grant_editor_state(session, actor)
+            user_row = _grant_editor_user(session, username)
+            return _grant_editor_payload(session, username, phase, user_row)
+    finally:
+        engine.dispose()
+
+
+def _selected_grants(grants) -> set[tuple[str, "str | None"]]:
+    if not isinstance(grants, list):
+        raise GrantEditorError("invalid_grants")
+    selected = set()
+    for grant in grants:
+        if not isinstance(grant, dict) or set(grant) != {"permission_id", "target_owner"}:
+            raise GrantEditorError("invalid_grant")
+        permission_id = grant["permission_id"]
+        target_owner = grant["target_owner"]
+        spec = authz.CATALOG.get(permission_id) if isinstance(permission_id, str) else None
+        if spec is None:
+            raise GrantEditorError("unknown_permission")
+        if target_owner is not None and not _valid_username(target_owner):
+            raise GrantEditorError("invalid_target_owner")
+        if (spec.storage_scope == "installation") != (target_owner is None):
+            raise GrantEditorError("invalid_scope")
+        key = permission_id, target_owner
+        if key in selected:
+            raise GrantEditorError("duplicate_grant")
+        selected.add(key)
+    return selected
+
+
+def _validate_grant_targets(
+    session: Session,
+    username: str,
+    user_row: User,
+    selected: set[tuple[str, "str | None"]],
+    phase: str,
+) -> None:
+    targets = {owner for _pid, owner in selected if owner is not None}
+    if len(targets) > 1:
+        raise GrantEditorError("multiple_targets")
+    if user_row.budget_owner and targets - {username}:
+        raise GrantEditorError("owner_target_invalid")
+    if ("household.view", username) in selected:
+        raise GrantEditorError("household_self_target")
+    for target_owner in targets:
+        owner = session.get(User, target_owner)
+        if (
+            owner is None
+            or owner.disabled
+            or not owner.budget_owner
+            or (phase != authz.POLICY_PHASE_CUSTOM and owner.role != "admin")
+        ):
+            raise GrantEditorError("invalid_target_owner")
+    for permission_id, target_owner in selected:
+        if (
+            target_owner is not None
+            and authz.CATALOG[permission_id].delegation == "self_only"
+            and username != target_owner
+        ):
+            raise GrantEditorError("self_only_delegation")
+
+
+def _validate_manager_removal(
+    session: Session,
+    actor: str,
+    username: str,
+    selected: set[tuple[str, "str | None"]],
+) -> None:
+    key = "system.manage_users", None
+    if key in selected or not authz.authorize(session, username, "system.manage_users"):
+        return
+    if username == actor:
+        raise GrantEditorError("self_manage_users")
+    if _other_enabled_admins(session, username) == 0:
+        raise GrantEditorError("last_admin")
+
+
+def _household_metadata_changed(
+    metadata: "BudgetHouseholdMember | None",
+    current: set[tuple[str, "str | None"]],
+    selected: set[tuple[str, "str | None"]],
+) -> bool:
+    current_owners = {owner for pid, owner in current if pid == "household.view"}
+    desired_owners = {owner for pid, owner in selected if pid == "household.view"}
+    desired_owner = next(iter(desired_owners), None)
+    if desired_owner is None:
+        return metadata is not None
+    return (
+        metadata is None
+        or metadata.owner != desired_owner
+        or desired_owner not in current_owners
+    )
+
+
+def _apply_household_metadata(
+    session: Session,
+    username: str,
+    metadata: "BudgetHouseholdMember | None",
+    current: set[tuple[str, "str | None"]],
+    selected: set[tuple[str, "str | None"]],
+) -> None:
+    current_owners = {owner for pid, owner in current if pid == "household.view"}
+    desired_owner = next(iter({owner for pid, owner in selected if pid == "household.view"}), None)
+    if desired_owner is None:
+        if metadata is not None:
+            session.delete(metadata)
+        return
+    if metadata is not None and metadata.owner != desired_owner:
+        session.delete(metadata)
+        session.flush()
+        metadata = None
+    if metadata is None:
+        session.add(BudgetHouseholdMember(
+            member_username=username,
+            owner=desired_owner,
+            grant_id=secrets.token_hex(32),
+        ))
+    elif desired_owner not in current_owners:
+        metadata.grant_id = secrets.token_hex(32)
+
+
+def _revoke_changed_grant_devices(session: Session, username: str) -> None:
+    session.execute(
+        update(BudgetReceiptDeviceToken)
+        .where(
+            (BudgetReceiptDeviceToken.owner == username) | (BudgetReceiptDeviceToken.actor == username),
+            BudgetReceiptDeviceToken.revoked_at.is_(None),
+        )
+        .values(revoked_at=time.time())
+    )
+
+
+def replace_user_grants(username: str, grants, *, actor: str, path=None) -> dict:
+    """Atomically replace direct grants, preserving unchanged row and household grant IDs."""
+    engine = _immediate_engine(path)
+    try:
+        with Session(engine) as session, session.begin():
+            phase = _grant_editor_state(session, actor)
+            user_row = _grant_editor_user(session, username)
+            selected = _selected_grants(grants)
+            rows = session.execute(
+                select(PermissionGrant).where(PermissionGrant.username == username)
+            ).scalars().all()
+            current = {(row.permission_id, row.target_owner) for row in rows}
+            metadata = session.get(BudgetHouseholdMember, username)
+            grants_changed = selected != current
+            metadata_changed = _household_metadata_changed(metadata, current, selected)
+            write_phase = (
+                authz.POLICY_PHASE_CUSTOM
+                if phase == authz.POLICY_PHASE_COMPAT and (grants_changed or metadata_changed)
+                else phase
+            )
+            _validate_grant_targets(session, username, user_row, selected, write_phase)
+            _validate_manager_removal(session, actor, username, selected)
+            if not grants_changed and not metadata_changed:
+                return {"ok": True, "phase": phase}
+
+            if phase == authz.POLICY_PHASE_COMPAT:
+                _upsert(
+                    session, AppMeta, "key", authz.POLICY_PHASE_KEY,
+                    {"value": authz.POLICY_PHASE_CUSTOM},
+                )
+                phase = authz.POLICY_PHASE_CUSTOM
+            existing = {(row.permission_id, row.target_owner): row for row in rows}
+            for key in current - selected:
+                session.delete(existing[key])
+            for permission_id, target_owner in sorted(selected - current, key=_grant_sort_key):
+                session.add(PermissionGrant(
+                    username=username,
+                    permission_id=permission_id,
+                    target_owner=target_owner,
+                ))
+            _apply_household_metadata(session, username, metadata, current, selected)
+            if grants_changed:
+                _revoke_changed_grant_devices(session, username)
+            session.flush()
+            return {"ok": True, "phase": phase}
     finally:
         engine.dispose()
 
