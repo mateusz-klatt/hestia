@@ -73,7 +73,7 @@ let onRoomsNav: (inRoom: boolean) => void = () => undefined;
 // Set in startApp once the view switcher exists; the settings-menu "edit icons" entry calls it.
 let triggerIconEdit: () => void = () => undefined;
 let roomIcons: Record<string, string> = {};
-// The current user's capabilities, resolved from /api/whoami BEFORE startApp. Default to the most
+// Role and capability gates are resolved from /api/whoami and /api/me/capabilities BEFORE startApp. Default to the most
 // restrictive until known; auth-off resolves both to true (loopback/dev = fully open). `canControl` =
 // operator/admin (room controls + scenes + IR/klima panels); `isAdmin` = admin (the 🔧 Advanced view).
 // The server is the real boundary (#73) — this gating is convenience, never the security check.
