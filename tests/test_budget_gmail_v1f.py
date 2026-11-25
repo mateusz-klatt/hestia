@@ -643,6 +643,17 @@ class V1fStoreTests(unittest.TestCase):
         (gateway,) = [row for row in self._receipts() if row.gateway is not None]
         self.assertEqual(gateway.evidence_for_receipt_id, shop_ids["120"])
 
+    def test_paid_upgrade_removes_an_attachment_that_becomes_ambiguous(self):
+        self.assertEqual(self._commit(self._message(1, payment=_shop_payment(total="100")),
+                                      self._message(2, payment=_shop_payment(total="101.5"))), (2, 0, True))
+        registration = _gateway_payment(total="100", fee=None, status="registered")
+        self.assertEqual(self._commit(self._message(3, payment=registration)), (1, 0, True))
+        (gateway,) = [row for row in self._receipts() if row.gateway is not None]
+        self.assertIsNotNone(gateway.evidence_for_receipt_id)
+        self.assertEqual(self._commit(self._message(4, payment=_gateway_payment())), (0, 1, True))
+        (gateway,) = [row for row in self._receipts() if row.gateway is not None]
+        self.assertIsNone(gateway.evidence_for_receipt_id)
+
     def test_paid_date_change_invalidates_an_unconfirmed_document_only(self):
         paid_day = date(2026, 11, 20)
         for index, confirmed in enumerate((False, True), start=1):

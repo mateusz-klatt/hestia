@@ -518,11 +518,7 @@ class GmailStore(BudgetStore):
         row.version += 1
         row.updated_at = now
         write_audit(session, owner, row, "gateway_upgrade", before, audit_payload(row, "gateway_upgrade"), now)
-        if evidence_changed and row.evidence_for_receipt_id is not None:
-            document = session.get(BudgetReceipt, row.evidence_for_receipt_id)
-            if document.status != "confirmed" and not self._evidence_match(row, document):
-                row.evidence_for_receipt_id = None
-        self._attach_evidence(session, owner, row)
+        self._attach_evidence(session, owner, row, revalidate=evidence_changed)
 
     def _failed_gateway(self, session, owner, failed, *, now, expires_at):
         """Remove an unconfirmed failed registration and keep its ref until expiry."""
@@ -575,13 +571,13 @@ class GmailStore(BudgetStore):
                      or (document.raw_nip and gateway_row.raw_nip and document.raw_nip == gateway_row.raw_nip)]
         return preferred or qualified
 
-    def _attach_evidence(self, session, owner, gateway_row):
+    def _attach_evidence(self, session, owner, gateway_row, *, revalidate=False):
         """Attach a gateway row to its shop document only when exactly one qualifies."""
-        if gateway_row.evidence_for_receipt_id is not None or gateway_row.status != "imported":
-            return
+        if gateway_row.evidence_for_receipt_id is not None:
+            if not revalidate or session.get(BudgetReceipt, gateway_row.evidence_for_receipt_id).status == "confirmed":
+                return
         candidates = self._evidence_candidates(session, owner, gateway_row)
-        if len(candidates) == 1:
-            gateway_row.evidence_for_receipt_id = candidates[0].id
+        gateway_row.evidence_for_receipt_id = candidates[0].id if len(candidates) == 1 else None
 
     def _attach_gateway_for_document(self, session, owner, document):
         """Reverse check on document insert: attach a unique unattached gateway row."""
