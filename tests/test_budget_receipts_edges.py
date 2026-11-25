@@ -732,6 +732,18 @@ class StoreEdgeTests(AnalyticsCase):
                 ))
                 self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 50 + idx), 1)
 
+        # Shop-category nouns (PL/EN with diacritics & inflections) never enter distinctive merchant tokens.
+        for category_shop in (
+            "APTEKA CENTRUM", "APTEKI CENTRUM", "SKLEP SPOŻYWCZY", "PIEKARNIA CUKIERNIA",
+            "PIEKARNI CUKIERNI", "RESTAURACJA KAWIARNIA", "BAR PIZZERIA BISTRO", "STACJA PALIWA",
+            "HOTEL HOSTEL KINO", "SALON STUDIO DROGERIA", "KSIĘGARNIA KSIEGARNI KWIACIARNIA",
+            "OPTYK FRYZJERA KEBAB SUSHI", "DELIKATESY MARKET SUPERMARKET HIPERMARKET",
+            "PARKING MYJNIA WARSZTAT SERWIS", "PRZYCHODNIA GABINET KLINIKA",
+            "PHARMACY BAKERY CAFE CAFÉ COFFEE RESTAURANT STATION FUEL CINEMA CLINIC",
+        ):
+            self.assertEqual(merchant_tokens(category_shop, None), frozenset(), category_shop)
+        self.assertEqual(merchant_score_groups("Księgarnia Centrum", None), ((), ("centrum", "ksiegarnia")))
+
 
 class ReceiptApiEdgeTests(unittest.TestCase):
     def test_store_refuses_a_non_authoritative_backend(self):

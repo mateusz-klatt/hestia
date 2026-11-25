@@ -199,29 +199,60 @@ describe("receipts_model", () => {
     expect(merged.map((r) => r.receipt_id)).toEqual(["r1", "r3"]);
 
     expect(candidateDisplayDate(candidateOf({ booking_date: null, value_date: "2026-11-13" }))).toBe("2026-11-13");
-    expect(suggestedCandidateDates(candidateOf({ transaction_date: "2026-11-12", booking_date: "2026-11-14" }))).toEqual({
+    expect(suggestedCandidateDates(
+      candidateOf({ transaction_date: "2026-11-12", booking_date: "2026-11-14" }),
+      { receipt_date: "2026-11-12", document_kind: "receipt", due_date: null },
+    )).toEqual({
       primaryDate: "2026-11-12",
       bookingDayMonth: "14.11",
+      displayDistance: 0,
     });
-    expect(suggestedCandidateDates(candidateOf({ transaction_date: "2026-11-14", booking_date: "2026-11-14" }))).toEqual({
+    expect(suggestedCandidateDates(
+      candidateOf({ transaction_date: null, booking_date: "2026-11-16", value_date: "2026-11-14", date_distance: 0 }),
+      { receipt_date: "2026-11-14", document_kind: "receipt", due_date: null },
+    )).toEqual({
+      primaryDate: "2026-11-14",
+      bookingDayMonth: "16.11",
+      displayDistance: 0,
+    });
+    expect(suggestedCandidateDates(
+      candidateOf({ transaction_date: "2026-11-10", booking_date: "2026-11-16", value_date: "2026-11-18", date_distance: 2 }),
+      { receipt_date: "2026-11-14", document_kind: "invoice", due_date: "2026-11-20" },
+    )).toEqual({
+      primaryDate: "2026-11-16",
+      bookingDayMonth: null,
+      displayDistance: 2,
+    });
+    expect(suggestedCandidateDates(
+      candidateOf({ transaction_date: "2026-11-14", booking_date: "2026-11-14" }),
+      { receipt_date: "2026-11-14", document_kind: "invoice", due_date: null },
+    )).toEqual({
       primaryDate: "2026-11-14",
       bookingDayMonth: null,
+      displayDistance: 0,
     });
     expect(suggestedCandidateDates(candidateOf({ transaction_date: null, booking_date: "2026-11-14", value_date: "2026-11-13" }))).toEqual({
       primaryDate: "2026-11-14",
       bookingDayMonth: null,
+      displayDistance: 0,
     });
-    expect(suggestedCandidateDates(candidateOf({ transaction_date: null, booking_date: null, value_date: "2026-11-13" }))).toEqual({
+    expect(suggestedCandidateDates(candidateOf({ transaction_date: null, booking_date: null, value_date: "2026-11-13", date_distance: 1 }))).toEqual({
       primaryDate: "2026-11-13",
       bookingDayMonth: null,
+      displayDistance: 1,
     });
-    expect(suggestedCandidateDates(candidateOf({ transaction_date: null, booking_date: null, value_date: null }))).toEqual({
+    expect(suggestedCandidateDates(candidateOf({ transaction_date: null, booking_date: null, value_date: null, date_distance: 0 }))).toEqual({
       primaryDate: null,
       bookingDayMonth: null,
+      displayDistance: 0,
     });
-    expect(suggestedCandidateDates(candidateOf({ transaction_date: "2026-11-12", booking_date: "2026", value_date: null }))).toEqual({
-      primaryDate: "2026-11-12",
+    expect(suggestedCandidateDates(
+      candidateOf({ transaction_date: "2026-02-30", booking_date: "2026", value_date: null, date_distance: 3 }),
+      { receipt_date: "2026-11-12", document_kind: "receipt", due_date: null },
+    )).toEqual({
+      primaryDate: "2026-02-30",
       bookingDayMonth: "2026",
+      displayDistance: 3,
     });
     const acc = account({
       id: "acc-1",

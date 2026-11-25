@@ -1718,12 +1718,21 @@ describe("ReceiptsView", () => {
     }));
   });
 
-  it("shows suggested banner transaction_date with optional booking note instead of booking_date", async () => {
+  it("shows suggested banner exact server distance date with optional booking note instead of booking_date", async () => {
     const candDiff = receiptCandidate({
       entry_reference: "7".repeat(64),
       candidate_token: "tok-date-diff",
       transaction_date: "2026-11-12",
       booking_date: "2026-11-14",
+      value_date: "2026-11-14",
+      date_distance: 0,
+      match_strength: "nip",
+    });
+    const candValueDate = receiptCandidate({
+      entry_reference: "6".repeat(64),
+      candidate_token: "tok-val-date",
+      transaction_date: null,
+      booking_date: "2026-11-16",
       value_date: "2026-11-14",
       date_distance: 0,
       match_strength: "nip",
@@ -1745,21 +1754,30 @@ describe("ReceiptsView", () => {
       match_strength: "nip",
     });
     const rows = [
-      receiptSummary({ receipt_id: "rec-diff", status: "imported" }),
+      receiptSummary({ receipt_id: "rec-diff", receipt_date: "2026-11-12", status: "imported" }),
       receiptSummary({ receipt_id: "rec-same", status: "imported" }),
       receiptSummary({ receipt_id: "rec-null", status: "imported" }),
+      receiptSummary({ receipt_id: "rec-val", receipt_date: "2026-11-14", status: "imported" }),
     ];
     const clients = fakeClients(rows);
     vi.mocked(clients.rApi.receiptDetail)
-      .mockImplementationOnce(() => ok({ receipt: receiptDetail({ receipt_id: "rec-diff", status: "imported", linked: false }), candidates: [candDiff] }))
-      .mockImplementationOnce(() => ok({ receipt: receiptDetail({ receipt_id: "rec-diff", status: "imported", linked: false }), candidates: [candDiff] }))
+      .mockImplementationOnce(() => ok({ receipt: receiptDetail({ receipt_id: "rec-diff", receipt_date: "2026-11-12", status: "imported", linked: false }), candidates: [candDiff] }))
+      .mockImplementationOnce(() => ok({ receipt: receiptDetail({ receipt_id: "rec-val", receipt_date: "2026-11-14", status: "imported", linked: false }), candidates: [candValueDate] }))
+      .mockImplementationOnce(() => ok({ receipt: receiptDetail({ receipt_id: "rec-diff", receipt_date: "2026-11-12", status: "imported", linked: false }), candidates: [candDiff] }))
       .mockImplementationOnce(() => ok({ receipt: receiptDetail({ receipt_id: "rec-same", status: "imported", linked: false }), candidates: [candSame] }))
-      .mockImplementationOnce(() => ok({ receipt: receiptDetail({ receipt_id: "rec-null", status: "imported", linked: false }), candidates: [candNullTx] }));
+      .mockImplementationOnce(() => ok({ receipt: receiptDetail({ receipt_id: "rec-null", status: "imported", linked: false }), candidates: [candNullTx] }))
+      .mockImplementationOnce(() => ok({ receipt: receiptDetail({ receipt_id: "rec-val", receipt_date: "2026-11-14", status: "imported", linked: false }), candidates: [candValueDate] }));
 
     await renderReceipts(clients, { locale: "pl" });
     await click(openDetailButton(0, "Szczegóły"));
     const bannerPlDiff = dialog().querySelector<HTMLElement>(".budget-receipt-suggested");
     expect(bannerPlDiff?.textContent).toContain("2026-11-12 (księgowanie 14.11)");
+    await click(button("Zamknij", dialog()));
+
+    await click(openDetailButton(3, "Szczegóły"));
+    const bannerPlVal = dialog().querySelector<HTMLElement>(".budget-receipt-suggested");
+    expect(bannerPlVal?.textContent).toContain("2026-11-14 (księgowanie 16.11)");
+    expect(bannerPlVal?.textContent).toContain("Ten sam dzień");
     await click(button("Zamknij", dialog()));
 
     await renderReceipts(clients, { locale: "en" });
@@ -1778,5 +1796,11 @@ describe("ReceiptsView", () => {
     const bannerNullTx = dialog().querySelector<HTMLElement>(".budget-receipt-suggested");
     expect(bannerNullTx?.textContent).toContain("2026-11-14");
     expect(bannerNullTx?.textContent).not.toContain("(booked");
+    await click(button("Close", dialog()));
+
+    await click(openDetailButton(3));
+    const bannerEnVal = dialog().querySelector<HTMLElement>(".budget-receipt-suggested");
+    expect(bannerEnVal?.textContent).toContain("2026-11-14 (booked 16.11)");
+    expect(bannerEnVal?.textContent).toContain("Same day");
   });
 });

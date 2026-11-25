@@ -1552,14 +1552,14 @@ function ReceiptDetailDrawer({
                   candidate.account_id,
                   t("budget.main.account"),
                 );
-                const { primaryDate, bookingDayMonth } = suggestedCandidateDates(candidate);
+                const { primaryDate, bookingDayMonth, displayDistance } = suggestedCandidateDates(candidate, detail);
                 const baseDate = primaryDate ?? t("budget.receipts.noDate");
                 const dateText = bookingDayMonth === null
                   ? baseDate
                   : `${baseDate} ${t("budget.receipts.bookingDateNote", { date: bookingDayMonth })}`;
-                const daysText = candidate.date_distance === 0
+                const daysText = displayDistance === 0
                   ? t("budget.receipts.candidateSameDay")
-                  : t("budget.receipts.candidateDays", { days: candidate.date_distance });
+                  : t("budget.receipts.candidateDays", { days: displayDistance });
                 const amountText = formatAmount(
                   candidate.amount,
                   candidate.currency,

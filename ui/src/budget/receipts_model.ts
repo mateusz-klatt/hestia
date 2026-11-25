@@ -209,6 +209,25 @@ export function candidateDisplayDate(
 export interface SuggestedCandidateDateInfo {
   readonly primaryDate: string | null;
   readonly bookingDayMonth: string | null;
+  readonly displayDistance: number;
+}
+
+const ISO_DAY_MS = 86_400_000;
+
+function parseIsoDayNumber(value: string | null | undefined): number | null {
+  if (typeof value !== "string") return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (match === null) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const check = new Date(0);
+  check.setUTCFullYear(year, month - 1, day);
+  check.setUTCHours(0, 0, 0, 0);
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) {
+    return null;
+  }
+  return Math.round(check.getTime() / ISO_DAY_MS);
 }
 
 function formatIsoDayMonth(isoDate: string): string {
@@ -219,18 +238,46 @@ function formatIsoDayMonth(isoDate: string): string {
   return isoDate;
 }
 
+/** Pick the exact bank date `_date_distance` scored against and derive day offset from it. */
 export function suggestedCandidateDates(
-  candidate: Pick<ReceiptCandidate, "booking_date" | "value_date" | "transaction_date">,
+  candidate: Pick<ReceiptCandidate, "booking_date" | "value_date" | "transaction_date" | "date_distance">,
+  receipt?: Pick<ReceiptDetail, "receipt_date" | "document_kind" | "due_date"> | null,
 ): SuggestedCandidateDateInfo {
-  const primaryDate = candidate.transaction_date ?? candidate.booking_date ?? candidate.value_date ?? null;
+  const orderedDates = [candidate.transaction_date, candidate.booking_date, candidate.value_date] as const;
+  const targetDay = parseIsoDayNumber(receipt?.receipt_date);
+  let primaryDate: string | null = null;
+  if (targetDay !== null) {
+    let startDay = targetDay - 4;
+    let endDay = targetDay + 4;
+    if (receipt?.document_kind === "invoice") {
+      const dueDay = parseIsoDayNumber(receipt.due_date) ?? targetDay;
+      startDay = targetDay - 1;
+      endDay = Math.max(dueDay, targetDay) + 14;
+    }
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const rawDate of orderedDates) {
+      const candidateDay = parseIsoDayNumber(rawDate);
+      if (candidateDay === null || candidateDay < startDay || candidateDay > endDay) continue;
+      const dist = Math.abs(candidateDay - targetDay);
+      if (dist < bestDistance) {
+        bestDistance = dist;
+        primaryDate = rawDate;
+      }
+    }
+  }
+  primaryDate ??= candidate.transaction_date ?? candidate.booking_date ?? candidate.value_date ?? null;
+  const primaryDay = parseIsoDayNumber(primaryDate);
+  const displayDistance = (targetDay !== null && primaryDay !== null)
+    ? Math.abs(primaryDay - targetDay)
+    : candidate.date_distance;
   const bookingDayMonth = (
-    candidate.transaction_date !== null
+    primaryDate !== null
     && candidate.booking_date !== null
-    && candidate.transaction_date !== candidate.booking_date
+    && primaryDate !== candidate.booking_date
   )
     ? formatIsoDayMonth(candidate.booking_date)
     : null;
-  return { primaryDate, bookingDayMonth };
+  return { primaryDate, bookingDayMonth, displayDistance };
 }
 
 export function receiptAccountLabel(

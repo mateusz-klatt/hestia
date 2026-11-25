@@ -2685,6 +2685,60 @@ NR KARTY ****5555
         self.assertEqual(self.receipts.detail("owner", rec_iban_yr)["candidates"][0]["match_strength"], "none")
         self.assertFalse(self.receipts.detail("owner", rec_iban_yr)["candidates"][0]["merchant_token_hit"])
 
+    def test_round4_shop_category_tokens_never_distinctive(self):
+        # 1. Shared shop-category token without shared distinctive brand stays "generic", never "distinctive".
+        self.add_transaction(
+            "a", "r4-apteka-gemini", amount="210.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["APTEKA GEMINI"],
+        )
+        rec_apteka = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="210.00",
+            shop="APTEKA CENTRUM", nip=None,
+        )
+        cand_apteka = self.receipts.detail("owner", rec_apteka)["candidates"]
+        self.assertEqual(cand_apteka[0]["match_strength"], "generic")
+
+        # 2. When ALL receipt tokens are category or generic words (even exact match), strength stays "generic".
+        self.add_transaction(
+            "a", "r4-all-cat", amount="211.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["APTEKA CENTRUM WARSZAWA"],
+        )
+        rec_all_cat = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="211.00",
+            shop="APTEKA CENTRUM WARSZAWA", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_all_cat)["candidates"][0]["match_strength"], "generic")
+
+        self.add_transaction(
+            "a", "r4-stacja-paliwa", amount="212.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["STACJA PALIWA PHARMACY CAFE"],
+        )
+        rec_stacja = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="212.00",
+            shop="STACJA PALIWA PHARMACY CAFE", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_stacja)["candidates"][0]["match_strength"], "generic")
+
+        # 3. Category word + distinctive brand requires the distinctive brand to match for "distinctive".
+        self.add_transaction(
+            "a", "r4-drogeria-other", amount="213.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["DROGERIA NATURA"],
+        )
+        self.add_transaction(
+            "a", "r4-drogeria-brand", amount="214.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["HEBE WARSZAWA"],
+        )
+        rec_drog_other = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="213.00",
+            shop="DROGERIA HEBE", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_drog_other)["candidates"][0]["match_strength"], "generic")
+        rec_drog_brand = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="214.00",
+            shop="DROGERIA HEBE", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_drog_brand)["candidates"][0]["match_strength"], "distinctive")
+
 
 class ReceiptRetentionSweepTests(fixture.unittest.IsolatedAsyncioTestCase):
     async def test_sweep_calls_retain_expired_when_flag_is_off(self):
