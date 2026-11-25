@@ -224,6 +224,17 @@ def _grant(session, member, owner):
         )
     if not owner_valid:
         raise HouseholdCommandError("household_owner_invalid")
+    if phase == authz.POLICY_PHASE_CUSTOM:
+        member_row = session.get(User, member)
+        if member_row.budget_owner:
+            raise HouseholdCommandError("household_member_invalid")
+        targets = session.execute(select(PermissionGrant.target_owner).where(
+            PermissionGrant.username == member,
+            PermissionGrant.target_owner.is_not(None),
+            PermissionGrant.target_owner != owner,
+        ).distinct()).scalars()
+        if any(authz.effective_permissions(session, member, owner=target) for target in targets):
+            raise HouseholdCommandError("household_member_invalid")
     existing = session.get(BudgetHouseholdMember, member)
     if existing is not None:
         if existing.owner != owner:

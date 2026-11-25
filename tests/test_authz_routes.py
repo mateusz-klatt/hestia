@@ -156,6 +156,19 @@ class RouteMatrixTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("authorization_bridge_incompatible", stderr.getvalue())
 
+    def test_custom_household_grant_rejects_owner_and_second_target(self):
+        with self.sessions.begin() as session:
+            session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
+        for member, owner in (("owner2", "admin"), ("viewer", "owner2")):
+            with self.subTest(member=member, owner=owner):
+                with self.assertRaises(household.HouseholdCommandError) as denied:
+                    household.grant_member(member, owner, path=str(self.path))
+                self.assertEqual(denied.exception.code, "household_member_invalid")
+        with self.sessions() as session:
+            self.assertIsNone(session.get(db.BudgetHouseholdMember, "owner2"))
+            self.assertEqual(authz.resolve_budget_target(session, "owner2"), "owner2")
+            self.assertEqual(authz.resolve_budget_target(session, "viewer"), "admin")
+
     def test_last_account_manager_guard_uses_effective_grant_not_role_projection(self):
         with self.sessions.begin() as session:
             session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
