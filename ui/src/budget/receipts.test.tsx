@@ -1250,4 +1250,35 @@ describe("ReceiptsView", () => {
     expect(host.textContent).toContain("Failure 409 budget_actor_changed: 1");
     expect(host.textContent).toContain("1 remaining, 1 failed");
   });
+
+  it("reloads the list after confirm or delete fails with a network or unknown error", async () => {
+    const confirmedRow = receiptSummary({ status: "confirmed", version: 2 });
+    const clients = fakeClients([receiptSummary({ status: "needs_review", version: 1 })]);
+    await renderReceipts(clients);
+
+    // Confirm commits on server, response fails with unknown error: mounted drawer shows error and list still reloads.
+    await click(openDetailButton(0));
+    vi.mocked(clients.rApi.receiptsList).mockImplementation(() => ok({ receipts: [confirmedRow], next_cursor: null }));
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => fail(200, "budget_unknown_outcome"));
+    const listCallsBeforeConfirm = vi.mocked(clients.rApi.receiptsList).mock.calls.length;
+    await click(button("Confirm receipt", dialog()));
+    expect(dialog().querySelector('[role="alert"]')).not.toBeNull();
+    expect(vi.mocked(clients.rApi.receiptsList).mock.calls.length).toBeGreaterThan(listCallsBeforeConfirm);
+    await click(button("Close", dialog()));
+    expect(host.querySelector(".budget-receipts")?.textContent).toContain("Confirmed");
+
+    // Delete commits on server, response fails with network error: mounted drawer shows error and list still reloads.
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() =>
+      ok({ receipt: receiptDetail({ status: "confirmed", version: 2 }), candidates: [] }));
+    await click(openDetailButton(0));
+    vi.mocked(clients.rApi.receiptsList).mockImplementation(() => ok({ receipts: [], next_cursor: null }));
+    vi.mocked(clients.rApi.deleteReceipt).mockImplementationOnce(() => fail(0, "budget_network_error"));
+    const listCallsBeforeDelete = vi.mocked(clients.rApi.receiptsList).mock.calls.length;
+    await click(button("Delete document", dialog()));
+    await click(button("Confirm deletion", dialog()));
+    expect(dialog().querySelector('[role="alert"]')).not.toBeNull();
+    expect(vi.mocked(clients.rApi.receiptsList).mock.calls.length).toBeGreaterThan(listCallsBeforeDelete);
+    await click(button("Close", dialog()));
+    expect(host.querySelector(".budget-receipts")?.textContent).not.toContain("Synthetic Grocery");
+  });
 });

@@ -197,18 +197,20 @@ function confirmErrorText(error: string): string {
   }
 }
 
+function isConflictOrStaleError(result: { status?: number; error?: string }): boolean {
+  return result.status === 409
+    || result.error === "budget_receipt_conflict"
+    || result.error === "budget_receipt_tx_already_linked"
+    || result.error === "budget_receipt_stale_source";
+}
+
 function settledOutcome(
   result: { ok: boolean; status?: number; error?: string },
   successOutcome: "confirmed" | "deleted",
 ): ReceiptSettledEvent["outcome"] {
   if (result.ok) return successOutcome;
   if (result.status === 404) return "not_found";
-  if (result.status === 409
-    || result.error === "budget_receipt_conflict"
-    || result.error === "budget_receipt_tx_already_linked"
-    || result.error === "budget_receipt_stale_source") {
-    return "conflict";
-  }
+  if (isConflictOrStaleError(result)) return "conflict";
   return "error";
 }
 
@@ -286,6 +288,11 @@ export function ReceiptsView({
     setSelectedId(null);
     setDetailState({ kind: "loading" });
   }, [clearImage]);
+
+  const reloadList = useCallback(() => {
+    staleCursorReloadedRef.current = false;
+    setListRefresh((current) => current + 1);
+  }, []);
 
   const clearAllReceiptsState = useCallback((disabled: boolean, disabledRevision: number | null = null) => {
     listGeneration.current += 1;
@@ -488,10 +495,9 @@ export function ReceiptsView({
       errors: [...errors.entries()],
     });
     if (!aborted) {
-      staleCursorReloadedRef.current = false;
-      setListRefresh((current) => current + 1);
+      reloadList();
     }
-  }, [actorKey, checkBarrier, receiptsApi, store]);
+  }, [actorKey, checkBarrier, receiptsApi, reloadList, store]);
 
   // Subscribe to persistent store so locks survive unmount/remount and late settlements refresh the panel.
   useEffect(() => {
@@ -499,18 +505,21 @@ export function ReceiptsView({
     return store.subscribe((event?: ReceiptSettledEvent) => {
       if (!mounted.current) return;
       setPendingMap(store.snapshot());
-      if (event !== undefined
-        && (event.outcome === "confirmed" || event.outcome === "deleted"
-          || event.outcome === "not_found" || event.outcome === "conflict")) {
-        staleCursorReloadedRef.current = false;
-        setListRefresh((current) => current + 1);
-        if (openReceiptIdRef.current === event.receiptId && event.outcome === "confirmed") {
+      if (event !== undefined) {
+        // Reload list after every settled mutation (including error) in case a server write committed before response loss.
+        reloadList();
+        if (openReceiptIdRef.current === event.receiptId) {
           receiptFloorGenRef.current.set(event.receiptId, ++detailGeneration.current);
-          setDetailRefresh((current) => current + 1);
+          if (event.outcome === "deleted" || event.outcome === "not_found") {
+            resetDrawer();
+            if (event.outcome === "not_found") setNotice(t("budget.receipts.notFound"));
+          } else {
+            setDetailRefresh((current) => current + 1);
+          }
         }
       }
     });
-  }, [store]);
+  }, [store, reloadList, resetDrawer]);
 
   const searchMode = filter.query.trim() !== "";
 
@@ -1132,31 +1141,28 @@ export function ReceiptsView({
             receiptFloorGenRef.current.set(updated.receipt_id, floorToken);
             setDetailState({ kind: "ready", detail: updated, candidates: [] });
             setNotice(t("budget.receipts.confirmSuccess"));
-            staleCursorReloadedRef.current = false;
-            setListRefresh((current) => current + 1);
+            reloadList();
           }}
           onConflictOrStale={(receiptId) => {
             const floorToken = ++detailGeneration.current;
             receiptFloorGenRef.current.set(receiptId, floorToken);
             setDetailRefresh((current) => current + 1);
-            staleCursorReloadedRef.current = false;
-            setListRefresh((current) => current + 1);
+            reloadList();
           }}
           onNotFound={(receiptId) => {
             const floorToken = ++detailGeneration.current;
             receiptFloorGenRef.current.set(receiptId, floorToken);
             resetDrawer();
             setNotice(t("budget.receipts.notFound"));
-            staleCursorReloadedRef.current = false;
-            setListRefresh((current) => current + 1);
+            reloadList();
           }}
           onDeleted={(receiptId) => {
             const floorToken = ++detailGeneration.current;
             receiptFloorGenRef.current.set(receiptId, floorToken);
             resetDrawer();
-            staleCursorReloadedRef.current = false;
-            setListRefresh((current) => current + 1);
+            reloadList();
           }}
+          onMutationError={reloadList}
         />
       )}
     </section>
@@ -1180,6 +1186,7 @@ interface DrawerProps {
   onConflictOrStale: (receiptId: string) => void;
   onNotFound: (receiptId: string) => void;
   onDeleted: (receiptId: string) => void;
+  onMutationError: () => void;
 }
 
 function ReceiptDetailDrawer({
@@ -1199,6 +1206,7 @@ function ReceiptDetailDrawer({
   onConflictOrStale,
   onNotFound,
   onDeleted,
+  onMutationError,
 }: DrawerProps) {
   const [confirmDraft, setConfirmDraft] = useState<ReceiptConfirmDraft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -1282,11 +1290,12 @@ function ReceiptDetailDrawer({
           return;
         }
         setActionError(confirmErrorText(result.error));
-        if (result.error === "budget_receipt_conflict"
-          || result.error === "budget_receipt_tx_already_linked"
-          || result.error === "budget_receipt_stale_source") {
+        if (isConflictOrStaleError(result)) {
           keepActionErrorRef.current = true;
           onConflictOrStale(detail.receipt_id);
+        } else {
+          // Reload list even on network/unknown errors in case the write committed server-side.
+          onMutationError();
         }
         return;
       }
@@ -1315,12 +1324,15 @@ function ReceiptDetailDrawer({
           onNotFound(detail.receipt_id);
           return;
         }
-        setActionError(result.error === "budget_receipt_conflict"
+        setActionError(isConflictOrStaleError(result)
           ? t("budget.receipts.conflict")
           : t("budget.receipts.deleteError"));
-        if (result.error === "budget_receipt_conflict") {
+        if (isConflictOrStaleError(result)) {
           keepActionErrorRef.current = true;
           onConflictOrStale(detail.receipt_id);
+        } else {
+          // Reload list even on network/unknown errors in case the delete committed server-side.
+          onMutationError();
         }
         return;
       }

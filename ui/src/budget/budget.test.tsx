@@ -2122,6 +2122,113 @@ describe("receipts tab & capability gate", () => {
     expect(listSection?.textContent).not.toContain("Confirming…");
   });
 
+  it("reloads receipts list on recovered panel when in-flight confirm or delete settles with network or unknown error", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+    const baseRow = {
+      receipt_id: "11111111-1111-4111-8111-111111111111",
+      status: "needs_review" as const,
+      document_kind: "receipt" as const,
+      source_kind: "local_ocr" as const,
+      receipt_kind: "purchase" as const,
+      receipt_date: "2026-11-14",
+      receipt_time: null,
+      raw_shop_name: "Tab Integration Market",
+      raw_nip: null,
+      shop_id: null,
+      chain_key: null,
+      total_amount: "19.50",
+      currency: "PLN",
+      payment_method: "card",
+      math_delta: "0",
+      linked: false,
+      linked_account_id: null,
+      linked_entry_ref: null,
+      version: 1,
+      image_available: false,
+      image_expires_at: null,
+      raw_text_expires_at: null,
+      invoice_number: null,
+      due_date: null,
+      import_expires_at: null,
+      forwarded_manually: false,
+      forwarded_sender_domain: null,
+      created_at: 1_700_000_000,
+      updated_at: 1_700_000_000,
+    };
+
+    const pendingConfirm = deferred<Loaded<ReceiptsApi["confirmReceipt"]>>();
+    vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => pendingConfirm.promise);
+
+    await renderWithReceipts(api, rApi);
+    await click(button("Receipts and documents"));
+    await click(button("Details"));
+    await click(button("Confirm receipt"));
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+
+    // Concurrent read 403 bumps receiptEpoch and temporarily hides panel while capabilities refresh.
+    vi.mocked(rApi.receiptsSearch).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    await act(async () => {
+      const searchQuery = host.querySelector<HTMLInputElement>('input[name="query"]');
+      if (searchQuery === null) throw new Error("receipt search input missing");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(searchQuery, "Tab");
+      searchQuery.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await click(button("Apply filters"));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Confirming…");
+
+    // Server committed the confirm even though the HTTP response was lost; recovered list must reload on error settlement.
+    const confirmedRow = { ...baseRow, status: "confirmed" as const, version: 2 };
+    vi.mocked(rApi.receiptsList).mockImplementation(() => ok({ receipts: [confirmedRow], next_cursor: null }));
+    const listCallsBeforeConfirmError = vi.mocked(rApi.receiptsList).mock.calls.length;
+    await act(async () => {
+      pendingConfirm.settle({ ok: false, status: 0, error: "budget_network_error" });
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(vi.mocked(rApi.receiptsList).mock.calls.length).toBeGreaterThan(listCallsBeforeConfirmError);
+    expect(host.querySelector(".budget-receipts")?.textContent).toContain("Confirmed");
+    expect(host.querySelector(".budget-receipts")?.textContent).not.toContain("Confirming…");
+
+    // Same across a lost-response delete (budget_unknown_outcome) after an epoch bump.
+    vi.mocked(rApi.receiptDetail).mockImplementation(() => ok({ receipt: { ...confirmedRow, lines: [] }, candidates: [] }));
+    const pendingDelete = deferred<Loaded<ReceiptsApi["deleteReceipt"]>>();
+    vi.mocked(rApi.deleteReceipt).mockImplementationOnce(() => pendingDelete.promise);
+
+    await click(button("Details"));
+    await click(button("Delete document"));
+    await click(button("Confirm deletion"));
+    expect(rApi.deleteReceipt).toHaveBeenCalledTimes(1);
+
+    vi.mocked(rApi.receiptsSearch).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    await act(async () => {
+      const searchQuery = host.querySelector<HTMLInputElement>('input[name="query"]');
+      if (searchQuery === null) throw new Error("receipt search input missing");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(searchQuery, "Tab");
+      searchQuery.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await click(button("Apply filters"));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Deleting…");
+
+    vi.mocked(rApi.receiptsList).mockImplementation(() => ok({ receipts: [], next_cursor: null }));
+    const listCallsBeforeDeleteError = vi.mocked(rApi.receiptsList).mock.calls.length;
+    await act(async () => {
+      pendingDelete.settle({ ok: false, status: 200, error: "budget_unknown_outcome" });
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(vi.mocked(rApi.receiptsList).mock.calls.length).toBeGreaterThan(listCallsBeforeDeleteError);
+    expect(host.querySelector(".budget-receipts")?.textContent).not.toContain("Tab Integration Market");
+    expect(host.querySelector(".budget-receipts")?.textContent).not.toContain("Deleting…");
+  });
+
   it("aborts in-flight bulk confirm on principal switch, authorization lock, or actor change", async () => {
     const api = fakeApi();
     const rApi = fakeReceiptsApi();
