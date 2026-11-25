@@ -303,7 +303,7 @@ def _rrule_parts(line: str) -> dict[str, str] | None:
 
 def _parse_int_list(
     raw: str, minimum: int, maximum: int | None = None, *, allow_negative: bool = False
-) -> list[int] | None:
+) -> tuple[int, ...] | None:
     values = []
     for token in raw.split(","):
         try:
@@ -314,7 +314,7 @@ def _parse_int_list(
         if magnitude < minimum or (maximum is not None and magnitude > maximum):
             return None
         values.append(value)
-    return values
+    return tuple(values)
 
 
 def _start_date(payload: dict) -> date:
@@ -350,21 +350,31 @@ def _parse_byday(raw: str) -> tuple[set[str], int | None] | None:
 def _shape_rejection_reason(
     frequency: str, interval: int, parts: dict[str, str], start_date: date
 ) -> str | None:
-    months = _parse_int_list(parts["BYMONTH"], 1, 12) if "BYMONTH" in parts else None
-    if "BYMONTH" in parts and months is None:
-        return "uses invalid BYMONTH parameter"
-    month_days = _parse_int_list(parts["BYMONTHDAY"], 1, 31, allow_negative=True) if "BYMONTHDAY" in parts else None
-    if "BYMONTHDAY" in parts and month_days is None:
-        return "uses invalid BYMONTHDAY parameter"
-    plain_days, ordinal_day = set(), None
+    months: tuple[int, ...] = ()
+    if "BYMONTH" in parts:
+        parsed_months = _parse_int_list(parts["BYMONTH"], 1, 12)
+        if parsed_months is None:
+            return "uses invalid BYMONTH parameter"
+        months = parsed_months
+    month_days: tuple[int, ...] = ()
+    if "BYMONTHDAY" in parts:
+        parsed_month_days = _parse_int_list(parts["BYMONTHDAY"], 1, 31, allow_negative=True)
+        if parsed_month_days is None:
+            return "uses invalid BYMONTHDAY parameter"
+        month_days = parsed_month_days
+    plain_days: set[str] = set()
+    ordinal_day: int | None = None
     if "BYDAY" in parts:
         parsed_byday = _parse_byday(parts["BYDAY"])
         if parsed_byday is None:
             return "uses unsupported BYDAY parameter"
         plain_days, ordinal_day = parsed_byday
-    setpos = _parse_int_list(parts["BYSETPOS"], 1, 28, allow_negative=True) if "BYSETPOS" in parts else None
-    if "BYSETPOS" in parts and setpos is None:
-        return "uses out-of-range BYSETPOS parameter"
+    setpos: tuple[int, ...] = ()
+    if "BYSETPOS" in parts:
+        parsed_setpos = _parse_int_list(parts["BYSETPOS"], 1, 28, allow_negative=True)
+        if parsed_setpos is None:
+            return "uses out-of-range BYSETPOS parameter"
+        setpos = parsed_setpos
 
     by_keys = set(parts) & _BY_KEYS
     if not by_keys:
@@ -395,7 +405,7 @@ def _shape_rejection_reason(
             # S6: MONTHLY plain BYDAY with single BYSETPOS; every month has >=4 of each weekday.
             if abs(setpos[0]) <= 4 * len(plain_days):
                 return None
-    if frequency == "YEARLY" and months is not None and len(months) == 1:
+    if frequency == "YEARLY" and len(months) == 1:
         month = months[0]
         if by_keys == {"BYMONTH", "BYMONTHDAY"} and len(month_days) == 1:
             # S7(a): YEARLY single BYMONTH+BYMONTHDAY; valid day hits yearly (Feb 29 within 8 years at INTERVAL=1).
