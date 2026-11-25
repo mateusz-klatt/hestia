@@ -2059,6 +2059,7 @@ describe("receipts tab & capability gate", () => {
             created_at: 1_700_000_000,
             updated_at: 1_700_000_000,
             lines: [],
+            payment_evidence: [],
           },
         },
       });
@@ -2314,6 +2315,7 @@ describe("receipts tab & capability gate", () => {
     vi.mocked(rApi.receiptDetail).mockImplementation((id) => ok({
       receipt: {
         ...(id === item1.receipt_id ? item1 : item2),
+        payment_evidence: [],
         lines: [{
           line_no: 1,
           line_kind: "other",
