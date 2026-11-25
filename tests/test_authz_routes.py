@@ -162,7 +162,12 @@ class RouteMatrixTests(unittest.TestCase):
     def test_custom_household_grant_rejects_owner_and_second_target(self):
         with self.sessions.begin() as session:
             session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
-        for member, owner in (("owner2", "admin"), ("viewer", "owner2")):
+            session.add(db.User(username="dormant", password_hash="h", role="viewer"))
+            session.flush()
+            session.add(db.PermissionGrant(
+                username="dormant", permission_id="budget.receipts.add", target_owner="admin",
+            ))
+        for member, owner in (("owner2", "admin"), ("viewer", "owner2"), ("dormant", "owner2")):
             with self.subTest(member=member, owner=owner):
                 with self.assertRaises(household.HouseholdCommandError) as denied:
                     household.grant_member(member, owner, path=str(self.path))

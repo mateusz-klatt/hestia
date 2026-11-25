@@ -233,7 +233,7 @@ def _grant(session, member, owner):
             PermissionGrant.target_owner.is_not(None),
             PermissionGrant.target_owner != owner,
         ).distinct()).scalars()
-        if any(authz.effective_permissions(session, member, owner=target) for target in targets):
+        if next(iter(targets), None) is not None:
             raise HouseholdCommandError("household_member_invalid")
     existing = session.get(BudgetHouseholdMember, member)
     if existing is not None:
