@@ -20,14 +20,15 @@ class PaymentFixtureTests(unittest.TestCase):
         cases = (
             ("gateway_p24_style", "Nowa transakcja płatnicza (P24-AAA-BBB-CCC)", True, ImportedPayment(
                 "PRZYKŁADOWY SKLEP SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ", "Zamówienie 100200300", "217", "PLN", (),
+                "100200300",
             )),
             ("gateway_tpay_style", "Potwierdzenie transakcji TR-AAAA-0000000", True, ImportedPayment(
-                "PRZYKŁADOWA SPÓŁKA AKCYJNA", "Zamówienie 00000000001", "83.84", "PLN", (),
+                "PRZYKŁADOWA SPÓŁKA AKCYJNA", "Zamówienie 0000000001", "83.84", "PLN", (), "0000000001",
             )),
             ("gateway_started", "Potwierdzenie rozpoczęcia transakcji dla - https://sklep.example.test/", True, None),
             ("gateway_unfinished", "Dokończ płatność", True, None),
             ("food_order", "Zamówienie potwierdzone", False, ImportedPayment(
-                _MERCHANT, "Zamówienie potwierdzone", "55.52", "PLN", (),
+                _MERCHANT, "Przykładowa Restauracja", "55.52", "PLN", (),
             )),
             ("app_store_invoice", "Twoja faktura z firmy Example", False, ImportedPayment(
                 _MERCHANT, "Twoja faktura z firmy Example", "419.99", "PLN", (date(2026, 11, 14),),
@@ -44,9 +45,35 @@ class PaymentFixtureTests(unittest.TestCase):
             ("payment_failed", "Important: Your Example Family subscription payment failed", False, None),
             ("pickup_notice", "Twoje zamówienie nr 00000000000000 czeka na odbiór w salonie", False, None),
             ("shop_order", "Dziękujemy za zamówienie nr 00000000001", False, ImportedPayment(
-                _MERCHANT, "Dziękujemy za zamówienie nr", "83.84", "PLN", (),
+                _MERCHANT, "Dziękujemy za zamówienie nr", "83.84", "PLN", (), "00000000001",
             )),
             ("newsletter_with_prices", "Nowości w tym tygodniu", False, None),
+            ("ride_inline_tags", "Przejazd opłacony", False, ImportedPayment(
+                _MERCHANT, "Przejazd opłacony", "42.35", "PLN", (),
+            )),
+            ("gateway_fee_inclusive", "Potwierdzenie płatności", True, ImportedPayment(
+                _MERCHANT, "Potwierdzenie płatności", "214.7", "PLN", (),
+            )),
+            ("gateway_start_date_field", "Płatność zakończona", True, ImportedPayment(
+                _MERCHANT, "Przykładowy zakup", "38.12", "PLN", (),
+            )),
+            ("gateway_registered", "Zarejestrowaliśmy Twoje zlecenie płatnicze", True, ImportedPayment(
+                "Example Studio", "Materiały do projektu", "47.25", "PLN", (),
+            )),
+            ("gateway_completed", "Przekazaliśmy Twoje pieniądze", True, ImportedPayment(
+                "Example Studio", "Materiały do projektu", "47.25", "PLN", (),
+            )),
+            *(("saas_gateway_receipt", subject, True, ImportedPayment("Example Workshop", subject, "8.27", "USD", ()))
+              for subject in ("Your receipt from Example Workshop #1234-5678", "Your Example Workshop receipt [#1234-5678]",
+                              "Twoje pokwitowanie od Example Workshop nr 1234-5678")),
+            *(("shop_order_updates", subject, False,
+               ImportedPayment(_MERCHANT, "Materiały warsztatowe", "67.18", "PLN", (), reference))
+              for subject, reference in (("Nowe zamówienie nr 00000000001", "00000000001"),
+                                         ("Zamówienie opłacone", None),
+                                         ("Zamówienie nr 00000000002", "00000000002"))),
+            ("food_description", "Potwierdzenie zamówienia nr 00000000001", False, ImportedPayment(
+                _MERCHANT, "Przykładowa Restauracja", "26.42", "PLN", (), "00000000001",
+            )),
         )
         self.assertEqual({path.stem for path in _FIXTURES.glob("*.txt")}, {case[0] for case in cases})
         for fixture, subject, gateway, expected in cases:
@@ -87,10 +114,10 @@ class PaymentExtractionTests(unittest.TestCase):
                 self.assertEqual(actual, expected)
 
     def test_every_total_label_and_priority(self):
-        highest = ("Amount paid", "Kwota zapłacona", "Zapłacono", "Paid")
-        middle = ("Kwota transakcji", "Do zapłaty", "Łącznie", "Razem do zapłaty", "Suma do zapłaty",
+        highest = ("Amount paid", "Kwota zapłacona", "Zapłacono łącznie", "Zapłacono", "Paid")
+        middle = ("Do zapłaty", "Łącznie", "Razem do zapłaty", "Suma do zapłaty",
                   "Total", "Cena z dostawą")
-        lowest = ("Razem", "Suma", "Kwota zamówienia", "Kwota")
+        lowest = ("Razem", "Suma", "Kwota transakcji", "Kwota zamówienia", "Kwota")
         for labels, lower in ((highest, "Total 2 PLN"), (middle, "Razem 2 PLN"), (lowest, "xxxx 0000\n2 PLN")):
             for label in labels:
                 for separator in (" ", ": ", "\n\n"):
@@ -125,7 +152,7 @@ class PaymentExtractionTests(unittest.TestCase):
     def test_every_rejection_marker(self):
         for marker in (
             "dokończ płatność", "płatność nie została zakończona", "płatność nie została jeszcze zakończona",
-            "rozpoczęcie transakcji", "rozpoczęcia transakcji", "oczekuje na płatność", "nie opłacono",
+            "oczekuje na płatność", "nie opłacono",
             "payment failed", "unable to process", "was declined", "nieudana płatność", "płatność odrzucona",
             "nie udało się pobrać", "nie udało się obciążyć", "zwrot", "refund", "korekta", "faktura korygująca",
             "credit note", "czeka na odbiór", "gotowe do odbioru", "potwierdzenie odbioru", "została wysłana",
@@ -135,6 +162,9 @@ class PaymentExtractionTests(unittest.TestCase):
                 upper = marker.upper().replace(" ", "\u00a0\t ")
                 self.assertIsNone(_extract("Total 2 PLN", f"Example {upper}"))
                 self.assertIsNone(_extract(f"Example {upper}!\nTotal 2 PLN"))
+        for marker in ("rozpoczęcie transakcji", "rozpoczęcia transakcji"):
+            self.assertIsNone(_extract("Total 2 PLN", f"Example {marker}"))
+        self.assertIsNone(_extract("Potwierdzenie rozpoczęcia transakcji\nTotal 2 PLN"))
 
     def test_marker_does_not_reject_a_priced_or_long_item(self):
         for item in ("Book about refund 2 PLN", "Book titled Refund (USD 13.00)",
@@ -187,8 +217,8 @@ class PaymentExtractionTests(unittest.TestCase):
 
     def test_description_selection_redaction_and_cap(self):
         self.assertEqual(_extract(
-            "Tytuł: Other title\nOpis zamówienia w Example: Ｅxample\u200b plan a@example.test "
-            "https://example.test/path 00000000002 order 100200300\nTotal 3 PLN",
+            "Opis zamówienia w Example: Ｅxample\u200b plan a@example.test "
+            "https://example.test/path 00000000002 order 100200300\nTotal 3 PLN", "",
         ).description, "Example plan order 100200300")
         self.assertEqual(_extract("Opis zamówienia w Example: a@example.test\nTytuł: Other\nTotal 3 PLN").description, "Other")
         for private in ("PL00 0000 0000 0000 0000 0000 0000", "0000 0000 0000 0000", "00000000000"):

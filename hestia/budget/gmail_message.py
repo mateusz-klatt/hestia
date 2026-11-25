@@ -14,9 +14,9 @@ from zoneinfo import ZoneInfo
 from .gmail_address import canonical_mailbox
 from .gmail_client import GmailError
 from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
-from .gmail_payment import extract_payment
-from .gmail_store import (PAYMENT_SENDER_DOMAIN, RFC_MESSAGE_DOMAIN, PendingMessage, PendingPayment, digest,
-                          normalize_parse_failed_reason)
+from .gmail_payment import inspect_payment
+from .gmail_store import (ORDER_REFERENCE_DOMAIN, PAYMENT_SENDER_DOMAIN, RFC_MESSAGE_DOMAIN, PendingMessage,
+                          PendingPayment, digest, normalize_parse_failed_reason)
 from .gmail_trust import (classify_sender, domain_matches, forward_sender_domain, mime_parts, payment_sender_for,
                           unwrap_trusted_forward)
 from .gmail_worker import MAX_HTML_BYTES, MAX_PDF_BYTES, PDFUnsupported, WorkerRejected, WorkerUnavailable
@@ -199,6 +199,7 @@ class GmailMessageProcessor:
         return pending
 
     def _payment(self, message, pending, sender, payment_senders):
+        subjects = tuple(map(str, message.get_all("Subject", ())))
         failure = pending
         for kind, part in _body_parts(message):
             try:
@@ -214,9 +215,10 @@ class GmailMessageProcessor:
                 continue
             if not text.strip():
                 continue
-            # The first rendered body is authoritative, including when it rejects a payment.
-            payment = extract_payment(text, subject=str(message.get("Subject", "")),
-                                      merchant=sender.merchant, gateway=sender.gateway)
+            inspected = inspect_payment(text, subjects=subjects, merchant=sender.merchant, gateway=sender.gateway)
+            if inspected.missing_total:
+                continue
+            payment = inspected.payment
             if payment is None:
                 return pending
             try:
@@ -226,10 +228,14 @@ class GmailMessageProcessor:
             if any(abs((body_date - receipt_date).days) > 3 for body_date in payment.body_dates):
                 return pending
             secret = self.settings.hmac_secret
+            reference = payment.order_reference
             provenance = PendingPayment(
-                payment, receipt_date, digest(secret, PAYMENT_SENDER_DOMAIN, sender.sender),
+                replace(payment, order_reference=None), receipt_date,
+                digest(secret, PAYMENT_SENDER_DOMAIN, sender.sender),
                 tuple(digest(secret, PAYMENT_SENDER_DOMAIN, rule.sender)
                       for rule in payment_senders if rule.gateway != sender.gateway),
+                order_reference_hmac=digest(secret, ORDER_REFERENCE_DOMAIN, reference) if reference else None,
+                gateway=sender.gateway,
             )
             return replace(pending, outcome="imported", payment=provenance,
                            rfc_message_id_hmac=_rfc_message_hmac(message, secret))

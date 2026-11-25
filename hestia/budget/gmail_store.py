@@ -8,6 +8,7 @@ import json
 import uuid
 
 from sqlalchemy import and_, case, delete, func, or_, select, update
+from sqlalchemy.orm import aliased
 
 from ..db import AppMeta, BudgetAnalyticsAudit, BudgetGmailMessage, BudgetGmailState, BudgetReceipt, BudgetReceiptLine
 from .gmail_client import GmailError
@@ -23,6 +24,7 @@ MAX_PENDING_IMPORTS = 200
 GMAIL_MESSAGE_DOMAIN = b"hestia/budget/gmail-msg-id/v1\0"
 RFC_MESSAGE_DOMAIN = b"hestia/budget/gmail-rfc-msg-id/v1\0"
 PAYMENT_SENDER_DOMAIN = b"hestia/budget/gmail-payment-sender/v1\0"
+ORDER_REFERENCE_DOMAIN = b"hestia/budget/gmail-order-reference/v1\0"
 SCOPE_DOMAIN = b"hestia/budget/gmail-scope-query/v1\0"
 MAILBOX_DOMAIN = b"hestia/budget/gmail-mailbox/v1\0"
 
@@ -46,6 +48,7 @@ _PARSE_FAILED_REASONS_PREFIX = "budget_gmail_parse_failed_reasons:"
 _RETRY_WINDOW_PREFIX = "budget_gmail_retry_full_window:"
 _INC_RESET_PREFIX = "budget_gmail_inc_reset:"
 _PAYMENT_SENDER_PREFIX = "budget_gmail_payment_sender:"
+_PAYMENT_ORDER_PREFIX = "budget_gmail_payment_order:"
 PARSE_FAILED_REASONS = (
     "charset_error",
     "message_defects",
@@ -86,7 +89,7 @@ def _inc_reset_key(owner):
 
 
 def digest(secret, domain, value):
-    return hmac.digest(secret, domain + value.encode("ascii"), "sha256").hex()
+    return hmac.digest(secret, domain + value.encode("utf-8"), "sha256").hex()
 
 
 @dataclass(frozen=True, repr=False)
@@ -95,6 +98,8 @@ class PendingPayment:
     receipt_date: date
     sender_hmac: str
     opposite_sender_hmacs: tuple[str, ...]
+    order_reference_hmac: str | None = None
+    gateway: bool = False
 
 
 @dataclass(frozen=True, repr=False)
@@ -122,8 +127,17 @@ def _payment_sender_key(receipt_id):
     return _PAYMENT_SENDER_PREFIX + receipt_id
 
 
+def _payment_order_key(receipt_id):
+    return _PAYMENT_ORDER_PREFIX + receipt_id
+
+
 def _forget_payment_senders(session, *predicates):
-    keys = select(_payment_sender_key(BudgetGmailMessage.receipt_id)).where(*predicates)
+    receipts = select(BudgetGmailMessage.receipt_id).where(
+        BudgetGmailMessage.receipt_id.is_not(None), *predicates,
+    ).subquery()
+    keys = select(_payment_sender_key(receipts.c.receipt_id)).union_all(
+        select(_payment_order_key(receipts.c.receipt_id)),
+    )
     session.execute(delete(AppMeta).where(AppMeta.key.in_(keys)))
 
 
@@ -323,18 +337,32 @@ class GmailStore(BudgetStore):
 
     @staticmethod
     def _duplicate_payment(session, owner, payment):
-        if not payment.opposite_sender_hmacs:
-            return False
         fields = payment.fields
+        sender, order_reference = aliased(AppMeta), aliased(AppMeta)
         receipt_day = func.julianday(payment.receipt_date.isoformat())
-        return session.scalar(select(BudgetReceipt.id).join(
-            AppMeta, AppMeta.key == _payment_sender_key(BudgetReceipt.id),
+        distance = func.abs(func.julianday(BudgetReceipt.receipt_date) - receipt_day)
+        same_sender = sender.value == payment.sender_hmac
+        candidates = session.execute(select(
+            sender.value, order_reference.value, BudgetReceipt.raw_shop_name, (distance <= 2).label("nearby"),
+        ).select_from(BudgetReceipt).join(
+            sender, sender.key == _payment_sender_key(BudgetReceipt.id),
+        ).outerjoin(
+            order_reference, order_reference.key == _payment_order_key(BudgetReceipt.id),
         ).where(
             BudgetReceipt.owner == owner, BudgetReceipt.document_kind == "payment_confirmation",
             BudgetReceipt.total_amount == fields.total_amount, BudgetReceipt.currency == fields.currency,
-            func.abs(func.julianday(BudgetReceipt.receipt_date) - receipt_day) <= 2,
-            AppMeta.value.in_(payment.opposite_sender_hmacs),
-        ).limit(1)) is not None
+            or_(and_(same_sender, distance <= 7),
+                and_(sender.value.in_(payment.opposite_sender_hmacs), distance <= 2)),
+        ).order_by(same_sender.desc()))
+        for sender_hmac, reference_hmac, merchant, nearby in candidates:
+            if sender_hmac != payment.sender_hmac:
+                return "skipped_non_receipt"
+            if (not reference_hmac or not payment.order_reference_hmac
+                    or reference_hmac == payment.order_reference_hmac):
+                return "skipped_duplicate"
+            if payment.gateway and nearby and (merchant or "").casefold() == fields.merchant.casefold():
+                return "skipped_duplicate"
+        return None
 
     @staticmethod
     def _invoice(session, owner, item, now):
@@ -364,8 +392,10 @@ class GmailStore(BudgetStore):
             raw_name_key=fold_text(fields.description)[:128], quantity="1",
             gross_line_total=fields.total_amount, net_line_total=fields.total_amount,
         ))
-        # Keep only the matched config rule's fingerprint. The current config supplies its role.
+        # The current config supplies the role of the stored sender fingerprint.
         session.add(AppMeta(key=_payment_sender_key(receipt.id), value=payment.sender_hmac))
+        if payment.order_reference_hmac is not None:
+            session.add(AppMeta(key=_payment_order_key(receipt.id), value=payment.order_reference_hmac))
         return receipt.id
 
     @staticmethod
@@ -398,10 +428,10 @@ class GmailStore(BudgetStore):
                 outcome = item.outcome
                 # Review placeholders are keyed by their outer Gmail ID.
                 rfc_hmac = None if item.forwarded_manually else item.rfc_message_id_hmac
-                if item.payment is not None and self._duplicate_payment(session, owner, item.payment):
-                    outcome = "skipped_non_receipt"
-                elif self._duplicate(session, owner, rfc_hmac):
+                if self._duplicate(session, owner, rfc_hmac):
                     outcome = "skipped_duplicate"
+                elif item.payment is not None:
+                    outcome = self._duplicate_payment(session, owner, item.payment) or outcome
                 if outcome == "imported":
                     if self._pending_count(session, owner) >= MAX_PENDING_IMPORTS:
                         drained = False

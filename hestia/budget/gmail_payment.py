@@ -10,7 +10,8 @@ import unicodedata
 
 from .gmail_address import canonical_domain
 from .gmail_invoice import _MONTHS, _SKIPPED_LINE, _line_pairs, _normalized_invoice_lines
-from .receipt_parser import MAX_LINE_CHARS, MAX_TEXT_BYTES, ReceiptError, _bound_raw_line, canonical_money, redact_pan
+from .receipt_parser import (MAX_LINE_CHARS, MAX_TEXT_BYTES, ReceiptError, _normalize_receipt_text,
+                             canonical_money, redact_digit_field, redact_pan)
 
 
 @dataclass(frozen=True)
@@ -20,11 +21,22 @@ class ImportedPayment:
     total_amount: str
     currency: str
     body_dates: tuple[date, ...]
+    order_reference: str | None = None
+
+
+@dataclass(frozen=True)
+class PaymentInspection:
+    payment: ImportedPayment | None = None
+    missing_total: bool = False
+
+
+class _RejectedPayment(ValueError):
+    """An explicit rejection must not fall through to another MIME representation."""
 
 
 _MARKER = re.compile(
     r"\b(?:dokończ\s+płatność|płatność\s+nie\s+została\s+(?:jeszcze\s+)?zakończona"
-    r"|rozpoczęci[ae]\s+transakcji|oczekuje\s+na\s+płatność|nie\s+opłacono"
+    r"|oczekuje\s+na\s+płatność|nie\s+opłacono"
     r"|payment\s+failed|unable\s+to\s+process|was\s+declined|nieudana\s+płatność"
     r"|płatność\s+odrzucona|nie\s+udało\s+się\s+(?:pobrać|obciążyć)"
     r"|zwrot|refund|korekta|faktura\s+korygująca|credit\s+note|czeka\s+na\s+odbiór"
@@ -32,59 +44,89 @@ _MARKER = re.compile(
     r"|shipped|out\s+for\s+delivery)\b",
     re.IGNORECASE,
 )
+_STARTED = re.compile(r"\brozpoczęci[ae]\s++transakcji\b", re.IGNORECASE)
+_STARTED_NOTICE = re.compile(r"Potwierdzenie\s++rozpoczęcia\s++transakcji\b", re.IGNORECASE)
+_BODY_FIELD = re.compile(r"[^:]++:(?!//|(?<=[0-9]:)[0-9])\s*+\S")
 _LEGAL = re.compile(r"\b(?:kapitał\w*|KRS|zakładowego)\b", re.IGNORECASE)
+_INLINE_TAG = re.compile(
+    r"</?(?:p|b|strong|span|div|br|td|tr|th|table|tbody|font)(?: [^<>]*+)?/?>", re.IGNORECASE,
+)
 _FEE = re.compile(
     r"(?:Dodatkowe\s+opłaty|Opłata\s+za\s+(?:realizację\s+transakcji|usługę)|Dostawa)(?=$|[:\s])",
     re.IGNORECASE,
 )
 _BULLET = re.compile(r"^[-*•]\s+")
 _TOTAL = re.compile(
-    r"(?:(?P<paid>Amount\s+paid|Kwota\s+zapłacona|Zapłacono|Paid)"
-    r"|(?P<total>Kwota\s+transakcji|Do\s+zapłaty|Łącznie|Razem\s+do\s+zapłaty"
+    r"(?:(?P<paid>Amount\s+paid|Kwota\s+zapłacona|Zapłacono(?:\s++łącznie)?|Paid)"
+    r"|(?P<total>Do\s+zapłaty|Łącznie|Razem\s+do\s+zapłaty"
     r"|Suma\s+do\s+zapłaty|Total|Cena\s+z\s+dostawą)"
-    r"|(?P<sum>Razem|Suma|Kwota\s+zamówienia|Kwota))(?=$|[:\s])\s*:?\s*",
+    r"|(?P<sum>Razem|Suma|Kwota(?:\s++(?:zamówienia|transakcji))?))(?=$|[:\s])\s*+:?\s*+",
     re.IGNORECASE,
 )
 _CARD = re.compile(r"(?<!\w)(?:[•]{4}|[*]{4}|x{4}|(?<!\S)-)\s+[0-9]{4}$", re.IGNORECASE)
 _CURRENCY = r"(?:zł|PLN|EUR|€|USD|\$|GBP|£)"
 _MONEY_NUMBER = (
-    r"(?:[0-9]{1,3}(?: +[0-9]{3})+(?:[.,][0-9]{2})?"
-    r"|[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{2})?"
-    r"|[0-9]{1,3}(?:\.[0-9]{3})+(?:,[0-9]{2})?"
-    r"|[0-9]+(?:[.,][0-9]{2})?)"
+    r"(?:[1-9][0-9]{0,2}(?: ++[0-9]{3})++(?:[.,][0-9]{2})?"
+    r"|[1-9][0-9]{0,2}(?:,[0-9]{3})++(?:\.[0-9]{2})?"
+    r"|[1-9][0-9]{0,2}(?:\.[0-9]{3})++(?:,[0-9]{2})?"
+    r"|[0-9]++(?:[.,][0-9]{2})?)"
 )
-_SIGN = r"(?:[-−]\s*)?"
+_SIGN = r"(?:[-−]\s*+)?"
+_AMOUNT_END = r"(?!\w|[.,][0-9])"
 _AMOUNT = re.compile(
-    rf"(?P<sign>{_SIGN})(?:(?P<prefix>{_CURRENCY})\s*(?P<inner_sign>{_SIGN})(?P<prefix_number>{_MONEY_NUMBER})"
-    rf"|(?P<suffix_number>{_MONEY_NUMBER})\s*(?P<suffix>{_CURRENCY}))(?=$|[.,;]?\s+[^\W\d_])",
+    rf"(?<![\w.,])(?P<sign>{_SIGN})(?:(?P<prefix>{_CURRENCY})\s*+(?P<inner_sign>{_SIGN})"
+    rf"(?P<prefix_number>{_MONEY_NUMBER})"
+    rf"|(?P<suffix_number>{_MONEY_NUMBER})\s*+(?P<suffix>{_CURRENCY})){_AMOUNT_END}",
     re.IGNORECASE,
 )
-_MONEY_TOKEN = rf"{_SIGN}(?:{_CURRENCY}\s*{_SIGN}{_MONEY_NUMBER}|{_MONEY_NUMBER}\s*{_CURRENCY})"
-_CONTAINS_AMOUNT = re.compile(rf"(?<![\w.,]){_MONEY_TOKEN}(?!\w|[.,][0-9])", re.IGNORECASE)
-_LABEL_DELIMITER = r"(?:\s*:\s*|\s+)"
+_MONEY_TOKEN = rf"{_SIGN}(?:{_CURRENCY}\s*+{_SIGN}{_MONEY_NUMBER}|{_MONEY_NUMBER}\s*+{_CURRENCY})"
+_TRAILING_WORDS = re.compile(r"[.,;]?\s++[^\W\d_]")
+_LABEL_DELIMITER = r"(?:\s*+:\s*+|\s++)"
 # Some rendered tables flatten the summary into one row. Split only the
 # adjacent Total/Amount paid cells so redaction still sees the receipt header
 # and its identifiers separately from the totals.
-_FLAT_SUMMARY = re.compile(
-    rf"^(Receipt\s+\#\S+.*?)\s+(Total{_LABEL_DELIMITER}{_MONEY_TOKEN})"
-    rf"\s+(Amount\s+paid{_LABEL_DELIMITER}{_MONEY_TOKEN})$",
-    re.IGNORECASE,
-)
+_RECEIPT_HEADER = re.compile(r"Receipt\s++#\S++", re.IGNORECASE)
+_SUMMARY_LABEL = re.compile(r"(?<!\S)(?:Total|Amount\s++paid)(?=[:\s])", re.IGNORECASE)
+_SUMMARY_TOTAL = re.compile(rf"Total{_LABEL_DELIMITER}{_MONEY_TOKEN}", re.IGNORECASE)
+_SUMMARY_PAID = re.compile(rf"Amount\s++paid{_LABEL_DELIMITER}{_MONEY_TOKEN}", re.IGNORECASE)
 _DECIMAL = re.compile(r"[.,][0-9]{2}$")
 _SEPARATORS = str.maketrans("", "", " .,")
 _CURRENCIES = {"zł": "PLN", "€": "EUR", "$": "USD", "£": "GBP"}
 
 _ORDER = re.compile(r"Opis\s+zamówienia\s+w\s+([^:]+):\s*(.*)", re.IGNORECASE)
-_TITLE = re.compile(r"Tytuł\s*:\s*(.*)", re.IGNORECASE)
-_PAYEE_LABEL = re.compile(r"(?:^Odbiorca\s+wpłaty\s*:\s*|\bpłatność\s+dla\s+)", re.IGNORECASE)
-_PAYEE_HOST = re.compile(r"\bdla\s*-\s*(?:https?://)?([a-z0-9.-]+)(?=$|[/:?#\s])", re.IGNORECASE)
-_CONTACT = re.compile(
-    r"\b(?:[a-z][a-z0-9+.-]*://|www\.|mailto:)\S+|[^\s<>@]+@[^\s<>@]+",
+_TITLE = re.compile(r"(?:Tytuł|Opis\s++płatności)\s*+:\s*+(.*)", re.IGNORECASE)
+_DESCRIPTION_LABEL = re.compile(r"(?:Tytuł|Opis)\b", re.IGNORECASE)
+_VENUE = re.compile(r"Twoje\s++zamówienie\s++z\s++lokalu\s++(.+)", re.IGNORECASE)
+_VENUE_SUFFIX = re.compile(r"\s++zostanie\b", re.IGNORECASE)
+_PAYEE_LABEL = re.compile(
+    r"\b(?:Odbiorca(?:\s++wpłaty)?\s*+:\s*+|(?P<order>Opis\s++zamówienia\s++w\s++)"
+    r"|(?P<host>dla\s*+-\s*+)|płatność\s++dla\s++(?!-)"
+    r"|(?P<registered>Zarejestrowaliśmy\s++zlecenie\s++płatności\s++dla\s++(?!-))"
+    r"|(?P<receipt>Receipt\s++from\s++)"
+    r"|(?P<payment>Payment\s++to\s++))",
     re.IGNORECASE,
 )
+_PAYEE_HOST = re.compile(r"(?:https?://)?([a-z0-9.-]+)(?=$|[/:?#\s])", re.IGNORECASE)
+_RECEIPT_SUFFIX = re.compile(r"\s++Receipt\s++#", re.IGNORECASE)
+_SUBJECT_RECEIPT_ID = r"[0-9]++(?:-[0-9]++)*+"
+_SUBJECT_PAYEES = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
+    rf"Your\s++receipt\s++from\s++(.+?)\s++#{_SUBJECT_RECEIPT_ID}",
+    rf"Your\s++(.+?)\s++receipt\s++\[#{_SUBJECT_RECEIPT_ID}\]",
+    rf"Twoje\s++pokwitowanie\s++od\s++(.+?)\s++nr\s++{_SUBJECT_RECEIPT_ID}",
+))
+_TRANSFERRED = re.compile(r"Przekazaliśmy\s++Twoje\s++pieniądze[.!]?", re.IGNORECASE)
+_TRANSFER_PAYEE = re.compile(r"Do\s++(?!zapłaty\b)(.+)", re.IGNORECASE)
+_GENERIC_DESCRIPTIONS = frozenset({"płatność", "payment", "zamówienie", "order", "receipt", "faktura"})
 _LONG_DIGITS = re.compile(r"\d{11,}")
 _PAYEE_DIGITS = re.compile(r"\d{7,}")
-_ORDER_REFERENCE = re.compile(r"Zamówienie 0{10}[1-9]", re.IGNORECASE)
+_REFERENCE = re.compile(
+    r"\b(?:(?P<polish_prefix>nr\s++zamówienia)|zamówieni[ae](?:\s++(?P<polish_suffix>nr|numer)\b)?"
+    r"|order\b(?:\s++(?P<english_suffix>no)\b\.?)?)"
+    r"(?:(?P<separator>\s*+[:#]\s*+)|\s++)(?P<reference>[^\W_]{6,}+)(?![\w-])",
+    re.IGNORECASE,
+)
+_ORDER_STATUS = frozenset({"received", "awaiting", "preparing", "shipped", "confirmation", "confirmed",
+                           "potwierdzone", "przyjęte", "opłacone", "przygotowywane", "wysłane"})
 _REDACTED = "[usunięto]"
 
 _DATE_LABEL = re.compile(r"(?:Date\s+paid|Data)(?=$|[:\s])\s*:?\s*", re.IGNORECASE)
@@ -112,17 +154,21 @@ def _following_values(lines: list[str]) -> list[str]:
     return values[::-1]
 
 
-def _parse_amount(value: str) -> tuple[Decimal, str] | None:
-    match = _AMOUNT.match(value)
+def _parse_amount(value: str, *, labelled: bool = False) -> tuple[Decimal, str] | None:
+    match = _AMOUNT.search(value) if labelled else _AMOUNT.match(value)
     if match is None:
+        return None
+    trailing = value[match.end():]
+    if match["sign"] or match["inner_sign"] or _AMOUNT.search(trailing):
+        raise _RejectedPayment
+    if match.start() or (trailing and not _TRAILING_WORDS.match(trailing)):
         return None
     number = match["prefix_number"] or match["suffix_number"]
     currency = (match["prefix"] or match["suffix"]).casefold()
     digits = number.translate(_SEPARATORS)
     if _DECIMAL.search(number):
         digits = f"{digits[:-2]}.{digits[-2:]}"
-    sign = "-" if match["sign"] or match["inner_sign"] else ""
-    return Decimal(sign + digits), _CURRENCIES.get(currency, currency.upper())
+    return Decimal(digits), _CURRENCIES.get(currency, currency.upper())
 
 
 def _payment_total(lines: list[str], following: list[str]) -> tuple[str, str] | None:
@@ -132,24 +178,20 @@ def _payment_total(lines: list[str], following: list[str]) -> tuple[str, str] | 
         if _FEE.match(label_line):
             continue
         if label := _TOTAL.match(label_line):
-            level = label.lastgroup
             value = label_line[label.end():] or next_value
-        elif _CARD.search(line):
-            level, value = "card", adjacent
-        else:
-            continue
-        if parsed := _parse_amount(value):
-            if parsed[0].is_signed():
-                return None
-            totals[level].add(parsed)
+            if parsed := _parse_amount(value, labelled=True):
+                totals[label.lastgroup].add(parsed)
+                continue
+        if _CARD.search(line) and (parsed := _parse_amount(adjacent)):
+            totals["card"].add(parsed)
     for values in totals.values():
         if values:
             if len(values) != 1:
-                return None
+                raise _RejectedPayment
             amount, currency = values.pop()
             if 0 < amount <= 1_000_000:
                 return canonical_money(format(amount, "f")), currency
-            return None
+            raise _RejectedPayment
     return None
 
 
@@ -174,6 +216,8 @@ def _body_dates(lines: list[str], following: list[str]) -> tuple[date, ...]:
     dates = set()
     for line, next_value in zip(lines, following):
         line = _BULLET.sub("", line)
+        if _DESCRIPTION_LABEL.match(line):
+            continue
         if label := _DATE_LABEL.match(line):
             if parsed := _parse_date(line[label.end():] or next_value):
                 dates.add(parsed)
@@ -183,18 +227,32 @@ def _body_dates(lines: list[str], following: list[str]) -> tuple[date, ...]:
     return tuple(sorted(dates))
 
 
+def _contact_token(token: str) -> bool:
+    folded = token.casefold()
+    return "://" in folded or "mailto:" in folded or "www." in folded or "@" in token[1:-1]
+
+
 def _clean_field(value: str) -> str:
-    return " ".join(_CONTACT.sub(" ", value.replace(_REDACTED, " ")).split())
+    return " ".join(token for token in value.replace(_REDACTED, " ").split() if not _contact_token(token))
 
 
-def _description(value: str) -> str:
-    value = _clean_field(value)
-    # A zero-padded synthetic order reference in the fixture is neither an
-    # identity number nor free-form digits. It must still pass redact_pan.
-    if not _ORDER_REFERENCE.fullmatch(value):
+def _description(candidates: list[str]) -> str:
+    fallback = "Płatność"
+    for candidate in candidates:
+        value = _clean_field(candidate)
+        if value.strip(" .,:;!?").casefold() in _GENERIC_DESCRIPTIONS:
+            continue
+        digit_heavy = bool(_LONG_DIGITS.search(value)) or redact_digit_field(value) != value
         value = " ".join(_LONG_DIGITS.sub(" ", value).split())
-    value = redact_pan(value) if value else ""
-    return "" if value == _REDACTED else value[:128].strip()
+        value = redact_pan(value) if value else ""
+        value = value[:128].strip()
+        if not value or value == _REDACTED:
+            continue
+        if not digit_heavy:
+            return value
+        if fallback == "Płatność":
+            fallback = value
+    return fallback
 
 
 def _payee(value: str) -> str:
@@ -206,64 +264,132 @@ def _payee(value: str) -> str:
 
 def _payee_candidates(line: str) -> list[str]:
     candidates = []
-    if host := _PAYEE_HOST.search(line):
-        if domain := canonical_domain(host[1]):
-            candidates.append(domain)
-        line = line[:host.start()]
     labels = list(_PAYEE_LABEL.finditer(line))
     boundaries = [label.start() for label in labels[1:]] + [len(line)]
-    return candidates + [line[label.end():end] for label, end in zip(labels, boundaries)]
+    for label, end in zip(labels, boundaries):
+        value = line[label.end():end].rstrip(" ;|")
+        kind = label.lastgroup
+        if kind == "host":
+            if (host := _PAYEE_HOST.match(value)) and (domain := canonical_domain(host[1])):
+                candidates.append(domain)
+        elif kind == "order":
+            name, separator, _ = value.partition(":")
+            if separator:
+                candidates.append(name)
+        elif kind == "payment":
+            name, _, amount = value.rpartition(":")
+            if _AMOUNT.fullmatch(amount.strip()):
+                candidates.append(name)
+        elif kind == "receipt":
+            suffix = _RECEIPT_SUFFIX.search(value) or _AMOUNT.search(value)
+            candidates.append(value[:suffix.start()] if suffix else value)
+        elif kind == "registered":
+            # The HTML worker can leave an opening parenthesis after removing a URL.
+            candidates.append(_clean_field(value).rstrip(" .("))
+        else:
+            candidates.append(value)
+    return candidates
 
 
-def _receipt_fields(lines: list[str], subject: str, merchant: str, gateway: bool) -> tuple[str, str] | None:
+def _receipt_fields(lines: list[str], subjects: tuple[str, ...], merchant: str, gateway: bool) -> tuple[str, str]:
     descriptions: list[str] = []
     titles: list[str] = []
+    venues: list[str] = []
+    candidates: list[str] = []
     payees: dict[str, str] = {}
-    for line in lines:
+    for line, next_line in zip(lines, _following_values(lines)):
         line = _BULLET.sub("", line)
-        order = _ORDER.fullmatch(line)
-        if order:
+        if order := _ORDER.fullmatch(line):
             descriptions.append(order[2])
         if title := _TITLE.fullmatch(line):
             titles.append(title[1])
+            continue
+        if venue := _VENUE.fullmatch(line):
+            venues.append(_VENUE_SUFFIX.split(venue[1], maxsplit=1)[0])
         if not gateway:
             continue
-        for candidate in [order[1]] if order else _payee_candidates(line):
+        candidates.extend(_payee_candidates(line))
+        if _TRANSFERRED.fullmatch(line) and (payee := _TRANSFER_PAYEE.fullmatch(next_line)):
+            candidates.append(payee[1])
+    if gateway:
+        for subject in subjects:
+            candidates.extend(match[1] for pattern in _SUBJECT_PAYEES if (match := pattern.fullmatch(subject)))
+        for candidate in candidates:
             if clean := _payee(candidate):
                 payees.setdefault(clean.casefold(), clean)
     if len(payees) > 1:
-        return None
-    description = next((value for item in (*descriptions, *titles, subject) if (value := _description(item))), "Płatność")
-    return next(iter(payees.values()), merchant), description
+        raise _RejectedPayment
+    return next(iter(payees.values()), merchant), _description([*descriptions, *titles, *venues, *subjects])
+
+
+def _order_reference(fields: list[str]) -> str | None:
+    for field in fields:
+        for match in _REFERENCE.finditer(_clean_field(field)):
+            reference = match["reference"].casefold()
+            # Bare order labels also introduce prose like "Order received".
+            if reference not in _ORDER_STATUS or any(match.group(
+                "polish_prefix", "polish_suffix", "english_suffix", "separator",
+            )):
+                return reference
+    return None
+
+
+def _flatten_summary(line: str) -> tuple[str, ...]:
+    if header := _RECEIPT_HEADER.match(line):
+        labels = list(_SUMMARY_LABEL.finditer(line, header.end()))
+        if len(labels) >= 2:
+            total_start, paid_start = (label.start() for label in labels[-2:])
+            total = line[total_start:paid_start].rstrip()
+            paid = line[paid_start:]
+            if _SUMMARY_TOTAL.fullmatch(total) and _SUMMARY_PAID.fullmatch(paid):
+                return line[:total_start].rstrip(), total, paid
+    return (line,)
+
+
+def _subject_text(subject: str) -> str:
+    visible = (" " if char.isspace() else char for char in subject
+               if char.isspace() or unicodedata.category(char) not in ("Cc", "Cf"))
+    bounded = "".join(islice(visible, MAX_LINE_CHARS))
+    return " ".join(_normalize_receipt_text(bounded)[:256].split())
+
+
+def _body_marker(line: str) -> bool:
+    return (len(line) <= 120 and not _BODY_FIELD.match(_BULLET.sub("", line))
+            and bool(_MARKER.search(line) or _STARTED_NOTICE.match(line)) and not _AMOUNT.search(line))
+
+
+def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gateway: bool) -> PaymentInspection:
+    """Distinguish an absent total from a rejection in one rendered MIME body."""
+    if not isinstance(text, str) or len(text) > MAX_TEXT_BYTES:
+        return PaymentInspection()
+    try:
+        if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
+            return PaymentInspection()
+        subjects = tuple(_subject_text(subject) for subject in subjects)
+        normalized = (_INLINE_TAG.sub("", line).strip() for line in _normalized_invoice_lines(text))
+        raw = ["" if _LEGAL.search(line) else line for line in normalized]
+        # Rejection predicates do not extract fields. Check the original line
+        # shape so identifiers cannot hide warnings and table splits do not
+        # turn the priced part of an item into an independent warning.
+        if any(_MARKER.search(subject) or _STARTED.search(subject) for subject in subjects) or any(
+            _body_marker(line) for line in raw
+        ):
+            return PaymentInspection()
+        expanded = [part for line in raw for part in _flatten_summary(line)]
+        joined = "\n".join(expanded)
+        clean = redact_pan(joined).split("\n") if joined else expanded
+        lines = [_SKIPPED_LINE if line == _SKIPPED_LINE else value for line, value in zip(expanded, clean)]
+        following = _following_values(lines)
+        if (total := _payment_total(lines, following)) is None:
+            return PaymentInspection(missing_total=True)
+        safe_subjects = tuple(redact_pan(subject) if subject else "" for subject in subjects)
+        fields = _receipt_fields(lines, safe_subjects, merchant, gateway)
+        reference = _order_reference([*safe_subjects, *lines])
+        return PaymentInspection(ImportedPayment(*fields, *total, _body_dates(lines, following), reference))
+    except (_RejectedPayment, ReceiptError, UnicodeEncodeError):
+        return PaymentInspection()
 
 
 def extract_payment(text: str, *, subject: str, merchant: str, gateway: bool) -> ImportedPayment | None:
     """Read only bounded, redacted fields from an authenticated payment email."""
-    if not isinstance(text, str) or len(text) > MAX_TEXT_BYTES:
-        return None
-    try:
-        if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
-            return None
-        visible = (char for char in subject if unicodedata.category(char) != "Cf")
-        subject = "".join(islice(visible, MAX_LINE_CHARS))
-        subject = " ".join(unicodedata.normalize("NFKC", _bound_raw_line(subject))[:256].split())
-        raw = ["" if _LEGAL.search(line) else line for line in _normalized_invoice_lines(text)]
-        # Rejection predicates do not extract fields. Check the original line
-        # shape so identifiers cannot hide warnings and table splits do not
-        # turn the priced part of an item into an independent warning.
-        if _MARKER.search(subject) or any(
-            len(line) <= 120 and _MARKER.search(line) and not _CONTAINS_AMOUNT.search(line) for line in raw
-        ):
-            return None
-        expanded = [part for line in raw for part in _FLAT_SUMMARY.sub(r"\1\n\2\n\3", line).split("\n")]
-        clean = redact_pan("\n".join(expanded)).split("\n")
-        lines = [_SKIPPED_LINE if line == _SKIPPED_LINE else value for line, value in zip(expanded, clean)]
-        safe_subject = redact_pan(subject) if subject else ""
-        following = _following_values(lines)
-        if (total := _payment_total(lines, following)) is None:
-            return None
-        if (fields := _receipt_fields(lines, safe_subject, merchant, gateway)) is None:
-            return None
-        return ImportedPayment(*fields, *total, _body_dates(lines, following))
-    except (ReceiptError, UnicodeEncodeError):
-        return None
+    return inspect_payment(text, subjects=(subject,), merchant=merchant, gateway=gateway).payment

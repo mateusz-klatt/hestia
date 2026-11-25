@@ -11,7 +11,7 @@ from unittest.mock import Mock, call, patch
 from hestia.budget import gmail_message
 from hestia.budget.gmail_client import GmailError
 from hestia.budget.gmail_invoice import ImportedInvoice
-from hestia.budget.gmail_store import PAYMENT_SENDER_DOMAIN, RFC_MESSAGE_DOMAIN, digest
+from hestia.budget.gmail_store import ORDER_REFERENCE_DOMAIN, PAYMENT_SENDER_DOMAIN, RFC_MESSAGE_DOMAIN, digest
 from hestia.budget.gmail_trust import PaymentSender
 from hestia.budget.gmail_worker import PDFUnsupported, WorkerRejected, WorkerUnavailable
 
@@ -120,6 +120,25 @@ class GmailMessageProcessorTests(unittest.TestCase):
         self.assertEqual(pending.payment.sender_hmac, digest(SECRET, PAYMENT_SENDER_DOMAIN, "@shop.example.test"))
         self.assertEqual(pending.payment.opposite_sender_hmacs,
                          (digest(SECRET, PAYMENT_SENDER_DOMAIN, "@gateway.example.test"),))
+        self.assertIsNone(pending.payment.order_reference_hmac)
+
+    def test_payment_order_reference_crosses_processing_boundary_only_as_hmac(self):
+        message = self._payment_email("Amount paid: 123 PLN\nTytuł: Example purchase")
+        message["Subject"] = "Potwierdzenie zamówienia nr 00000000001"
+        pending = self._process(_metadata(message), _raw(message))
+        self.assertEqual(pending.outcome, "imported")
+        self.assertEqual(pending.payment.order_reference_hmac, digest(SECRET, ORDER_REFERENCE_DOMAIN, "00000000001"))
+        self.assertIsNone(pending.payment.fields.order_reference)
+        self.assertEqual(pending.payment.fields.description, "Example purchase")
+
+    def test_payment_checks_all_decoded_subject_headers_for_rejection(self):
+        message = self._payment_email("Amount paid: 123 PLN")
+        message["Subject"] = "Example payment"
+        raw = message.as_bytes().replace(
+            b"Subject: Example payment\n", b"Subject: Example payment\nsUbJeCt: =?utf-8?q?Ref=00und?=\n",
+        )
+        pending = self._process(_metadata(message), _raw(raw))
+        self.assertEqual((pending.outcome, pending.payment), ("skipped_non_receipt", None))
 
     def test_payment_rejects_distant_dates_and_unrepresentable_internal_date(self):
         for header, internal_date in (("Data: 2026-11-21", "1795566945123"),
@@ -130,18 +149,29 @@ class GmailMessageProcessorTests(unittest.TestCase):
                 pending = self._process({**_metadata(message), "internalDate": internal_date}, _raw(message))
                 self.assertEqual((pending.outcome, pending.payment), ("skipped_non_receipt", None))
 
-    def test_readable_plain_payment_body_takes_precedence_over_html(self):
-        message = self._payment_email("Payment failed")
+    def test_explicit_plain_payment_rejection_takes_precedence_over_html(self):
+        for body in ("Payment failed", "Total: -5 PLN", "Total: 1 PLN\nDo zapłaty: 2 PLN"):
+            with self.subTest(body=body):
+                self.worker.parse.reset_mock()
+                message = self._payment_email(body)
+                message.add_alternative("Amount paid: 123 PLN", subtype="html")
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual((pending.outcome, pending.payment), ("skipped_non_receipt", None))
+                self.worker.parse.assert_called_once_with("text", (body + "\n").encode("utf-8"))
+
+    def test_payment_uses_valid_plain_total_before_html(self):
+        message = self._payment_email("Amount paid: 25 PLN")
         message.add_alternative("Amount paid: 123 PLN", subtype="html")
         pending = self._process(_metadata(message), _raw(message))
-        self.assertEqual((pending.outcome, pending.payment), ("skipped_non_receipt", None))
-        self.worker.parse.assert_called_once_with("text", b"Payment failed\n")
+        self.assertEqual((pending.outcome, pending.payment.fields.total_amount), ("imported", "25"))
+        self.worker.parse.assert_called_once_with("text", b"Amount paid: 25 PLN\n")
 
-    def test_payment_uses_html_for_empty_or_unreadable_plain_body(self):
-        for plain in ("missing payload", "empty render", "bad charset"):
+    def test_payment_uses_html_for_missing_total_or_unreadable_plain_body(self):
+        for plain in ("missing payload", "empty render", "bad charset", "no total"):
             with self.subTest(plain=plain):
                 self.worker.parse.reset_mock()
-                message = self._payment_email(" \n")
+                body = "Example receipt stub\n" if plain == "no total" else " \n"
+                message = self._payment_email(body)
                 message.add_alternative("Amount paid: 123 PLN", subtype="html")
                 part = message.get_body(("plain",))
                 if plain == "missing payload":
@@ -151,8 +181,8 @@ class GmailMessageProcessorTests(unittest.TestCase):
                 pending = self._process(_metadata(message), _raw(message))
                 self.assertEqual((pending.outcome, pending.payment.fields.total_amount), ("imported", "123"))
                 worker_calls = [call("html", b"Amount paid: 123 PLN\n")]
-                if plain == "empty render":
-                    worker_calls.insert(0, call("text", b" \n"))
+                if plain in ("empty render", "no total"):
+                    worker_calls.insert(0, call("text", body.encode("utf-8")))
                 self.assertEqual(self.worker.parse.call_args_list, worker_calls)
 
     def test_payment_oversized_and_rejected_body_use_existing_fixed_outcomes(self):

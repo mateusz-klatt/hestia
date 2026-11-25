@@ -1,0 +1,5 @@
+Zarejestrowaliśmy Twoje zlecenie płatnicze.
+Zarejestrowaliśmy zlecenie płatności dla Example Studio (http://studio.example.test/).
+
+Opis płatności: Materiały do projektu
+Kwota transakcji: 47,25 PLN

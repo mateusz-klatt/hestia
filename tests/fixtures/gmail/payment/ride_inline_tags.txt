@@ -1,0 +1,7 @@
+<p>Cena podstawowa</p>
+37,10 zł
+5,25 zł
+<p><strong>Zapłacono łącznie</strong></p>
+42,35 zł
+<p>Szczegóły płatności</p>
+654321******0099

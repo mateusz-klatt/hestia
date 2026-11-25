@@ -75,7 +75,8 @@ def _payment_sender_rule(entry) -> PaymentSender:
     rule = _sender_rule(sender) if isinstance(sender, str) else None
     if rule is None or any(domain_matches(rule.rpartition("@")[2], domain) for domain in _PUBLIC_WEBMAIL):
         raise ValueError(_CONFIG_ERROR)
-    if not isinstance(merchant, str) or not 1 <= len(merchant) <= 64 or not merchant.isprintable():
+    if (not isinstance(merchant, str) or not 1 <= len(merchant) <= 64
+            or not merchant.isprintable() or not merchant.strip()):
         raise ValueError(_CONFIG_ERROR)
     if type(gateway) is not bool:
         raise ValueError(_CONFIG_ERROR)

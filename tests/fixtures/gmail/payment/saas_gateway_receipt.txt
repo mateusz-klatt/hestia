@@ -1,0 +1,4 @@
+Receipt from Example Workshop Receipt #1234-5678
+
+Amount paid: $8.27
+Payment to Example Workshop : $8.27

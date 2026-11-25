@@ -1,0 +1,5 @@
+Płatność zakończona sukcesem
+
+Kwota transakcji: 212,34 PLN
+Opłata za realizację transakcji: 2,36 PLN
+Do zapłaty: 214,70 PLN

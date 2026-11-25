@@ -9,8 +9,8 @@ from unittest.mock import Mock
 
 from hestia.budget.gmail_address import canonical_mailbox
 from hestia.budget.gmail_trust import (
-    PaymentSender, classify_sender, forward_sender_domain, normalize_sender_rules, payment_sender_for,
-    unwrap_trusted_forward,
+    PaymentSender, classify_sender, forward_sender_domain, normalize_payment_senders, normalize_sender_rules,
+    payment_sender_for, unwrap_trusted_forward,
 )
 
 
@@ -76,6 +76,13 @@ class GmailTrustTests(unittest.TestCase):
             with self.subTest(direct=direct, spouses=spouses, known=known):
                 with self.assertRaisesRegex(ValueError, "^budget_receipt_gmail_sender_config_invalid$"):
                     normalize_sender_rules(direct, spouses, known)
+
+    def test_payment_merchant_must_contain_a_nonblank_character(self):
+        entry = {"sender": "@pay.example.test", "merchant": "   "}
+        with self.assertRaisesRegex(ValueError, "^budget_receipt_gmail_sender_config_invalid$"):
+            normalize_payment_senders([entry])
+        self.assertEqual(normalize_payment_senders([entry | {"merchant": "Example Pay"}]),
+                         (PaymentSender("@pay.example.test", "Example Pay"),))
 
     def test_direct_spouse_and_domain_rules(self):
         for address, expected in (
