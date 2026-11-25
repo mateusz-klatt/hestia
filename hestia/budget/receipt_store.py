@@ -285,7 +285,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             receipt_kind=parsed["receipt_kind"], raw_shop_name=parsed["raw_shop_name"],
             raw_nip=parsed["raw_nip"],
         )
-        with self._read(owner) as session:
+        with self._read(owner, permission=None) as session:
             return self._candidates(session, owner, preview, parsed)
 
     @staticmethod
@@ -683,7 +683,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             )
         if preview is None:
             return {"receipt": receipt}
-        with self._read(owner) as session:
+        with self._read(owner, permission=None) as session:
             candidates = self._candidates(session, owner, preview, {}, include_receipt_id=preview.id)
         return {"receipt": receipt, "candidates": candidates}
 

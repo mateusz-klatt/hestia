@@ -195,12 +195,25 @@ class BudgetStore:
         self.sessions, self.clock = sessions, clock
 
     @contextmanager
-    def transaction(self):
+    def transaction(self, owner=None, permission=None):
         with self.sessions.begin() as session:
             session.execute(text("BEGIN IMMEDIATE"))
             store_sql.auth_session_phase(session)
-            authz.require_supported_policy_phase(session)
+            phase = authz.require_supported_policy_phase(session)
+            if owner is not None:
+                self._owner(session, owner)
+            if permission is not None:
+                self._authorize_operation(session, owner, permission, phase=phase)
             yield session
+
+    @staticmethod
+    def _authorize_operation(session, username, permission, *, phase=None):
+        phase = authz.require_supported_policy_phase(session) if phase is None else phase
+        if phase != authz.POLICY_PHASE_LEGACY and not authz.authorize(
+            session, username, permission, owner=username,
+        ):
+            from .views import BudgetAccessDenied
+            raise BudgetAccessDenied(403)
 
     @staticmethod
     def _owner(session, username):

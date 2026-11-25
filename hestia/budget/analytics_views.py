@@ -1418,7 +1418,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 or not inbox_mod._HEX64.fullmatch(expected_reads_version)):
             raise AnalyticsError()
         keys = inbox_mod.validate_mark_items(items)
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             state, reads_revision, read_rows, tuples, current_version = self._inbox_read_state(session, owner)
             if not hmac.compare_digest(current_version, expected_reads_version):

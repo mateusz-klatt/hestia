@@ -88,10 +88,13 @@ class BudgetHTTPStore(BudgetJobStore):
             raise BudgetAccessDenied(403)
 
     @contextmanager
-    def _read(self, owner):
+    def _read(self, owner, permission="budget.view"):
         with self.sessions() as session:
             session.execute(text("BEGIN"))
+            phase = authz.require_supported_policy_phase(session)
             self._owner(session, owner)
+            if permission is not None:
+                self._authorize_operation(session, owner, permission, phase=phase)
             yield session
 
     def _account_dict(self, account, connection, *, session=None):
