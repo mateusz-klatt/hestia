@@ -1300,23 +1300,35 @@ class MonthlyBudgetProjectionTests(ProjectionCase):
                     comp.last_success = stamp
         with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
             partial = self.store.monthly_budget("owner")
-            self.assertEqual(partial["card_exposure"]["status"], "partial")
-            self.assertIsNone(partial["card_exposure"]["amount"])
-            self.store.set_account_credit_limit("owner", self.accounts["a"], "10000", actor="owner")
-            self.store.set_account_credit_limit("owner", self.accounts["b"], "5000", actor="owner")
+            self.assertEqual(partial["card_exposure"], {"status": "unavailable", "amount": None, "as_of_date": None})
+            self.assertEqual(partial["card_debt"]["status"], "partial")
+            self.assertIsNone(partial["card_debt"]["amount"])
+            self.store.set_account_credit_limit("owner", self.accounts["a"], {"amount": "10000", "currency": "PLN"}, actor="owner")
+            self.store.set_account_credit_limit("owner", self.accounts["b"], {"amount": "5000", "currency": "PLN"}, actor="owner")
+            # At self.now (2026-11-22 12:00), a is 26h old and b is 50h old -> stale (>=86400) -> partial with debt sum & old date.
+            stale = self.store.monthly_budget("owner")
+            api_contract.BudgetAnalyticsMonthlyBudget.model_validate(stale)
+            self.assertEqual(stale["card_debt"]["status"], "partial")
+            self.assertEqual(stale["card_debt"]["amount"], "900")
+            self.assertEqual(stale["card_debt"]["as_of_date"], "2026-11-20")
+            # Refresh component timestamps within 86400s -> available!
+            with self.sessions.begin() as session:
+                session.get(db.BudgetComponent, (self.accounts["a"], "balances")).last_success = self.now - 3600
+                session.get(db.BudgetComponent, (self.accounts["b"], "balances")).last_success = self.now - 7200
             full = self.store.monthly_budget("owner")
             api_contract.BudgetAnalyticsMonthlyBudget.model_validate(full)
-            self.assertEqual(full["card_exposure"]["status"], "available")
-            self.assertEqual(full["card_exposure"]["amount"], "900")
-            self.assertEqual(full["card_exposure"]["as_of_date"], "2026-11-20")
-            self.assertEqual(len(full["card_exposure"]["accounts"]), 2)
+            self.assertEqual(full["card_debt"]["status"], "available")
+            self.assertEqual(full["card_debt"]["amount"], "900")
+            self.assertEqual(full["card_debt"]["currency"], "PLN")
+            self.assertEqual(full["card_debt"]["as_of_date"], "2026-11-22")
+            self.assertEqual(len(full["card_debt"]["accounts"]), 2)
             # Updating balances_json works even without changing transactions (projection cache hit).
             with self.sessions.begin() as session:
                 session.get(db.BudgetAccount, self.accounts["a"]).balances_json = json.dumps([
                     {"name": "Avail", "balance_type": "ITAV", "balance_amount": {"amount": "9800", "currency": "PLN"}, "reference_date": None},
                 ])
             updated = self.store.monthly_budget("owner")
-            self.assertEqual(updated["card_exposure"]["amount"], "1000")
+            self.assertEqual(updated["card_debt"]["amount"], "1000")
             # Corrupted balances_json or corrupted AppMeta credit limit -> 500 budget_analytics_data_error.
             for bad_balances in ("{bad-json", json.dumps({"not": "a-list"})):
                 with self.sessions.begin() as session:
@@ -1324,7 +1336,7 @@ class MonthlyBudgetProjectionTests(ProjectionCase):
                 self.assert_invalid(lambda: self.store.monthly_budget("owner"), code="budget_analytics_data_error", status=500)
             with self.sessions.begin() as session:
                 session.get(db.BudgetAccount, self.accounts["a"]).balances_json = "[]"
-                session.get(db.AppMeta, f"budget_account_credit_limit:{self.accounts['a']}").value = json.dumps({"amount": "0"})
+                session.get(db.AppMeta, f"budget_account_credit_limit:{self.accounts['a']}").value = json.dumps({"amount": "0", "currency": "PLN"})
             self.assert_invalid(lambda: self.store.monthly_budget("owner"), code="budget_analytics_data_error", status=500)
 
     def test_monthly_budget_charts_single_snapshot_cache_identity_and_income_window(self):

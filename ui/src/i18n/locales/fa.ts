@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "سقف اعتبار",
   "budget.main.creditLimitSave": "ذخیرهٔ سقف",
   "budget.main.creditLimitClear": "پاک کردن",
-  "budget.main.creditLimitInvalid": "مبلغی بیشتر از 0 و حداکثر تا 10,000,000 وارد کنید.",
+  "budget.main.creditLimitInvalid": "یک ارز ۳ حرفی و مبلغی بیشتر از 0 تا 10,000,000 وارد کنید.",
   "budget.main.freshness.never": "هنوز دریافت نشده",
   "budget.main.freshness.fresh": "به‌روز",
   "budget.main.freshness.stale": "قدیمی",

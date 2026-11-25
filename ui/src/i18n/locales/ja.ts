@@ -285,7 +285,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "利用限度額",
   "budget.main.creditLimitSave": "限度額を保存",
   "budget.main.creditLimitClear": "クリア",
-  "budget.main.creditLimitInvalid": "0 より大きく 10,000,000 以下の金額を入力してください。",
+  "budget.main.creditLimitInvalid": "3文字の通貨コードと、0より大きく10,000,000以下の金額を入力してください。",
   "budget.main.freshness.never": "未取得",
   "budget.main.freshness.fresh": "最新",
   "budget.main.freshness.stale": "古い情報",

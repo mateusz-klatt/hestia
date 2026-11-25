@@ -394,7 +394,7 @@ export interface paths {
         };
         /**
          * Read the owner-private monthly budget dashboard
-         * @description Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates (including cross-account salary matching), and spending pace. Card exposure computes total credit card debt as max(0, credit_limit - ITAV) in the budget currency from owner-set limits and stored ITAV balances. Makes no bank requests and no database writes.
+         * @description Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates (including cross-account salary matching), and spending pace. Legacy card_exposure stays unavailable for 0.47.0 compatibility; additive card_debt computes credit card debt as max(0, credit_limit - ITAV) in the budget currency from owner-set limits and fresh ITAV balances. Makes no bank requests and no database writes.
          */
         get: operations["getBudgetAnalyticsMonthlyBudget"];
         put?: never;
@@ -2310,8 +2310,7 @@ export interface components {
             connection: string;
             /** Control Version */
             control_version: number;
-            /** Credit Limit */
-            credit_limit?: string | null;
+            credit_limit?: components["schemas"]["BudgetAccountCreditLimit"] | null;
             /** @default null */
             display: components["schemas"]["BudgetAccountDisplay"] | null;
             /** Id */
@@ -2350,8 +2349,7 @@ export interface components {
             connection: string;
             /** Control Version */
             control_version: number;
-            /** Credit Limit */
-            credit_limit?: string | null;
+            credit_limit?: components["schemas"]["BudgetAccountCreditLimit"] | null;
             /** @default null */
             display: components["schemas"]["BudgetAccountDisplay"] | null;
             /** Id */
@@ -2376,6 +2374,13 @@ export interface components {
             paused: boolean;
             /** Selected */
             selected: boolean;
+        };
+        /** BudgetAccountCreditLimit */
+        BudgetAccountCreditLimit: {
+            /** Amount */
+            amount: string;
+            /** Currency */
+            currency: string;
         };
         /**
          * BudgetAccountDisplay
@@ -3208,6 +3213,7 @@ export interface components {
         BudgetAnalyticsMonthlyBudget: {
             /** Available Currencies */
             available_currencies: string[];
+            card_debt?: components["schemas"]["BudgetAnalyticsMonthlyBudgetCardDebt"] | null;
             card_exposure: components["schemas"]["BudgetAnalyticsMonthlyBudgetCardExposure"];
             /** Category Spend */
             category_spend: components["schemas"]["BudgetAnalyticsMonthlyBudgetCategorySpend"][];
@@ -3239,32 +3245,48 @@ export interface components {
             start: string;
             summary: components["schemas"]["BudgetAnalyticsMonthlyBudgetSummary"] | null;
         };
-        /** BudgetAnalyticsMonthlyBudgetCardExposure */
-        BudgetAnalyticsMonthlyBudgetCardExposure: {
+        /** BudgetAnalyticsMonthlyBudgetCardDebt */
+        BudgetAnalyticsMonthlyBudgetCardDebt: {
             /** Accounts */
-            accounts?: components["schemas"]["BudgetAnalyticsMonthlyBudgetCardExposureAccount"][] | null;
+            accounts?: components["schemas"]["BudgetAnalyticsMonthlyBudgetCardDebtAccount"][] | null;
             /** Amount */
             amount: string | null;
             /** As Of Date */
             as_of_date: string | null;
+            /** Currency */
+            currency: string;
             /**
              * Status
              * @enum {string}
              */
             status: "available" | "partial" | "unavailable";
         };
-        /** BudgetAnalyticsMonthlyBudgetCardExposureAccount */
-        BudgetAnalyticsMonthlyBudgetCardExposureAccount: {
+        /** BudgetAnalyticsMonthlyBudgetCardDebtAccount */
+        BudgetAnalyticsMonthlyBudgetCardDebtAccount: {
             /** Account Id */
             account_id: string;
             /** As Of */
             as_of: string | null;
             /** Available */
             available: string;
+            /** Currency */
+            currency: string;
             /** Debt */
             debt: string;
             /** Limit */
             limit: string;
+        };
+        /** BudgetAnalyticsMonthlyBudgetCardExposure */
+        BudgetAnalyticsMonthlyBudgetCardExposure: {
+            /** Amount */
+            amount: string | null;
+            /** As Of Date */
+            as_of_date: string | null;
+            /**
+             * Status
+             * @constant
+             */
+            status: "unavailable";
         };
         /** BudgetAnalyticsMonthlyBudgetCategoryLabel */
         BudgetAnalyticsMonthlyBudgetCategoryLabel: {
@@ -5034,15 +5056,24 @@ export interface components {
         };
         /**
          * BudgetCreditLimitRequest
-         * @description Set or clear an owner-configured credit limit (> 0, <= 10,000,000) for card debt calculation.
+         * @description Set or clear an owner-configured credit limit and currency for card debt calculation.
          */
         BudgetCreditLimitRequest: {
             /** Account Id */
             account_id: string;
-            /** Credit Limit */
-            credit_limit: string | null;
+            credit_limit: components["schemas"]["BudgetCreditLimitValue"] | null;
             /** Expected Version */
             expected_version: number;
+        };
+        /**
+         * BudgetCreditLimitValue
+         * @description Positive decimal limit (> 0, <= 10,000,000) paired with its 3-letter ISO currency code.
+         */
+        BudgetCreditLimitValue: {
+            /** Amount */
+            amount: string;
+            /** Currency */
+            currency: string;
         };
         /** BudgetError */
         BudgetError: {

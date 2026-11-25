@@ -285,7 +285,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "क्रेडिट सीमा",
   "budget.main.creditLimitSave": "सीमा सहेजें",
   "budget.main.creditLimitClear": "हटाएं",
-  "budget.main.creditLimitInvalid": "0 से अधिक और अधिकतम 10,000,000 तक की राशि दर्ज करें।",
+  "budget.main.creditLimitInvalid": "3 अक्षरों की मुद्रा और 0 से अधिक व 10,000,000 तक की राशि दर्ज करें।",
   "budget.main.freshness.never": "अभी डाउनलोड नहीं हुआ",
   "budget.main.freshness.fresh": "अद्यतित",
   "budget.main.freshness.stale": "पुराना",

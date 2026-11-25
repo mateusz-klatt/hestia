@@ -32,6 +32,7 @@ MAX_CREDIT_LIMIT = "10000000"
 MAX_CREDIT_LIMIT_CHARS = 80
 CREDIT_LIMIT_META_PREFIX = "budget_account_credit_limit:"
 _CREDIT_LIMIT_RE = re.compile(r"[0-9]+(?:\.[0-9]+)?\Z", re.ASCII)
+_CREDIT_LIMIT_CURRENCY_RE = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 # Failures that stop unattended acquisition until an explicit owner refresh verifies the session.
 ATTENTION = frozenset({"authorization", "invalid_session", "expired_session", "session_mismatch", "configuration"})
 _SELECTION_CHANGED = "Bank account selection changed during acquisition"
@@ -69,10 +70,8 @@ def credit_limit_meta_key(account_id: str) -> str:
     return CREDIT_LIMIT_META_PREFIX + account_id
 
 
-def parse_credit_limit(value: object, *, allow_none: bool = False) -> str | None:
+def parse_credit_limit_amount(value: object) -> str:
     """Validate and canonicalize a credit limit decimal string (> 0 and <= 10,000,000)."""
-    if value is None and allow_none:
-        return None
     if not isinstance(value, str) or not 1 <= len(value) <= MAX_CREDIT_LIMIT_CHARS or not _CREDIT_LIMIT_RE.fullmatch(value):
         raise BudgetStoreError("Invalid credit limit")
     canonical = core.canonical_money(value)
@@ -81,30 +80,54 @@ def parse_credit_limit(value: object, *, allow_none: bool = False) -> str | None
     return canonical
 
 
-def _decode_credit_limit_meta(raw: str) -> str:
+def parse_credit_limit(value: object, *, allow_none: bool = False) -> dict[str, str] | None:
+    """Validate and canonicalize a credit limit mapping ``{"amount": str, "currency": str}``."""
+    if value is None and allow_none:
+        return None
+    if not isinstance(value, dict) or set(value) != {"amount", "currency"}:
+        raise BudgetStoreError("Invalid credit limit")
+    currency = value["currency"]
+    if not isinstance(currency, str) or not _CREDIT_LIMIT_CURRENCY_RE.fullmatch(currency):
+        raise BudgetStoreError("Invalid credit limit")
+    return {"amount": parse_credit_limit_amount(value["amount"]), "currency": currency}
+
+
+def _decode_credit_limit_meta(raw: str) -> dict[str, str]:
     try:
         parsed = json.loads(raw)
     except (ValueError, TypeError):
         raise BudgetStoreError("Corrupted credit limit configuration") from None
-    if not isinstance(parsed, dict) or set(parsed) != {"amount"}:
-        raise BudgetStoreError("Corrupted credit limit configuration")
-    return parse_credit_limit(parsed["amount"])
+    try:
+        return parse_credit_limit(parsed)
+    except BudgetStoreError:
+        raise BudgetStoreError("Corrupted credit limit configuration") from None
 
 
-def load_account_credit_limit(session, account_id: str) -> str | None:
-    """Read one account's validated canonical credit limit from AppMeta, if configured."""
+def load_account_credit_limit(session, account_id: str) -> dict[str, str] | None:
+    """Read one account's validated canonical credit limit and currency from AppMeta, if configured."""
     row = session.get(AppMeta, credit_limit_meta_key(account_id))
     return None if row is None else _decode_credit_limit_meta(row.value)
 
 
-def load_credit_limits(session, account_ids) -> dict[str, str]:
-    """Batch-load validated canonical credit limits for the given account IDs."""
+def load_credit_limits(session, account_ids) -> dict[str, dict[str, str]]:
+    """Batch-load validated canonical credit limits and currencies for the given account IDs."""
     ids = list(account_ids)
     if not ids:
         return {}
     keys = {credit_limit_meta_key(account_id): account_id for account_id in ids}
     rows = session.scalars(select(AppMeta).where(AppMeta.key.in_(keys))).all()
     return {keys[row.key]: _decode_credit_limit_meta(row.value) for row in rows}
+
+
+def prune_orphan_credit_limits(session) -> int:
+    """Remove persisted AppMeta credit limit entries whose account row no longer exists."""
+    active_ids = set(session.scalars(select(Account.id)))
+    removed = 0
+    for row in session.scalars(select(AppMeta).where(AppMeta.key.startswith(CREDIT_LIMIT_META_PREFIX))):
+        if row.key.removeprefix(CREDIT_LIMIT_META_PREFIX) not in active_ids:
+            session.delete(row)
+            removed += 1
+    return removed
 
 
 def safe_error(code):
@@ -199,6 +222,7 @@ class BudgetStore:
                 row.enabled = True
                 for identity_hash in item.accounts:
                     self._configure_account(session, item, identity_hash)
+            prune_orphan_credit_limits(session)
 
     @staticmethod
     def _configure_account(session, item, identity_hash):
@@ -329,11 +353,15 @@ class BudgetStore:
                 account.kind, account.kind_confirmed_at = kind, self.clock()
                 account.kind_confirmed_by, account.kind_confirmation_origin = actor, origin
                 account.control_version += 1
+                if kind != "credit_card":
+                    existing_limit = session.get(AppMeta, credit_limit_meta_key(account.id))
+                    if existing_limit is not None:
+                        session.delete(existing_limit)
             return {**self._account_dict(account, connection, session=session), "changed": changed}
 
     def set_account_credit_limit(self, owner, account_id, credit_limit, *, actor, origin="operator",
                                  expected_version=None):
-        """Set or clear an owner-configured credit limit without storing or logging amounts in audit."""
+        """Set or clear an owner-configured credit limit and currency without logging amounts in audit."""
         self._actor(actor, origin, owner=owner)
         canonical = parse_credit_limit(credit_limit, allow_none=True)
         with self.transaction() as session:
@@ -342,7 +370,7 @@ class BudgetStore:
             changed = current != canonical
             self._check_version(account, expected_version, changed,
                                 self._account_dict(account, connection, session=session), origin)
-            if canonical is not None and (account.kind != "credit_card" or account.kind_confirmed_at is None):
+            if account.kind != "credit_card" or account.kind_confirmed_at is None:
                 raise BudgetStoreError("Credit limit requires a confirmed credit card account")
             if changed:
                 self._audit(session, account, actor, origin, "credit_limit",
@@ -352,9 +380,9 @@ class BudgetStore:
                 if canonical is None:
                     session.delete(existing)
                 elif existing is None:
-                    session.add(AppMeta(key=key, value=_json({"amount": canonical})))
+                    session.add(AppMeta(key=key, value=_json(canonical)))
                 else:
-                    existing.value = _json({"amount": canonical})
+                    existing.value = _json(canonical)
                 account.control_version += 1
             return {**self._account_dict(account, connection, session=session),
                     "credit_limit": canonical, "changed": changed}

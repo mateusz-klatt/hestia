@@ -285,7 +285,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Teorainn chreidmheasa",
   "budget.main.creditLimitSave": "Sábháil an teorainn",
   "budget.main.creditLimitClear": "Glan",
-  "budget.main.creditLimitInvalid": "Cuir isteach méid níos mó ná 0 agus suas le 10,000,000.",
+  "budget.main.creditLimitInvalid": "Cuir isteach airgeadra 3 litir agus méid níos mó ná 0 suas le 10,000,000.",
   "budget.main.freshness.never": "níor íoslódáladh fós",
   "budget.main.freshness.fresh": "cothrom le dáta",
   "budget.main.freshness.stale": "as dáta",

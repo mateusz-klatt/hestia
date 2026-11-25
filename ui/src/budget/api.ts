@@ -3,8 +3,8 @@
 // financial data in the browser.
 import { apiUrl } from "../api/client";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent, BudgetConsentFlow,
-  BudgetConsentReconcile, BudgetConsentRenewalReminders, BudgetJob, BudgetKind, BudgetBalances, BudgetLimit,
-  BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
+  BudgetConsentReconcile, BudgetConsentRenewalReminders, BudgetCreditLimitValue, BudgetJob, BudgetKind, BudgetBalances,
+  BudgetLimit, BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
 import { idempotencyKey } from "./model";
 import type { AnalyticsCategory, AnalyticsForecast, AnalyticsInbox, AnalyticsInboxMarkRequest, AnalyticsInboxMarkSaved,
   AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCharts, AnalyticsMortgages, AnalyticsOverview, AnalyticsQuarantine,
@@ -170,7 +170,7 @@ export const budgetApi = {
   setKind: (account: BudgetAccount, kind: BudgetKind) =>
     post<{ account: BudgetAccount }>("account-kind",
       { account_id: account.id, kind, expected_version: account.control_version }),
-  setCreditLimit: (account: BudgetAccount, creditLimit: string | null) =>
+  setCreditLimit: (account: BudgetAccount, creditLimit: BudgetCreditLimitValue | null) =>
     post<{ account: BudgetAccount }>("account-credit-limit",
       { account_id: account.id, credit_limit: creditLimit, expected_version: account.control_version }),
   setPaused: (connection: BudgetConnection, paused: boolean) =>

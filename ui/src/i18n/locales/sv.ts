@@ -283,7 +283,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Kreditgräns",
   "budget.main.creditLimitSave": "Spara gräns",
   "budget.main.creditLimitClear": "Rensa",
-  "budget.main.creditLimitInvalid": "Ange ett belopp större än 0 och högst 10 000 000.",
+  "budget.main.creditLimitInvalid": "Ange en 3-bokstavsvaluta och ett belopp större än 0 upp till 10 000 000.",
   "budget.main.freshness.never": "inte hämtat ännu",
   "budget.main.freshness.fresh": "aktuellt",
   "budget.main.freshness.stale": "inaktuellt",

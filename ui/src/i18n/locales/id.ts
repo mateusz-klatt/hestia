@@ -285,7 +285,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Batas kredit",
   "budget.main.creditLimitSave": "Simpan batas",
   "budget.main.creditLimitClear": "Hapus",
-  "budget.main.creditLimitInvalid": "Masukkan jumlah lebih dari 0 dan hingga 10.000.000.",
+  "budget.main.creditLimitInvalid": "Masukkan mata uang 3 huruf dan jumlah lebih dari 0 hingga 10.000.000.",
   "budget.main.freshness.never": "belum diunduh",
   "budget.main.freshness.fresh": "terkini",
   "budget.main.freshness.stale": "belum diperbarui",

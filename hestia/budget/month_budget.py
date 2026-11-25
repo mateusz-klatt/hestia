@@ -364,17 +364,10 @@ def _valid_iso_date(value: object) -> str:
     return value
 
 
-def _balance_as_of_date(balances_ts: object, itav_ref_date: object, evaluated_at: float) -> str | None:
-    if balances_ts is not None:
-        return warsaw_date(min(_validate_timestamp(balances_ts), evaluated_at))[0]
-    return None if itav_ref_date is None else _valid_iso_date(itav_ref_date)
-
-
-def _extract_itav_balance(entries: object, target_currency: str) -> tuple[str | None, str | None, bool]:
+def _extract_itav_by_currency(entries: object) -> dict[str, list[tuple[str, str | None]]]:
     if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
         raise MonthDataError()
-    matching: list[tuple[str, str | None]] = []
-    saw_other = False
+    by_currency: dict[str, list[tuple[str, str | None]]] = defaultdict(list)
     for entry in entries:
         if not isinstance(entry, Mapping):
             raise MonthDataError()
@@ -393,69 +386,85 @@ def _extract_itav_balance(entries: object, target_currency: str) -> tuple[str | 
         ref_date = entry.get("reference_date")
         if ref_date is not None:
             _valid_iso_date(ref_date)
-        if currency == target_currency:
-            matching.append((available, ref_date))
-        else:
-            saw_other = True
-    if len(matching) == 1:
-        return matching[0][0], matching[0][1], False
-    return None, None, saw_other and len(matching) == 0
+        by_currency[currency].append((available, ref_date))
+    return by_currency
 
 
-def _compute_card_exposure(
+def _is_card_balance_stale(
+    fetch_ts: float | None,
+    as_of_date: str | None,
+    evaluation_date: str,
+    evaluated_at: float,
+) -> bool:
+    if fetch_ts is None or (evaluated_at - fetch_ts) >= STALE_AFTER["balances"]:
+        return True
+    if as_of_date is not None and (date.fromisoformat(evaluation_date) - date.fromisoformat(as_of_date)).days > 1:
+        return True
+    return False
+
+
+def _compute_card_debt(
     *,
     account_kinds: Mapping[str, str],
     account_balances: Mapping[str, Sequence[Mapping]] | None,
-    account_credit_limits: Mapping[str, str | None] | None,
+    account_credit_limits: Mapping[str, Mapping[str, str] | None] | None,
     account_balance_timestamps: Mapping[str, int | float | None] | None,
     target_currency: str,
+    evaluation_date: str,
     evaluated_at: float,
 ) -> dict:
     card_ids = sorted(account_id for account_id, kind in account_kinds.items() if kind == "credit_card")
     if not card_ids:
-        return {"status": "unavailable", "amount": None, "as_of_date": None, "accounts": []}
+        return {
+            "status": "unavailable",
+            "amount": None,
+            "currency": target_currency,
+            "as_of_date": None,
+            "accounts": [],
+        }
     accounts_out: list[dict] = []
-    missing_limit_or_balance = False
-    skipped_other_currency = False
+    has_partial = False
     for account_id in card_ids:
+        raw_ts = None if account_balance_timestamps is None else account_balance_timestamps.get(account_id)
+        fetch_ts = None if raw_ts is None else min(_validate_timestamp(raw_ts), evaluated_at)
+        raw_balances = () if account_balances is None else account_balances.get(account_id, ())
+        itav_by_currency = _extract_itav_by_currency(raw_balances)
         raw_limit = None if account_credit_limits is None else account_credit_limits.get(account_id)
         if raw_limit is None:
-            limit = None
-        else:
-            try:
-                limit = parse_credit_limit(raw_limit)
-            except BudgetStoreError:
-                raise MonthDataError() from None
-        raw_balances = () if account_balances is None else account_balances.get(account_id, ())
-        available, ref_date, only_other_currency = _extract_itav_balance(raw_balances, target_currency)
-        balances_ts = None if account_balance_timestamps is None else account_balance_timestamps.get(account_id)
-        card_as_of = _balance_as_of_date(balances_ts, ref_date, evaluated_at)
-        if limit is None or available is None:
-            if limit is not None and only_other_currency:
-                skipped_other_currency = True
-            else:
-                missing_limit_or_balance = True
+            has_partial = True
             continue
+        try:
+            limit = parse_credit_limit(raw_limit)
+        except BudgetStoreError:
+            raise MonthDataError() from None
+        limit_amount, limit_currency = limit["amount"], limit["currency"]
+        if limit_currency != target_currency:
+            has_partial = True
+            continue
+        matching = itav_by_currency.get(limit_currency, ())
+        if len(matching) != 1:
+            has_partial = True
+            continue
+        available, ref_date = matching[0]
+        # Prefer bank's reference_date when present; otherwise use fetch date in Europe/Warsaw.
+        card_as_of = ref_date if ref_date is not None else (warsaw_date(fetch_ts)[0] if fetch_ts is not None else None)
+        if _is_card_balance_stale(fetch_ts, card_as_of, evaluation_date, evaluated_at):
+            has_partial = True
         accounts_out.append({
             "account_id": account_id,
-            "debt": _max_money(_sub_money(limit, available), _ZERO),
-            "limit": _check_aggregate(limit),
+            "debt": _max_money(_sub_money(limit_amount, available), _ZERO),
+            "limit": _check_aggregate(limit_amount),
             "available": _check_aggregate(available),
+            "currency": limit_currency,
             "as_of": card_as_of,
         })
-    if accounts_out:
-        dates = [item["as_of"] for item in accounts_out if item["as_of"] is not None]
-        return {
-            "status": "partial" if (missing_limit_or_balance or skipped_other_currency) else "available",
-            "amount": _sum_money_checked(item["debt"] for item in accounts_out),
-            "as_of_date": min(dates) if dates else None,
-            "accounts": accounts_out,
-        }
+    dates = [item["as_of"] for item in accounts_out if item["as_of"] is not None]
     return {
-        "status": "partial" if missing_limit_or_balance else "unavailable",
-        "amount": None,
-        "as_of_date": None,
-        "accounts": [],
+        "status": "partial" if has_partial else "available",
+        "amount": _sum_money_checked(item["debt"] for item in accounts_out) if accounts_out else None,
+        "currency": target_currency,
+        "as_of_date": min(dates) if (accounts_out and dates) else None,
+        "accounts": accounts_out,
     }
 
 
@@ -1227,12 +1236,14 @@ def _evaluate_monthly_budget_core(
         "provisional": provisional,
         "has_activity": selected_bucket.has_activity,
     }
-    card_exposure = _compute_card_exposure(
+    card_exposure = {"status": "unavailable", "amount": None, "as_of_date": None}
+    card_debt = _compute_card_debt(
         account_kinds=account_kinds,
         account_balances=account_balances,
         account_credit_limits=account_credit_limits,
         account_balance_timestamps=account_balance_timestamps,
         target_currency=target_currency,
+        evaluation_date=evaluation_date,
         evaluated_at=float(evaluated_at),
     )
     envelope = {
@@ -1248,6 +1259,7 @@ def _evaluate_monthly_budget_core(
         "available_currencies": available_currencies,
         "coverage": coverage,
         "card_exposure": card_exposure,
+        "card_debt": card_debt,
     }
 
     if not configured:

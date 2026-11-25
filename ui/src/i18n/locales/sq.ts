@@ -285,7 +285,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Limiti i kredisë",
   "budget.main.creditLimitSave": "Ruaj limitin",
   "budget.main.creditLimitClear": "Pastro",
-  "budget.main.creditLimitInvalid": "Vendosni një shumë më të madhe se 0 dhe deri në 10,000,000.",
+  "budget.main.creditLimitInvalid": "Vendosni një monedhë me 3 shkronja dhe një shumë më të madhe se 0 deri në 10,000,000.",
   "budget.main.freshness.never": "ende të pashkarkuara",
   "budget.main.freshness.fresh": "të përditësuara",
   "budget.main.freshness.stale": "të vjetruara",

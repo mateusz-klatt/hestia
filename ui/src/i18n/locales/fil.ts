@@ -285,7 +285,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Limitasyon ng credit",
   "budget.main.creditLimitSave": "I-save ang limitasyon",
   "budget.main.creditLimitClear": "I-clear",
-  "budget.main.creditLimitInvalid": "Maglagay ng halagang higit sa 0 at hanggang 10,000,000.",
+  "budget.main.creditLimitInvalid": "Maglagay ng 3-letrang pera at halagang higit sa 0 hanggang 10,000,000.",
   "budget.main.freshness.never": "hindi pa na-download",
   "budget.main.freshness.fresh": "napapanahon",
   "budget.main.freshness.stale": "hindi napapanahon",

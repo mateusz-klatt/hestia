@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Kikomo cha mkopo",
   "budget.main.creditLimitSave": "Hifadhi kikomo",
   "budget.main.creditLimitClear": "Futa",
-  "budget.main.creditLimitInvalid": "Weka kiasi kikubwa kuliko 0 na kisichozidi 10,000,000.",
+  "budget.main.creditLimitInvalid": "Weka sarafu ya herufi 3 na kiasi kikubwa kuliko 0 hadi 10,000,000.",
   "budget.main.freshness.never": "bado haijapakuliwa",
   "budget.main.freshness.fresh": "imesasishwa",
   "budget.main.freshness.stale": "haijasasishwa",

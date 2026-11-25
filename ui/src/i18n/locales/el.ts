@@ -285,7 +285,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Πιστωτικό όριο",
   "budget.main.creditLimitSave": "Αποθήκευση ορίου",
   "budget.main.creditLimitClear": "Εκκαθάριση",
-  "budget.main.creditLimitInvalid": "Εισαγάγετε ποσό μεγαλύτερο από 0 και έως 10.000.000.",
+  "budget.main.creditLimitInvalid": "Εισαγάγετε νόμισμα 3 γραμμάτων και ποσό μεγαλύτερο από 0 έως 10.000.000.",
   "budget.main.freshness.never": "δεν έχει γίνει λήψη ακόμη",
   "budget.main.freshness.fresh": "ενημερωμένα",
   "budget.main.freshness.stale": "παρωχημένα",

@@ -5,12 +5,12 @@ import { createRoot } from "react-dom/client";
 import { currentLocale, t, tPlural } from "../i18n";
 import { budgetApi } from "./api";
 import type { BudgetApi, BudgetResult } from "./api";
-import { ACTIVE_JOB, KINDS, accountLabel, effectiveState, formatAmount, freshness, hasActiveJob, idempotencyKey,
-  isAccessLoss, isComponentLimit, latestJob, limitState, newer, normalizeCreditLimitInput, otherObservedCurrencies,
-  presetRange, OPEN_FLOW, READY_FLOW, consentIntent, safeAuthorizationUrl, transactionDate, transactionText, validRange,
-  when } from "./model";
-import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnection, BudgetJob, BudgetKind,
-  BudgetConsent, BudgetConsentFlow, BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange,
+import { ACTIVE_JOB, KINDS, accountLabel, defaultCreditLimitCurrency, effectiveState, formatAmount, freshness,
+  hasActiveJob, idempotencyKey, isAccessLoss, isComponentLimit, latestJob, limitState, newer,
+  normalizeCreditCurrencyInput, normalizeCreditLimitInput, otherObservedCurrencies, presetRange, OPEN_FLOW, READY_FLOW,
+  consentIntent, safeAuthorizationUrl, transactionDate, transactionText, validRange, when } from "./model";
+import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnection, BudgetCreditLimitValue, BudgetJob,
+  BudgetKind, BudgetConsent, BudgetConsentFlow, BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange,
   LimitState } from "./model";
 import { ConsentHealthPanel } from "./consent_health";
 import { ForecastView } from "./analytics/forecast";
@@ -601,21 +601,23 @@ function LimitsPanel({ connectionId, accounts, limits, locale }: LimitsProps) {
 interface RowProps {
   account: BudgetAccount; index: number; busy: ReadonlySet<string>;
   onOpen: () => void; onSelect: (selected: boolean) => void; onKind: (kind: BudgetKind) => void;
-  onCreditLimit: (limit: string | null) => void;
+  onCreditLimit: (limit: BudgetCreditLimitValue | null) => void;
 }
 
 function AccountRow({ account, index, busy, onOpen, onSelect, onKind, onCreditLimit }: RowProps) {
   const kind = account.kind_confirmed_at === null ? "" : account.kind;
-  const serverLimit = account.credit_limit ?? "";
+  const serverLimit = account.credit_limit?.amount ?? "";
+  const serverCurrency = defaultCreditLimitCurrency(account);
   const [limitDraft, setLimitDraft] = useState(serverLimit);
+  const [currencyDraft, setCurrencyDraft] = useState(serverCurrency);
   const [limitError, setLimitError] = useState(false);
   useEffect(() => {
     setLimitDraft(serverLimit);
+    setCurrencyDraft(serverCurrency);
     setLimitError(false);
-  }, [serverLimit]);
+  }, [serverLimit, serverCurrency]);
   const state = (name: "transactions" | "balances") => labelOf(MAIN_FRESHNESS_KEYS, freshness(account.components[name]));
   const isConfirmedCard = account.kind_confirmed_at !== null && account.kind === "credit_card";
-  const limitCurrency = account.observed_balance_currencies?.[0] ?? account.display?.currency ?? null;
   const limitBusy = busy.has(`credit-limit:${account.id}`);
 
   function submitCreditLimit() {
@@ -630,12 +632,13 @@ function AccountRow({ account, index, busy, onOpen, onSelect, onKind, onCreditLi
       return;
     }
     const parsed = normalizeCreditLimitInput(trimmed);
-    if (parsed === null) {
+    const parsedCurrency = normalizeCreditCurrencyInput(currencyDraft);
+    if (parsed === null || parsedCurrency === null) {
       setLimitError(true);
       return;
     }
     setLimitError(false);
-    onCreditLimit(parsed);
+    onCreditLimit({ amount: parsed, currency: parsedCurrency });
   }
 
   return (
@@ -666,7 +669,11 @@ function AccountRow({ account, index, busy, onOpen, onSelect, onKind, onCreditLi
             <span>{t("budget.main.creditLimit")}</span>
             <input name="credit_limit" type="text" inputMode="decimal" value={limitDraft} disabled={limitBusy}
               onChange={(event) => { setLimitDraft(event.currentTarget.value); setLimitError(false); }} />
-            {limitCurrency ? <span className="budget-muted">{limitCurrency}</span> : null}
+          </label>
+          <label className="budget-kind">
+            <span>{t("budget.limits.currency")}</span>
+            <input name="credit_limit_currency" type="text" maxLength={3} value={currencyDraft} disabled={limitBusy}
+              onChange={(event) => { setCurrencyDraft(event.currentTarget.value); setLimitError(false); }} />
           </label>
           <button type="button" disabled={limitBusy} onClick={submitCreditLimit}>{t("budget.main.creditLimitSave")}</button>
           {account.credit_limit ? (

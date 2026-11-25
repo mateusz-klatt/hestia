@@ -283,7 +283,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Kredietlimiet",
   "budget.main.creditLimitSave": "Limiet opslaan",
   "budget.main.creditLimitClear": "Wissen",
-  "budget.main.creditLimitInvalid": "Voer een bedrag groter dan 0 en maximaal 10.000.000 in.",
+  "budget.main.creditLimitInvalid": "Voer een 3-letterige valuta en een bedrag groter dan 0 tot maximaal 10.000.000 in.",
   "budget.main.freshness.never": "nog niet gedownload",
   "budget.main.freshness.fresh": "actueel",
   "budget.main.freshness.stale": "verouderd",

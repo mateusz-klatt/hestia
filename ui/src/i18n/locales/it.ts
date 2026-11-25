@@ -283,7 +283,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Plafond della carta",
   "budget.main.creditLimitSave": "Salva plafond",
   "budget.main.creditLimitClear": "Cancella",
-  "budget.main.creditLimitInvalid": "Inserisci un importo maggiore di 0 e fino a 10.000.000.",
+  "budget.main.creditLimitInvalid": "Inserisci una valuta di 3 lettere e un importo maggiore di 0 fino a 10.000.000.",
   "budget.main.freshness.never": "non ancora scaricato",
   "budget.main.freshness.fresh": "aggiornato",
   "budget.main.freshness.stale": "non aggiornato",

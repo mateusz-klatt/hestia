@@ -13,9 +13,9 @@ import { groupCategoryTotals, hasCategoryParents, visibleCategoryRows } from "./
 import { MONTH_BUDGET_CARD_STATUS_KEYS, MONTH_BUDGET_LIMIT_STATUS_KEYS, clampPercentString, formatRatioHalfEven,
   isPositiveDecimal, isZero, labelOf, monthLabel, monthlyBudgetCurrencies, oneOffRowKey, ratioPercentFloor,
   shiftMonth, validCurrency } from "./model";
-import type { AnalyticsCategory, AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCharts,
-  AnalyticsMonthlyBudgetExpectedIncome, AnalyticsMonthlyBudgetIncomeWindow, AnalyticsMonthlyBudgetPace,
-  AnalyticsMonthlyBudgetPassThrough, AnalyticsMonthlyBudgetSeries } from "./model";
+import type { AnalyticsCategory, AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCardDebt,
+  AnalyticsMonthlyBudgetCharts, AnalyticsMonthlyBudgetExpectedIncome, AnalyticsMonthlyBudgetIncomeWindow,
+  AnalyticsMonthlyBudgetPace, AnalyticsMonthlyBudgetPassThrough, AnalyticsMonthlyBudgetSeries } from "./model";
 import { MonthBudgetCharts } from "./month_budget_charts";
 import { buildMonthPaceProjection } from "./month_budget_pace";
 import type { MonthPaceProjection, MonthPaceScheduleData } from "./month_budget_pace";
@@ -484,6 +484,47 @@ function SummaryMeter({ spent, budget, label }: { spent: string; budget: string;
   );
 }
 
+function CardDebtCard({ cardDebt, locale }: {
+  cardDebt: AnalyticsMonthlyBudgetCardDebt;
+  locale: string;
+}) {
+  const cardExposureTitle = t("budget.monthBudget.cardExposureTitle");
+  return (
+    <article className="budget-total" aria-label={cardExposureTitle}>
+      <h4>{cardExposureTitle}</h4>
+      <dl>
+        <dt>{cardExposureTitle}</dt>
+        <dd>
+          <strong>
+            {cardDebt.amount === null
+              ? labelOf(MONTH_BUDGET_CARD_STATUS_KEYS, cardDebt.status)
+              : formatAmount(cardDebt.amount, cardDebt.currency, locale)}
+          </strong>
+          {cardDebt.amount !== null && cardDebt.status === "partial" ? (
+            <span className="budget-muted">
+              {" · "}
+              {labelOf(MONTH_BUDGET_CARD_STATUS_KEYS, cardDebt.status)}
+            </span>
+          ) : null}
+        </dd>
+        {cardDebt.as_of_date !== null ? (
+          <>
+            <dt>{t("budget.monthBudget.cardExposureAsOfLabel")}</dt>
+            <dd>{cardDebt.as_of_date}</dd>
+          </>
+        ) : null}
+      </dl>
+      <p className="budget-muted">
+        {cardDebt.status === "available"
+          ? t("budget.monthBudget.cardExposureCalculatedNote")
+          : cardDebt.status === "partial"
+            ? t("budget.monthBudget.cardExposurePartialNote")
+            : t("budget.monthBudget.cardExposureNote")}
+      </p>
+    </article>
+  );
+}
+
 function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, locale, onOpenMonth }: {
   data: AnalyticsMonthlyBudget;
   series: AnalyticsMonthlyBudgetSeries | null;
@@ -515,8 +556,13 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, l
   const viewTransactionsText = t("budget.monthBudget.viewTransactions");
   const provisionalText = t("budget.monthBudget.provisional");
   const summaryTitle = t("budget.monthBudget.summaryTitle");
-  const cardExposureTitle = t("budget.monthBudget.cardExposureTitle");
   const spendingAndLimitsTitle = t("budget.monthBudget.spendingAndLimits");
+  const cardDebt: AnalyticsMonthlyBudgetCardDebt = data.card_debt ?? {
+    status: data.card_exposure.status,
+    amount: data.card_exposure.amount,
+    currency: data.currency,
+    as_of_date: data.card_exposure.as_of_date,
+  };
   const uncategorisedLabel = t("budget.monthBudget.uncategorised");
   const unknownCategoryLabel = t("budget.monthBudget.unknownCategory");
   const archivedText = t("budget.monthBudget.archived");
@@ -553,7 +599,12 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, l
       </div>
 
       {data.configuration.status === "unconfigured" || data.summary === null || data.expected_income === null || data.pace === null ? (
-        <p className="budget-notice" role="status">{t("budget.monthBudget.unconfigured")}</p>
+        <>
+          <p className="budget-notice" role="status">{t("budget.monthBudget.unconfigured")}</p>
+          <div className="budget-totals">
+            <CardDebtCard cardDebt={cardDebt} locale={locale} />
+          </div>
+        </>
       ) : (
         <>
           {!data.coverage.has_activity ? (
@@ -653,38 +704,7 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, l
                 categoryMap={categoryMap} locale={locale} />
             )}
 
-            <article className="budget-total" aria-label={cardExposureTitle}>
-              <h4>{cardExposureTitle}</h4>
-              <dl>
-                <dt>{cardExposureTitle}</dt>
-                <dd>
-                  <strong>
-                    {data.card_exposure.amount === null
-                      ? labelOf(MONTH_BUDGET_CARD_STATUS_KEYS, data.card_exposure.status)
-                      : money(data.card_exposure.amount)}
-                  </strong>
-                  {data.card_exposure.amount !== null && data.card_exposure.status === "partial" ? (
-                    <span className="budget-muted">
-                      {" · "}
-                      {labelOf(MONTH_BUDGET_CARD_STATUS_KEYS, data.card_exposure.status)}
-                    </span>
-                  ) : null}
-                </dd>
-                {data.card_exposure.as_of_date !== null ? (
-                  <>
-                    <dt>{t("budget.monthBudget.cardExposureAsOfLabel")}</dt>
-                    <dd>{data.card_exposure.as_of_date}</dd>
-                  </>
-                ) : null}
-              </dl>
-              <p className="budget-muted">
-                {data.card_exposure.status === "available"
-                  ? t("budget.monthBudget.cardExposureCalculatedNote")
-                  : data.card_exposure.status === "partial"
-                    ? t("budget.monthBudget.cardExposurePartialNote")
-                    : t("budget.monthBudget.cardExposureNote")}
-              </p>
-            </article>
+            <CardDebtCard cardDebt={cardDebt} locale={locale} />
           </div>
 
           <section className="budget-entries" aria-label={spendingAndLimitsTitle}>

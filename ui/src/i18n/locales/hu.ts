@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Hitelkeret",
   "budget.main.creditLimitSave": "Keret mentése",
   "budget.main.creditLimitClear": "Törlés",
-  "budget.main.creditLimitInvalid": "Adjon meg 0-nál nagyobb és legfeljebb 10 000 000 összeget.",
+  "budget.main.creditLimitInvalid": "Adjon meg 3 betűs pénznemet és 0-nál nagyobb, legfeljebb 10 000 000 összeget.",
   "budget.main.freshness.never": "még nincs letöltve",
   "budget.main.freshness.fresh": "naprakész",
   "budget.main.freshness.stale": "elavult",

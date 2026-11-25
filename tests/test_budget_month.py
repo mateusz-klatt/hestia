@@ -321,7 +321,11 @@ class MonthlyBudgetConfigAndClockTests(unittest.TestCase):
         self.assertIsNone(result["pace"])
         self.assertIsNone(result["pass_through"])
         self.assertEqual(result["category_spend"], [])
-        self.assertEqual(result["card_exposure"], {"status": "unavailable", "amount": None, "as_of_date": None, "accounts": []})
+        self.assertEqual(result["card_exposure"], {"status": "unavailable", "amount": None, "as_of_date": None})
+        self.assertEqual(
+            result["card_debt"],
+            {"status": "unavailable", "amount": None, "currency": "PLN", "as_of_date": None, "accounts": []},
+        )
         self.assertTrue(result["coverage"]["has_activity"])
         self.assertEqual(result["coverage"]["purchase_date_fallback_count"], 1)
 
@@ -1627,15 +1631,24 @@ class CardExposureTests(unittest.TestCase):
             "reference_date": reference_date,
         }
 
-    def test_mbank_and_ing_conventions_negative_clamp_and_oldest_freshness(self):
+    @staticmethod
+    def _lim(amount: str, currency: str = "PLN") -> dict:
+        return {"amount": amount, "currency": currency}
+
+    def test_mbank_and_ing_conventions_negative_clamp_and_reference_date_precedence(self):
         evaluated_at = _utc_ts("2026-11-22T12:00:00Z")
         balances = {
-            # Bank A (mBank): ITBD == limit (10000), ITAV == 9900 -> debt = 100
-            "card-mbank": [self._bal("ITBD", "10000"), self._bal("ITAV", "9900", reference_date="2026-11-20")],
+            # Bank A (mBank): ITBD == limit (10000), ITAV == 9900 -> debt = 100.
+            # Also has a secondary EUR ITAV; limit currency (PLN) selects the PLN balance.
+            "card-mbank": [
+                self._bal("ITBD", "10000"),
+                self._bal("ITAV", "9900", "PLN", reference_date="2026-11-21"),
+                self._bal("ITAV", "200", "EUR", reference_date="2026-11-22"),
+            ],
             # Bank B (ING): ITBD != limit (pending holds), ITAV == 4200, limit == 5000 -> debt = 800
             "card-ing": [self._bal("ITBD", "450"), self._bal("ITAV", "4200")],
             # Overpaid card: limit 2000, ITAV 2250.50 -> debt clamped to 0
-            "card-overpaid": [self._bal("ITAV", "2250.50", reference_date="2026-11-18")],
+            "card-overpaid": [self._bal("ITAV", "2250.50", reference_date="2026-11-22")],
             # Non-card account ignored
             "checking": [self._bal("ITAV", "1000")],
         }
@@ -1645,32 +1658,40 @@ class CardExposureTests(unittest.TestCase):
             "card-overpaid": "credit_card",
             "checking": "current",
         }
-        limits = {"card-mbank": "10000", "card-ing": "5000", "card-overpaid": "2000"}
-        # Balance timestamps convert in Europe/Warsaw and cap at evaluated_at; overpaid falls back to reference_date.
-        balance_ts = {
-            "card-mbank": _utc_ts("2026-11-21T23:30:00Z"),  # 2026-11-22 in Warsaw (UTC+1)
-            "card-ing": _utc_ts("2026-11-19T12:00:00Z"),    # 2026-11-19
-            "card-overpaid": None,                           # falls back to reference_date 2026-11-18
+        limits = {
+            "card-mbank": self._lim("10000"),
+            "card-ing": self._lim("5000"),
+            "card-overpaid": self._lim("2000"),
         }
-        res = _eval(
-            evaluated_at=evaluated_at,
-            settings=DEFAULT_SETTINGS,
-            account_kinds=kinds,
-            account_balances=balances,
-            account_credit_limits=limits,
-            account_balance_timestamps=balance_ts,
-        )
-        api_contract.BudgetAnalyticsMonthlyBudget.model_validate(res)
-        self.assertEqual(res["card_exposure"], {
+        # Bank reference_date takes precedence over fetch date when present; otherwise fetch date applies.
+        balance_ts = {
+            "card-mbank": _utc_ts("2026-11-21T23:30:00Z"),  # fetch is 2026-11-22 Warsaw, reference_date 2026-11-21 wins
+            "card-ing": _utc_ts("2026-11-22T01:00:00Z"),    # no reference_date -> 2026-11-22
+            "card-overpaid": _utc_ts("2026-11-22T06:00:00Z"),
+        }
+        expected_card_debt = {
             "status": "available",
             "amount": "900",
-            "as_of_date": "2026-11-18",
+            "currency": "PLN",
+            "as_of_date": "2026-11-21",
             "accounts": [
-                {"account_id": "card-ing", "debt": "800", "limit": "5000", "available": "4200", "as_of": "2026-11-19"},
-                {"account_id": "card-mbank", "debt": "100", "limit": "10000", "available": "9900", "as_of": "2026-11-22"},
-                {"account_id": "card-overpaid", "debt": "0", "limit": "2000", "available": "2250.5", "as_of": "2026-11-18"},
+                {"account_id": "card-ing", "debt": "800", "limit": "5000", "available": "4200", "currency": "PLN", "as_of": "2026-11-22"},
+                {"account_id": "card-mbank", "debt": "100", "limit": "10000", "available": "9900", "currency": "PLN", "as_of": "2026-11-21"},
+                {"account_id": "card-overpaid", "debt": "0", "limit": "2000", "available": "2250.5", "currency": "PLN", "as_of": "2026-11-22"},
             ],
-        })
+        }
+        for settings in (DEFAULT_SETTINGS, None):
+            res = _eval(
+                evaluated_at=evaluated_at,
+                settings=settings,
+                account_kinds=kinds,
+                account_balances=balances,
+                account_credit_limits=limits,
+                account_balance_timestamps=balance_ts,
+            )
+            api_contract.BudgetAnalyticsMonthlyBudget.model_validate(res)
+            self.assertEqual(res["card_exposure"], {"status": "unavailable", "amount": None, "as_of_date": None})
+            self.assertEqual(res["card_debt"], expected_card_debt)
         charts = _eval_charts(
             evaluated_at=evaluated_at,
             settings=DEFAULT_SETTINGS,
@@ -1679,112 +1700,176 @@ class CardExposureTests(unittest.TestCase):
             account_credit_limits=limits,
             account_balance_timestamps=balance_ts,
         )
-        self.assertEqual(charts["budget"]["card_exposure"], res["card_exposure"])
+        self.assertEqual(charts["budget"]["card_exposure"], {"status": "unavailable", "amount": None, "as_of_date": None})
+        self.assertEqual(charts["budget"]["card_debt"], expected_card_debt)
 
-        # Without timestamps or reference dates, as_of / as_of_date are None.
+    def test_stale_paused_cards_mark_partial_with_real_as_of_date(self):
+        evaluated_at = _utc_ts("2026-11-22T12:00:00Z")
+        # 15-day-old paused card keeps its real as_of_date and marks status partial (never today).
+        paused = _eval(
+            evaluated_at=evaluated_at,
+            account_kinds={"card-paused": "credit_card"},
+            account_balances={"card-paused": [self._bal("ITAV", "4900", reference_date="2026-11-07")]},
+            account_credit_limits={"card-paused": self._lim("5000")},
+            account_balance_timestamps={"card-paused": _utc_ts("2026-11-07T10:00:00Z")},
+        )
+        self.assertEqual(paused["card_debt"], {
+            "status": "partial",
+            "amount": "100",
+            "currency": "PLN",
+            "as_of_date": "2026-11-07",
+            "accounts": [{"account_id": "card-paused", "debt": "100", "limit": "5000", "available": "4900", "currency": "PLN", "as_of": "2026-11-07"}],
+        })
+
+        # Fetch timestamp at or beyond STALE_AFTER["balances"] (86400s) is stale even without reference_date.
+        stale_fetch = _eval(
+            evaluated_at=evaluated_at,
+            account_kinds={"card-a": "credit_card"},
+            account_balances={"card-a": [self._bal("ITAV", "4200")]},
+            account_credit_limits={"card-a": self._lim("5000")},
+            account_balance_timestamps={"card-a": evaluated_at - 86400},
+        )
+        self.assertEqual(stale_fetch["card_debt"]["status"], "partial")
+        self.assertEqual(stale_fetch["card_debt"]["as_of_date"], "2026-11-21")
+
+        # Bank reference_date > 1 day older than evaluation_date marks partial even with fresh fetch timestamp.
+        old_ref = _eval(
+            evaluated_at=evaluated_at,
+            account_kinds={"card-a": "credit_card"},
+            account_balances={"card-a": [self._bal("ITAV", "4200", reference_date="2026-11-20")]},
+            account_credit_limits={"card-a": self._lim("5000")},
+            account_balance_timestamps={"card-a": evaluated_at - 60},
+        )
+        self.assertEqual(old_ref["card_debt"]["status"], "partial")
+        self.assertEqual(old_ref["card_debt"]["as_of_date"], "2026-11-20")
+
+        # Missing fetch timestamp without reference_date is partial with as_of / as_of_date None.
         no_dates = _eval(
             evaluated_at=evaluated_at,
-            account_kinds={"card-ing": "credit_card"},
-            account_balances={"card-ing": [self._bal("ITAV", "4200")]},
-            account_credit_limits={"card-ing": "5000"},
+            account_kinds={"card-a": "credit_card"},
+            account_balances={"card-a": [self._bal("ITAV", "4200")]},
+            account_credit_limits={"card-a": self._lim("5000")},
         )
-        self.assertEqual(no_dates["card_exposure"], {
-            "status": "available",
+        self.assertEqual(no_dates["card_debt"], {
+            "status": "partial",
             "amount": "800",
+            "currency": "PLN",
             "as_of_date": None,
-            "accounts": [{"account_id": "card-ing", "debt": "800", "limit": "5000", "available": "4200", "as_of": None}],
+            "accounts": [{"account_id": "card-a", "debt": "800", "limit": "5000", "available": "4200", "currency": "PLN", "as_of": None}],
         })
 
     def test_missing_limit_missing_balance_no_cards_and_mixed_currencies(self):
+        evaluated_at = _utc_ts("2026-11-22T12:00:00Z")
+        fresh_ts = evaluated_at - 60
+
         # 0 credit cards -> unavailable
-        none_res = _eval(account_kinds={"checking": "current"})
-        self.assertEqual(none_res["card_exposure"],
-                         {"status": "unavailable", "amount": None, "as_of_date": None, "accounts": []})
+        none_res = _eval(evaluated_at=evaluated_at, account_kinds={"checking": "current"})
+        self.assertEqual(none_res["card_debt"],
+                         {"status": "unavailable", "amount": None, "currency": "PLN", "as_of_date": None, "accounts": []})
 
         # 1 card with missing limit -> partial with amount=None
         single_no_limit = _eval(
+            evaluated_at=evaluated_at,
             account_kinds={"card-a": "credit_card"},
-            account_balances={"card-a": [self._bal("ITAV", "9000", reference_date="2026-11-20")]},
+            account_balances={"card-a": [self._bal("ITAV", "9000", reference_date="2026-11-22")]},
             account_credit_limits={},
+            account_balance_timestamps={"card-a": fresh_ts},
         )
-        self.assertEqual(single_no_limit["card_exposure"],
-                         {"status": "partial", "amount": None, "as_of_date": None, "accounts": []})
+        self.assertEqual(single_no_limit["card_debt"],
+                         {"status": "partial", "amount": None, "currency": "PLN", "as_of_date": None, "accounts": []})
 
         # 2 cards: 1 missing limit + 1 complete -> partial with available card sum
         partial_res = _eval(
+            evaluated_at=evaluated_at,
             account_kinds={"card-a": "credit_card", "card-b": "credit_card"},
             account_balances={
-                "card-a": [self._bal("ITAV", "9500", reference_date="2026-11-21")],
-                "card-b": [self._bal("ITAV", "4000", reference_date="2026-11-20")],
+                "card-a": [self._bal("ITAV", "9500", reference_date="2026-11-22")],
+                "card-b": [self._bal("ITAV", "4000", reference_date="2026-11-22")],
             },
-            account_credit_limits={"card-a": "10000"},
+            account_credit_limits={"card-a": self._lim("10000")},
+            account_balance_timestamps={"card-a": fresh_ts, "card-b": fresh_ts},
         )
-        self.assertEqual(partial_res["card_exposure"], {
+        self.assertEqual(partial_res["card_debt"], {
             "status": "partial",
             "amount": "500",
-            "as_of_date": "2026-11-21",
-            "accounts": [{"account_id": "card-a", "debt": "500", "limit": "10000", "available": "9500", "as_of": "2026-11-21"}],
+            "currency": "PLN",
+            "as_of_date": "2026-11-22",
+            "accounts": [{"account_id": "card-a", "debt": "500", "limit": "10000", "available": "9500", "currency": "PLN", "as_of": "2026-11-22"}],
         })
 
         # Missing ITAV balance (only ITBD present) or ambiguous 2 matching ITAV entries -> partial
         no_itav = _eval(
+            evaluated_at=evaluated_at,
             account_kinds={"card-a": "credit_card", "card-b": "credit_card"},
             account_balances={
-                "card-a": [self._bal("ITAV", "9500", reference_date="2026-11-21")],
+                "card-a": [self._bal("ITAV", "9500", reference_date="2026-11-22")],
                 "card-b": [self._bal("ITBD", "5000")],
             },
-            account_credit_limits={"card-a": "10000", "card-b": "5000"},
+            account_credit_limits={"card-a": self._lim("10000"), "card-b": self._lim("5000")},
+            account_balance_timestamps={"card-a": fresh_ts, "card-b": fresh_ts},
         )
-        self.assertEqual(no_itav["card_exposure"]["status"], "partial")
-        self.assertEqual(no_itav["card_exposure"]["amount"], "500")
+        self.assertEqual(no_itav["card_debt"]["status"], "partial")
+        self.assertEqual(no_itav["card_debt"]["amount"], "500")
 
         ambiguous_itav = _eval(
+            evaluated_at=evaluated_at,
             account_kinds={"card-a": "credit_card"},
             account_balances={"card-a": [self._bal("ITAV", "900"), self._bal("ITAV", "800")]},
-            account_credit_limits={"card-a": "1000"},
+            account_credit_limits={"card-a": self._lim("1000")},
+            account_balance_timestamps={"card-a": fresh_ts},
         )
-        self.assertEqual(ambiguous_itav["card_exposure"]["status"], "partial")
-        self.assertIsNone(ambiguous_itav["card_exposure"]["amount"])
+        self.assertEqual(ambiguous_itav["card_debt"]["status"], "partial")
+        self.assertIsNone(ambiguous_itav["card_debt"]["amount"])
 
-        # Mixed currencies: PLN card + EUR card -> PLN returns partial with PLN card; EUR returns partial with EUR card.
+        # Mixed currencies: PLN limit card with both PLN and EUR ITAV balances picks PLN; EUR card excluded from PLN report.
         mixed_kw = dict(
+            evaluated_at=evaluated_at,
             account_kinds={"card-pln": "credit_card", "card-eur": "credit_card"},
             account_balances={
-                "card-pln": [self._bal("ITAV", "9000", "PLN", reference_date="2026-11-20")],
-                "card-eur": [self._bal("ITAV", "1700", "EUR", reference_date="2026-11-21")],
+                "card-pln": [
+                    self._bal("ITAV", "9000", "PLN", reference_date="2026-11-21"),
+                    self._bal("ITAV", "200", "EUR", reference_date="2026-11-22"),
+                ],
+                "card-eur": [self._bal("ITAV", "1700", "EUR", reference_date="2026-11-22")],
             },
-            account_credit_limits={"card-pln": "10000", "card-eur": "2000"},
+            account_credit_limits={"card-pln": self._lim("10000", "PLN"), "card-eur": self._lim("2000", "EUR")},
+            account_balance_timestamps={"card-pln": fresh_ts, "card-eur": fresh_ts},
         )
         pln_res = _eval(currency="PLN", **mixed_kw)
-        self.assertEqual(pln_res["card_exposure"], {
+        self.assertEqual(pln_res["card_debt"], {
             "status": "partial",
             "amount": "1000",
-            "as_of_date": "2026-11-20",
-            "accounts": [{"account_id": "card-pln", "debt": "1000", "limit": "10000", "available": "9000", "as_of": "2026-11-20"}],
+            "currency": "PLN",
+            "as_of_date": "2026-11-21",
+            "accounts": [{"account_id": "card-pln", "debt": "1000", "limit": "10000", "available": "9000", "currency": "PLN", "as_of": "2026-11-21"}],
         })
         eur_res = _eval(currency="EUR", **mixed_kw)
-        self.assertEqual(eur_res["card_exposure"], {
+        self.assertEqual(eur_res["card_debt"], {
             "status": "partial",
             "amount": "300",
-            "as_of_date": "2026-11-21",
-            "accounts": [{"account_id": "card-eur", "debt": "300", "limit": "2000", "available": "1700", "as_of": "2026-11-21"}],
+            "currency": "EUR",
+            "as_of_date": "2026-11-22",
+            "accounts": [{"account_id": "card-eur", "debt": "300", "limit": "2000", "available": "1700", "currency": "EUR", "as_of": "2026-11-22"}],
         })
-        # All cards configured purely in other currency (none in USD) -> unavailable
+        # All cards have limits in other currencies (none matching USD) -> partial with amount=None
         usd_res = _eval(currency="USD", **mixed_kw)
-        self.assertEqual(usd_res["card_exposure"],
-                         {"status": "unavailable", "amount": None, "as_of_date": None, "accounts": []})
+        self.assertEqual(usd_res["card_debt"],
+                         {"status": "partial", "amount": None, "currency": "USD", "as_of_date": None, "accounts": []})
 
-    def test_invalid_card_exposure_data_raises_month_data_error(self):
+    def test_invalid_card_debt_data_raises_month_data_error(self):
+        ok_lim = self._lim("1000")
         for kwargs in (
-            {"account_credit_limits": {"card-a": "0"}, "account_balances": {"card-a": [self._bal("ITAV", "10")]}},
-            {"account_credit_limits": {"card-a": "1000"}, "account_balances": {"card-a": "not-a-list"}},
-            {"account_credit_limits": {"card-a": "1000"}, "account_balances": {"card-a": ["not-a-dict"]}},
-            {"account_credit_limits": {"card-a": "1000"}, "account_balances": {"card-a": [{"balance_type": "ITAV", "balance_amount": "bad"}]}},
-            {"account_credit_limits": {"card-a": "1000"}, "account_balances": {"card-a": [self._bal("ITAV", "10", currency="pln")]}},
-            {"account_credit_limits": {"card-a": "1000"}, "account_balances": {"card-a": [self._bal("ITAV", "bad")]}},
-            {"account_credit_limits": {"card-a": "1000"}, "account_balances": {"card-a": [self._bal("ITAV", "10", reference_date="2026-02-30")]}},
-            {"account_credit_limits": {"card-a": "1000"}, "account_balances": {"card-a": [self._bal("ITAV", "10", reference_date=123)]}},
-            {"account_credit_limits": {"card-a": "1000"}, "account_balances": {"card-a": [self._bal("ITAV", "10")]},
+            {"account_credit_limits": {"card-a": "1000"}, "account_balances": {"card-a": [self._bal("ITAV", "10")]}},
+            {"account_credit_limits": {"card-a": {"amount": "0", "currency": "PLN"}}, "account_balances": {"card-a": [self._bal("ITAV", "10")]}},
+            {"account_credit_limits": {"card-a": {"amount": "1000", "currency": "pln"}}, "account_balances": {"card-a": [self._bal("ITAV", "10")]}},
+            {"account_credit_limits": {"card-a": ok_lim}, "account_balances": {"card-a": "not-a-list"}},
+            {"account_credit_limits": {"card-a": ok_lim}, "account_balances": {"card-a": ["not-a-dict"]}},
+            {"account_credit_limits": {"card-a": ok_lim}, "account_balances": {"card-a": [{"balance_type": "ITAV", "balance_amount": "bad"}]}},
+            {"account_credit_limits": {"card-a": ok_lim}, "account_balances": {"card-a": [self._bal("ITAV", "10", currency="pln")]}},
+            {"account_credit_limits": {"card-a": ok_lim}, "account_balances": {"card-a": [self._bal("ITAV", "bad")]}},
+            {"account_credit_limits": {"card-a": ok_lim}, "account_balances": {"card-a": [self._bal("ITAV", "10", reference_date="2026-02-30")]}},
+            {"account_credit_limits": {"card-a": ok_lim}, "account_balances": {"card-a": [self._bal("ITAV", "10", reference_date=123)]}},
+            {"account_credit_limits": {"card-a": ok_lim}, "account_balances": {"card-a": [self._bal("ITAV", "10")]},
              "account_balance_timestamps": {"card-a": "bad-ts"}},
         ):
             with self.subTest(kwargs=kwargs), self.assertRaises(month_budget.MonthDataError):

@@ -285,7 +285,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "วงเงินบัตรเครดิต",
   "budget.main.creditLimitSave": "บันทึกวงเงิน",
   "budget.main.creditLimitClear": "ล้างค่า",
-  "budget.main.creditLimitInvalid": "กรอกจำนวนเงินที่มากกว่า 0 และไม่เกิน 10,000,000",
+  "budget.main.creditLimitInvalid": "กรอกรหัสสกุลเงิน 3 ตัวอักษรและจำนวนเงินที่มากกว่า 0 ไม่เกิน 10,000,000",
   "budget.main.freshness.never": "ยังไม่ได้ดาวน์โหลด",
   "budget.main.freshness.fresh": "เป็นปัจจุบัน",
   "budget.main.freshness.stale": "ไม่เป็นปัจจุบัน",

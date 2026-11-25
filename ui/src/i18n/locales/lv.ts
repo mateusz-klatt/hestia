@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Kredītlimits",
   "budget.main.creditLimitSave": "Saglabāt limitu",
   "budget.main.creditLimitClear": "Notīrīt",
-  "budget.main.creditLimitInvalid": "Ievadiet summu, kas ir lielāka par 0 un nepārsniedz 10 000 000.",
+  "budget.main.creditLimitInvalid": "Ievadiet 3 burtu valūtu un summu, kas lielāka par 0 un nepārsniedz 10 000 000.",
   "budget.main.freshness.never": "vēl nav lejupielādēts",
   "budget.main.freshness.fresh": "aktuāli",
   "budget.main.freshness.stale": "novecojuši",

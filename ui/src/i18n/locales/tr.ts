@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Kredi limiti",
   "budget.main.creditLimitSave": "Limiti kaydet",
   "budget.main.creditLimitClear": "Temizle",
-  "budget.main.creditLimitInvalid": "0'dan büyük ve en fazla 10.000.000 tutar girin.",
+  "budget.main.creditLimitInvalid": "3 harfli para birimi ve 0'dan büyük en fazla 10.000.000 tutar girin.",
   "budget.main.freshness.never": "henüz indirilmedi",
   "budget.main.freshness.fresh": "güncel",
   "budget.main.freshness.stale": "güncel değil",

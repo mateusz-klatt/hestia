@@ -285,7 +285,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "신용 한도",
   "budget.main.creditLimitSave": "한도 저장",
   "budget.main.creditLimitClear": "지우기",
-  "budget.main.creditLimitInvalid": "0보다 크고 10,000,000 이하인 금액을 입력하세요.",
+  "budget.main.creditLimitInvalid": "3글자 통화와 0보다 크고 10,000,000 이하인 금액을 입력하세요.",
   "budget.main.freshness.never": "아직 다운로드하지 않음",
   "budget.main.freshness.fresh": "최신",
   "budget.main.freshness.stale": "오래됨",

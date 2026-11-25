@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Кредитный лимит",
   "budget.main.creditLimitSave": "Сохранить лимит",
   "budget.main.creditLimitClear": "Очистить",
-  "budget.main.creditLimitInvalid": "Введите сумму больше 0 и не более 10 000 000.",
+  "budget.main.creditLimitInvalid": "Введите 3-буквенную валюту и сумму больше 0 и не более 10 000 000.",
   "budget.main.freshness.never": "ещё не загружено",
   "budget.main.freshness.fresh": "актуальные",
   "budget.main.freshness.stale": "устаревшие",

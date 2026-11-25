@@ -305,7 +305,7 @@ const en = {
   "budget.main.creditLimit": "Credit limit",
   "budget.main.creditLimitSave": "Save limit",
   "budget.main.creditLimitClear": "Clear",
-  "budget.main.creditLimitInvalid": "Enter an amount greater than 0 and up to 10,000,000.",
+  "budget.main.creditLimitInvalid": "Enter a 3-letter currency and an amount greater than 0 up to 10,000,000.",
   "budget.main.freshness.never": "not downloaded yet",
   "budget.main.freshness.fresh": "up to date",
   "budget.main.freshness.stale": "outdated",

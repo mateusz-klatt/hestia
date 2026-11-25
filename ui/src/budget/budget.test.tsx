@@ -862,7 +862,7 @@ describe("controls", () => {
           kind_confirmed_at: 5,
           control_version: 3,
           observed_balance_currencies: ["PLN"],
-          credit_limit: "10000",
+          credit_limit: { amount: "10000", currency: "EUR" },
         }),
       }))
       .mockImplementationOnce(() => ok({
@@ -882,7 +882,9 @@ describe("controls", () => {
     expect(inputs).toHaveLength(1);
     const input = inputs[0];
     if (input === undefined) throw new Error("credit_limit input missing");
-    expect(input.closest("li")?.textContent).toContain("PLN");
+    const currencyInput = host.querySelector<HTMLInputElement>('input[name="credit_limit_currency"]');
+    if (currencyInput === null) throw new Error("credit_limit_currency input missing");
+    expect(currencyInput.value).toBe("PLN");
 
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "0");
@@ -891,15 +893,20 @@ describe("controls", () => {
     });
     await click(button("Save limit"));
     expect(api.setCreditLimit).not.toHaveBeenCalled();
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain("greater than 0 and up to 10,000,000");
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("greater than 0");
 
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "10000,00");
       input.dispatchEvent(new Event("input", { bubbles: true }));
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(currencyInput, "eur");
+      currencyInput.dispatchEvent(new Event("input", { bubbles: true }));
       await Promise.resolve();
     });
     await click(button("Save limit"));
-    expect(api.setCreditLimit).toHaveBeenCalledWith(expect.objectContaining({ id: "acct-card", control_version: 2 }), "10000");
+    expect(api.setCreditLimit).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acct-card", control_version: 2 }),
+      { amount: "10000", currency: "EUR" },
+    );
 
     await click(button("Clear"));
     expect(api.setCreditLimit).toHaveBeenLastCalledWith(expect.objectContaining({ id: "acct-card", control_version: 3 }), null);

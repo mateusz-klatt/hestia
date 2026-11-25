@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Kreditni limit",
   "budget.main.creditLimitSave": "Sačuvaj limit",
   "budget.main.creditLimitClear": "Očisti",
-  "budget.main.creditLimitInvalid": "Unesite iznos veći od 0 i do 10.000.000.",
+  "budget.main.creditLimitInvalid": "Unesite troslovnu valutu i iznos veći od 0 do 10.000.000.",
   "budget.main.freshness.never": "još nije preuzeto",
   "budget.main.freshness.fresh": "ažurno",
   "budget.main.freshness.stale": "zastarjelo",

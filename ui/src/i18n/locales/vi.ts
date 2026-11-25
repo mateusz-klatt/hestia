@@ -285,7 +285,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Hạn mức tín dụng",
   "budget.main.creditLimitSave": "Lưu hạn mức",
   "budget.main.creditLimitClear": "Xóa",
-  "budget.main.creditLimitInvalid": "Nhập số tiền lớn hơn 0 và tối đa 10.000.000.",
+  "budget.main.creditLimitInvalid": "Nhập mã tiền tệ 3 chữ cái và số tiền lớn hơn 0 đến tối đa 10.000.000.",
   "budget.main.freshness.never": "chưa tải xuống",
   "budget.main.freshness.fresh": "đã cập nhật",
   "budget.main.freshness.stale": "đã lỗi thời",

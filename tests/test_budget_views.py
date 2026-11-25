@@ -366,14 +366,17 @@ class BudgetViewsTests(unittest.TestCase):
         self.assertEqual(self.rows(db.BudgetConnectionAudit), [])
         self.assertIsNone(self.http.accounts("owner")[0]["credit_limit"])
         with self.assertRaises(BudgetControlConflict) as conflict:
-            self.http.set_account_credit_limit("owner", self.account, "5000", actor="owner", origin="web",
+            self.http.set_account_credit_limit("owner", self.account, {"amount": "5000", "currency": "PLN"},
+                                               actor="owner", origin="web",
                                                expected_version=confirmed["control_version"] - 1)
         self.assertEqual(conflict.exception.current["control_version"], confirmed["control_version"])
         self.assertIsNone(conflict.exception.current["credit_limit"])
-        saved_limit = self.http.set_account_credit_limit("owner", self.account, "5000.00", actor="owner", origin="web",
+        saved_limit = self.http.set_account_credit_limit("owner", self.account,
+                                                         {"amount": "5000.00", "currency": "PLN"},
+                                                         actor="owner", origin="web",
                                                          expected_version=confirmed["control_version"])
-        self.assertEqual(saved_limit["credit_limit"], "5000")
-        self.assertEqual(self.http.accounts("owner")[0]["credit_limit"], "5000")
+        self.assertEqual(saved_limit["credit_limit"], {"amount": "5000", "currency": "PLN"})
+        self.assertEqual(self.http.accounts("owner")[0]["credit_limit"], {"amount": "5000", "currency": "PLN"})
         self.assertNotIn("credit_limit", self.store.accounts("owner")[0])
 
     def test_foreign_controls_missing_version_and_actor_cannot_escape_owner_scope(self):

@@ -285,7 +285,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Վարկային սահմանաչափ",
   "budget.main.creditLimitSave": "Պահպանել սահմանաչափը",
   "budget.main.creditLimitClear": "Մաքրել",
-  "budget.main.creditLimitInvalid": "Մուտքագրեք 0-ից մեծ և մինչև 10,000,000 գումար։",
+  "budget.main.creditLimitInvalid": "Մուտքագրեք 3-տառանոց արժույթ և 0-ից մեծ ու մինչև 10,000,000 գումար։",
   "budget.main.freshness.never": "դեռ ներբեռնված չէ",
   "budget.main.freshness.fresh": "արդիական",
   "budget.main.freshness.stale": "հնացած",

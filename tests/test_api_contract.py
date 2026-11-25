@@ -62,14 +62,14 @@ class OpenApiArtifactTests(unittest.TestCase):
         self.assertEqual(document["info"]["version"], "0.49.0")
         document["paths"].pop("/api/budget/account-credit-limit")
         schemas.pop("BudgetCreditLimitRequest")
+        schemas.pop("BudgetCreditLimitValue")
+        schemas.pop("BudgetAccountCreditLimit")
         schemas["BudgetAccount"]["properties"].pop("credit_limit")
         schemas["BudgetAccountChanged"]["properties"].pop("credit_limit")
-        ce_props = schemas["BudgetAnalyticsMonthlyBudgetCardExposure"]["properties"]
-        ce_props.pop("accounts")
-        schemas.pop("BudgetAnalyticsMonthlyBudgetCardExposureAccount")
-        ce_props["amount"] = {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Amount"}
-        self.assertEqual(set(ce_props["status"]["enum"]), {"available", "partial", "unavailable"})
-        ce_props["status"] = {"const": "unavailable", "title": "Status", "type": "string"}
+        mb_props = schemas["BudgetAnalyticsMonthlyBudget"]["properties"]
+        mb_props.pop("card_debt")
+        schemas.pop("BudgetAnalyticsMonthlyBudgetCardDebt")
+        schemas.pop("BudgetAnalyticsMonthlyBudgetCardDebtAccount")
         document["paths"]["/api/budget/analytics/monthly-budget"]["get"]["description"] = (
             "Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. "
             "Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, "
@@ -769,7 +769,8 @@ class TolerantResponseContractTests(unittest.TestCase):
         "NameRequest", "ResetPasswordRequest", "RoomIconRequest", "RuleInput", "SceneRequest",
         "SetDisabledRequest", "SetRoleRequest", "SettingsUpdate", "WholeHomeRequest",
         "CalendarCreateRequest", "CalendarUpdateRequest", "CalendarDeleteRequest",
-        "BudgetSelectionRequest", "BudgetKindRequest", "BudgetCreditLimitRequest", "BudgetConnectionStateRequest",
+        "BudgetSelectionRequest", "BudgetKindRequest", "BudgetCreditLimitRequest", "BudgetCreditLimitValue",
+        "BudgetConnectionStateRequest",
         "BudgetBackgroundSelectionRequest", "BudgetRefreshRequest", "BudgetConsentStartRequest", "BudgetConsentFlowRequest",
     }
 

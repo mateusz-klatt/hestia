@@ -312,23 +312,28 @@ class BudgetAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse((await confirmed.json())["account"]["selected"])
             card_version = (await confirmed.json())["account"]["control_version"]
             for bad_body in (
-                {"account_id": self.alice_id, "credit_limit": "0", "expected_version": card_version},
-                {"account_id": self.alice_id, "credit_limit": "10000000.01", "expected_version": card_version},
-                {"account_id": self.alice_id, "credit_limit": 10000, "expected_version": card_version},
+                {"account_id": self.alice_id, "credit_limit": {"amount": "0", "currency": "PLN"}, "expected_version": card_version},
+                {"account_id": self.alice_id, "credit_limit": {"amount": "10000000.01", "currency": "PLN"}, "expected_version": card_version},
+                {"account_id": self.alice_id, "credit_limit": {"amount": "1000", "currency": "pln"}, "expected_version": card_version},
+                {"account_id": self.alice_id, "credit_limit": "10000", "expected_version": card_version},
             ):
                 bad_limit = await self.post("account-credit-limit", bad_body)
                 self.assertEqual(bad_limit.status, 400)
-            missing_ver = await self.post("account-credit-limit", {"account_id": self.alice_id, "credit_limit": "10000"})
+            missing_ver = await self.post(
+                "account-credit-limit",
+                {"account_id": self.alice_id, "credit_limit": {"amount": "10000", "currency": "PLN"}},
+            )
             self.assertEqual(missing_ver.status, 409)
             api_contract.BudgetConflict.model_validate(await missing_ver.json())
             saved_limit = await self.post("account-credit-limit",
-                                          {"account_id": self.alice_id, "credit_limit": "10000.00",
+                                          {"account_id": self.alice_id,
+                                           "credit_limit": {"amount": "10000.00", "currency": "PLN"},
                                            "expected_version": card_version})
             self.assertEqual(saved_limit.status, 200)
             limit_payload = await saved_limit.json()
             api_contract.BudgetAccountSaved.model_validate(limit_payload)
-            self.assertEqual(limit_payload["account"]["credit_limit"], "10000")
-            self.assertEqual((await self.account())["credit_limit"], "10000")
+            self.assertEqual(limit_payload["account"]["credit_limit"], {"amount": "10000", "currency": "PLN"})
+            self.assertEqual((await self.account())["credit_limit"], {"amount": "10000", "currency": "PLN"})
             cleared_limit = await self.post("account-credit-limit",
                                             {"account_id": self.alice_id, "credit_limit": None,
                                              "expected_version": limit_payload["account"]["control_version"]})

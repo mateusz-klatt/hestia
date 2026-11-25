@@ -283,7 +283,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Plafond de crédit",
   "budget.main.creditLimitSave": "Enregistrer le plafond",
   "budget.main.creditLimitClear": "Effacer",
-  "budget.main.creditLimitInvalid": "Saisissez un montant supérieur à 0 et inférieur ou égal à 10 000 000.",
+  "budget.main.creditLimitInvalid": "Saisissez une devise à 3 lettres et un montant supérieur à 0 jusqu'à 10 000 000.",
   "budget.main.freshness.never": "pas encore téléchargé",
   "budget.main.freshness.fresh": "à jour",
   "budget.main.freshness.stale": "obsolète",

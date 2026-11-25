@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Kredito limitas",
   "budget.main.creditLimitSave": "Išsaugoti limitą",
   "budget.main.creditLimitClear": "Išvalyti",
-  "budget.main.creditLimitInvalid": "Įveskite sumą, didesnę nei 0 ir ne didesnę kaip 10 000 000.",
+  "budget.main.creditLimitInvalid": "Įveskite 3 raidžių valiutą ir sumą, didesnę nei 0 iki 10 000 000.",
   "budget.main.freshness.never": "dar neatsisiųsta",
   "budget.main.freshness.fresh": "atnaujinta",
   "budget.main.freshness.stale": "pasenę",

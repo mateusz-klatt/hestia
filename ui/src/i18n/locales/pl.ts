@@ -287,7 +287,7 @@ const pl: Partial<Messages> = {
   "budget.main.creditLimit": "Limit kredytowy",
   "budget.main.creditLimitSave": "Zapisz limit",
   "budget.main.creditLimitClear": "Wyczyść",
-  "budget.main.creditLimitInvalid": "Wpisz kwotę większą od 0 i nie większą niż 10 000 000.",
+  "budget.main.creditLimitInvalid": "Wpisz 3-literową walutę oraz kwotę większą od 0 i nie większą niż 10 000 000.",
   "budget.main.freshness.never": "jeszcze nie pobrano",
   "budget.main.freshness.fresh": "aktualne",
   "budget.main.freshness.stale": "nieaktualne",

@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Luottoraja",
   "budget.main.creditLimitSave": "Tallenna raja",
   "budget.main.creditLimitClear": "Tyhjennä",
-  "budget.main.creditLimitInvalid": "Syötä summa, joka on suurempi kuin 0 ja enintään 10 000 000.",
+  "budget.main.creditLimitInvalid": "Syötä 3-kirjaiminen valuutta ja summa, joka on suurempi kuin 0 ja enintään 10 000 000.",
   "budget.main.freshness.never": "ei vielä haettu",
   "budget.main.freshness.fresh": "ajan tasalla",
   "budget.main.freshness.stale": "vanhentunut",

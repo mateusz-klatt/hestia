@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "מסגרת אשראי",
   "budget.main.creditLimitSave": "שמירת מסגרת",
   "budget.main.creditLimitClear": "ניקוי",
-  "budget.main.creditLimitInvalid": "הזינו סכום גדול מ-0 ועד 10,000,000.",
+  "budget.main.creditLimitInvalid": "הזינו מטבע בן 3 אותיות וסכום גדול מ-0 ועד 10,000,000.",
   "budget.main.freshness.never": "טרם הורד",
   "budget.main.freshness.fresh": "מעודכן",
   "budget.main.freshness.stale": "לא מעודכן",

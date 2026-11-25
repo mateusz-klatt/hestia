@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Úverový limit",
   "budget.main.creditLimitSave": "Uložiť limit",
   "budget.main.creditLimitClear": "Vymazať",
-  "budget.main.creditLimitInvalid": "Zadajte sumu väčšiu ako 0 a najviac 10 000 000.",
+  "budget.main.creditLimitInvalid": "Zadajte trojpísmenovú menu a sumu väčšiu ako 0 až 10 000 000.",
   "budget.main.freshness.never": "zatiaľ nestiahnuté",
   "budget.main.freshness.fresh": "aktuálne",
   "budget.main.freshness.stale": "zastarané",

@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Kreditgrænse",
   "budget.main.creditLimitSave": "Gem grænse",
   "budget.main.creditLimitClear": "Ryd",
-  "budget.main.creditLimitInvalid": "Indtast et beløb større end 0 og højst 10.000.000.",
+  "budget.main.creditLimitInvalid": "Indtast en 3-bogstavsvaluta og et beløb større end 0 op til 10.000.000.",
   "budget.main.freshness.never": "endnu ikke hentet",
   "budget.main.freshness.fresh": "ajour",
   "budget.main.freshness.stale": "forældet",

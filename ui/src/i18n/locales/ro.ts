@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Limită de credit",
   "budget.main.creditLimitSave": "Salvează limita",
   "budget.main.creditLimitClear": "Șterge",
-  "budget.main.creditLimitInvalid": "Introduceți o sumă mai mare decât 0 și de cel mult 10.000.000.",
+  "budget.main.creditLimitInvalid": "Introduceți o monedă din 3 litere și o sumă mai mare decât 0 până la 10.000.000.",
   "budget.main.freshness.never": "încă nedescărcat",
   "budget.main.freshness.fresh": "la zi",
   "budget.main.freshness.stale": "învechit",

@@ -47,7 +47,7 @@ _OVERVIEW_MONEY = ("expenses", "refunds", "income", "net_spending")
 _BUDGET_KEYS = (
     "period", "start", "end", "cutoff", "current_month", "evaluated_at", "evaluation_date",
     "evaluation_timezone", "currency", "available_currencies", "configuration", "coverage",
-    "summary", "expected_income", "pace", "category_spend", "pass_through", "card_exposure",
+    "summary", "expected_income", "pace", "category_spend", "pass_through", "card_exposure", "card_debt",
 )
 _QUERY = {
     "access": frozenset(),
@@ -740,13 +740,15 @@ def _sanitize_budget(budget, book):
     coverage = dict(budget["coverage"])
     coverage["pending_row_keys"] = []
     safe["coverage"] = coverage
-    # Household shows aggregate card exposure status, amount and freshness date only, never per-account breakdown.
-    exposure = budget["card_exposure"]
-    if exposure is not None:
-        safe["card_exposure"] = {
-            "status": exposure["status"],
-            "amount": exposure["amount"],
-            "as_of_date": exposure["as_of_date"],
+    # Household keeps legacy card_exposure at 0.47.0 unavailable and exposes aggregate card_debt without per-account breakdown.
+    safe["card_exposure"] = budget["card_exposure"]
+    debt = budget["card_debt"]
+    if debt is not None:
+        safe["card_debt"] = {
+            "status": debt["status"],
+            "amount": debt["amount"],
+            "currency": debt["currency"],
+            "as_of_date": debt["as_of_date"],
         }
     safe["category_spend"] = [
         _sanitize_spend(row, book) for row in _folded_category_rows(budget["category_spend"], book)]

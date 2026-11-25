@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "Kortamörk",
   "budget.main.creditLimitSave": "Vista mörk",
   "budget.main.creditLimitClear": "Hreinsa",
-  "budget.main.creditLimitInvalid": "Sláðu inn upphæð hærri en 0 og að hámarki 10.000.000.",
+  "budget.main.creditLimitInvalid": "Sláðu inn 3 stafa gjaldmiðil og upphæð hærri en 0 allt að 10.000.000.",
   "budget.main.freshness.never": "ekki enn sótt",
   "budget.main.freshness.fresh": "uppfært",
   "budget.main.freshness.stale": "úrelt",

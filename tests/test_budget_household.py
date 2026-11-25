@@ -495,7 +495,7 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
                 session.add(db.BudgetComponent(account_id=self.alice_id, operation="balances", last_success=now))
             else:
                 comp.last_success = now
-        self.store.set_account_credit_limit("alice", self.alice_id, "10000", actor="alice")
+        self.store.set_account_credit_limit("alice", self.alice_id, {"amount": "10000", "currency": "PLN"}, actor="alice")
         with mock.patch.object(analytics_views.BudgetAnalyticsViews, "_now", return_value=now):
             owner_month = await (await self.client.get(
                 "/api/budget/analytics/monthly-budget", params={"period": PERIOD}, headers=self.headers("alice")
@@ -504,21 +504,30 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(spouse_res.status, 200)
         spouse_month = await spouse_res.json()
         api_contract.BudgetHouseholdMonthlyBudget.model_validate(spouse_month)
-        self.assertEqual(owner_month["card_exposure"], {
+        self.assertEqual(owner_month["card_exposure"], {"status": "unavailable", "amount": None, "as_of_date": None})
+        self.assertEqual(owner_month["card_debt"], {
             "status": "available",
             "amount": "100",
-            "as_of_date": "2026-11-22",
-            "accounts": [
-                {"account_id": self.alice_id, "debt": "100", "limit": "10000", "available": "9900", "as_of": "2026-11-22"}
-            ],
+            "currency": "PLN",
+            "as_of_date": "2026-11-21",
+            "accounts": [{
+                "account_id": self.alice_id,
+                "debt": "100",
+                "limit": "10000",
+                "available": "9900",
+                "currency": "PLN",
+                "as_of": "2026-11-21",
+            }],
         })
-        self.assertEqual(spouse_month["budget"]["card_exposure"], {
+        self.assertEqual(spouse_month["budget"]["card_exposure"], {"status": "unavailable", "amount": None, "as_of_date": None})
+        self.assertEqual(spouse_month["budget"]["card_debt"], {
             "status": "available",
             "amount": "100",
-            "as_of_date": "2026-11-22",
+            "currency": "PLN",
+            "as_of_date": "2026-11-21",
         })
-        self.assertNotIn("accounts", spouse_month["budget"]["card_exposure"])
-        encoded = json.dumps(spouse_month["budget"]["card_exposure"])
+        self.assertNotIn("accounts", spouse_month["budget"]["card_debt"])
+        encoded = json.dumps(spouse_month["budget"]["card_debt"])
         self.assertNotIn(self.alice_id, encoded)
         self.assertNotIn("10000", encoded)
         self.assertNotIn("9900", encoded)

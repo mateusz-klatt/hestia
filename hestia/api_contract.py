@@ -113,7 +113,7 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.46.0: additive 409 device_token_limit_reached response for new password-login device names at the active cap.
 # 0.47.0: additive parse_failed_reasons on BudgetReceiptGmailStatus and retry_parse_failed on BudgetReceiptGmailSyncRequest (zero migration).
 # 0.48.0: read-only bounded expansion of recurring calendar events into concrete instances.
-# 0.49.0: per-card credit_limit control (POST /api/budget/account-credit-limit, BudgetAccount.credit_limit) and real monthly budget card_exposure calculation.
+# 0.49.0: per-card credit_limit ({amount, currency}) control on accounts + additive card_debt on monthly budget (legacy card_exposure kept at 0.47.0 shape for Vesta).
 CONTRACT_VERSION = "0.49.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
@@ -1105,25 +1105,34 @@ class BudgetKindRequest(BaseModel):
     expected_version: BudgetVersion
 
 
-def _check_credit_limit(value: str) -> str:
-    from .budget.store import parse_credit_limit
-    parse_credit_limit(value)
+def _check_credit_limit_amount(value: str) -> str:
+    from .budget.store import parse_credit_limit_amount
+    parse_credit_limit_amount(value)
     return value
 
 
-BudgetCreditLimit = Annotated[
+BudgetCreditLimitAmount = Annotated[
     str,
     Field(min_length=1, max_length=80, pattern=r"^[0-9]+(?:\.[0-9]+)?$"),
-    AfterValidator(_check_credit_limit),
+    AfterValidator(_check_credit_limit_amount),
 ]
+BudgetCreditLimitCurrency = Annotated[str, Field(min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")]
+
+
+class BudgetCreditLimitValue(BaseModel):
+    """Positive decimal limit (> 0, <= 10,000,000) paired with its 3-letter ISO currency code."""
+
+    model_config = _STRICT
+    amount: BudgetCreditLimitAmount
+    currency: BudgetCreditLimitCurrency
 
 
 class BudgetCreditLimitRequest(BaseModel):
-    """Set or clear an owner-configured credit limit (> 0, <= 10,000,000) for card debt calculation."""
+    """Set or clear an owner-configured credit limit and currency for card debt calculation."""
 
     model_config = _STRICT
     account_id: BudgetId
-    credit_limit: BudgetCreditLimit | None
+    credit_limit: BudgetCreditLimitValue | None
     expected_version: BudgetVersion
 
 
@@ -1343,6 +1352,12 @@ class BudgetAccountDisplay(BaseModel):
     imported_at: float
 
 
+class BudgetAccountCreditLimit(BaseModel):
+    model_config = _READ
+    amount: str
+    currency: Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
+
+
 class BudgetAccount(BaseModel):
     """Owner-visible control metadata; opaque local IDs never reveal bank identities."""
 
@@ -1362,7 +1377,7 @@ class BudgetAccount(BaseModel):
     display: BudgetAccountDisplay | None = None
     observed_balance_currencies: list[str] = Field(default_factory=list,
         description="Sorted unique currencies from current stored API balances only; independent of declared display currency.")
-    credit_limit: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    credit_limit: Annotated[BudgetAccountCreditLimit | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 BudgetAttention = Literal["authorization", "invalid_session", "expired_session", "session_mismatch", "configuration"]
@@ -2797,22 +2812,31 @@ class BudgetAnalyticsMonthlyBudgetPassThrough(BaseModel):
     uncovered_mortgage: BudgetAnalyticsMonthlyBudgetMoney
 
 
-class BudgetAnalyticsMonthlyBudgetCardExposureAccount(BaseModel):
+class BudgetAnalyticsMonthlyBudgetCardExposure(BaseModel):
+    model_config = _READ
+    status: Literal["unavailable"]
+    amount: str | None
+    as_of_date: str | None
+
+
+class BudgetAnalyticsMonthlyBudgetCardDebtAccount(BaseModel):
     model_config = _READ
     account_id: str
     debt: BudgetAnalyticsMonthlyBudgetMoney
     limit: BudgetAnalyticsMonthlyBudgetMoney
     available: BudgetAnalyticsMonthlyBudgetMoney
+    currency: Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
     as_of: str | None
 
 
-class BudgetAnalyticsMonthlyBudgetCardExposure(BaseModel):
+class BudgetAnalyticsMonthlyBudgetCardDebt(BaseModel):
     model_config = _READ
     status: Literal["available", "partial", "unavailable"]
     amount: BudgetAnalyticsMonthlyBudgetMoney | None
+    currency: Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
     as_of_date: str | None
     accounts: Annotated[
-        list[BudgetAnalyticsMonthlyBudgetCardExposureAccount] | None,
+        list[BudgetAnalyticsMonthlyBudgetCardDebtAccount] | None,
         Field(default=None, json_schema_extra=_OMIT),
     ] = None
 
@@ -2838,6 +2862,10 @@ class BudgetAnalyticsMonthlyBudget(BaseModel):
     category_spend: list[BudgetAnalyticsMonthlyBudgetCategorySpend]
     pass_through: BudgetAnalyticsMonthlyBudgetPassThrough | None
     card_exposure: BudgetAnalyticsMonthlyBudgetCardExposure
+    card_debt: Annotated[
+        BudgetAnalyticsMonthlyBudgetCardDebt | None,
+        Field(default=None, json_schema_extra=_OMIT),
+    ] = None
 
 
 BudgetReceiptId = Annotated[str, Field(pattern=r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")]
@@ -4690,8 +4718,9 @@ def _analytics_paths():
             "Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. "
             "Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, "
             "unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates "
-            "(including cross-account salary matching), and spending pace. Card exposure computes total credit card debt as "
-            "max(0, credit_limit - ITAV) in the budget currency from owner-set limits and stored ITAV balances. "
+            "(including cross-account salary matching), and spending pace. Legacy card_exposure stays unavailable "
+            "for 0.47.0 compatibility; additive card_debt computes credit card debt as max(0, credit_limit - ITAV) "
+            "in the budget currency from owner-set limits and fresh ITAV balances. "
             "Makes no bank requests and no database writes."
         )),
         "monthly-budget/charts": ("Read the owner-private monthly budget dashboard and chart series", (

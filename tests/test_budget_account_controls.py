@@ -173,47 +173,95 @@ class BudgetAccountControlTests(AdvancingTime, unittest.TestCase):
         self.assertEqual(self.rows(db.BudgetAccountAudit), [])
 
     def test_credit_limit_lifecycle_validation_zero_amount_audit_and_cli_omission(self):
-        from hestia.budget.store import load_credit_limits, parse_credit_limit
+        from hestia.budget.store import load_credit_limits, parse_credit_limit, prune_orphan_credit_limits
 
         self.store.configure(fixtures.configuration())
         account_id = self.store.accounts("owner")[0]["id"]
         self.assertEqual(load_credit_limits(None, ()), {})
+        # Setting or clearing requires a confirmed credit_card account (savings / unconfirmed rejected).
         with self.assertRaises(BudgetStoreError):
-            self.store.set_account_credit_limit("owner", account_id, "10000", actor="operator")
+            self.store.set_account_credit_limit("owner", account_id, {"amount": "10000", "currency": "PLN"}, actor="operator")
+        with self.assertRaises(BudgetStoreError):
+            self.store.set_account_credit_limit("owner", account_id, None, actor="operator")
+        self.store.confirm_account_kind("owner", account_id, "savings", actor="operator")
+        with self.assertRaises(BudgetStoreError):
+            self.store.set_account_credit_limit("owner", account_id, None, actor="operator")
         self.store.confirm_account_kind("owner", account_id, "credit_card", actor="operator")
 
-        for bad in (None, "", "0", "0.00", "-10", "+10", "10000000.01", "1e5", 10000, True, "1" * 81):
+        for bad in (
+            None,
+            "10000",
+            {},
+            {"amount": "10000"},
+            {"currency": "PLN"},
+            {"amount": "10000", "currency": "pln"},
+            {"amount": "10000", "currency": "PL"},
+            {"amount": "", "currency": "PLN"},
+            {"amount": "0", "currency": "PLN"},
+            {"amount": "0.00", "currency": "PLN"},
+            {"amount": "-10", "currency": "PLN"},
+            {"amount": "+10", "currency": "PLN"},
+            {"amount": "10000000.01", "currency": "PLN"},
+            {"amount": "1e5", "currency": "PLN"},
+            {"amount": 10000, "currency": "PLN"},
+            {"amount": True, "currency": "PLN"},
+            {"amount": "1" * 81, "currency": "PLN"},
+        ):
             with self.subTest(bad=bad), self.assertRaises(BudgetStoreError):
                 parse_credit_limit(bad)
 
-        created = self.store.set_account_credit_limit("owner", account_id, "10000.00", actor="operator")
-        self.assertEqual(created["credit_limit"], "10000")
+        created = self.store.set_account_credit_limit(
+            "owner", account_id, {"amount": "10000.00", "currency": "PLN"}, actor="operator",
+        )
+        self.assertEqual(created["credit_limit"], {"amount": "10000", "currency": "PLN"})
         self.assertTrue(created["changed"])
         self.assertNotIn("credit_limit", self.store.accounts("owner")[0])
 
-        repeated = self.store.set_account_credit_limit("owner", account_id, "10000", actor="operator")
+        repeated = self.store.set_account_credit_limit(
+            "owner", account_id, {"amount": "10000", "currency": "PLN"}, actor="operator",
+        )
         self.assertFalse(repeated["changed"])
 
-        updated = self.store.set_account_credit_limit("owner", account_id, "12500.50", actor="operator")
+        updated = self.store.set_account_credit_limit(
+            "owner", account_id, {"amount": "12500.50", "currency": "EUR"}, actor="operator",
+        )
         self.assertTrue(updated["changed"])
-        self.assertEqual(updated["credit_limit"], "12500.5")
+        self.assertEqual(updated["credit_limit"], {"amount": "12500.5", "currency": "EUR"})
 
         cleared = self.store.set_account_credit_limit("owner", account_id, None, actor="operator")
         self.assertTrue(cleared["changed"])
         self.assertIsNone(cleared["credit_limit"])
         self.assertFalse(self.store.set_account_credit_limit("owner", account_id, None, actor="operator")["changed"])
 
+        # Switching a confirmed credit card with a limit to savings removes its AppMeta limit.
+        self.store.set_account_credit_limit("owner", account_id, {"amount": "5000", "currency": "PLN"}, actor="operator")
+        self.store.confirm_account_kind("owner", account_id, "savings", actor="operator")
+        with self.sessions.begin() as session:
+            self.assertEqual(load_credit_limits(session, [account_id]), {})
+        self.store.confirm_account_kind("owner", account_id, "credit_card", actor="operator")
+
+        # Orphan credit limit entries for non-existent accounts are cleaned up on configure/prune.
+        with self.sessions.begin() as session:
+            session.add(db.AppMeta(key="budget_account_credit_limit:deleted-acct", value='{"amount":"100","currency":"PLN"}'))
+            session.add(db.AppMeta(key=f"budget_account_credit_limit:{account_id}", value='{"amount":"100","currency":"PLN"}'))
+        self.store.configure(fixtures.configuration())
+        with self.sessions.begin() as session:
+            self.assertIsNone(session.get(db.AppMeta, "budget_account_credit_limit:deleted-acct"))
+            self.assertIsNotNone(session.get(db.AppMeta, f"budget_account_credit_limit:{account_id}"))
+            self.assertEqual(prune_orphan_credit_limits(session), 0)
+
         audits = [row for row in self.rows(db.BudgetAccountAudit) if row.field == "credit_limit"]
-        self.assertEqual(len(audits), 3)
+        self.assertEqual(len(audits), 4)
         for row in audits:
             self.assertNotIn("10000", row.old_value_json + row.new_value_json)
             self.assertNotIn("12500", row.old_value_json + row.new_value_json)
+            self.assertNotIn("5000", row.old_value_json + row.new_value_json)
             self.assertEqual(set(json.loads(row.old_value_json)), {"configured"})
             self.assertEqual(set(json.loads(row.new_value_json)), {"configured"})
 
         # Corrupted AppMeta value fails closed.
         key = f"budget_account_credit_limit:{account_id}"
-        for raw_bad in ("{bad", json.dumps({"other": "100"}), json.dumps({"amount": "0"})):
+        for raw_bad in ("{bad", json.dumps({"amount": "100"}), json.dumps({"amount": "0", "currency": "PLN"})):
             with self.sessions.begin() as session:
                 row = session.get(db.AppMeta, key)
                 if row is None:

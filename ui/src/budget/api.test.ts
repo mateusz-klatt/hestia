@@ -215,7 +215,7 @@ describe("budget api", () => {
     const fetchMock = respond(200, { ok: true });
     await budgetApi.setSelected(account({ control_version: 7 }), false);
     await budgetApi.setKind(account({ control_version: 8 }), "savings");
-    await budgetApi.setCreditLimit(account({ control_version: 9 }), "10000");
+    await budgetApi.setCreditLimit(account({ control_version: 9 }), { amount: "10000", currency: "PLN" });
     await budgetApi.setCreditLimit(account({ control_version: 10 }), null);
     await budgetApi.setPaused(connection, true);
     await budgetApi.setBackground(connection, true);
@@ -223,7 +223,7 @@ describe("budget api", () => {
     expect(bodies).toEqual([
       { account_id: "local-a", selected: false, expected_version: 7 },
       { account_id: "local-a", kind: "savings", expected_version: 8 },
-      { account_id: "local-a", credit_limit: "10000", expected_version: 9 },
+      { account_id: "local-a", credit_limit: { amount: "10000", currency: "PLN" }, expected_version: 9 },
       { account_id: "local-a", credit_limit: null, expected_version: 10 },
       { connection_id: "bank", paused: true, expected_version: 4 },
       { connection_id: "bank", enabled: true, expected_version: 4 },

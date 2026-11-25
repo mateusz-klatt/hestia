@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "حد الائتمان",
   "budget.main.creditLimitSave": "حفظ الحد",
   "budget.main.creditLimitClear": "مسح",
-  "budget.main.creditLimitInvalid": "أدخل مبلغًا أكبر من 0 وحتى 10,000,000.",
+  "budget.main.creditLimitInvalid": "أدخل رمز عملة من 3 أحرف ومبلغًا أكبر من 0 وحتى 10,000,000.",
   "budget.main.freshness.never": "لم يُنزّل بعد",
   "budget.main.freshness.fresh": "محدّث",
   "budget.main.freshness.stale": "قديم",

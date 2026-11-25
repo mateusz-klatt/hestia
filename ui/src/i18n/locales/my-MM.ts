@@ -285,7 +285,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "အကြွေးကန့်သတ်ချက်",
   "budget.main.creditLimitSave": "ကန့်သတ်ချက် သိမ်းရန်",
   "budget.main.creditLimitClear": "ရှင်းလင်းရန်",
-  "budget.main.creditLimitInvalid": "0 ထက်ကြီးပြီး 10,000,000 အထိ ပမာဏကို ထည့်သွင်းပါ။",
+  "budget.main.creditLimitInvalid": "စာလုံး ၃ လုံးပါ ငွေကြေးနှင့် 0 ထက်ကြီးပြီး 10,000,000 အထိ ပမာဏကို ထည့်ပါ။",
   "budget.main.freshness.never": "မဒေါင်းလုဒ်ရသေး",
   "budget.main.freshness.fresh": "နောက်ဆုံးအခြေအနေဖြစ်သည်",
   "budget.main.freshness.stale": "အချက်အလက်ဟောင်းနေသည်",

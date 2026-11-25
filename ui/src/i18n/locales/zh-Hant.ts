@@ -284,7 +284,7 @@ const messages: Partial<Messages> = {
   "budget.main.creditLimit": "信用額度",
   "budget.main.creditLimitSave": "儲存額度",
   "budget.main.creditLimitClear": "清除",
-  "budget.main.creditLimitInvalid": "請輸入大於 0 且不超過 10,000,000 的金額。",
+  "budget.main.creditLimitInvalid": "請輸入 3 碼幣別以及大於 0 至 10,000,000 的金額。",
   "budget.main.freshness.never": "尚未下載",
   "budget.main.freshness.fresh": "已是最新",
   "budget.main.freshness.stale": "資料過舊",

@@ -13,6 +13,8 @@ export type BudgetBalances = Schemas["BudgetBalances"];
 export type BudgetBalance = Schemas["BudgetBalance"];
 export type BudgetJob = Schemas["BudgetJob"];
 export type BudgetKind = Schemas["BudgetKindRequest"]["kind"];
+export type BudgetCreditLimit = Schemas["BudgetAccountCreditLimit"];
+export type BudgetCreditLimitValue = Schemas["BudgetCreditLimitValue"];
 export type BudgetSharedLimit = Schemas["BudgetSharedLimit"];
 export type BudgetComponentLimit = Schemas["BudgetComponentLimit"];
 export type BudgetLimit = BudgetSharedLimit | BudgetComponentLimit;
@@ -66,6 +68,17 @@ export function normalizeCreditLimitInput(raw: string): string | null {
   if (intVal === 0n && frac === "") return null;
   if (intVal > 10_000_000n || (intVal === 10_000_000n && frac !== "")) return null;
   return canonical;
+}
+
+/** Validate a 3-letter uppercase ISO currency code, or return null. */
+export function normalizeCreditCurrencyInput(raw: string): string | null {
+  const cleaned = raw.trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(cleaned) ? cleaned : null;
+}
+
+/** Default limit currency from stored limit, observed balance currency, display metadata, or PLN. */
+export function defaultCreditLimitCurrency(account: BudgetAccount): string {
+  return account.credit_limit?.currency ?? account.observed_balance_currencies?.[0] ?? account.display?.currency ?? "PLN";
 }
 
 const DECIMAL = /^(-?)(\d+)(?:\.(\d+))?$/;

@@ -245,13 +245,12 @@
           "credit_limit": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/BudgetAccountCreditLimit"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Credit Limit"
+            ]
           },
           "display": {
             "anyOf": [
@@ -368,13 +367,12 @@
           "credit_limit": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/BudgetAccountCreditLimit"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Credit Limit"
+            ]
           },
           "display": {
             "anyOf": [
@@ -462,6 +460,25 @@
           "changed"
         ],
         "title": "BudgetAccountChanged",
+        "type": "object"
+      },
+      "BudgetAccountCreditLimit": {
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "currency": {
+            "pattern": "^[A-Z]{3}$",
+            "title": "Currency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "currency"
+        ],
+        "title": "BudgetAccountCreditLimit",
         "type": "object"
       },
       "BudgetAccountDisplay": {
@@ -2901,6 +2918,16 @@
             "title": "Available Currencies",
             "type": "array"
           },
+          "card_debt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetCardDebt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "card_exposure": {
             "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetCardExposure"
           },
@@ -3018,13 +3045,13 @@
         "title": "BudgetAnalyticsMonthlyBudget",
         "type": "object"
       },
-      "BudgetAnalyticsMonthlyBudgetCardExposure": {
+      "BudgetAnalyticsMonthlyBudgetCardDebt": {
         "properties": {
           "accounts": {
             "anyOf": [
               {
                 "items": {
-                  "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetCardExposureAccount"
+                  "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetCardDebtAccount"
                 },
                 "type": "array"
               },
@@ -3057,6 +3084,11 @@
             ],
             "title": "As Of Date"
           },
+          "currency": {
+            "pattern": "^[A-Z]{3}$",
+            "title": "Currency",
+            "type": "string"
+          },
           "status": {
             "enum": [
               "available",
@@ -3070,12 +3102,13 @@
         "required": [
           "status",
           "amount",
+          "currency",
           "as_of_date"
         ],
-        "title": "BudgetAnalyticsMonthlyBudgetCardExposure",
+        "title": "BudgetAnalyticsMonthlyBudgetCardDebt",
         "type": "object"
       },
-      "BudgetAnalyticsMonthlyBudgetCardExposureAccount": {
+      "BudgetAnalyticsMonthlyBudgetCardDebtAccount": {
         "properties": {
           "account_id": {
             "title": "Account Id",
@@ -3097,6 +3130,11 @@
             "title": "Available",
             "type": "string"
           },
+          "currency": {
+            "pattern": "^[A-Z]{3}$",
+            "title": "Currency",
+            "type": "string"
+          },
           "debt": {
             "maxLength": 192,
             "title": "Debt",
@@ -3113,9 +3151,48 @@
           "debt",
           "limit",
           "available",
+          "currency",
           "as_of"
         ],
-        "title": "BudgetAnalyticsMonthlyBudgetCardExposureAccount",
+        "title": "BudgetAnalyticsMonthlyBudgetCardDebtAccount",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudgetCardExposure": {
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount"
+          },
+          "as_of_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of Date"
+          },
+          "status": {
+            "const": "unavailable",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "amount",
+          "as_of_date"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudgetCardExposure",
         "type": "object"
       },
       "BudgetAnalyticsMonthlyBudgetCategoryLabel": {
@@ -8327,7 +8404,7 @@
       },
       "BudgetCreditLimitRequest": {
         "additionalProperties": false,
-        "description": "Set or clear an owner-configured credit limit (> 0, <= 10,000,000) for card debt calculation.",
+        "description": "Set or clear an owner-configured credit limit and currency for card debt calculation.",
         "properties": {
           "account_id": {
             "maxLength": 128,
@@ -8338,16 +8415,12 @@
           "credit_limit": {
             "anyOf": [
               {
-                "maxLength": 80,
-                "minLength": 1,
-                "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
-                "type": "string"
+                "$ref": "#/components/schemas/BudgetCreditLimitValue"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Credit Limit"
+            ]
           },
           "expected_version": {
             "minimum": 1,
@@ -8361,6 +8434,32 @@
           "expected_version"
         ],
         "title": "BudgetCreditLimitRequest",
+        "type": "object"
+      },
+      "BudgetCreditLimitValue": {
+        "additionalProperties": false,
+        "description": "Positive decimal limit (> 0, <= 10,000,000) paired with its 3-letter ISO currency code.",
+        "properties": {
+          "amount": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Amount",
+            "type": "string"
+          },
+          "currency": {
+            "maxLength": 3,
+            "minLength": 3,
+            "pattern": "^[A-Z]{3}$",
+            "title": "Currency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "currency"
+        ],
+        "title": "BudgetCreditLimitValue",
         "type": "object"
       },
       "BudgetError": {
@@ -17999,7 +18098,7 @@
     },
     "/api/budget/analytics/monthly-budget": {
       "get": {
-        "description": "Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates (including cross-account salary matching), and spending pace. Card exposure computes total credit card debt as max(0, credit_limit - ITAV) in the budget currency from owner-set limits and stored ITAV balances. Makes no bank requests and no database writes.",
+        "description": "Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates (including cross-account salary matching), and spending pace. Legacy card_exposure stays unavailable for 0.47.0 compatibility; additive card_debt computes credit card debt as max(0, credit_limit - ITAV) in the budget currency from owner-set limits and fresh ITAV balances. Makes no bank requests and no database writes.",
         "operationId": "getBudgetAnalyticsMonthlyBudget",
         "parameters": [
           {
