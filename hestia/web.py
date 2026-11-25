@@ -637,6 +637,12 @@ def _envelope_matches_state(carrier: str, envelope: auth.SessionEnvelope, auth_s
     return envelope.version == 1
 
 
+def _unauthenticated_session(request):
+    if (request.method, request.path) == ("POST", device_token.EXCHANGE_PATH):
+        return _native_session_required()
+    return _empty(HTTPStatus.UNAUTHORIZED)
+
+
 @web.middleware
 async def _auth_middleware(request, handler):
     """Authenticate + authorize requests across legacy and active session/policy bridge phases."""
@@ -700,7 +706,7 @@ async def _auth_middleware(request, handler):
                 return _incompatible_bridge_response()
         if redeem_cookie:
             return await handler(request)
-        return _empty(HTTPStatus.UNAUTHORIZED)
+        return _unauthenticated_session(request)
     try:
         auth_state = await asyncio.to_thread(store_sql.load_auth_state, envelope.username)
     except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
@@ -712,7 +718,7 @@ async def _auth_middleware(request, handler):
     ):
         if redeem_cookie:
             return await handler(request)
-        return _empty(HTTPStatus.UNAUTHORIZED)
+        return _unauthenticated_session(request)
     request[_USER_KEY] = envelope.username
     request[_ROLE_KEY] = auth_state.role
     request[_SESSION_CONTEXT_KEY] = ValidatedSessionContext(
@@ -954,6 +960,10 @@ def _qr_error(status: int, code: str, *, retry: "int | None" = None):
     return response
 
 
+def _native_session_required():
+    return _qr_error(HTTPStatus.UNAUTHORIZED, "native_session_required")
+
+
 def _qr_configured_origin() -> "str | None":
     return _canonical_https_origin(os.environ.get("HESTIA_PUBLIC_ORIGIN"), allow_trailing_slash=True)
 
@@ -997,7 +1007,7 @@ async def _qr_code(request):
         return _qr_error(HTTPStatus.SERVICE_UNAVAILABLE, "auth_origin_unavailable")
     body, error = await _read_json_body(request, reject_duplicates=True)
     if error:
-        return body
+        return _qr_error(body.status, "qr_invalid_request")
     supplied = _canonical_https_origin(body.get("origin")) if isinstance(body, dict) and set(body) == {"origin"} else None
     origins = request.headers.getall("Origin", [])
     if supplied != configured or len(origins) != 1 or _canonical_https_origin(origins[0]) != configured:
@@ -1031,7 +1041,7 @@ async def _qr_redeem(request):
         return _qr_error(HTTPStatus.TOO_MANY_REQUESTS, "qr_rate_limited", retry=retry)
     body, error = await _read_json_body(request, reject_duplicates=True)
     if error:
-        return body
+        return _qr_error(body.status, "qr_invalid_request")
     if not isinstance(body, dict) or set(body) != {"origin", "code"}:
         return _qr_error(HTTPStatus.UNAUTHORIZED, "qr_code_invalid")
     if body["origin"] != configured or not _qr_public_transport(request, configured):
@@ -1060,21 +1070,22 @@ async def _device_exchange(request):
         or ctx.purpose not in {auth.SESSION_PURPOSE_NATIVE, auth.SESSION_PURPOSE_NATIVE_QR}
         or ctx.session_phase != store_sql.SESSION_PHASE_V2
     ):
-        return _qr_error(HTTPStatus.UNAUTHORIZED, "native_session_required")
+        return _native_session_required()
     if not device_token.budget_http_enabled():
         return _qr_error(HTTPStatus.NOT_FOUND, "budget_disabled")
     if not device_token.receipts_enabled():
         return _qr_error(HTTPStatus.NOT_FOUND, "budget_receipts_disabled")
+    invalid_request = "budget_invalid_request"
     body, error = await _read_json_body(request, 4096, reject_duplicates=True)
     if error:
-        return body
+        return _qr_error(body.status, invalid_request)
     if not _session_credential_current(ctx):
-        return _qr_error(HTTPStatus.UNAUTHORIZED, "native_session_required")
+        return _native_session_required()
     if not isinstance(body, dict) or not set(body) <= {"device_name", "prior_token"} or "device_name" not in body:
-        return _qr_error(HTTPStatus.BAD_REQUEST, "budget_invalid_request")
+        return _qr_error(HTTPStatus.BAD_REQUEST, invalid_request)
     prior = body.get("prior_token")
     if prior is not None and (not isinstance(prior, str) or not prior):
-        return _qr_error(HTTPStatus.BAD_REQUEST, "budget_invalid_request")
+        return _qr_error(HTTPStatus.BAD_REQUEST, invalid_request)
     try:
         result = await asyncio.to_thread(
             lambda: device_token.open_store(session_secret=_SESSION_SECRET).exchange(

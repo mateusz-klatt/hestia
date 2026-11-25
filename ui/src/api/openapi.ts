@@ -1415,7 +1415,7 @@ export interface paths {
         put?: never;
         /**
          * Validate exact line and total identities, review an optional bank link; JSON body cap 128 KiB.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite users backend and a browser cookie with exact Origin or a receipts-capable device token. Permissions apply to the target ledger and may be delegated. With budget.receipts.add, a caller can finalize their own draft. Other drafts and saved receipts require budget.receipts.edit. Changing a bank link requires budget.receipts.match. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["confirmBudgetReceipt"];
         delete?: never;
@@ -1435,7 +1435,7 @@ export interface paths {
         put?: never;
         /**
          * Delete receipt lines before their owned receipt using expected_version CAS.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite users backend and a browser cookie with exact Origin or a receipts-capable device token. Permissions apply to the target ledger and may be delegated. With budget.receipts.add, a caller can discard their own draft. Other drafts and saved receipts require budget.receipts.edit. Deleting a linked receipt also requires budget.receipts.match. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["deleteBudgetReceipt"];
         delete?: never;
@@ -1694,8 +1694,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Keyset-page owner receipts with filters in the JSON body, never URL query parameters.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         * Keyset-page receipts on the target ledger using filters in the JSON body.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite users backend and a browser cookie with exact Origin or a receipts-capable device token. Permissions apply to the target ledger and may be delegated. Requires budget.receipts.view. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["listBudgetReceipts"];
         delete?: never;
@@ -1715,7 +1715,7 @@ export interface paths {
         put?: never;
         /**
          * Paste Live Text, redact PAN data and create a 48-hour draft; JSON body cap 48 KiB.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite users backend and a browser cookie with exact Origin or a receipts-capable device token. Permissions apply to the target ledger and may be delegated. Requires budget.receipts.add. Bank candidates are available with budget.receipts.match. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["parseBudgetReceiptText"];
         delete?: never;
@@ -1734,8 +1734,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Search owner receipts with the query in the JSON body, never reverse-proxy URL logs.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         * Search receipts on the target ledger with the query in the JSON body.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite users backend and a browser cookie with exact Origin or a receipts-capable device token. Permissions apply to the target ledger and may be delegated. Requires budget.receipts.view. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["searchBudgetReceipts"];
         delete?: never;
@@ -8125,7 +8125,7 @@ export interface operations {
                     "application/json": components["schemas"]["AuthError"];
                 };
             };
-            /** @description missing, stale, or non-native session */
+            /** @description missing, stale, or non-native session (native_session_required) */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -8143,8 +8143,44 @@ export interface operations {
                     "application/json": components["schemas"]["AuthError"];
                 };
             };
+            /** @description request body read timed out */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
             /** @description active slot limit or rejected prior_token proof */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Content-Length is required */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description request body exceeds the byte limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Content-Type must be application/json */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8197,7 +8233,7 @@ export interface operations {
                     "application/json": components["schemas"]["QrCodeResult"];
                 };
             };
-            /** @description origin mismatch or an origin over 45 bytes */
+            /** @description invalid JSON (qr_invalid_request), origin mismatch, or an origin over 45 bytes */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -8217,6 +8253,42 @@ export interface operations {
             };
             /** @description native bearer is not a browser session */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description request body read timed out */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Content-Length is required */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description request body exceeds the byte limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Content-Type must be application/json */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8257,7 +8329,7 @@ export interface operations {
                     "application/json": components["schemas"]["QrRedeemSuccess"];
                 };
             };
-            /** @description ambiguous credentials or origin mismatch */
+            /** @description invalid JSON (qr_invalid_request), ambiguous credentials, or origin mismatch */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -8268,6 +8340,42 @@ export interface operations {
             };
             /** @description invalid, expired, consumed, or stale code */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description request body read timed out */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Content-Length is required */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description request body exceeds the byte limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Content-Type must be application/json */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14458,7 +14566,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stale expected_version (budget_receipt_conflict), the bank transaction is already linked (budget_receipt_tx_already_linked), or the candidate token no longer matches the owner, transaction, dates and merchant evidence shown at preview (budget_receipt_stale_source). A missing SQLite users backend also returns 409 (budget_requires_sqlite_users). */
+            /** @description Stale expected_version (budget_receipt_conflict), the bank transaction is already linked (budget_receipt_tx_already_linked), or the candidate token no longer matches the owner, transaction, dates and merchant evidence shown at preview (budget_receipt_stale_source). Repeating confirmation of one's own draft without budget.receipts.edit returns already_submitted. A missing SQLite users backend also returns 409 (budget_requires_sqlite_users). */
             409: {
                 headers: {
                     [name: string]: unknown;

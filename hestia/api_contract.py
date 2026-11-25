@@ -3908,6 +3908,12 @@ def build_openapi() -> dict:
     so the checked-in ``docs/api/openapi.json`` stays byte-stable across regenerations."""
     err = {"content": {_APP_JSON: {"schema": _ref("ControlError")}}}
     auth_err = {"content": {_APP_JSON: {"schema": _ref("AuthError")}}}
+    auth_body_errors = {
+        "408": {"description": "request body read timed out", **auth_err},
+        "411": {"description": "Content-Length is required", **auth_err},
+        "413": {"description": "request body exceeds the byte limit", **auth_err},
+        "415": {"description": "Content-Type must be application/json", **auth_err},
+    }
     doc = {
         "openapi": "3.1.0",
         "info": {
@@ -4168,9 +4174,11 @@ def build_openapi() -> dict:
                     "requestBody": {"required": True,
                                     "content": {_APP_JSON: {"schema": _ref("QrCodeRequest")}}},
                     "responses": {
+                        **auth_body_errors,
                         "200": {"description": "the QR payload",
                                 "content": {_APP_JSON: {"schema": _ref("QrCodeResult")}}},
-                        "400": {"description": "origin mismatch or an origin over 45 bytes", **auth_err},
+                        "400": {"description": "invalid JSON (qr_invalid_request), origin mismatch, or an origin "
+                                               "over 45 bytes", **auth_err},
                         "401": {"description": "browser session missing or requiring upgrade", **auth_err},
                         "403": {"description": "native bearer is not a browser session", **auth_err},
                         "503": {"description": "HTTPS public origin unavailable", **auth_err},
@@ -4185,9 +4193,11 @@ def build_openapi() -> dict:
                     "requestBody": {"required": True,
                                     "content": {_APP_JSON: {"schema": _ref("QrRedeemRequest")}}},
                     "responses": {
+                        **auth_body_errors,
                         "200": {"description": "native session issued",
                                 "content": {_APP_JSON: {"schema": _ref("QrRedeemSuccess")}}},
-                        "400": {"description": "ambiguous credentials or origin mismatch", **auth_err},
+                        "400": {"description": "invalid JSON (qr_invalid_request), ambiguous credentials, or "
+                                               "origin mismatch", **auth_err},
                         "401": {"description": "invalid, expired, consumed, or stale code", **auth_err},
                         "429": {"description": "redemption throttled", **auth_err,
                                 "headers": {"Retry-After": {"schema": {"type": "string"}}}},
@@ -4203,10 +4213,12 @@ def build_openapi() -> dict:
                     "requestBody": {"required": True,
                                     "content": {_APP_JSON: {"schema": _ref("AuthDeviceTokenRequest")}}},
                     "responses": {
+                        **auth_body_errors,
                         "200": {"description": "device credential issued",
                                 "content": {_APP_JSON: {"schema": _ref("AuthDeviceTokenResult")}}},
                         "400": {"description": "invalid device name or request", **auth_err},
-                        "401": {"description": "missing, stale, or non-native session", **auth_err},
+                        "401": {"description": "missing, stale, or non-native session (native_session_required)",
+                                **auth_err},
                         "403": {"description": "no eligible live receipt/device target", **auth_err},
                         "409": {"description": "active slot limit or rejected prior_token proof", **auth_err},
                     },
@@ -4610,31 +4622,39 @@ def _receipt_paths():
     writes = (
         ("parse-text", "parseBudgetReceiptText", "BudgetReceiptParseTextRequest", "BudgetReceiptParseResult",
          "Paste Live Text, redact PAN data and create a 48-hour draft; JSON body cap 48 KiB.",
+         "Requires budget.receipts.add. Bank candidates are available with budget.receipts.match.",
          "SQLite users backend is required (budget_requires_sqlite_users).",
          "JSON body exceeds 49152 bytes, or the owner already has 20 active drafts (budget_receipt_quota_exceeded)."),
         ("confirm", "confirmBudgetReceipt", "BudgetReceiptConfirmRequest", "BudgetReceiptConfirmResult",
          "Validate exact line and total identities, review an optional bank link; JSON body cap 128 KiB.",
+         "With budget.receipts.add, a caller can finalize their own draft. Other drafts and saved receipts "
+         "require budget.receipts.edit. Changing a bank link requires budget.receipts.match.",
          "Stale expected_version (budget_receipt_conflict), the bank transaction is already linked "
          "(budget_receipt_tx_already_linked), or the candidate token no longer matches the owner, transaction, "
-         "dates and merchant evidence shown at preview (budget_receipt_stale_source). A missing SQLite users backend "
+         "dates and merchant evidence shown at preview (budget_receipt_stale_source). Repeating confirmation of "
+         "one's own draft without budget.receipts.edit returns already_submitted. A missing SQLite users backend "
          "also returns 409 (budget_requires_sqlite_users).",
          "JSON body exceeds 131072 bytes."),
         ("list", "listBudgetReceipts", "BudgetReceiptListRequest", "BudgetReceiptListResult",
-         "Keyset-page owner receipts with filters in the JSON body, never URL query parameters.",
+         "Keyset-page receipts on the target ledger using filters in the JSON body.",
+         "Requires budget.receipts.view.",
          "SQLite users backend is required (budget_requires_sqlite_users).",
          "JSON body exceeds 16384 bytes."),
         ("search", "searchBudgetReceipts", "BudgetReceiptSearchRequest", "BudgetReceiptListResult",
-         "Search owner receipts with the query in the JSON body, never reverse-proxy URL logs.",
+         "Search receipts on the target ledger with the query in the JSON body.",
+         "Requires budget.receipts.view.",
          "SQLite users backend is required (budget_requires_sqlite_users).",
          "JSON body exceeds 16384 bytes."),
         ("delete", "deleteBudgetReceipt", "BudgetReceiptDeleteRequest", "BudgetReceiptDeleteResult",
          "Delete receipt lines before their owned receipt using expected_version CAS.",
+         "With budget.receipts.add, a caller can discard their own draft. Other drafts and saved receipts "
+         "require budget.receipts.edit. Deleting a linked receipt also requires budget.receipts.match.",
          "Stale expected_version (budget_receipt_conflict). A missing SQLite users backend also returns 409 "
          "(budget_requires_sqlite_users).",
          "JSON body exceeds 16384 bytes."),
     )
     paths = {}
-    for name, operation, request, response, summary, conflict, too_large in writes:
+    for name, operation, request, response, summary, access, conflict, too_large in writes:
         responses = _budget_responses(response)
         responses["401"] = _receipt_error(_DEVICE_UNAUTHENTICATED)
         responses["409"] = _receipt_error(conflict)
@@ -4643,9 +4663,12 @@ def _receipt_paths():
         responses["415"] = _receipt_error("Content-Type must be application/json.")
         paths[prefix + name] = {"post": {
             "operationId": operation, "summary": summary,
-            "description": ("Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's "
-                            "browser cookie with exact Origin, or a receipts device token. " + _RECEIPT_AMBIGUITY +
-                            " 411 means Content-Length is required and 415 means Content-Type must be application/json."),
+            "description": (
+                "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite users backend and a "
+                "browser cookie with exact Origin or a receipts-capable device token. Permissions apply "
+                f"to the target ledger and may be delegated. {access} {_RECEIPT_AMBIGUITY} "
+                "411 means Content-Length is required and 415 means Content-Type must be application/json."
+            ),
             "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref(request)}}},
             "responses": responses,
         }}

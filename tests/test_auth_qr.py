@@ -265,10 +265,12 @@ class QrLoginWebTests(unittest.IsolatedAsyncioTestCase):
             **self._browser_headers(), "Content-Type": "application/json",
         })
         self.assertEqual(malformed_issue.status, 400)
+        self.assertEqual(await malformed_issue.json(), {"error": {"code": "qr_invalid_request"}})
         malformed_redeem = await self._post_redeem( data="{", headers={
             "Content-Type": "application/json",
         })
         self.assertEqual(malformed_redeem.status, 400)
+        self.assertEqual(await malformed_redeem.json(), {"error": {"code": "qr_invalid_request"}})
         with mock.patch.object(web, "_AUTH_ENABLED", False):
             disabled_features = await (await self.client.get("/api/auth/features")).json()
             self.assertIsNone(disabled_features["qr_origin"])
@@ -302,6 +304,22 @@ class QrLoginWebTests(unittest.IsolatedAsyncioTestCase):
             features = await (await self.client.get("/api/auth/features")).json()
             self.assertIsNone(features["qr_origin"])
             self.assertNotIn("qr_login", features["features"])
+
+    async def test_duplicate_json_fields_use_qr_error_envelope(self):
+        headers = {"Content-Type": "application/json"}
+        issue = await self.client.post(
+            auth_qr.CODE_PATH,
+            data='{"origin":"https://different.example","origin":"https://hestia.example"}',
+            headers={**self._browser_headers(), **headers},
+        )
+        redeem = await self._post_redeem(
+            data='{"origin":"https://hestia.example","code":"bad","code":"bad"}',
+            headers=headers,
+        )
+        for response in (issue, redeem):
+            self.assertEqual(response.status, 400)
+            self.assertEqual(await response.json(), {"error": {"code": "qr_invalid_request"}})
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
 
     async def test_expiry_during_upload_and_auth_off_cannot_issue(self):
         now = web._now()

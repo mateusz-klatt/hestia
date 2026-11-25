@@ -335,6 +335,7 @@ class DeviceExchangeWebTests(unittest.IsolatedAsyncioTestCase):
             "Authorization": f"Bearer {self.token}", "Content-Type": "application/json",
         })
         self.assertEqual(malformed.status, 400)
+        self.assertEqual(await malformed.json(), {"error": {"code": "budget_invalid_request"}})
         from hestia.budget.views import BudgetUsersBackendRequired
         with mock.patch.object(device_token, "open_store", side_effect=BudgetUsersBackendRequired):
             unavailable = await self.client.post(device_token.EXCHANGE_PATH, json={"device_name": "Vesta"},
@@ -365,6 +366,25 @@ class DeviceExchangeWebTests(unittest.IsolatedAsyncioTestCase):
             disabled = await self.client.post(device_token.EXCHANGE_PATH, json={"device_name": "Vesta"},
                 headers={"Authorization": f"Bearer {self.token}"})
             self.assertEqual(disabled.status, 404)
+
+    async def test_missing_expired_and_stale_native_sessions_use_exchange_error_envelope(self):
+        expired = auth.make_session(
+            "owner", now=web._now() - 60, secret=self.secret, ttl=30,
+            generation=0, purpose=auth.SESSION_PURPOSE_NATIVE,
+        )
+        store_sql.set_user_db("owner", auth.hash_password("updated password"), path=self.path)
+        for case, headers in (
+            ("missing", {}),
+            ("expired", {"Authorization": f"Bearer {expired}"}),
+            ("stale generation", {"Authorization": f"Bearer {self.token}"}),
+        ):
+            with self.subTest(case=case):
+                response = await self.client.post(
+                    device_token.EXCHANGE_PATH, json={"device_name": "Vesta"}, headers=headers,
+                )
+                self.assertEqual(response.status, 401)
+                self.assertEqual(await response.json(), {"error": {"code": "native_session_required"}})
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
 
     async def test_native_expiry_during_upload_cannot_issue(self):
         expiring = auth.make_session(
