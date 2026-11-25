@@ -349,6 +349,7 @@ _OWNER_ONLY_ROUTES = frozenset({
         ("GET", "/api/budget/jobs"),
         ("POST", "/api/budget/account-selection"),
         ("POST", "/api/budget/account-kind"),
+        ("POST", "/api/budget/account-credit-limit"),
         ("POST", "/api/budget/connection-state"),
         ("POST", "/api/budget/background-selection"),
         ("POST", "/api/budget/refresh"),

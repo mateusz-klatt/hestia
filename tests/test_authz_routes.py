@@ -363,10 +363,12 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         self.assertEqual(await response.json(), {
-            "auth_contract": 2, "features": ["capabilities"], "qr_origin": None,
+            "auth_contract": 2, "features": ["capabilities", "calendar_instances"], "qr_origin": None,
         })
 
-        app = web.make_app(SimpleNamespace())
+        app = aiohttp_web.Application()
+        response = await web._auth_features(make_mocked_request("GET", "/api/auth/features", app=app))
+        self.assertEqual(json.loads(response.body)["features"], ["capabilities"])
 
         async def instances(_request):
             return aiohttp_web.json_response({"enabled": False})

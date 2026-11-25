@@ -16652,7 +16652,7 @@
           }
         },
         "summary": "Set or clear one owned card account's credit limit",
-        "x-required-permission": "ioc.configure",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },

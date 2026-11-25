@@ -60,6 +60,11 @@ class OpenApiArtifactTests(unittest.TestCase):
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
         self.assertEqual(document["info"]["version"], "0.50.0")
+        credit_limit_post = document["paths"]["/api/budget/account-credit-limit"]["post"]
+        self.assertEqual(credit_limit_post["x-required-permission"], "owner_only")
+        instances_get = document["paths"]["/api/calendars/instances"]["get"]
+        self.assertEqual(instances_get["x-required-role"], "viewer")
+        self.assertEqual(instances_get["x-required-permission"], "calendar.view")
         document["paths"].pop("/api/me/capabilities")
         document["paths"].pop("/api/auth/features")
         for name in (
@@ -70,8 +75,6 @@ class OpenApiArtifactTests(unittest.TestCase):
             for operation in operations.values():
                 operation.pop("x-required-permission")
         document["info"]["version"] = "0.49.0"
-        credit_limit_post = document["paths"]["/api/budget/account-credit-limit"]["post"]
-        self.assertEqual(credit_limit_post["x-required-permission"], "owner_only")
         document["paths"].pop("/api/budget/account-credit-limit")
         schemas.pop("BudgetCreditLimitRequest")
         schemas.pop("BudgetCreditLimitValue")
@@ -90,9 +93,6 @@ class OpenApiArtifactTests(unittest.TestCase):
             "Makes no bank requests and no database writes."
         )
         document["info"]["version"] = "0.48.0"
-        instances_get = document["paths"]["/api/calendars/instances"]["get"]
-        self.assertEqual(instances_get["x-required-role"], "viewer")
-        self.assertEqual(instances_get["x-required-permission"], "calendar.view")
         del document["paths"]["/api/calendars/instances"]
         for name in ("CalendarInstances", "CalendarExpandedInstance"):
             del schemas[name]
