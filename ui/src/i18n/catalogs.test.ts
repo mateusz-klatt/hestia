@@ -153,6 +153,20 @@ const identicalStrings: Partial<Record<MessageKey, IdenticalString>> = {
   "budget.recurring.account": { value: "Account", locales: ["fil"] },
   "budget.quarantine.account": { value: "Account", locales: ["fil"] },
   "budget.forecast.account": { value: "Account", locales: ["fil"] },
+  "budget.receipts.status": { value: "Status", locales: ["pl", "da", "de", "pt", "nl", "sv", "no", "hr", "bs", "id", "ms"] },
+  "budget.receipts.date": { value: "Date", locales: ["fr"] },
+  "budget.receipts.total": { value: "Total", locales: ["fr", "es", "pt", "ro"] },
+  "budget.receipts.open": { value: "Details", locales: ["de", "nl"] },
+  "budget.receipts.version": { value: "Version {version}", locales: ["da", "de", "fr", "sv"] },
+  "budget.receipts.documentKind.invoice": { value: "Invoice", locales: ["fil"] },
+  "budget.receipts.sourceKinds.cloud_ai": { value: "Cloud OCR", locales: ["fil"] },
+  "budget.receipts.receiptKind.refund": { value: "Refund", locales: ["fil"] },
+  "budget.receipts.paymentMethods.card": { value: "Card", locales: ["fil", "ro"] },
+  "budget.receipts.paymentMethods.blik": { value: "BLIK", locales: "all" },
+  "budget.receipts.paymentMethods.cash": { value: "Cash", locales: ["fil"] },
+  "budget.receipts.lineKinds.item": { value: "Item", locales: ["fil", "id", "ms", "pt"] },
+  "budget.receipts.nip": { value: "Tax ID (NIP)", locales: ["fil"] },
+  "budget.receipts.linkedAccount": { value: "Account: {account}", locales: ["fil"] },
 };
 
 function placeholders(message: string): string[] {
@@ -161,21 +175,9 @@ function placeholders(message: string): string[] {
   return [...new Set(message.match(/\{[^{}]*\}/g) ?? [])].sort();
 }
 
-// Pending Codex translation for receipts v1e. Locales without the label use the English fallback.
-const pendingReceiptLabel = "budget.receipts.documentKind.payment_confirmation" satisfies MessageKey;
-
-function mayOmitTranslation(locale: Locale, key: string): boolean {
-  return key === pendingReceiptLabel && locale !== "en" && locale !== "pl";
-}
-
 describe("translation catalogs", () => {
   it("ships exactly one catalog for every supported locale", () => {
     expect(Object.keys(catalogs).sort()).toEqual(LOCALES.map((locale) => `./locales/${locale}.ts`).sort());
-  });
-
-  it("removes the pending receipt label exception once translation is complete", () => {
-    expect(LOCALES.some((locale) => mayOmitTranslation(locale, pendingReceiptLabel)
-      && catalogs[`./locales/${locale}.ts`]?.[pendingReceiptLabel] === undefined)).toBe(true);
   });
 
   it("keeps identical-string exceptions explicit and current", () => {
@@ -193,14 +195,12 @@ describe("translation catalogs", () => {
     const messages = catalogs[`./locales/${locale}.ts`] ?? {};
 
     it("has every required source key and no extra keys", () => {
-      const expected = sourceKeys.filter((key) => key in messages || !mayOmitTranslation(locale, key));
-      expect(Object.keys(messages).sort()).toEqual(expected);
+      expect(Object.keys(messages).sort()).toEqual(sourceKeys);
     });
 
     it("has non-empty messages with the source placeholder sets", () => {
       for (const [key, source] of Object.entries(en)) {
         const message = messages[key];
-        if (message === undefined && mayOmitTranslation(locale, key)) continue;
         expect(typeof message, key).toBe("string");
         expect(message?.trim(), key).not.toBe("");
         expect(placeholders(message ?? ""), key).toEqual(placeholders(source));
