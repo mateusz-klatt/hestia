@@ -217,7 +217,7 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
       return;
     }
     setAuthorization(result.data);
-    setDeviceAccess(result.data.own_budget?.can_manage_devices === true);
+    setDeviceAccess(result.data.own_budget.can_manage_devices);
   }, [api, principal, barrier, invalidate]);
 
   const deviceBarrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
