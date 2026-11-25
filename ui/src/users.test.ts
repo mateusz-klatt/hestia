@@ -140,33 +140,48 @@ describe("renderUsersPanel", () => {
     expect(container.querySelector(".users-add .status")?.textContent).toBe("dup");
   });
 
-  it("opens grant checkboxes, applies implications, and saves direct grants", async () => {
+  it("shows implied grants without persisting them when a manager edits other grants", async () => {
     const container = document.createElement("div");
+    document.body.appendChild(container);
     const api = makeApi(USERS, "admin");
     await renderUsersPanel(container, api).refresh();
     q<HTMLButtonElement>(rowFor(container, "bob"), ".user-grants").click();
     await flush();
     expect(api.fetchUserGrants).toHaveBeenCalledWith("bob");
     const editor = q<HTMLElement>(rowFor(container, "bob"), ".grant-editor");
-    const view = q<HTMLInputElement>(editor, '[data-permission="ioc.view"]');
-    const control = q<HTMLInputElement>(editor, '[data-permission="ioc.control"]');
-    expect(view.checked).toBe(true); // implied by the direct control grant
-    view.checked = false;
-    view.dispatchEvent(new Event("change"));
-    expect(control.checked).toBe(false);
-    const edit = q<HTMLInputElement>(editor, '[data-permission="budget.receipts.edit"]');
-    edit.checked = true;
-    edit.dispatchEvent(new Event("change"));
+    expect(q<HTMLInputElement>(editor, '[data-permission="ioc.view"]').checked).toBe(true);
+    q<HTMLInputElement>(editor, '[data-permission="budget.receipts.edit"]').click();
     expect(q<HTMLInputElement>(editor, '[data-permission="budget.receipts.add"]').checked).toBe(true);
     expect(q<HTMLInputElement>(editor, '[data-permission="budget.receipts.view"]').checked).toBe(true);
     editor.dispatchEvent(new Event("submit"));
     await flush();
-    expect(api.saveUserGrants).toHaveBeenCalledWith("bob", expect.arrayContaining([
+    expect(api.saveUserGrants).toHaveBeenCalledWith("bob", [
+      { permission_id: "ioc.control", target_owner: null },
       { permission_id: "budget.receipts.edit", target_owner: "admin" },
-      { permission_id: "budget.receipts.add", target_owner: "admin" },
-      { permission_id: "budget.receipts.view", target_owner: "admin" },
-    ]));
+    ]);
     expect(api.fetchUsers).toHaveBeenCalledTimes(2);
+  });
+
+  it("withdraws grants that imply an unchecked permission and keeps unrelated and standalone grants", async () => {
+    const data = grantsFor("bob");
+    data.direct.push({ permission_id: "budget.receipts.add", target_owner: "admin" });
+    const api = makeApi(USERS, "admin", { fetchUserGrants: vi.fn().mockResolvedValue(data) });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    await renderUsersPanel(container, api).refresh();
+    q<HTMLButtonElement>(rowFor(container, "bob"), ".user-grants").click();
+    await flush();
+    const editor = q<HTMLElement>(rowFor(container, "bob"), ".grant-editor");
+    q<HTMLInputElement>(editor, '[data-permission="budget.receipts.edit"]').click();
+    q<HTMLInputElement>(editor, '[data-permission="ioc.view"]').click();
+    expect(q<HTMLInputElement>(editor, '[data-permission="ioc.control"]').checked).toBe(false);
+    expect(q<HTMLInputElement>(editor, '[data-permission="budget.receipts.edit"]').checked).toBe(true);
+    editor.dispatchEvent(new Event("submit"));
+    await flush();
+    expect(api.saveUserGrants).toHaveBeenCalledWith("bob", [
+      { permission_id: "budget.receipts.add", target_owner: "admin" },
+      { permission_id: "budget.receipts.edit", target_owner: "admin" },
+    ]);
   });
 
   it("protects self-admin, limits presets, and surfaces grant errors", async () => {
@@ -180,6 +195,15 @@ describe("renderUsersPanel", () => {
     expect(q<HTMLInputElement>(selfEditor, '[data-permission="system.manage_users"]').checked).toBe(true);
     q<HTMLButtonElement>(selfEditor, ".grant-full").click();
     expect(q<HTMLInputElement>(selfEditor, '[data-permission="budget.view"]').checked).toBe(true);
+    expect(q<HTMLInputElement>(selfEditor, '[data-permission="budget.receipts.view"]').checked).toBe(true);
+    selfEditor.dispatchEvent(new Event("submit"));
+    await flush();
+    expect(api.saveUserGrants).toHaveBeenCalledWith("admin", [
+      { permission_id: "ioc.control", target_owner: null },
+      { permission_id: "budget.view", target_owner: "admin" },
+      { permission_id: "budget.receipts.edit", target_owner: "admin" },
+      { permission_id: "system.manage_users", target_owner: null },
+    ]);
 
     const failing = makeApi(USERS, "admin", {
       fetchUserGrants: vi.fn().mockResolvedValue(null),
@@ -228,10 +252,10 @@ describe("renderUsersPanel", () => {
     add.dispatchEvent(new Event("change"));
     editor.dispatchEvent(new Event("submit"));
     await flush();
-    expect(api.saveUserGrants).toHaveBeenCalledWith("bob", expect.arrayContaining([
-      { permission_id: "budget.receipts.add", target_owner: "other" },
+    expect(api.saveUserGrants).toHaveBeenCalledWith("bob", [
       { permission_id: "ioc.control", target_owner: null },
-    ]));
+      { permission_id: "budget.receipts.add", target_owner: "other" },
+    ]);
   });
 
   it("toggles enable/disable", async () => {
