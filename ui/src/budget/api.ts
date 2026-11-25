@@ -2,6 +2,7 @@
 // discriminated, never thrown, so a failed call cannot become an unhandled rejection. Nothing here persists
 // financial data in the browser.
 import { apiUrl } from "../api/client";
+import type { components } from "../api/openapi";
 import type { BudgetAccount, BudgetCapabilities, BudgetConnection, BudgetConsent, BudgetConsentFlow,
   BudgetConsentReconcile, BudgetConsentRenewalReminders, BudgetCreditLimitValue, BudgetJob, BudgetKind, BudgetBalances,
   BudgetLimit, BudgetOperation, BudgetTransactions, ConsentIntent } from "./model";
@@ -221,6 +222,10 @@ export function createBudgetApi(expectedActor: string | null = null) {
   },
   isAuthorizationLocked: () => authorizationLocked,
   capabilities,
+  authFeatures: () => call<components["schemas"]["AuthFeatures"]>(apiUrl("auth/features")),
+  issueQrLoginCode: (origin: string) => call<components["schemas"]["QrCodeResult"]>(apiUrl("auth/qr-code"), {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ origin }),
+  }, true),
   connections: () => call<ConnectionsData>(url("connections")),
   accounts: (connectionId?: string) =>
     call<{ accounts: BudgetAccount[] }>(url("accounts", { connection_id: connectionId })),

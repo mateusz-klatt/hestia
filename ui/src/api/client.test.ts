@@ -11,6 +11,7 @@ import {
   fetchDiscovery,
   fetchRoomIcons,
   fetchSettings,
+  fetchUserGrants,
   fetchUsers,
   login,
   logout,
@@ -21,6 +22,7 @@ import {
   resetUserPassword,
   saveRoomIcon,
   saveSettings,
+  saveUserGrants,
   setUserDisabled,
   setUserRole,
   whoami,
@@ -515,6 +517,19 @@ describe("user management (#PR-D)", () => {
     expect(await fetchUsers()).toBeNull();
   });
 
+  it("fetchUserGrants returns the catalog or null on HTTP/network failure", async () => {
+    const grants = { username: "kid", catalog: [], direct: [], effective: [] };
+    vi.stubGlobal("fetch", (url: URL) => {
+      expect(url.href).toContain("/api/users/grants?username=kid%20%C5%81");
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(grants) });
+    });
+    expect(await fetchUserGrants("kid Ł")).toEqual(grants);
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false }));
+    expect(await fetchUserGrants("kid")).toBeNull();
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    expect(await fetchUserGrants("kid")).toBeNull();
+  });
+
   it("the admin mutations hit the right path with the right body", async () => {
     const calls: { url: string; body: unknown }[] = [];
     vi.stubGlobal("fetch", (url: URL, init: RequestInit) => {
@@ -525,12 +540,16 @@ describe("user management (#PR-D)", () => {
     await setUserRole("kid", "admin");
     await setUserDisabled("kid", true);
     await resetUserPassword("kid", "new12345");
+    await saveUserGrants("kid", [{ permission_id: "ioc.view", target_owner: null }]);
     expect(calls.map((c) => c.url.replace(/^.*\/api\//, "api/"))).toEqual([
-      "api/users", "api/users/role", "api/users/disabled", "api/users/reset-password",
+      "api/users", "api/users/role", "api/users/disabled", "api/users/reset-password", "api/users/grants",
     ]);
     expect(calls[0]?.body).toBe(JSON.stringify({ username: "kid", password: "kidpassword", role: "operator" }));
     expect(calls[1]?.body).toBe(JSON.stringify({ username: "kid", role: "admin" }));
     expect(calls[2]?.body).toBe(JSON.stringify({ username: "kid", disabled: true }));
     expect(calls[3]?.body).toBe(JSON.stringify({ username: "kid", new: "new12345" }));
+    expect(calls[4]?.body).toBe(JSON.stringify({
+      username: "kid", grants: [{ permission_id: "ioc.view", target_owner: null }],
+    }));
   });
 });

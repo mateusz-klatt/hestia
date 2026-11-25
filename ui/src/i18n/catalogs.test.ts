@@ -24,6 +24,8 @@ interface IdenticalString {
 // These are brands, symbols, protocol identifiers and literal input-format hints.
 const identicalStrings: Partial<Record<MessageKey, IdenticalString>> = {
   "header.title": { value: "hestia", locales: "all" },
+  "grants.domain.ioc": { value: "IOC", locales: "all" },
+  "grants.domain.calendar": { value: "Calendar", locales: ["ro"] },
   "audit.result.ok": { value: "OK", locales: "all" },
   "rooms.iconNone": { value: "—", locales: "all" },
   "auto.id": { value: "id", locales: "all" },

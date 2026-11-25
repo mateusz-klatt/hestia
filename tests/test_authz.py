@@ -58,6 +58,7 @@ class CatalogValidationTests(unittest.TestCase):
         self.assertEqual(
             authz.DEVICE_ELIGIBLE_PERMISSIONS,
             {
+                "budget.view",
                 "budget.receipts.add",
                 "budget.receipts.view",
                 "budget.receipts.edit",
@@ -207,7 +208,7 @@ class AuthzEvaluationTests(unittest.TestCase):
             # Self-only receipts.match implies delegable receipts.view for owner.
             _add_grant(session, "owner", "budget.receipts.match", "owner")
             _add_grant(session, "owner", "budget.edit", "owner")
-            # PR 2 retains delegated receipt rows as dormant data; only household.view is effective.
+            # Delegable receipt grants are active in PR 3; self-only budget.view remains invalid for delegates.
             _add_grant(session, "spouse", "budget.receipts.edit", "owner")
             _add_grant(session, "spouse", "household.view", "owner")
             _add_grant(session, "spouse", "budget.view", "owner")
@@ -220,11 +221,15 @@ class AuthzEvaluationTests(unittest.TestCase):
             self.assertEqual(authz.resolve_budget_target(session, "owner"), "owner")
             self.assertEqual(
                 authz.effective_permissions(session, "spouse", owner="owner"),
-                frozenset({"household.view"}),
+                frozenset({"household.view", "budget.receipts.edit", "budget.receipts.add", "budget.receipts.view"}),
             )
             self.assertFalse(authz.authorize(session, "spouse", "budget.view", owner="owner"))
-            self.assertFalse(authz.authorize(session, "spouse", "budget.receipts.add", owner="owner"))
+            self.assertTrue(authz.authorize(session, "spouse", "budget.receipts.add", owner="owner"))
             self.assertEqual(authz.resolve_budget_target(session, "spouse"), "owner")
+            self.assertEqual(
+                authz.delegated_receipt_permissions(session, "spouse"),
+                frozenset({"budget.receipts.edit", "budget.receipts.add", "budget.receipts.view"}),
+            )
 
     def test_disabled_missing_unprovisioned_and_demoted_owner_rejected(self):
         with Session(self.engine) as session, session.begin():

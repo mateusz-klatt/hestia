@@ -100,6 +100,25 @@ describe("budget api", () => {
     });
   });
 
+  it("discovers QR login and posts the advertised origin using the browser session", async () => {
+    const features = { auth_contract: 2, features: ["qr_login"], qr_origin: "https://home.example" };
+    const fetchMock = respond(200, features);
+    expect(await budgetApi.authFeatures()).toEqual({ ok: true, data: features });
+    expect(sent(fetchMock).url.pathname).toBe("/api/auth/features");
+    const payload = `hestia-login:${features.qr_origin}#1234567890123456789`;
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ qr_payload: payload })));
+    expect(await budgetApi.issueQrLoginCode(features.qr_origin)).toEqual({
+      ok: true, data: { qr_payload: payload },
+    });
+    const { url, init } = sent(fetchMock, 1);
+    expect(url.pathname).toBe("/api/auth/qr-code");
+    expect(init).toMatchObject({
+      credentials: "same-origin", cache: "no-store", method: "POST",
+      body: JSON.stringify({ origin: features.qr_origin }),
+    });
+    expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+  });
+
   it("posts the explicit category colour spread mutation", async () => {
     const fetchMock = respond(200, { ok: true, categories: [] });
     await budgetApi.spreadCategoryColors();
@@ -458,6 +477,7 @@ describe("budget api", () => {
     const fetchMock = respond(200, {});
     const api = createBudgetApi("owner");
     const reads: Array<[string, () => Promise<BudgetResult<unknown>>]> = [
+      ["authFeatures", () => api.authFeatures()],
       ["connections", () => api.connections()],
       ["accounts", () => api.accounts()],
       ["transactions", () => api.transactions("account")],

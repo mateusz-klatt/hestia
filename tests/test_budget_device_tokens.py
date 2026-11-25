@@ -16,7 +16,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from sqlalchemy import select
 from yarl import URL
 
-from hestia import api_contract, auth, db, store_sql, web
+from hestia import api_contract, auth, auth_qr, db, store_sql, web
 from hestia.budget import (analytics_api, api, consent_api, consent_context, device_token, household, household_api,
                            receipt_api)
 from hestia.budget.config import BudgetConfigError
@@ -1369,7 +1369,8 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(device_token, "open_store") as open_store:
             for method, path in sorted(routes - allowed):
                 response = await self.client.request(method, path, headers=self._auth(device), allow_redirects=False)
-                expected = 200 if path == "/api/auth/features" else 400 if path == device_token.LOGIN_PATH else 403
+                expected = (200 if path == "/api/auth/features" else 400
+                            if path in (device_token.LOGIN_PATH, auth_qr.REDEEM_PATH) else 403)
                 self.assertEqual(response.status, expected, f"{method} {path}")
                 await response.read()
             open_store.assert_not_called()

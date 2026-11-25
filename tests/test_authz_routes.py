@@ -269,6 +269,10 @@ class CapabilityUnitTests(unittest.TestCase):
         with mock.patch.object(web, "_SESSION_SECRET", b"route-secret"), \
              mock.patch.object(store_sql, "load_auth_state", side_effect=authz.PolicyPhaseUnsupported("future")):
             self.assertFalse(web._session_context_current(ctx))
+        with mock.patch.object(web, "_SESSION_SECRET", b"route-secret"), \
+             mock.patch.object(store_sql, "load_auth_state", return_value=self._state(phase="catalog_custom")), \
+             mock.patch.object(web, "_catalog_request_allowed", side_effect=authz.PolicyPhaseUnsupported("future")):
+            self.assertFalse(web._session_context_current(ctx))
 
 
 def _actor_header(username):
@@ -326,6 +330,7 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
             "/api/logout": 200,
             "/api/budget/receipts/device-token/login": 400,
             "/api/budget/receipts/device-token/redeem": 400,
+            "/api/auth/qr-redeem": 401,
         }
         for method, path in routes:
             with self.subTest(method=method, path=path):
@@ -337,6 +342,8 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
                             **({"json": {}} if method == "POST" else {}),
                         )
                         expected = public_post_status.get(path)
+                        if path == "/api/auth/qr-redeem" and headers:
+                            expected = 400
                         if expected is not None:
                             self.assertEqual(response.status, expected)
                         else:
@@ -426,7 +433,7 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
         capabilities = await self.client.get("/api/me/capabilities", headers=self._cookie("admin"))
         payload = (await capabilities.json())
         self.assertTrue(payload["own_budget"]["can_view"])
-        self.assertFalse(payload["own_budget"]["can_use_receipts"])
+        self.assertTrue(payload["own_budget"]["can_use_receipts"])
         self.assertTrue(payload["own_budget"]["can_manage_devices"])
         whoami = await self.client.get("/api/whoami", headers=self._cookie("admin"))
         self.assertEqual(await whoami.json(), {"user": "admin", "role": "viewer"})
@@ -480,12 +487,9 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
         denied = await self.client.get("/api/budget/analytics/overview", headers=self._cookie("admin"))
         self.assertEqual(denied.status, 403)
 
-    async def test_custom_delegate_and_stale_actor_receive_contract_error_envelopes(self):
+    async def test_custom_receipt_denial_and_stale_actor_receive_contract_error_envelopes(self):
         with self.sessions.begin() as session:
             session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
-            session.add(db.PermissionGrant(
-                username="viewer", permission_id="budget.receipts.add", target_owner="admin",
-            ))
         denied = await self.client.post(
             "/api/budget/receipts/parse-text", json={"text": "synthetic"},
             headers={**self._cookie("viewer"), "Origin": "https://unused.example"},

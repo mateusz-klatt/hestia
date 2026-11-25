@@ -112,6 +112,12 @@ ProxyAddHeaders On
 
 `mod_remoteip` restores the client address before proxying. The `RequestHeader` directive strips incoming `X-Forwarded-For`, and `ProxyAddHeaders` builds the forwarded header from Apache's restored address. Use the normal request-header phase for this removal so it follows address restoration. Without the trusted loopback setting and client-address restoration, pairing traffic collapses into one per-IP bucket. [Apache remote-IP documentation](https://httpd.apache.org/docs/2.4/mod/mod_remoteip.html), [Apache proxy headers](https://httpd.apache.org/docs/2.4/mod/mod_proxy.html#proxyaddheaders)
 
+## QR login behind Apache and Cloudflare
+
+QR redemption requires HTTPS, a request `Host` matching the configured `HESTIA_PUBLIC_ORIGIN`, and a JSON `origin` equal to that canonical origin. The proxy must preserve the public Host.
+
+When Apache forwards traffic over HTTP, configure it to replace the incoming `X-Forwarded-Proto` with a single `https` value for client requests whose original scheme was HTTPS. Include the proxy's immediate peer address in `HESTIA_BUDGET_TRUSTED_PROXY_CIDRS` as shown above. If requests reach Hestia directly over TLS, omit the forwarded scheme. QR issuance uses a browser session and verifies the Origin header.
+
 ## Gmail receipt import (receipts v1d-a, v1d-b, and v1e)
 
 Default off (`HESTIA_BUDGET_GMAIL_IMPORT_ENABLED` unset). The isolated `receipt-parser` service handles plain text and HTML for Gmail imports and extracts text from invoice PDFs (`network_mode: none`, read-only root, `cap_drop: ALL`, `no-new-privileges`, UID 1000, 256 MiB / 32 pids / 0.5 CPU, noexec tmpfs). It is behind the compose profile `receipt-parser`, so an ordinary Hestia deploy does not start it. With the flag on and the service down, the Gmail routes return `503 budget_receipt_gmail_parser_unavailable` before contacting Gmail.

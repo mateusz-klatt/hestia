@@ -59,8 +59,16 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.52.0")
-        # 0.52.0 gateway payment evidence.
+        self.assertEqual(document["info"]["version"], "0.54.0")
+        for path in ("/api/auth/qr-code", "/api/auth/qr-redeem", "/api/auth/device-token", "/api/users/grants"):
+            document["paths"].pop(path)
+        for name in (
+            "AuthErrorDetail", "AuthError", "QrCodeRequest", "QrCodeResult", "QrRedeemRequest",
+            "QrRedeemSuccess", "AuthDeviceTokenRequest", "AuthDeviceTokenResult", "GrantSelection",
+            "GrantCatalogEntry", "UserGrantsResult", "UpdateUserGrantsRequest", "UpdateUserGrantsResult",
+        ):
+            schemas.pop(name)
+        document["info"]["version"] = "0.52.0"
         for field in ("gateway", "gateway_status", "fee_amount", "payee_host", "evidence_for_receipt_id",
                       "has_document"):
             for name in ("BudgetReceiptSummary", "BudgetReceiptDetail"):
@@ -69,6 +77,7 @@ class OpenApiArtifactTests(unittest.TestCase):
                     schemas[name]["required"].remove(field)
         schemas["BudgetReceiptDetail"]["properties"].pop("payment_evidence")
         schemas.pop("BudgetReceiptPaymentEvidence")
+        schemas["BudgetReceiptListRequest"]["properties"].pop("evidence")
         document["info"]["version"] = "0.51.0"
         confirm_schema = schemas["BudgetReceiptConfirmRequest"]
         for field_name, index in (("raw_shop_name", 2), ("raw_nip", 3)):
@@ -731,6 +740,9 @@ class RoleAndBindingContractTests(unittest.TestCase):
         self.assertGreaterEqual(
             tuple(int(part) for part in api_contract.CONTRACT_VERSION.split(".")), (0, 50, 0),
         )
+        self.assertEqual(paths["/api/auth/qr-redeem"]["post"]["x-required-role"], "public")
+        self.assertEqual(paths["/api/auth/device-token"]["post"]["x-required-permission"], "authenticated")
+        self.assertEqual(paths["/api/users/grants"]["post"]["x-required-permission"], "system.manage_users")
         capabilities = api_contract.MeCapabilities.model_validate({
             "user": "viewer", "actor_tag": "A" * 43, "installation_permissions": ["ioc.view"], "own_budget": None,
             "delegated_receipts": None, "household_available": True,
@@ -825,7 +837,8 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetReceiptDeviceBrowserRequest", "BudgetReceiptDeviceRedeemRequest",
         "BudgetReceiptDeviceRevokeRequest", "BudgetReceiptDeviceCancelRequest", "BudgetReceiptDeviceLoginRequest",
         "BudgetReceiptGmailGrantRequest", "BudgetReceiptGmailRevokeRequest", "BudgetReceiptGmailSyncRequest",
-        "AddUserRequest", "ChangePasswordRequest", "ControlCover", "ControlLevel", "ControlRequest",
+        "AddUserRequest", "ChangePasswordRequest", "QrCodeRequest", "QrRedeemRequest",
+        "AuthDeviceTokenRequest", "UpdateUserGrantsRequest", "ControlCover", "ControlLevel", "ControlRequest",
         "ControlSwitch", "ControlThermostat", "ControlThermostatPower", "IrRequest", "LoginRequest",
         "NameRequest", "ResetPasswordRequest", "RoomIconRequest", "RuleInput", "SceneRequest",
         "SetDisabledRequest", "SetRoleRequest", "SettingsUpdate", "WholeHomeRequest",

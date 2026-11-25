@@ -1,3 +1,4 @@
+// @vitest-environment-options {"url":"https://home.example"}
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
@@ -106,6 +107,8 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     setMortgagePayment: vi.fn<BudgetApi["setMortgagePayment"]>(),
     inbox: vi.fn<BudgetApi["inbox"]>(() => ok(inboxOf())),
     markInbox: vi.fn<BudgetApi["markInbox"]>(() => ok({ inbox: inboxMarkSaved() })),
+    authFeatures: vi.fn<BudgetApi["authFeatures"]>(() => ok({ auth_contract: 2, features: [], qr_origin: null })),
+    issueQrLoginCode: vi.fn<BudgetApi["issueQrLoginCode"]>(),
     receiptDevices: vi.fn<BudgetApi["receiptDevices"]>(() => ok([])),
     pairReceiptDevice: vi.fn<BudgetApi["pairReceiptDevice"]>(),
     cancelReceiptPairCode: vi.fn<BudgetApi["cancelReceiptPairCode"]>(),
@@ -1135,6 +1138,50 @@ describe("analytics views", () => {
     expect(host.querySelector(".budget-devices")).not.toBeNull();
     expect(api.receiptDevices).toHaveBeenCalledTimes(1);
     expect(scrollSpy).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+  });
+
+  it("renders the sign-in QR in Accounts when advertised, even without receipt device management", async () => {
+    const api = fakeApi();
+    const origin = "https://home.example";
+    api.capabilities.mockImplementation(() => ok({
+      ...authorization, own_budget: { ...authorization.own_budget, can_manage_devices: false },
+    }));
+    api.authFeatures.mockImplementation(() => ok({ auth_contract: 2, features: ["qr_login"], qr_origin: origin }));
+    api.issueQrLoginCode.mockImplementation(() => ok({ qr_payload: `hestia-login:${origin}#1234567890123456789` }));
+    await render(api);
+    expect(api.receiptDevices).not.toHaveBeenCalled();
+    expect(api.issueQrLoginCode).not.toHaveBeenCalled();
+    await click(button("Show sign-in QR code"));
+    expect(api.issueQrLoginCode).toHaveBeenCalledWith(origin);
+    expect(host.querySelector('svg[aria-label="Sign-in QR code"]')?.getAttribute("viewBox")).toBe("-4 -4 41 41");
+    await click(button("Close"));
+    expect(host.querySelector('svg[aria-label="Sign-in QR code"]')).toBeNull();
+  });
+
+  it.each([
+    { auth_contract: 2, features: ["device_exchange"], qr_origin: "https://home.example" },
+    { auth_contract: 2, features: ["qr_login"], qr_origin: "https://alias.example" },
+    { auth_contract: 1, features: ["qr_login"], qr_origin: "https://home.example" },
+  ])("hides the sign-in control without a supported QR origin (%j)", async (features) => {
+    const api = fakeApi();
+    api.authFeatures.mockImplementation(() => ok(features));
+    await render(api);
+    expect(api.authFeatures).toHaveBeenCalled();
+    expect(host.textContent).not.toContain("Show sign-in QR code");
+    expect(api.issueQrLoginCode).not.toHaveBeenCalled();
+  });
+
+  it("clears Budget when QR issuance reports a different browser actor", async () => {
+    const api = fakeApi();
+    api.authFeatures.mockImplementation(() => ok({
+      auth_contract: 2, features: ["qr_login"], qr_origin: "https://home.example",
+    }));
+    api.issueQrLoginCode.mockImplementation(() => fail(409, "budget_actor_changed"));
+    await render(api);
+    expect(host.textContent).toContain("Synthetic Current");
+    await click(button("Show sign-in QR code"));
+    expect(host.textContent).not.toContain("Synthetic Current");
+    expect(host.textContent).not.toContain("Show sign-in QR code");
   });
 
   it("gates the quarantine tab on analytics, defaults to Monthly budget, and keeps Quarantine after Forecast", async () => {

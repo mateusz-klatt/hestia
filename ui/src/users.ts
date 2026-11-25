@@ -1,6 +1,7 @@
 import type { MutationResult } from "./api/client";
 import type { UserAccount } from "./api/types";
 import { t } from "./i18n";
+import { renderGrantEditor, type GrantApi } from "./grant_editor";
 import type { MessageKey } from "./i18n/locales/en";
 import { MIN_PASSWORD, openFormModal } from "./modal";
 
@@ -9,7 +10,7 @@ export type FetchUsers = () => Promise<UserAccount[] | null>;
 /** Everything the admin Users panel needs — injected so it stays pure/testable (main.ts wires the
  *  real `client` calls; tests pass fakes). `currentUser` lets the panel mark/guard the admin's OWN row
  *  (the server also blocks self-demote / self-disable; this is convenience). */
-export interface UsersApi {
+export interface UsersApi extends GrantApi {
   fetchUsers: FetchUsers;
   addUser: (username: string, password: string, role: string) => Promise<MutationResult>;
   setUserRole: (username: string, role: string) => Promise<MutationResult>;
@@ -78,25 +79,23 @@ function userRow(u: UserAccount, me: string | null, api: UsersApi, refresh: () =
   const controls = document.createElement("span");
   controls.className = "user-controls";
 
-  const sel = roleSelect(u.role);
-  sel.setAttribute("aria-label", t("users.role"));
-  sel.disabled = isSelf; // can't change your own role (the server enforces this too)
-  sel.addEventListener("change", () => {
-    void (async () => {
-      sel.disabled = true;
-      const result = await api.setUserRole(u.username, sel.value);
-      if (result.ok) {
-        await refresh();
-      } else {
-        sel.value = u.role; // revert the optimistic selection
-        sel.disabled = false;
-        setStatus(status, result.error ?? t("modal.error"), true);
-      }
-    })();
+  const role = document.createElement("span");
+  role.className = "user-role-label";
+  role.textContent = roleLabel(u.role);
+  controls.appendChild(role);
+  const editGrants = button("user-grants", t("users.permissions"));
+  const editor = document.createElement("div");
+  editor.className = "user-grant-editor";
+  editGrants.addEventListener("click", () => {
+    if (editor.childNodes.length > 0) {
+      editor.replaceChildren();
+      return;
+    }
+    void renderGrantEditor(editor, u.username, api, me, refresh);
   });
-  controls.appendChild(sel);
+  controls.appendChild(editGrants);
 
-  // The admin manages their OWN password/role from the ⚙ menu (Change password); the panel only
+  // The admin manages their OWN password from the ⚙ menu (Change password); the panel only
   // offers enable/disable + reset on OTHER accounts (self-disable / self-reset are server-refused).
   if (!isSelf) {
     const toggle = button("user-toggle", u.disabled ? t("users.enable") : t("users.disable"));
@@ -139,14 +138,14 @@ function userRow(u: UserAccount, me: string | null, api: UsersApi, refresh: () =
     controls.appendChild(reset);
   }
 
-  row.append(name, controls, status);
+  row.append(name, controls, status, editor);
   return row;
 }
 
 const panels = new WeakMap<HTMLElement, UsersPanel>();
 
 /**
- * The admin user-management panel: an add-user form + a row per account (role dropdown, enable/disable,
+ * The admin user-management panel: an add-user form + a row per account (grant editor, enable/disable,
  * reset password). Build-once (idempotent per container); `refresh()` re-fetches + rebuilds the list.
  * The server is the security boundary — this UI's self-guards are convenience.
  */

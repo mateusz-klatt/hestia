@@ -24,6 +24,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/device-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exchange a v2 native session for a narrowed receipt/device token
+         * @description Allowed on HTTP LAN. prior_token rotates or migrates a credential without widening its permission ceiling.
+         */
+        post: operations["exchangeNativeSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/features": {
         parameters: {
             query?: never;
@@ -38,6 +58,46 @@ export interface paths {
         get: operations["authFeatures"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/qr-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue an origin-bound, single-use native login QR payload
+         * @description Requires a v2 browser cookie, the configured HTTPS public origin, and a matching Origin header.
+         */
+        post: operations["issueQrLoginCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/qr-redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Redeem a single-use QR code for a native session
+         * @description Public but HTTPS-origin-bound. Cookie and Authorization credentials are forbidden; no cookie is set.
+         */
+        post: operations["redeemQrLoginCode"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1355,7 +1415,7 @@ export interface paths {
         put?: never;
         /**
          * Validate exact line and total identities, review an optional bank link; JSON body cap 128 KiB.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite users backend and a browser cookie with exact Origin or a receipts-capable device token. Permissions apply to the target ledger and may be delegated. With budget.receipts.add, a caller can finalize their own draft. Other drafts and saved receipts require budget.receipts.edit. Changing a bank link requires budget.receipts.match. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["confirmBudgetReceipt"];
         delete?: never;
@@ -1375,7 +1435,7 @@ export interface paths {
         put?: never;
         /**
          * Delete receipt lines before their owned receipt using expected_version CAS.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite users backend and a browser cookie with exact Origin or a receipts-capable device token. Permissions apply to the target ledger and may be delegated. With budget.receipts.add, a caller can discard their own draft. Other drafts and saved receipts require budget.receipts.edit. Deleting a linked receipt also requires budget.receipts.match. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["deleteBudgetReceipt"];
         delete?: never;
@@ -1634,8 +1694,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Keyset-page owner receipts with filters in the JSON body, never URL query parameters.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         * Keyset-page receipts on the target ledger using filters in the JSON body.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite users backend and a browser cookie with exact Origin or a receipts-capable device token. Permissions apply to the target ledger and may be delegated. Requires budget.receipts.view. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["listBudgetReceipts"];
         delete?: never;
@@ -1655,7 +1715,7 @@ export interface paths {
         put?: never;
         /**
          * Paste Live Text, redact PAN data and create a 48-hour draft; JSON body cap 48 KiB.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite users backend and a browser cookie with exact Origin or a receipts-capable device token. Permissions apply to the target ledger and may be delegated. Requires budget.receipts.add. Bank candidates are available with budget.receipts.match. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["parseBudgetReceiptText"];
         delete?: never;
@@ -1674,8 +1734,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Search owner receipts with the query in the JSON body, never reverse-proxy URL logs.
-         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         * Search receipts on the target ledger with the query in the JSON body.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite users backend and a browser cookie with exact Origin or a receipts-capable device token. Permissions apply to the target ledger and may be delegated. Requires budget.receipts.view. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
          */
         post: operations["searchBudgetReceipts"];
         delete?: never;
@@ -2156,6 +2216,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/users/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the permission catalog and one account's direct/effective grants
+         * @description Requires account management. Delegated target rules and implication closures are resolved server-side.
+         */
+        get: operations["getUserGrants"];
+        put?: never;
+        /**
+         * Replace direct grants and activate the custom catalog on the first edit
+         * @description Requires a v2 browser session and Origin. The server preserves unchanged grant IDs and protects administration.
+         */
+        post: operations["updateUserGrants"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/users/reset-password": {
         parameters: {
             query?: never;
@@ -2305,6 +2389,44 @@ export interface components {
         AuditFeed: {
             /** Events */
             events: components["schemas"]["AuditEvent"][];
+        };
+        /** AuthDeviceTokenRequest */
+        AuthDeviceTokenRequest: {
+            /** Device Name */
+            device_name: string;
+            /** Prior Token */
+            prior_token?: string | null;
+        };
+        /** AuthDeviceTokenResult */
+        AuthDeviceTokenResult: {
+            /** Actor */
+            actor: string;
+            /** Expires At */
+            expires_at: string;
+            /** Issued Permissions */
+            issued_permissions: string[];
+            /** Owner */
+            owner: string;
+            /** Owner Key */
+            owner_key: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "receipts" | "device";
+            /** Token */
+            token: string;
+            /** Token Id */
+            token_id: string;
+        };
+        /** AuthError */
+        AuthError: {
+            error: components["schemas"]["AuthErrorDetail"];
+        };
+        /** AuthErrorDetail */
+        AuthErrorDetail: {
+            /** Code */
+            code: string;
         };
         /** AuthFeatures */
         AuthFeatures: {
@@ -3055,6 +3177,8 @@ export interface components {
         };
         /** BudgetAnalyticsInboxDeviceParams */
         BudgetAnalyticsInboxDeviceParams: {
+            /** Actor */
+            actor?: string | null;
             /** Date */
             date: string;
             /** Device Name */
@@ -7262,6 +7386,35 @@ export interface components {
             /** Outdoor Temp Ts */
             outdoor_temp_ts?: string | null;
         };
+        /** GrantCatalogEntry */
+        GrantCatalogEntry: {
+            /** Delegation */
+            delegation: ("self_only" | "delegable") | null;
+            /** Device Eligible */
+            device_eligible: boolean;
+            /** Domain */
+            domain: string;
+            /** Label */
+            label: string;
+            /** Permission Id */
+            permission_id: string;
+            /** Protected */
+            protected: boolean;
+            /** Requires */
+            requires: string[];
+            /**
+             * Storage Scope
+             * @enum {string}
+             */
+            storage_scope: "installation" | "owner";
+        };
+        /** GrantSelection */
+        GrantSelection: {
+            /** Permission Id */
+            permission_id: string;
+            /** Target Owner */
+            target_owner: string | null;
+        };
         /**
          * IrButton
          * @description A configured one-tap IR button (``HESTIA_IR_BUTTONS``) → transmits a saved Flipper signal.
@@ -7409,6 +7562,35 @@ export interface components {
             can_view: boolean;
             /** Permissions */
             permissions: string[];
+        };
+        /** QrCodeRequest */
+        QrCodeRequest: {
+            /** Origin */
+            origin: string;
+        };
+        /** QrCodeResult */
+        QrCodeResult: {
+            /** Qr Payload */
+            qr_payload: string;
+        };
+        /** QrRedeemRequest */
+        QrRedeemRequest: {
+            /** Code */
+            code: string;
+            /** Origin */
+            origin: string;
+        };
+        /** QrRedeemSuccess */
+        QrRedeemSuccess: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            /** Token */
+            token: string;
+            /** User */
+            user: string;
         };
         /**
          * ResetPasswordRequest
@@ -7783,6 +7965,40 @@ export interface components {
              */
             type: "time";
         };
+        /** UpdateUserGrantsRequest */
+        UpdateUserGrantsRequest: {
+            /** Grants */
+            grants: components["schemas"]["GrantSelection"][];
+            /** Username */
+            username: string;
+        };
+        /** UpdateUserGrantsResult */
+        UpdateUserGrantsResult: {
+            /**
+             * Ok
+             * @constant
+             */
+            ok: true;
+            /** Phase */
+            phase: string;
+        };
+        /** UserGrantsResult */
+        UserGrantsResult: {
+            /** Budget Owner */
+            budget_owner: boolean;
+            /** Budget Owners */
+            budget_owners: string[];
+            /** Catalog */
+            catalog: components["schemas"]["GrantCatalogEntry"][];
+            /** Direct */
+            direct: components["schemas"]["GrantSelection"][];
+            /** Effective */
+            effective: components["schemas"]["GrantSelection"][];
+            /** Phase */
+            phase: string;
+            /** Username */
+            username: string;
+        };
         /**
          * UserRow
          * @description One account in the admin user list (``store_sql.list_users``) — username / role / disabled,
@@ -7878,6 +8094,120 @@ export interface operations {
             };
         };
     };
+    exchangeNativeSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuthDeviceTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description device credential issued */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthDeviceTokenResult"];
+                };
+            };
+            /** @description invalid device name or request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description missing, stale, or non-native session (native_session_required) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description no eligible live receipt/device target */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Budget or receipt support is disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description request body read timed out */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description active slot limit or rejected prior_token proof */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Content-Length is required */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description request body exceeds the byte limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Content-Type must be application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description incompatible authorization bridge or unavailable device service */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+        };
+    };
     authFeatures: {
         parameters: {
             query?: never;
@@ -7895,6 +8225,208 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuthFeatures"];
+                };
+            };
+        };
+    };
+    issueQrLoginCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QrCodeRequest"];
+            };
+        };
+        responses: {
+            /** @description the QR payload */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QrCodeResult"];
+                };
+            };
+            /** @description invalid JSON (qr_invalid_request), origin mismatch, or an origin over 45 bytes */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description browser session missing or requiring upgrade */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description native bearer is not a browser session */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description request body read timed out */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description browser session differs from the expected actor (budget_actor_changed) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Content-Length is required */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description request body exceeds the byte limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Content-Type must be application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description HTTPS public origin unavailable or incompatible authorization bridge */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+        };
+    };
+    redeemQrLoginCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QrRedeemRequest"];
+            };
+        };
+        responses: {
+            /** @description native session issued */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QrRedeemSuccess"];
+                };
+            };
+            /** @description invalid JSON (qr_invalid_request), ambiguous credentials, or origin mismatch */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description invalid, expired, consumed, or stale code */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description request body read timed out */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Content-Length is required */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description request body exceeds the byte limit */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description Content-Type must be application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description redemption throttled */
+            429: {
+                headers: {
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description HTTPS public origin unavailable or incompatible authorization bridge */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
                 };
             };
         };
@@ -14061,7 +14593,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetError"];
                 };
             };
-            /** @description Stale expected_version (budget_receipt_conflict), the bank transaction is already linked (budget_receipt_tx_already_linked), or the candidate token no longer matches the owner, transaction, dates and merchant evidence shown at preview (budget_receipt_stale_source). A missing SQLite users backend also returns 409 (budget_requires_sqlite_users). */
+            /** @description Stale expected_version (budget_receipt_conflict), the bank transaction is already linked (budget_receipt_tx_already_linked), or the candidate token no longer matches the owner, transaction, dates and merchant evidence shown at preview (budget_receipt_stale_source). Repeating confirmation of one's own draft without budget.receipts.edit returns already_submitted. A missing SQLite users backend also returns 409 (budget_requires_sqlite_users). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -16936,6 +17468,115 @@ export interface operations {
                 };
             };
             /** @description would leave no enabled admin (or SQLite backend inactive) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControlError"];
+                };
+            };
+        };
+    };
+    getUserGrants: {
+        parameters: {
+            query: {
+                username: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description catalog and grants */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserGrantsResult"];
+                };
+            };
+            /** @description missing username */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControlError"];
+                };
+            };
+            /** @description no such user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControlError"];
+                };
+            };
+            /** @description user management requires the SQLite backend */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControlError"];
+                };
+            };
+        };
+    };
+    updateUserGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateUserGrantsRequest"];
+            };
+        };
+        responses: {
+            /** @description grants saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateUserGrantsResult"];
+                };
+            };
+            /** @description invalid, duplicate, or out-of-scope grants */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControlError"];
+                };
+            };
+            /** @description cannot remove your own administration grant */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControlError"];
+                };
+            };
+            /** @description no such user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControlError"];
+                };
+            };
+            /** @description last administrator, target conflict, or SQLite backend inactive */
             409: {
                 headers: {
                     [name: string]: unknown;

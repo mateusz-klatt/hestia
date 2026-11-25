@@ -15,6 +15,7 @@ import type {
   UserSettings,
 } from "./types";
 import { t } from "../i18n";
+import type { GrantSelection, UserGrants } from "../grant_editor";
 
 /**
  * The API root, derived from the page URL so it works at any mount point.
@@ -387,6 +388,22 @@ export async function fetchUsers(): Promise<UserAccount[] | null> {
   } catch {
     return null;
   }
+}
+
+/** GET `/api/users/grants` — direct and effective catalog grants for one account. */
+export async function fetchUserGrants(username: string): Promise<UserGrants | null> {
+  try {
+    const response = await fetch(apiUrl(`users/grants?username=${encodeURIComponent(username)}`));
+    if (!response.ok) return null;
+    return (await response.json()) as UserGrants;
+  } catch {
+    return null;
+  }
+}
+
+/** POST `/api/users/grants` — replace direct grants, activating the custom catalog on the first edit. */
+export function saveUserGrants(username: string, grants: GrantSelection[]): Promise<MutationResult> {
+  return postUser("users/grants", { username, grants });
 }
 
 /** POST `/api/users` (admin) — create a new account. */

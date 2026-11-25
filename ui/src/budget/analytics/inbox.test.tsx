@@ -59,10 +59,10 @@ function button(label: string, scope: ParentNode = host): HTMLButtonElement {
 }
 
 describe("InboxView", () => {
-  it("renders an owner device alert in Polish and marks it read through the inbox", async () => {
+  it.each([{}, { actor: null }])("renders an owner device alert in Polish and marks it read (%j)", async (actor) => {
     const device: AnalyticsInboxItem = {
       kind: "device_added", subject_id: "a".repeat(64), milestone: "added", read: false, read_at: null,
-      ref: { token_id: "synthetic-device-id" }, params: { status: "added", device_name: "Vesta", date: "2026-11-21" },
+      ref: { token_id: "synthetic-device-id" }, params: { status: "added", device_name: "Vesta", date: "2026-11-21", ...actor },
     };
     const data = inboxOf([device]);
     const api = fakeApi(data);
@@ -79,6 +79,22 @@ describe("InboxView", () => {
       items: [{ kind: device.kind, subject_id: device.subject_id, milestone: device.milestone }],
       read: true, expected_reads_version: data.reads_version,
     });
+  });
+
+  it("shows the delegate actor on a device alert without exposing its token reference", async () => {
+    const device: AnalyticsInboxItem = {
+      kind: "device_added", subject_id: "b".repeat(64), milestone: "added", read: false, read_at: null,
+      ref: { token_id: "synthetic-delegate-device" },
+      params: { status: "added", device_name: "Vesta", date: "2026-12-01", actor: "bob" },
+    };
+    const api = fakeApi(inboxOf([device]));
+    await act(async () => {
+      root.render(<InboxView api={api} connections={[]} consentEnabled={false} locale="en"
+        revision={0} onAccessLoss={() => false} onOpenAccounts={vi.fn()} onOpenMortgages={vi.fn()} onOpenLimits={vi.fn()} />);
+      await Promise.resolve();
+    });
+    expect(host.querySelector("li strong")?.textContent).toContain("Vesta · bob");
+    expect(host.textContent).not.toContain("synthetic-delegate-device");
   });
 
   it("renders all three alert kinds resolved via item.ref in EN and PL without raw hashes or storage", async () => {

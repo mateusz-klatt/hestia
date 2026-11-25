@@ -223,6 +223,24 @@ class BudgetReadContractTests(unittest.TestCase):
 
 
 class BudgetOpenApiTests(unittest.TestCase):
+    def test_receipt_contract_describes_delegated_permissions_and_confirm_retries(self):
+        paths = contract.build_openapi()["paths"]
+        for route, permissions in (
+            ("parse-text", ("add", "match")),
+            ("confirm", ("add", "edit", "match")),
+            ("list", ("view",)),
+            ("search", ("view",)),
+            ("delete", ("add", "edit", "match")),
+        ):
+            with self.subTest(route=route):
+                description = paths["/api/budget/receipts/" + route]["post"]["description"]
+                self.assertIn("may be delegated", description)
+                self.assertNotIn("admin", description)
+                for permission in permissions:
+                    self.assertIn("budget.receipts." + permission, description)
+        confirm = paths["/api/budget/receipts/confirm"]["post"]
+        self.assertIn("already_submitted", confirm["responses"]["409"]["description"])
+
     def test_only_implemented_routes_are_declared_with_exact_callback_exception(self):
         document = contract.build_openapi()
         budget = {path: methods for path, methods in document["paths"].items() if path.startswith("/api/budget/")}

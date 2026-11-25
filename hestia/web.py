@@ -41,11 +41,12 @@ from pathlib import Path
 
 from aiohttp import ClientConnectionError, web
 
-from . import auth, authz, store_sql
+from . import auth, auth_qr, authz, store_sql
 from .budget import api as budget_api
 from .budget import consent_api, consent_context, device_token
 from .budget.config import BudgetConfigError
 from .budget.i18n import validate_languages
+from .budget.views import BudgetUsersBackendRequired
 from .classifier import DeviceType
 from .db import AppMeta
 from .automations import rule_vocab
@@ -176,7 +177,7 @@ def _is_public_route(method: str, path: str) -> bool:
     if method == "GET":
         return (path in ("/", "/ui/", "/api/auth/features")
                 or path in consent_api.PUBLIC_GET or path.startswith("/assets/"))
-    return method == "POST" and (path in ("/api/login", "/api/logout", device_token.REDEEM_PATH)
+    return method == "POST" and (path in ("/api/login", "/api/logout", device_token.REDEEM_PATH, auth_qr.REDEEM_PATH)
                                  or _ROUTE_MIN_ROLE.get((method, path)) == _PUBLIC)
 
 
@@ -191,7 +192,11 @@ _PATH_SETTINGS = "/api/settings"
 _PATH_ROOM_ICONS = "/api/rooms/icons"
 _PATH_AUTOMATIONS = "/api/automations"
 _PATH_USERS = "/api/users"
+_PATH_USER_GRANTS = "/api/users/grants"
 _PATH_WHOLE_HOME = "/api/whole-home"
+_AUTH_API_PREFIX = "/api/auth/"
+_BROWSER_SESSION_REQUIRED = "browser_session_required"
+_BROWSER_SESSION_UPGRADE_REQUIRED = "browser_session_upgrade_required"
 _USERNAME_REQUIRED = "username is required"   # shared 400 message across the admin user verbs
 _ROUTE_MIN_ROLE = {
     ("GET", "/api/budget/consent/pending"): _ADMIN,
@@ -290,6 +295,8 @@ _ROUTE_MIN_ROLE = {
     ("GET", _PATH_ROOM_ICONS): _VIEWER,
     ("GET", "/api/whoami"): _VIEWER,
     ("GET", "/api/me/capabilities"): _VIEWER,
+    ("POST", auth_qr.CODE_PATH): _VIEWER,
+    ("POST", device_token.EXCHANGE_PATH): _VIEWER,
     ("POST", "/api/me/password"): _VIEWER,         # any signed-in user changes their OWN password (verifies current)
     # room actions: operator and admin (a viewer is read-only — the UI hides these, the server enforces it)
     ("POST", "/api/control"): _OPERATOR,
@@ -310,6 +317,8 @@ _ROUTE_MIN_ROLE = {
     # user administration: admin only (add/list accounts, change roles, disable, reset another's password)
     ("GET", _PATH_USERS): _ADMIN,
     ("POST", _PATH_USERS): _ADMIN,
+    ("GET", _PATH_USER_GRANTS): _ADMIN,
+    ("POST", _PATH_USER_GRANTS): _ADMIN,
     ("POST", "/api/users/role"): _ADMIN,
     ("POST", "/api/users/disabled"): _ADMIN,
     ("POST", "/api/users/reset-password"): _ADMIN,
@@ -334,6 +343,8 @@ _RECEIPT_DATA_ROUTES = frozenset({
 _AUTHENTICATED_ROUTES = frozenset({
     ("GET", "/api/whoami"),
     ("GET", "/api/me/capabilities"),
+    ("POST", auth_qr.CODE_PATH),
+    ("POST", device_token.EXCHANGE_PATH),
     ("GET", _PATH_SETTINGS),
     ("POST", _PATH_SETTINGS),
     ("POST", "/api/me/password"),
@@ -407,9 +418,11 @@ assert set(_ROUTE_REQUIREMENTS) == {
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _CORE_BROWSER_READ_ROUTES = frozenset({
     ("GET", _PATH_USERS),
+    ("GET", _PATH_USER_GRANTS),
 })
 _CORE_BROWSER_MUTATION_ROUTES = frozenset({
     ("POST", _PATH_USERS),
+    ("POST", _PATH_USER_GRANTS),
     ("POST", "/api/users/role"),
     ("POST", "/api/users/disabled"),
     ("POST", "/api/users/reset-password"),
@@ -421,7 +434,9 @@ _CORE_BROWSER_MUTATION_ROUTES = frozenset({
     ("POST", "/api/graduate"),
     ("POST", _PATH_ROOM_ICONS),
 })
-_CORE_BROWSER_ROUTES = _CORE_BROWSER_READ_ROUTES | _CORE_BROWSER_MUTATION_ROUTES
+_CORE_BROWSER_ROUTES = _CORE_BROWSER_READ_ROUTES | _CORE_BROWSER_MUTATION_ROUTES | {
+    ("POST", auth_qr.CODE_PATH),
+}
 
 
 _HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
@@ -498,6 +513,17 @@ def _canonical_origin_tuple(origin: str, *, allow_trailing_slash: bool = False) 
     return scheme, canonical_host, port
 
 
+def _canonical_https_origin(origin: "str | None", *, allow_trailing_slash: bool = False) -> "str | None":
+    if not isinstance(origin, str):
+        return None
+    parsed = _canonical_origin_tuple(origin, allow_trailing_slash=allow_trailing_slash)
+    if parsed is None or parsed[0] != "https":
+        return None
+    scheme, host, port = parsed
+    authority = f"[{host}]" if ":" in host else host
+    return f"{scheme}://{authority}" + ("" if port == 443 else f":{port}")
+
+
 def _check_core_origin(request) -> "web.Response | None":
     configured = os.environ.get("HESTIA_PUBLIC_ORIGIN")
     if configured is not None and configured != "":
@@ -517,8 +543,11 @@ def _check_core_origin(request) -> "web.Response | None":
     return None
 
 
-def _incompatible_bridge_response():
-    return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": "authorization_bridge_incompatible"})
+def _incompatible_bridge_response(request=None):
+    code = "authorization_bridge_incompatible"
+    if request is not None and request.path.startswith(_AUTH_API_PREFIX):
+        return _auth_error(HTTPStatus.SERVICE_UNAVAILABLE, code)
+    return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": code})
 
 
 def _required_role(method: str, path: str) -> str:
@@ -548,7 +577,13 @@ def _catalog_allows(session, actor: str, requirement: str) -> bool:
     if requirement == _OWNER_ONLY or requirement == _DEVICE_ADMIN:
         return authz.is_active_budget_owner(session, actor)
     if requirement == _LEGACY_RECEIPTS:
-        return authz.has_legacy_receipt_profile(session, actor)
+        if authz.has_legacy_receipt_profile(session, actor):
+            return True
+        target = authz.resolve_budget_target(session, actor)
+        return target is not None and bool(
+            authz.effective_permissions(session, actor, owner=target)
+            & {pid for pid in authz.CATALOG if pid.startswith("budget.receipts.")}
+        )
     return authz.authorize(
         session, actor, requirement,
         owner=actor if requirement.startswith("budget.") else None,
@@ -560,14 +595,22 @@ def _catalog_request_allowed(actor: str, method: str, path: str) -> bool:
         return _catalog_allows(session, actor, _required_permission(method, path))
 
 
-def _session_context_current(ctx: ValidatedSessionContext) -> bool:
+def _session_credential_current(ctx: ValidatedSessionContext) -> bool:
     envelope = auth.decode_session(ctx.raw_token, now=_now(), secret=_SESSION_SECRET)
-    if envelope is None:
+    if envelope is None or envelope.username != ctx.username:
         return False
     try:
         state = store_sql.load_auth_state(ctx.username)
-        if not state.enabled or not _envelope_matches_state(ctx.carrier, envelope, state):
-            return False
+        return state.enabled and _envelope_matches_state(ctx.carrier, envelope, state)
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return False
+
+
+def _session_context_current(ctx: ValidatedSessionContext) -> bool:
+    if not _session_credential_current(ctx):
+        return False
+    try:
+        state = store_sql.load_auth_state(ctx.username)
         return (
             _role_allows(state.role, _required_role("GET", "/api/events"))
             if state.policy_phase == authz.POLICY_PHASE_LEGACY
@@ -593,22 +636,44 @@ def _envelope_matches_state(carrier: str, envelope: auth.SessionEnvelope, auth_s
         if envelope.generation != auth_state.generation:
             return False
         if envelope.version == 2:
-            expected_purpose = auth.SESSION_PURPOSE_BROWSER if carrier == "cookie" else auth.SESSION_PURPOSE_NATIVE
-            return envelope.purpose == expected_purpose
+            if carrier == "cookie":
+                return envelope.purpose == auth.SESSION_PURPOSE_BROWSER
+            return envelope.purpose in {auth.SESSION_PURPOSE_NATIVE, auth.SESSION_PURPOSE_NATIVE_QR}
         return True
     return envelope.version == 1
+
+
+def _session_policy_error(request, status, code, *, legacy_empty=False):
+    if request.path.startswith(_AUTH_API_PREFIX):
+        return _auth_error(status, code)
+    if legacy_empty:
+        return _empty(status)
+    return _json(status, {"ok": False, "error": code})
+
+
+def _unauthenticated_session(request):
+    if (request.method, request.path) == ("POST", device_token.EXCHANGE_PATH):
+        return _native_session_required()
+    return _session_policy_error(request, HTTPStatus.UNAUTHORIZED, _BROWSER_SESSION_REQUIRED, legacy_empty=True)
 
 
 @web.middleware
 async def _auth_middleware(request, handler):
     """Authenticate + authorize requests across legacy and active session/policy bridge phases."""
-    if (request.method, request.path) == ("GET", "/api/auth/features"):
+    if (request.method, request.path) in {
+        ("GET", "/api/auth/features"), ("POST", auth_qr.REDEEM_PATH),
+    }:
         return await handler(request)
     if device_token.receipts_path(request.path) and not device_token.receipts_enabled():
         return device_token.disabled_response()
     authorization = request.headers.get("Authorization", "")
-    if (_AUTH_ENABLED and "Authorization" in request.headers
-            and (request.method, request.path) != ("POST", device_token.LOGIN_PATH)):
+    if (
+        _AUTH_ENABLED and "Authorization" in request.headers
+        and (
+            (request.method, request.path) != ("POST", device_token.LOGIN_PATH)
+            or device_token._modern_bearer(authorization.removeprefix(_BEARER_PREFIX)) is not None
+        )
+    ):
         target = request.raw_path.partition("?")[0]
         decision = await asyncio.to_thread(
             device_token.decide,
@@ -616,16 +681,20 @@ async def _auth_middleware(request, handler):
             _now(),
         )
         if decision["action"] == "response":
+            if request.path.startswith(_AUTH_API_PREFIX):
+                return _auth_error(decision["status"], decision["code"])
             return device_token.json_error(decision)
         if decision["action"] == "accept":
             request[device_token.REQUEST_KEY] = decision["token_id"]
             request[device_token.ACTOR_REQUEST_KEY] = decision["actor"]
+            request[device_token.PROOF_REQUEST_KEY] = decision["credential_hmac"]
             request[_USER_KEY] = decision["owner"]
             request[_ROLE_KEY] = _ADMIN
             return await handler(request)
         if (request.path.startswith("/api/budget/")
                 and (request.method, target) not in (
-                    ("POST", device_token.REDEEM_PATH), ("GET", consent_api.CALLBACK),
+                    ("POST", device_token.REDEEM_PATH), ("POST", device_token.LOGIN_PATH),
+                    ("GET", consent_api.CALLBACK),
                 )
                 and authorization.startswith(_BEARER_PREFIX)
                 and auth.decode_session(
@@ -641,7 +710,7 @@ async def _auth_middleware(request, handler):
             try:
                 await asyncio.to_thread(store_sql.check_supported_policy_phase)
             except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
-                return _incompatible_bridge_response()
+                return _incompatible_bridge_response(request)
         return await handler(request)
     carrier, raw_token = _request_carrier(request)
     envelope = auth.decode_session(raw_token, now=_now(), secret=_SESSION_SECRET) if raw_token else None
@@ -650,14 +719,14 @@ async def _auth_middleware(request, handler):
             try:
                 await asyncio.to_thread(store_sql.check_supported_policy_phase)
             except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
-                return _incompatible_bridge_response()
+                return _incompatible_bridge_response(request)
         if redeem_cookie:
             return await handler(request)
-        return _empty(HTTPStatus.UNAUTHORIZED)
+        return _unauthenticated_session(request)
     try:
         auth_state = await asyncio.to_thread(store_sql.load_auth_state, envelope.username)
     except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
-        return _incompatible_bridge_response()
+        return _incompatible_bridge_response(request)
     if (
         not auth_state.enabled
         or auth_state.role is None
@@ -665,7 +734,7 @@ async def _auth_middleware(request, handler):
     ):
         if redeem_cookie:
             return await handler(request)
-        return _empty(HTTPStatus.UNAUTHORIZED)
+        return _unauthenticated_session(request)
     request[_USER_KEY] = envelope.username
     request[_ROLE_KEY] = auth_state.role
     request[_SESSION_CONTEXT_KEY] = ValidatedSessionContext(
@@ -694,20 +763,21 @@ async def _auth_middleware(request, handler):
                 _catalog_request_allowed, envelope.username, request.method, request.path,
             )
         except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
-            return _incompatible_bridge_response()
+            return _incompatible_bridge_response(request)
     if not allowed:
         if auth_state.policy_phase != authz.POLICY_PHASE_LEGACY and request.path.startswith("/api/budget/"):
             return _json(HTTPStatus.FORBIDDEN, {"error": {"code": "budget_forbidden"}})
-        return _empty(HTTPStatus.FORBIDDEN)
-    if (
-        auth_state.session_phase == store_sql.SESSION_PHASE_V2
-        and (request.method, request.path) in _CORE_BROWSER_ROUTES
+        return _session_policy_error(request, HTTPStatus.FORBIDDEN, "auth_forbidden", legacy_empty=True)
+    route = request.method, request.path
+    grant_write = route == ("POST", _PATH_USER_GRANTS)
+    if grant_write or (
+        auth_state.session_phase == store_sql.SESSION_PHASE_V2 and route in _CORE_BROWSER_ROUTES
     ):
         if carrier != "cookie":
-            return _json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "browser_session_required"})
-        if envelope.version != 2:
-            return _json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "browser_session_upgrade_required"})
-        if (request.method, request.path) in _CORE_BROWSER_MUTATION_ROUTES:
+            return _session_policy_error(request, HTTPStatus.FORBIDDEN, _BROWSER_SESSION_REQUIRED)
+        if envelope.version != 2 or (grant_write and envelope.purpose != auth.SESSION_PURPOSE_BROWSER):
+            return _session_policy_error(request, HTTPStatus.UNAUTHORIZED, _BROWSER_SESSION_UPGRADE_REQUIRED)
+        if grant_write or route in _CORE_BROWSER_MUTATION_ROUTES:
             origin_err = _check_core_origin(request)
             if origin_err is not None:
                 return origin_err
@@ -719,8 +789,15 @@ async def _empty_404_405_middleware(request, handler):
     try:
         return await handler(request)
     except web.HTTPMethodNotAllowed as exc:
-        return _empty(HTTPStatus.METHOD_NOT_ALLOWED, [("Allow", exc.headers.get("Allow", ""))])
+        allow = exc.headers.get("Allow", "")
+        if request.path.startswith(_AUTH_API_PREFIX):
+            response = _auth_error(HTTPStatus.METHOD_NOT_ALLOWED, "auth_method_not_allowed")
+            response.headers["Allow"] = allow
+            return response
+        return _empty(HTTPStatus.METHOD_NOT_ALLOWED, [("Allow", allow)])
     except web.HTTPNotFound:
+        if request.path.startswith(_AUTH_API_PREFIX):
+            return _auth_error(HTTPStatus.NOT_FOUND, "auth_not_found")
         return _empty(HTTPStatus.NOT_FOUND)
 
 
@@ -836,6 +913,7 @@ def _capability_payload(actor: str, state: store_sql.AuthState) -> dict:
     household_enabled = budget_enabled and os.environ.get("HESTIA_BUDGET_ANALYTICS_ENABLED") == "1"
     with store_sql.authorization_snapshot() as session:
         authoritative = session.get(AppMeta, "users_authoritative") is not None
+        delegated = None
         if state.policy_phase == authz.POLICY_PHASE_LEGACY:
             installation = _legacy_role_permissions(state.role)
             legacy_owner = authoritative and state.role == _ADMIN
@@ -856,17 +934,19 @@ def _capability_payload(actor: str, state: store_sql.AuthState) -> dict:
             own = {
                 "permissions": sorted(own_permissions),
                 "can_view": budget_enabled and "budget.view" in own_permissions,
-                "can_use_receipts": (
-                    receipts_enabled and authz.LEGACY_RECEIPT_PERMISSIONS <= own_permissions
-                ),
+                "can_use_receipts": receipts_enabled and bool(own_permissions & authz.LEGACY_RECEIPT_PERMISSIONS),
                 "can_manage_devices": receipts_enabled,
             } if active_owner else None
+            delegated_permissions = authz.delegated_receipt_permissions(session, actor)
+            delegated = {
+                "permissions": sorted(delegated_permissions), "can_use": receipts_enabled,
+            } if delegated_permissions else None
         return {
             "user": actor,
             "actor_tag": budget_api.actor_digest(actor),
             "installation_permissions": sorted(installation),
             "own_budget": own,
-            "delegated_receipts": None,
+            "delegated_receipts": delegated,
             "household_available": household_enabled and authz.household_available(session, actor),
         }
 
@@ -895,14 +975,178 @@ async def _me_capabilities(request):
     return response
 
 
+def _auth_error(status: int, code: str, *, retry: "int | None" = None):
+    response = _json(status, {"error": {"code": code}})
+    response.headers.update(budget_api.PRIVATE_HEADERS)
+    if retry is not None:
+        response.headers["Retry-After"] = str(retry)
+    return response
+
+
+def _native_session_required():
+    return _auth_error(HTTPStatus.UNAUTHORIZED, "native_session_required")
+
+
+def _qr_configured_origin() -> "str | None":
+    return _canonical_https_origin(os.environ.get("HESTIA_PUBLIC_ORIGIN"), allow_trailing_slash=True)
+
+
+def _trusted_forwarded_https(request) -> bool:
+    if request.headers.getall("X-Forwarded-Proto", []) != ["https"]:
+        return False
+    try:
+        networks = consent_context._networks(os.environ)
+        peer = ipaddress.ip_address(request.remote or "")
+    except (ValueError, BudgetConfigError):
+        return False
+    return any(peer in network for network in networks)
+
+
+def _qr_public_transport(request, configured: str) -> bool:
+    hosts = request.headers.getall("Host", [])
+    expected = _canonical_origin_tuple(configured)
+    if len(hosts) != 1 or expected is None or _canonical_origin_tuple("https://" + hosts[0]) != expected:
+        return False
+    if "X-Forwarded-Proto" in request.headers:
+        return _trusted_forwarded_https(request)
+    return request.secure
+
+
+def _native_auth_available() -> bool:
+    if not _AUTH_ENABLED or os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
+        return False
+    try:
+        with store_sql.authorization_snapshot() as session:
+            return (
+                store_sql.auth_session_phase(session) == store_sql.SESSION_PHASE_V2
+                and session.get(AppMeta, store_sql._USERS_AUTHORITATIVE) is not None
+            )
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return False
+
+
+async def _qr_code(request):
+    configured = _qr_configured_origin()
+    if configured is None:
+        return _auth_error(HTTPStatus.SERVICE_UNAVAILABLE, "auth_origin_unavailable")
+    body, error = await _read_json_body(request, reject_duplicates=True)
+    if error:
+        return _auth_error(body.status, "qr_invalid_request")
+    supplied = _canonical_https_origin(body.get("origin")) if isinstance(body, dict) and set(body) == {"origin"} else None
+    origins = request.headers.getall("Origin", [])
+    if supplied != configured or len(origins) != 1 or _canonical_https_origin(origins[0]) != configured:
+        return _auth_error(HTTPStatus.BAD_REQUEST, "qr_origin_mismatch")
+    ctx = request.get(_SESSION_CONTEXT_KEY)
+    if ctx is None:
+        return _auth_error(HTTPStatus.UNAUTHORIZED, _BROWSER_SESSION_REQUIRED)
+    if not _session_credential_current(ctx):
+        return _auth_error(HTTPStatus.UNAUTHORIZED, _BROWSER_SESSION_UPGRADE_REQUIRED)
+    if not budget_api.expected_actor_matches(request, ctx.username):
+        return _auth_error(HTTPStatus.CONFLICT, "budget_actor_changed")
+    try:
+        payload = await asyncio.to_thread(
+            auth_qr.issue, ctx.username, configured, ctx.generation, now=_now(), secret=_SESSION_SECRET,
+        )
+    except auth_qr.QrLoginError as exc:
+        return _auth_error(exc.status, exc.code)
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return _incompatible_bridge_response(request)
+    response = _json(HTTPStatus.OK, {"qr_payload": payload})
+    response.headers.update(budget_api.PRIVATE_HEADERS)
+    return response
+
+
+async def _qr_redeem(request):
+    if "Cookie" in request.headers or "Authorization" in request.headers:
+        return _auth_error(HTTPStatus.BAD_REQUEST, "qr_auth_ambiguous")
+    configured = _qr_configured_origin()
+    if configured is None:
+        return _auth_error(HTTPStatus.SERVICE_UNAVAILABLE, "auth_origin_unavailable")
+    retry = auth_qr.redeem_limited(device_token.client_ip(request), time.monotonic())
+    if retry is not None:
+        return _auth_error(HTTPStatus.TOO_MANY_REQUESTS, "qr_rate_limited", retry=retry)
+    body, error = await _read_json_body(request, reject_duplicates=True)
+    if error:
+        return _auth_error(body.status, "qr_invalid_request")
+    if not isinstance(body, dict) or set(body) != {"origin", "code"}:
+        return _auth_error(HTTPStatus.UNAUTHORIZED, "qr_code_invalid")
+    if body["origin"] != configured or not _qr_public_transport(request, configured):
+        return _auth_error(HTTPStatus.BAD_REQUEST, "qr_origin_mismatch")
+    code = auth_qr.normalize_code(body["code"])
+    if code is None:
+        return _auth_error(HTTPStatus.UNAUTHORIZED, "qr_code_invalid")
+    retry = auth_qr.redeem_global_limited(time.monotonic())
+    if retry is not None:
+        return _auth_error(HTTPStatus.TOO_MANY_REQUESTS, "qr_rate_limited", retry=retry)
+    try:
+        result = await asyncio.to_thread(auth_qr.redeem, configured, code, now=_now(), secret=_SESSION_SECRET)
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return _incompatible_bridge_response(request)
+    if result is None:
+        return _auth_error(HTTPStatus.UNAUTHORIZED, "qr_code_invalid")
+    response = _json(HTTPStatus.OK, result)
+    response.headers.update(budget_api.PRIVATE_HEADERS)
+    return response
+
+
+async def _device_exchange(request):
+    ctx = request.get(_SESSION_CONTEXT_KEY)
+    if (
+        ctx is None or ctx.carrier != "bearer" or ctx.version != 2
+        or ctx.purpose not in {auth.SESSION_PURPOSE_NATIVE, auth.SESSION_PURPOSE_NATIVE_QR}
+        or ctx.session_phase != store_sql.SESSION_PHASE_V2
+    ):
+        return _native_session_required()
+    if not device_token.budget_http_enabled():
+        return _auth_error(HTTPStatus.NOT_FOUND, "budget_disabled")
+    if not device_token.receipts_enabled():
+        return _auth_error(HTTPStatus.NOT_FOUND, "budget_receipts_disabled")
+    invalid_request = "budget_invalid_request"
+    body, error = await _read_json_body(request, 4096, reject_duplicates=True)
+    if error:
+        return _auth_error(body.status, invalid_request)
+    if not _session_credential_current(ctx):
+        return _native_session_required()
+    if not isinstance(body, dict) or not set(body) <= {"device_name", "prior_token"} or "device_name" not in body:
+        return _auth_error(HTTPStatus.BAD_REQUEST, invalid_request)
+    prior = body.get("prior_token")
+    if prior is not None and (not isinstance(prior, str) or not prior):
+        return _auth_error(HTTPStatus.BAD_REQUEST, invalid_request)
+    try:
+        result = await asyncio.to_thread(
+            lambda: device_token.open_store(session_secret=_SESSION_SECRET).exchange(
+                ctx.username, body["device_name"], prior, generation=ctx.generation,
+            ),
+        )
+    except device_token.DeviceTokenError as exc:
+        return _auth_error(exc.status, exc.code)
+    except BudgetUsersBackendRequired:
+        return _auth_error(HTTPStatus.FORBIDDEN, "budget_forbidden")
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return _incompatible_bridge_response(request)
+    response = _json(HTTPStatus.OK, result)
+    response.headers.update(budget_api.PRIVATE_HEADERS)
+    return response
+
+
 async def _auth_features(request):
     calendar_instances = any(
         route.method == "GET" and route.resource.canonical == "/api/calendars/instances"
         for route in request.app.router.routes()
     )
-    features = ["capabilities"] + (["calendar_instances"] if calendar_instances else [])
+    native_auth = _native_auth_available()
+    qr_origin = _qr_configured_origin() if native_auth else None
+    if qr_origin is not None and len(qr_origin.encode("ascii")) > auth_qr.MAX_ORIGIN_BYTES:
+        qr_origin = None
+    features = ["capabilities"]
+    if qr_origin is not None:
+        features.append("qr_login")
+    if native_auth and device_token.budget_http_enabled() and device_token.receipts_enabled():
+        features.extend(["device_exchange", "budget_native_read"])
+    if calendar_instances:
+        features.append("calendar_instances")
     response = _json(HTTPStatus.OK, {
-        "auth_contract": 2, "features": features, "qr_origin": None,
+        "auth_contract": 2, "features": features, "qr_origin": qr_origin,
     })
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -915,6 +1159,18 @@ async def _audit_feed(request):
         return _json(HTTPStatus.OK, {"events": []})
     events = await asyncio.get_running_loop().run_in_executor(
         None, lambda: store_sql.recent_audit(rt.audit_engine))
+    actor = request.get(_USER_KEY)
+    if actor is not None:
+        try:
+            state = await asyncio.to_thread(store_sql.load_auth_state, actor)
+            manager = (
+                state.role == _ADMIN if state.policy_phase == authz.POLICY_PHASE_LEGACY
+                else await asyncio.to_thread(_catalog_request_allowed, actor, "GET", _PATH_USERS)
+            )
+        except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+            return _incompatible_bridge_response()
+        if not manager:
+            events = [event for event in events if event["action"] != "user_grants"]
     return _json(HTTPStatus.OK, {"events": events})
 
 
@@ -1085,7 +1341,8 @@ async def _room_icon_set(request):
 # The SERVER is the security boundary. Floors: /api/me/password = any signed-in user (verifies the
 # current password); every /api/users* route = admin (the middleware enforces it before these run).
 # All require the SQLite users backend (roles/disable live there) → 409 otherwise. Self-targeting is
-# blocked on the admin verbs so an admin can't lock themselves out or bypass the current-password check.
+# blocked on the legacy admin verbs. Grant editing allows ordinary self-edit but protects the caller's
+# own system.manage_users grant and the last enabled manager.
 
 _MIN_PASSWORD = 8
 _MAX_PASSWORD = 1024
@@ -1183,6 +1440,69 @@ async def _users_list(request):
         return _requires_sqlite()
     users = await asyncio.get_running_loop().run_in_executor(None, store_sql.list_users)
     return _json(HTTPStatus.OK, {"users": users})
+
+
+_GRANT_ERROR_STATUS = {
+    "users_not_authoritative": HTTPStatus.CONFLICT,
+    "catalog_not_active": HTTPStatus.CONFLICT,
+    "manage_users_required": HTTPStatus.FORBIDDEN,
+    "not_found": HTTPStatus.NOT_FOUND,
+    "user_disabled": HTTPStatus.CONFLICT,
+    "self_manage_users": HTTPStatus.FORBIDDEN,
+    "last_admin": HTTPStatus.CONFLICT,
+}
+
+
+def _grant_editor_error(error: store_sql.GrantEditorError):
+    status = _GRANT_ERROR_STATUS.get(error.code, HTTPStatus.BAD_REQUEST)
+    return _json(status, {"ok": False, "error": error.code})
+
+
+async def _users_grants_read(request):
+    """GET /api/users/grants?username=... — direct grants and their effective closure."""
+    usernames = request.query.getall("username", [])
+    if set(request.query) != {"username"} or len(usernames) != 1:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_username"})
+    try:
+        if not await _users_backend_ready():
+            return _requires_sqlite()
+        payload = await asyncio.to_thread(
+            store_sql.get_user_grants,
+            usernames[0],
+            actor=request.get(_USER_KEY),
+        )
+    except store_sql.GrantEditorError as exc:
+        return _grant_editor_error(exc)
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return _incompatible_bridge_response()
+    response = _json(HTTPStatus.OK, payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+async def _users_grants_write(request):
+    """POST /api/users/grants — replace one account's direct grant selection atomically."""
+    body, err = await _read_json_body(request, reject_duplicates=True)
+    if err:
+        return body
+    if not isinstance(body, dict) or set(body) != {"username", "grants"}:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "invalid_grant_request"})
+    username = body["username"]
+    try:
+        if not await _users_backend_ready():
+            return _requires_sqlite()
+        result = await asyncio.to_thread(
+            store_sql.replace_user_grants,
+            username,
+            body["grants"],
+            actor=request.get(_USER_KEY),
+        )
+    except store_sql.GrantEditorError as exc:
+        return _grant_editor_error(exc)
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return _incompatible_bridge_response()
+    _audit(_rt(request), _actor(request), "user_grants", target=username, detail=f"phase={result['phase']}")
+    return _json(HTTPStatus.OK, result)
 
 
 async def _users_add(request):
@@ -1770,6 +2090,9 @@ def make_app(rt):
     app.router.add_post("/api/login", _login)
     app.router.add_post("/api/logout", _logout)
     app.router.add_get("/api/auth/features", _auth_features, allow_head=False)
+    app.router.add_post(auth_qr.CODE_PATH, _qr_code)
+    app.router.add_post(auth_qr.REDEEM_PATH, _qr_redeem)
+    app.router.add_post(device_token.EXCHANGE_PATH, _device_exchange)
     app.router.add_get("/api/whoami", _whoami, allow_head=False)
     app.router.add_get("/api/me/capabilities", _me_capabilities, allow_head=False)
     app.router.add_get("/api/discovery", _discovery, allow_head=False)
@@ -1794,6 +2117,8 @@ def make_app(rt):
     app.router.add_post("/api/me/password", _me_password)
     app.router.add_get(_PATH_USERS, _users_list, allow_head=False)
     app.router.add_post(_PATH_USERS, _users_add)
+    app.router.add_get(_PATH_USER_GRANTS, _users_grants_read, allow_head=False)
+    app.router.add_post(_PATH_USER_GRANTS, _users_grants_write)
     app.router.add_post("/api/users/role", _users_role)
     app.router.add_post("/api/users/disabled", _users_disabled)
     app.router.add_post("/api/users/reset-password", _users_reset_password)

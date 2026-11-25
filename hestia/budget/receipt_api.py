@@ -48,14 +48,16 @@ def enabled():
 _RETENTION_SECRET = b"hestia/budget/receipts/retention/v1"
 
 
-def _store(secret, device_id=None):
+def _store(secret, device_id=None, actor=None):
     engine, sessions = init_db()
     with sessions() as session:
         store_sql.auth_session_phase(session)
         authz.require_supported_policy_phase(session)
     if not store_sql.is_users_db_authoritative(engine):
         raise BudgetUsersBackendRequired()
-    return BudgetReceiptStore(sessions, clock=time.time, cursor_secret=secret, device_id=device_id)
+    return BudgetReceiptStore(
+        sessions, clock=time.time, cursor_secret=secret, device_id=device_id, actor=actor,
+    )
 
 
 def retain_expired(path=None, clock=time.time):
@@ -79,8 +81,8 @@ def _receipt_id(request):
     return request.query["receipt_id"]
 
 
-def _run(owner, operation, values, secret, device_id):
-    store = _store(secret, device_id)
+def _run(owner, operation, values, secret, device_id, actor=None):
+    store = _store(secret, device_id, actor)
     if operation == "parse-text":
         return store.parse_text(owner, values["text"], source_kind=values["source_kind"])
     return getattr(store, operation)(owner, values)
@@ -138,10 +140,13 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
             secret = api._secret(session_secret)
             if not enabled():
                 raise api._Rejected(404, "budget_receipts_disabled")
+            actor = request.get(device_token.ACTOR_REQUEST_KEY, owner) if device_id is not None else owner
             if request.method == "GET":
                 version = _receipt_contract(request, operation)
                 receipt_id = _receipt_id(request)
-                result = await api._settled_thread(lambda: _run_read(owner, operation, receipt_id, secret, device_id))
+                result = await api._settled_thread(
+                    lambda: _run_read(owner, operation, receipt_id, secret, device_id, actor),
+                )
                 return _response(operation, result, version)
             if device_id is None:
                 api._browser(request, owner, secret)
@@ -161,7 +166,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
                 api._browser(request, owner, secret)
             if not enabled():
                 raise api._Rejected(404, "budget_receipts_disabled")
-            result = await api._settled_thread(lambda: _run(owner, operation, values, secret, device_id))
+            actor = request.get(device_token.ACTOR_REQUEST_KEY, owner) if device_id is not None else owner
+            result = await api._settled_thread(lambda: _run(owner, operation, values, secret, device_id, actor))
             return _response(operation, result, version)
         except (ReceiptError, device_token.DeviceTokenError) as exc:
             return api._error(exc.status, exc.code)
@@ -289,7 +295,10 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
                     return store.cancel_code(owner, code_id)
                 if operation == "list":
                     return store.list_tokens(owner)
-                return store.revoke(owner, token_id, actor_token_id=device_id)
+                return store.revoke(
+                    owner, token_id, actor_token_id=device_id,
+                    actor_token_proof=request.get(device_token.PROOF_REQUEST_KEY),
+                )
 
             result = await api._settled_thread(run)
             return web.json_response(result, headers=api.PRIVATE_HEADERS)
@@ -328,8 +337,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
     app.router.add_post(device_token.LOGIN_PATH, login)
 
 
-def _run_read(owner, operation, receipt_id, secret, device_id=None):
-    store = _store(secret, device_id)
+def _run_read(owner, operation, receipt_id, secret, device_id=None, actor=None):
+    store = _store(secret, device_id, actor)
     if operation == "detail":
         return store.detail(owner, receipt_id)
     store.image(owner, receipt_id)
