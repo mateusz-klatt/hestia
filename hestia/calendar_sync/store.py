@@ -25,8 +25,9 @@ REQUEST_PAYLOAD_BYTES = 16 * 1024 * 1024  # 16 MiB per-request JSON decode budge
 _EVENT_ID_CHUNK_SIZE = 500  # Keep SQLite IN (...) batches well below parameter limits.
 
 
-def _supports_octet_length(version: str = sqlite3.sqlite_version) -> bool:
-    return tuple(int(part) for part in version.split(".")[:2]) >= (3, 43)
+def _supports_octet_length(version: str | None = None) -> bool:
+    raw = sqlite3.sqlite_version if version is None else version
+    return tuple(int(part) for part in raw.split(".")[:2]) >= (3, 43)
 
 
 _HAS_OCTET_LENGTH = _supports_octet_length()
