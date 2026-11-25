@@ -289,6 +289,16 @@ def _read_snapshot(engine):
 
 
 @contextmanager
+def authorization_snapshot(*, path=None):
+    """Read catalog grants and account state from one consistent SQLite snapshot."""
+    engine, _ = init_db(path)
+    with _read_snapshot(engine) as session:
+        auth_session_phase(session)
+        authz.require_supported_policy_phase(session)
+        yield session
+
+
+@contextmanager
 def _immediate_transaction(engine):
     """Run work inside an explicit ``BEGIN IMMEDIATE`` write transaction on ``engine``."""
     with Session(engine) as session:
@@ -495,13 +505,16 @@ def set_user_db(username: str, password_hash: str, role: "str | None" = None, *,
     try:
         with Session(engine) as session, session.begin():
             s_phase = auth_session_phase(session)
-            authz.require_supported_policy_phase(session)
+            p_phase = authz.require_supported_policy_phase(session)
+            if role is not None and p_phase == authz.POLICY_PHASE_CUSTOM:
+                return "legacy_role_changes_disabled"
             row = session.get(User, username)
             if row is None:
                 effective_role = DEFAULT_NEW_ROLE if role is None else role
                 row = User(username=username, password_hash=password_hash, role=effective_role)
                 session.add(row)
-                sync_legacy_grants(session)
+                if p_phase != authz.POLICY_PHASE_CUSTOM:
+                    sync_legacy_grants(session)
                 return effective_role
             effective_role = row.role if role is None else role
             role_changed = effective_role != row.role
@@ -545,6 +558,13 @@ def _immediate_engine(path=None):
 
 def _other_enabled_admins(session, exclude_username: str) -> int:
     """How many ENABLED admins exist OTHER than ``exclude_username`` — the ≥1-admin invariant guard."""
+    if authz.policy_phase(session) == authz.POLICY_PHASE_CUSTOM:
+        return sum(
+            authz.project_legacy_role(session, row.username) == "admin"
+            for row in session.execute(
+                select(User).where(User.disabled.is_(False), User.username != exclude_username)
+            ).scalars()
+        )
     return session.execute(
         select(func.count()).select_from(User)
         .where(User.role == "admin", User.disabled.is_(False), User.username != exclude_username)
@@ -604,7 +624,9 @@ def set_user_role(username: str, role: str, *, path=None) -> str:
     engine = _immediate_engine(path)
     try:
         with Session(engine) as session, session.begin():
-            authz.require_supported_policy_phase(session)
+            phase = authz.require_supported_policy_phase(session)
+            if phase == authz.POLICY_PHASE_CUSTOM:
+                return "legacy_role_changes_disabled"
             row = session.get(User, username)
             if row is None:
                 return "not_found"
@@ -666,12 +688,17 @@ def load_auth_state(username, *, users_path=None) -> AuthState:
         if session.get(AppMeta, _USERS_AUTHORITATIVE) is not None:
             row = session.get(User, username) if valid_name else None
             enabled = row is not None and not row.disabled
+            role = (
+                authz.project_legacy_role(session, username)
+                if enabled and p_phase == authz.POLICY_PHASE_CUSTOM
+                else row.role if enabled else None
+            )
             return AuthState(
                 backend="sqlite",
                 session_phase=s_phase,
                 policy_phase=p_phase,
                 enabled=enabled,
-                role=row.role if enabled else None,
+                role=role,
                 generation=int(row.credential_generation) if enabled else 0,
             )
     present = valid_name and username in auth.load_users(Path(users_path) if users_path is not None else None)
@@ -772,6 +799,52 @@ def finish_sqlite_login(
         engine.dispose()
 
 
+def activate_catalog_compat(*, path=None) -> str:
+    """Backfill the legacy projection and enter ``catalog_compat`` in one write transaction."""
+    engine = _immediate_engine(path)
+    try:
+        with Session(engine) as session, session.begin():
+            auth_session_phase(session)
+            phase = authz.require_supported_policy_phase(session)
+            if phase == authz.POLICY_PHASE_CUSTOM:
+                return "already_custom"
+            if session.get(AppMeta, _USERS_AUTHORITATIVE) is None:
+                return "users_not_authoritative"
+            session.execute(
+                update(BudgetReceiptDeviceToken)
+                .where(BudgetReceiptDeviceToken.actor.is_(None))
+                .values(actor=BudgetReceiptDeviceToken.owner)
+            )
+            if phase == authz.POLICY_PHASE_COMPAT:
+                sync_legacy_grants(session)
+                return "already_active"
+
+            foreign_grants = set(session.execute(
+                select(PermissionGrant.username).where(
+                    PermissionGrant.target_owner.is_not(None),
+                    PermissionGrant.target_owner != PermissionGrant.username,
+                )
+            ).scalars())
+            household_members = set(session.execute(
+                select(BudgetHouseholdMember.member_username).where(
+                    BudgetHouseholdMember.member_username != BudgetHouseholdMember.owner
+                )
+            ).scalars())
+            conflicts = foreign_grants | household_members
+            for user in session.execute(select(User)).scalars():
+                if user.role == "admin" and user.username not in conflicts:
+                    user.budget_owner = True
+            _upsert(
+                session, AppMeta, "key", authz.POLICY_PHASE_KEY,
+                {"value": authz.POLICY_PHASE_COMPAT},
+            )
+            session.flush()
+            sync_legacy_grants(session)
+            return "activated"
+    finally:
+        engine.dispose()
+
+
 def activate_sessions_v2(*, path=None) -> str:
     """Persist ``auth_session_phase=v2`` once under a write lock."""
     engine = _immediate_engine(path)
@@ -795,7 +868,7 @@ def provision_budget_owner(username: str, *, path=None) -> str:
     try:
         with Session(engine) as session, session.begin():
             auth_session_phase(session)
-            authz.require_supported_policy_phase(session)
+            phase = authz.require_supported_policy_phase(session)
             if session.get(AppMeta, _USERS_AUTHORITATIVE) is None:
                 return "users_not_authoritative"
             row = session.get(User, username) if _valid_username(username) else None
@@ -803,7 +876,7 @@ def provision_budget_owner(username: str, *, path=None) -> str:
                 return "not_found"
             if row.disabled:
                 return "disabled"
-            if row.role != "admin":
+            if phase != authz.POLICY_PHASE_CUSTOM and row.role != "admin":
                 return "not_admin"
             if row.budget_owner:
                 return "already_provisioned"
@@ -837,7 +910,8 @@ def provision_budget_owner(username: str, *, path=None) -> str:
             )
             for pid in sorted(_LEGACY_SELF_BUDGET_GRANTS - existing_self):
                 session.add(PermissionGrant(username=username, permission_id=pid, target_owner=username))
-            sync_legacy_grants(session)
+            if phase != authz.POLICY_PHASE_CUSTOM:
+                sync_legacy_grants(session)
             return "ok"
     finally:
         engine.dispose()
@@ -875,8 +949,14 @@ def list_users(*, path=None) -> "list[dict]":
     engine, _ = init_db(path)
     try:
         with Session(engine) as session:
+            phase = authz.require_supported_policy_phase(session)
             rows = session.execute(select(User).order_by(User.username)).scalars()
-            return [{"username": u.username, "role": u.role, "disabled": bool(u.disabled)} for u in rows]
+            return [{
+                "username": u.username,
+                "role": (authz.project_legacy_role(session, u.username, include_disabled=True)
+                         if phase == authz.POLICY_PHASE_CUSTOM else u.role),
+                "disabled": bool(u.disabled),
+            } for u in rows]
     finally:
         engine.dispose()
 
@@ -886,11 +966,12 @@ def add_user(username: str, password_hash: str, role: str, *, path=None) -> str:
     engine = _immediate_engine(path)
     try:
         with Session(engine) as session, session.begin():
-            authz.require_supported_policy_phase(session)
+            phase = authz.require_supported_policy_phase(session)
             if session.get(User, username) is not None:
                 return "exists"
             session.add(User(username=username, password_hash=password_hash, role=role))
-            sync_legacy_grants(session)
+            if phase != authz.POLICY_PHASE_CUSTOM:
+                sync_legacy_grants(session)
         return "ok"
     finally:
         engine.dispose()

@@ -6,13 +6,21 @@ from typing import Iterable
 
 from sqlalchemy import select
 
-from .db import AppMeta, PermissionGrant, User
+from .db import AppMeta, BudgetHouseholdMember, PermissionGrant, User
 
 POLICY_PHASE_KEY = "authz_policy_phase"
 POLICY_PHASE_LEGACY = "legacy"
 POLICY_PHASE_COMPAT = "catalog_compat"
 POLICY_PHASE_CUSTOM = "catalog_custom"
-SUPPORTED_POLICY_PHASES = frozenset({POLICY_PHASE_LEGACY, POLICY_PHASE_COMPAT})
+SUPPORTED_POLICY_PHASES = frozenset(
+    {POLICY_PHASE_LEGACY, POLICY_PHASE_COMPAT, POLICY_PHASE_CUSTOM}
+)
+LEGACY_RECEIPT_PERMISSIONS = frozenset({
+    "budget.receipts.add",
+    "budget.receipts.view",
+    "budget.receipts.edit",
+    "budget.receipts.match",
+})
 
 
 class CatalogValidationError(ValueError):
@@ -253,13 +261,30 @@ def require_supported_policy_phase(session) -> str:
     return phase
 
 
-def _is_active_owner(user_row: "User | None") -> bool:
-    """True when ``user_row`` is an enabled, provisioned owner eligible before custom activation."""
+def _is_active_owner(user_row: "User | None", phase: str) -> bool:
     return (
         user_row is not None
         and not user_row.disabled
         and bool(user_row.budget_owner)
-        and user_row.role == "admin"
+        and (phase == POLICY_PHASE_CUSTOM or user_row.role == "admin")
+    )
+
+
+def is_active_budget_owner(session, actor: str) -> bool:
+    """Return whether ``actor`` is currently an enabled, provisioned self-owner."""
+    if not actor:
+        return False
+    phase = require_supported_policy_phase(session)
+    return _is_active_owner(session.get(User, actor), phase)
+
+
+def has_legacy_receipt_profile(session, actor: str, *, owner: "str | None" = None) -> bool:
+    """PR 2's legacy receipt surface is self-only and requires the complete effective profile."""
+    target = actor if owner is None else owner
+    return (
+        actor == target
+        and is_active_budget_owner(session, actor)
+        and LEGACY_RECEIPT_PERMISSIONS <= effective_permissions(session, actor, owner=target)
     )
 
 
@@ -278,7 +303,7 @@ def _closure(direct_ids: set[str]) -> frozenset[str]:
 
 def effective_permissions(session, actor: str, *, owner: "str | None" = None) -> frozenset[str]:
     """Return the transitive closure of valid direct grants for ``actor`` in that exact scope."""
-    require_supported_policy_phase(session)
+    phase = require_supported_policy_phase(session)
     if not actor:
         return frozenset()
     actor_row = session.get(User, actor)
@@ -299,7 +324,7 @@ def effective_permissions(session, actor: str, *, owner: "str | None" = None) ->
         return _closure(direct)
 
     owner_row = actor_row if owner == actor else session.get(User, owner)
-    if not _is_active_owner(owner_row):
+    if not _is_active_owner(owner_row, phase):
         return frozenset()
     rows = session.execute(
         select(PermissionGrant.permission_id).where(
@@ -321,9 +346,69 @@ def authorize(session, actor: str, permission_id: str, *, owner: "str | None" = 
     return permission_id in effective_permissions(session, actor, owner=owner)
 
 
+def household_available(session, actor: str) -> bool:
+    """Report only availability, never the household owner's identifier."""
+    phase = require_supported_policy_phase(session)
+    actor_row = session.get(User, actor) if actor else None
+    if actor_row is None or actor_row.disabled:
+        return False
+    if phase != POLICY_PHASE_LEGACY:
+        targets = session.execute(
+            select(PermissionGrant.target_owner).where(
+                PermissionGrant.username == actor,
+                PermissionGrant.permission_id == "household.view",
+                PermissionGrant.target_owner.is_not(None),
+            ).distinct()
+        ).scalars()
+        return any(authorize(session, actor, "household.view", owner=owner) for owner in targets)
+    if actor_row.role not in {"viewer", "operator"}:
+        return False
+    grants = session.execute(
+        select(BudgetHouseholdMember).where(BudgetHouseholdMember.member_username == actor)
+    ).scalars()
+    return any(
+        (owner_row := session.get(User, grant.owner)) is not None
+        and not owner_row.disabled and owner_row.role == "admin"
+        for grant in grants
+    )
+
+
+def project_legacy_role(session, actor: str, *, include_disabled: bool = False) -> "str | None":
+    """Expose the old role enum without using that projection for authorization."""
+    phase = require_supported_policy_phase(session)
+    user_row = session.get(User, actor) if actor else None
+    if user_row is None or (user_row.disabled and not include_disabled):
+        return None
+    if phase != POLICY_PHASE_CUSTOM:
+        return user_row.role
+
+    def declared(*, owner: "str | None" = None) -> frozenset[str]:
+        query = select(PermissionGrant.permission_id).where(PermissionGrant.username == actor)
+        query = query.where(
+            PermissionGrant.target_owner.is_(None) if owner is None
+            else PermissionGrant.target_owner == owner
+        )
+        scope = "installation" if owner is None else "owner"
+        return _closure({
+            pid for pid in session.execute(query).scalars()
+            if (spec := CATALOG.get(pid)) is not None and spec.storage_scope == scope
+        })
+
+    installation = declared()
+    own = declared(owner=actor) if user_row.budget_owner else frozenset()
+    if (
+        user_row.budget_owner
+        and "system.manage_users" in installation
+        and "ioc.control" in installation
+        and LEGACY_RECEIPT_PERMISSIONS <= own
+    ):
+        return "admin"
+    return "operator" if "ioc.control" in installation else "viewer"
+
+
 def resolve_budget_target(session, actor: str) -> "str | None":
     """Return ``actor``'s sole active budget target owner, or ``None`` if none or ambiguous."""
-    require_supported_policy_phase(session)
+    phase = require_supported_policy_phase(session)
     if not actor:
         return None
     actor_row = session.get(User, actor)
@@ -331,7 +416,7 @@ def resolve_budget_target(session, actor: str) -> "str | None":
         return None
 
     targets: set[str] = set()
-    if _is_active_owner(actor_row):
+    if _is_active_owner(actor_row, phase):
         targets.add(actor)
 
     candidate_owners = session.execute(
