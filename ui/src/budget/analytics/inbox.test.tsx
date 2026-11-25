@@ -59,10 +59,10 @@ function button(label: string, scope: ParentNode = host): HTMLButtonElement {
 }
 
 describe("InboxView", () => {
-  it("renders an owner device alert in Polish and marks it read through the inbox", async () => {
+  it.each([{}, { actor: null }])("renders an owner device alert in Polish and marks it read (%j)", async (actor) => {
     const device: AnalyticsInboxItem = {
       kind: "device_added", subject_id: "a".repeat(64), milestone: "added", read: false, read_at: null,
-      ref: { token_id: "synthetic-device-id" }, params: { status: "added", device_name: "Vesta", date: "2026-11-21" },
+      ref: { token_id: "synthetic-device-id" }, params: { status: "added", device_name: "Vesta", date: "2026-11-21", ...actor },
     };
     const data = inboxOf([device]);
     const api = fakeApi(data);

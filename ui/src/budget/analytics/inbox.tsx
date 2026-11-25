@@ -112,8 +112,8 @@ interface RowProps {
 
 function subjectLabel(item: AnalyticsInboxItem, lookups: LookupMaps): string {
   if (item.kind === "device_added") {
-    const name = item.params.actor === undefined ? item.params.device_name
-      : `${item.params.device_name} · ${item.params.actor}`;
+    const { actor, device_name: deviceName } = item.params;
+    const name = actor == null ? deviceName : `${deviceName} · ${actor}`;
     return t("budget.inbox.newDevice", { name, date: item.params.date });
   }
   if (item.kind === "consent_renewal") return lookups.banks.get(item.ref.connection_id) ?? t("budget.inbox.unknownBank");

@@ -269,6 +269,10 @@ class CapabilityUnitTests(unittest.TestCase):
         with mock.patch.object(web, "_SESSION_SECRET", b"route-secret"), \
              mock.patch.object(store_sql, "load_auth_state", side_effect=authz.PolicyPhaseUnsupported("future")):
             self.assertFalse(web._session_context_current(ctx))
+        with mock.patch.object(web, "_SESSION_SECRET", b"route-secret"), \
+             mock.patch.object(store_sql, "load_auth_state", return_value=self._state(phase="catalog_custom")), \
+             mock.patch.object(web, "_catalog_request_allowed", side_effect=authz.PolicyPhaseUnsupported("future")):
+            self.assertFalse(web._session_context_current(ctx))
 
 
 def _actor_header(username):

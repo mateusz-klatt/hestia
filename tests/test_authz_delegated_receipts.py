@@ -1,6 +1,7 @@
 import base64
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import hmac
 import json
 import os
 import unittest
@@ -107,6 +108,16 @@ class DelegatedReceiptStoreTests(AnalyticsCase):
         for actor, store in (("owner", self.receipts), ("delegate2", self.delegated("delegate2"))):
             with self.subTest(actor=actor), self.assertRaises(ReceiptError):
                 store.list(actor, {"limit": 1, "cursor": page["next_cursor"]})
+
+        last = page["receipts"][0]
+        raw = json.dumps({
+            "owner": "owner", "actor": "delegate", "context": delegate._filters({"limit": 1}, search=False)[-1],
+            "last_date": last["receipt_date"], "last_id": last["receipt_id"], "expires_at": self.now + 60,
+        }).encode("ascii")
+        mac = hmac.digest(delegate._receipt_cursor_key, raw, "sha256")
+        legacy_cursor = ".".join(base64.urlsafe_b64encode(part).rstrip(b"=").decode("ascii") for part in (raw, mac))
+        with self.assertRaises(ReceiptError):
+            delegate.list("delegate", {"limit": 1, "cursor": legacy_cursor})
 
     def test_link_redaction_and_sensitive_edit_preserve_reservation_without_bank_read(self):
         parsed = self.receipts.parse_text("owner", receipt_text())
