@@ -300,8 +300,46 @@ class BudgetAccountControlTests(AdvancingTime, unittest.TestCase):
             )
         self.assertIsNone(self.store.set_account_credit_limit("owner", account_id, None, actor="operator")["credit_limit"])
 
+        # ITAV currencies alone govern validation when ITAV balances exist (ITBD in EUR cannot unlock EUR limit).
+        with self.sessions.begin() as session:
+            session.get(db.BudgetAccount, account_id).balances_json = json.dumps([
+                {"name": "Available", "balance_type": "ITAV", "balance_amount": {"amount": "900", "currency": "PLN"},
+                 "reference_date": "2026-11-22"},
+                {"name": "Booked", "balance_type": "ITBD", "balance_amount": {"amount": "5000", "currency": "EUR"},
+                 "reference_date": "2026-11-22"},
+            ])
+        with self.assertRaises(BudgetStoreError):
+            self.store.set_account_credit_limit(
+                "owner", account_id, {"amount": "1000", "currency": "EUR"}, actor="operator",
+            )
+        self.assertEqual(
+            self.store.set_account_credit_limit(
+                "owner", account_id, {"amount": "1000", "currency": "PLN"}, actor="operator",
+            )["credit_limit"],
+            {"amount": "1000", "currency": "PLN"},
+        )
+        self.assertIsNone(self.store.set_account_credit_limit("owner", account_id, None, actor="operator")["credit_limit"])
+
+        # Without ITAV balances, validation falls back to any observed balance currency.
+        with self.sessions.begin() as session:
+            session.get(db.BudgetAccount, account_id).balances_json = json.dumps([
+                {"name": "Booked", "balance_type": "ITBD", "balance_amount": {"amount": "5000", "currency": "EUR"},
+                 "reference_date": "2026-11-22"},
+            ])
+        with self.assertRaises(BudgetStoreError):
+            self.store.set_account_credit_limit(
+                "owner", account_id, {"amount": "1000", "currency": "PLN"}, actor="operator",
+            )
+        self.assertEqual(
+            self.store.set_account_credit_limit(
+                "owner", account_id, {"amount": "1000", "currency": "EUR"}, actor="operator",
+            )["credit_limit"],
+            {"amount": "1000", "currency": "EUR"},
+        )
+        self.assertIsNone(self.store.set_account_credit_limit("owner", account_id, None, actor="operator")["credit_limit"])
+
         audits = [row for row in self.rows(db.BudgetAccountAudit) if row.field == "credit_limit"]
-        self.assertEqual(len(audits), 8)
+        self.assertEqual(len(audits), 12)
         for row in audits:
             self.assertNotIn("10000", row.old_value_json + row.new_value_json)
             self.assertNotIn("12500", row.old_value_json + row.new_value_json)

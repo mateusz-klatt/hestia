@@ -120,9 +120,13 @@ def load_credit_limits(session, account_ids) -> dict[str, dict[str, str]]:
     return {keys[row.key]: _decode_credit_limit_meta(row.value) for row in rows}
 
 
-def observed_balance_currencies(account: Account) -> list[str]:
+def observed_balance_currencies(account: Account, *, balance_type: str | None = None) -> list[str]:
     """Return sorted distinct currency codes present in an account's stored balances."""
-    return sorted({value["balance_amount"]["currency"] for value in json.loads(account.balances_json)})
+    return sorted({
+        value["balance_amount"]["currency"]
+        for value in json.loads(account.balances_json)
+        if balance_type is None or value.get("balance_type") == balance_type
+    })
 
 
 def prune_orphan_credit_limits(session) -> int:
@@ -383,8 +387,8 @@ class BudgetStore:
             if account.kind != "credit_card" or account.kind_confirmed_at is None:
                 raise BudgetStoreError("Credit limit requires a confirmed credit card account")
             if canonical is not None:
-                observed = observed_balance_currencies(account)
-                if observed and canonical["currency"] not in observed:
+                allowed = observed_balance_currencies(account, balance_type="ITAV") or observed_balance_currencies(account)
+                if allowed and canonical["currency"] not in allowed:
                     raise BudgetStoreError("Credit limit currency does not match observed balance currencies")
             if changed:
                 self._audit(session, account, actor, origin, "credit_limit",
