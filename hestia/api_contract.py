@@ -2637,6 +2637,7 @@ class BudgetAnalyticsInboxDeviceParams(BaseModel):
     status: Literal["added"]
     device_name: Annotated[str, Field(min_length=1, max_length=64)]
     date: Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")]
+    actor: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsInboxDeviceRef(BaseModel):

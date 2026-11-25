@@ -40,6 +40,12 @@ class OwnerInboxPureTests(unittest.TestCase):
                 entry = inbox_mod.device_entry("alice", "device-1", name, moment)
                 self.assertEqual(entry["params"], {"status": "added", "device_name": name,
                                                   "date": "1970-01-01" if moment == 0 else "2023-11-14"})
+        delegated = inbox_mod.device_entry("alice", "device-1", "Vesta", 0, actor="bob")
+        self.assertEqual(delegated["params"]["actor"], "bob")
+        self.assertNotIn("actor", inbox_mod.device_entry("alice", "device-1", "Vesta", 0, actor="alice")["params"])
+        for actor in (1, "", "x" * 65, "bad\nactor"):
+            with self.subTest(actor=actor), self.assertRaises(inbox_mod.OwnerInboxDataError):
+                inbox_mod.device_entry("alice", "device-1", "Vesta", 0, actor=actor)
         for name in (None, 1, "", "x" * 65, "bad\nname", "bad\tname", "bad\x00name", "bad\x7fname", "bad\u200bname"):
             with self.subTest(name=name), self.assertRaises(inbox_mod.OwnerInboxDataError):
                 inbox_mod.device_entry("alice", "device-1", name, 0)

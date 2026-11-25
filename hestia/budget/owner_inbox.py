@@ -192,21 +192,27 @@ def spending_limit_params(*, status: str, period: str, currency: str,
     }
 
 
-def device_entry(owner: str, token_id: str, device_name: str, added_at: float) -> dict:
+def device_entry(owner: str, token_id: str, device_name: str, added_at: float, *, actor: str | None = None) -> dict:
     if not isinstance(device_name, str) or not 1 <= len(device_name) <= 64 or not device_name.isprintable():
+        raise OwnerInboxDataError()
+    if actor is not None and (
+        not isinstance(actor, str) or not actor or len(actor) > 64 or not actor.isprintable()
+    ):
         raise OwnerInboxDataError()
     try:
         added_at = _non_negative_float(added_at)
         date = datetime.fromtimestamp(added_at, timezone.utc).date().isoformat()
     except (ValueError, OverflowError, OSError):
         raise OwnerInboxDataError() from None
+    params = {"status": "added", "device_name": device_name, "date": date}
+    if actor is not None and actor != owner:
+        params["actor"] = actor
     return {
         "kind": KIND_DEVICE,
         "subject_id": opaque_subject_id(owner, KIND_DEVICE, token_id),
         "milestone": "added",
         "ref": {"token_id": token_id},
-        "params": {"status": "added", "device_name": device_name,
-                   "date": date},
+        "params": params,
     }
 
 

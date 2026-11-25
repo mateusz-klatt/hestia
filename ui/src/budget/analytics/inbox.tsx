@@ -111,7 +111,11 @@ interface RowProps {
 }
 
 function subjectLabel(item: AnalyticsInboxItem, lookups: LookupMaps): string {
-  if (item.kind === "device_added") return t("budget.inbox.newDevice", { name: item.params.device_name, date: item.params.date });
+  if (item.kind === "device_added") {
+    const name = item.params.actor === undefined ? item.params.device_name
+      : `${item.params.device_name} · ${item.params.actor}`;
+    return t("budget.inbox.newDevice", { name, date: item.params.date });
+  }
   if (item.kind === "consent_renewal") return lookups.banks.get(item.ref.connection_id) ?? t("budget.inbox.unknownBank");
   if (item.kind === "mortgage_due") return lookups.schedules.get(item.ref.schedule_id) ?? t("budget.inbox.unknownMortgage");
   return lookups.categories.get(item.ref.category_id) ?? t("budget.inbox.unknownCategory");

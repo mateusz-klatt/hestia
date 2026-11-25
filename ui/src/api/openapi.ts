@@ -3177,6 +3177,8 @@ export interface components {
         };
         /** BudgetAnalyticsInboxDeviceParams */
         BudgetAnalyticsInboxDeviceParams: {
+            /** Actor */
+            actor?: string | null;
             /** Date */
             date: string;
             /** Device Name */

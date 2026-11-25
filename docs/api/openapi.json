@@ -2519,6 +2519,17 @@
       },
       "BudgetAnalyticsInboxDeviceParams": {
         "properties": {
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
           "date": {
             "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
             "title": "Date",

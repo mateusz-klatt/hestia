@@ -547,6 +547,22 @@ class GrantEditorHTTPTests(unittest.IsolatedAsyncioTestCase):
         after = await self.client.get("/api/users/grants?username=viewer", headers=self._headers())
         self.assertEqual(_grant_keys(await after.json()), {("ioc.control", None)})
 
+    async def test_grant_audit_is_manager_only(self):
+        self.client.server.app[web._RT_KEY].audit_engine = self.engine
+        changed = await self.client.post(
+            "/api/users/grants",
+            json={"username": "viewer", "grants": [_grant("ioc.control"), _grant("system.audit.view")]},
+            headers=self._headers(origin=True),
+        )
+        self.assertEqual(changed.status, 200, await changed.text())
+        viewer_feed = await self.client.get("/api/audit", headers=self._headers("viewer"))
+        self.assertEqual(viewer_feed.status, 200)
+        self.assertNotIn("user_grants", json.dumps(await viewer_feed.json()))
+        admin_feed = await self.client.get("/api/audit", headers=self._headers())
+        events = (await admin_feed.json())["events"]
+        grant_event = next(event for event in events if event["action"] == "user_grants")
+        self.assertEqual((grant_event["actor"], grant_event["target"]), ("admin", "viewer"))
+
     async def test_legacy_issuance_cannot_activate_custom_with_v1_bearer_or_cookie(self):
         with self.sessions.begin() as session:
             session.get(db.AppMeta, store_sql._SESSION_PHASE_KEY).value = store_sql.SESSION_PHASE_LEGACY

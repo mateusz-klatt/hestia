@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import json
 import os
 import unittest
@@ -129,6 +130,26 @@ class DelegatedReceiptStoreTests(AnalyticsCase):
         owner_detail = self.receipts.detail("owner", parsed["receipt_id"])
         self.assertEqual(owner_detail["receipt"]["linked_account_id"], self.accounts["a"])
         self.assertTrue(owner_detail["candidates"])
+
+    def test_delegate_qr_alert_uses_actor_and_redemption_date(self):
+        from hestia.budget.analytics_views import BudgetAnalyticsViews
+
+        code_id = str(uuid.uuid4())
+        issued = datetime(2026, 11, 30, 23, 59, tzinfo=timezone.utc).timestamp()
+        redeemed = datetime(2026, 12, 1, 0, 1, tzinfo=timezone.utc).timestamp()
+        with self.sessions.begin() as session:
+            session.add(db.NativeLoginCode(
+                id=code_id, username="delegate", code_hmac="a" * 64, generation=0,
+                created_at=issued, expires_at=issued + 300, consumed_at=redeemed,
+            ))
+            device_token.write_device_audit(
+                session, "owner", code_id, device_token.NEW_DEVICE_LOGIN, redeemed,
+                actor="delegate", device_name="Vesta QR",
+            )
+        with self.sessions() as session:
+            entries = BudgetAnalyticsViews._inbox_device_entries(session, "owner")
+        self.assertEqual(entries[0]["params"]["actor"], "delegate")
+        self.assertEqual(entries[0]["params"]["date"], "2026-12-01")
 
     def test_modern_device_uses_actor_owner_and_live_grants(self):
         self.grant("budget.receipts.add", "budget.receipts.view")

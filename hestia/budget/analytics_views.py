@@ -1309,7 +1309,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
     def _inbox_device_entries(session, owner):
         tokens = db.BudgetReceiptDeviceToken
         audit = db.BudgetAnalyticsAudit
-        rows = session.execute(select(tokens.id, tokens.device_name, tokens.created_at).where(
+        rows = session.execute(select(tokens.id, tokens.device_name, tokens.created_at, tokens.actor).where(
             tokens.owner == owner,
             select(audit.id).where(
                 audit.owner == owner, audit.subject_id == tokens.id, audit.subject_type == "receipt_device_token",
@@ -1320,15 +1320,20 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 audit.action == device_token.DEVICE_ROTATE,
             ).exists(),
         ))
-        entries = [inbox_mod.device_entry(owner, token_id, name, added_at) for token_id, name, added_at in rows]
+        entries = [
+            inbox_mod.device_entry(owner, token_id, name, added_at, actor=actor)
+            for token_id, name, added_at, actor in rows
+        ]
         codes = db.NativeLoginCode
-        redeemed = session.execute(select(codes.id, codes.created_at).where(
-            select(audit.id).where(
-                audit.owner == owner, audit.subject_id == codes.id, audit.subject_type == "receipt_device_token",
-                audit.action == device_token.NEW_DEVICE_LOGIN,
-            ).exists(),
+        redeemed = session.execute(select(codes.id, codes.username, audit.changed_at).join(
+            audit,
+            (audit.owner == owner) & (audit.subject_id == codes.id)
+            & (audit.subject_type == "receipt_device_token") & (audit.action == device_token.NEW_DEVICE_LOGIN),
         ))
-        entries.extend(inbox_mod.device_entry(owner, code_id, "Vesta QR", added_at) for code_id, added_at in redeemed)
+        entries.extend(
+            inbox_mod.device_entry(owner, code_id, "Vesta QR", redeemed_at, actor=actor)
+            for code_id, actor, redeemed_at in redeemed
+        )
         return entries
 
     def _evaluate_active_inbox(self, session, owner, evaluated_at, evaluation_date, *, use_cache, kinds=None):

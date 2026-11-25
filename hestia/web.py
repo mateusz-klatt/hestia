@@ -1122,6 +1122,18 @@ async def _audit_feed(request):
         return _json(HTTPStatus.OK, {"events": []})
     events = await asyncio.get_running_loop().run_in_executor(
         None, lambda: store_sql.recent_audit(rt.audit_engine))
+    actor = request.get(_USER_KEY)
+    if actor is not None:
+        try:
+            state = await asyncio.to_thread(store_sql.load_auth_state, actor)
+            manager = (
+                state.role == _ADMIN if state.policy_phase == authz.POLICY_PHASE_LEGACY
+                else await asyncio.to_thread(_catalog_request_allowed, actor, "GET", _PATH_USERS)
+            )
+        except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+            return _incompatible_bridge_response()
+        if not manager:
+            events = [event for event in events if event["action"] != "user_grants"]
     return _json(HTTPStatus.OK, {"events": events})
 
 
