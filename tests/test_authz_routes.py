@@ -156,6 +156,22 @@ class RouteMatrixTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("authorization_bridge_incompatible", stderr.getvalue())
 
+    def test_last_account_manager_guard_uses_effective_grant_not_role_projection(self):
+        with self.sessions.begin() as session:
+            session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
+            session.get(db.User, "admin").disabled = True
+            session.get(db.User, "owner2").disabled = True
+            session.add(db.User(username="manager", password_hash="h", role="viewer"))
+            session.flush()
+            session.add(db.PermissionGrant(
+                username="manager", permission_id="system.manage_users", target_owner=None,
+            ))
+        with self.sessions() as session:
+            self.assertEqual(authz.project_legacy_role(session, "manager"), "viewer")
+        self.assertEqual(store_sql.set_user_disabled("manager", True, path=self.path), "last_admin")
+        with self.sessions() as session:
+            self.assertFalse(session.get(db.User, "manager").disabled)
+
     def test_custom_role_writes_are_rejected_without_changing_projection(self):
         with self.sessions.begin() as session:
             session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM

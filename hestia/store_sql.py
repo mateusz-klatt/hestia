@@ -557,18 +557,14 @@ def _immediate_engine(path=None):
 
 
 def _other_enabled_admins(session, exclude_username: str) -> int:
-    """How many ENABLED admins exist OTHER than ``exclude_username`` — the ≥1-admin invariant guard."""
-    if authz.policy_phase(session) == authz.POLICY_PHASE_CUSTOM:
-        return sum(
-            authz.project_legacy_role(session, row.username) == "admin"
-            for row in session.execute(
-                select(User).where(User.disabled.is_(False), User.username != exclude_username)
-            ).scalars()
-        )
-    return session.execute(
-        select(func.count()).select_from(User)
-        .where(User.role == "admin", User.disabled.is_(False), User.username != exclude_username)
-    ).scalar_one()
+    """How many other enabled actors can manage accounts in the active policy phase."""
+    phase = authz.policy_phase(session)
+    rows = session.execute(
+        select(User).where(User.disabled.is_(False), User.username != exclude_username)
+    ).scalars()
+    if phase == authz.POLICY_PHASE_LEGACY:
+        return sum(row.role == "admin" for row in rows)
+    return sum(authz.authorize(session, row.username, "system.manage_users") for row in rows)
 
 
 def _revoke_receipt_devices(session: Session, username: str) -> None:
@@ -656,11 +652,11 @@ def set_user_disabled(username: str, disabled: bool, *, path=None) -> str:
             if row is None:
                 return "not_found"
             if disabled and not row.disabled:
-                projected_admin = (
-                    authz.project_legacy_role(session, username) == "admin"
-                    if p_phase == authz.POLICY_PHASE_CUSTOM else row.role == "admin"
+                account_manager = (
+                    row.role == "admin" if p_phase == authz.POLICY_PHASE_LEGACY
+                    else authz.authorize(session, username, "system.manage_users")
                 )
-                if projected_admin and _other_enabled_admins(session, username) == 0:
+                if account_manager and _other_enabled_admins(session, username) == 0:
                     return "last_admin"
                 row.disabled = True
                 _invalidate_account_credentials(session, row, s_phase=s_phase, include_owner_tokens=True)
