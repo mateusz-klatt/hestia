@@ -139,6 +139,8 @@ def _is_gateway_domain(domain):
 
 
 def _is_gateway_receipt(session, row):
+    if getattr(row, "gateway", None) is not None:
+        return True
     row_id = getattr(row, "id", None)
     if row_id is not None and session.get(AppMeta, _payment_payee_key(row_id)) is not None:
         return True
@@ -555,7 +557,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
 
     def _candidates(self, session, owner, row, parsed, *, include_receipt_id=None):
         if (row.total_amount is None or row.currency is None or row.receipt_date is None
-                or row.payment_method in ("cash", "mixed")):
+                or row.payment_method in ("cash", "mixed")
+                or getattr(row, "evidence_for_receipt_id", None) is not None):
             return []
         try:
             total = canonical_money(row.total_amount)
@@ -1037,6 +1040,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 raw_shop_name=row.raw_shop_name, raw_nip=row.raw_nip,
                 document_kind=row.document_kind, due_date=row.due_date, id=row.id,
                 forwarded_sender_domain=row.forwarded_sender_domain,
+                gateway=row.gateway, evidence_for_receipt_id=row.evidence_for_receipt_id,
                 linked_account_id=row.linked_account_id, linked_entry_ref=row.linked_entry_ref,
             )
         if preview is None:

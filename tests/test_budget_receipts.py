@@ -2761,6 +2761,37 @@ NR KARTY ****5555
         )
         self.assertEqual(self.receipts.detail("owner", rec_brand)["candidates"][0]["match_strength"], "distinctive")
 
+    def test_v1f_durable_gateway_suppresses_strength_and_evidence_rows_skip_candidates(self):
+        self.add_transaction(
+            "a", "r5-v1f-gw", amount="230.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["BIEDRONKA NIP 7791011327"],
+        )
+        doc_rec = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="230.00",
+            shop="BIEDRONKA", nip="7791011327", forwarded_sender_domain="shop.example.test",
+        )
+        self.assertEqual(self.receipts.detail("owner", doc_rec)["candidates"][0]["match_strength"], "nip")
+
+        dur_gw_rec = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-15", total="230.00",
+            shop="BIEDRONKA", nip="7791011327", with_line=True, forwarded_sender_domain="shop.example.test",
+        )
+        with self.sessions.begin() as session:
+            session.get(db.BudgetReceipt, dur_gw_rec).gateway = "Example Pay"
+        cand_gw = self.receipts.detail("owner", dur_gw_rec)["candidates"]
+        self.assertEqual(cand_gw[0]["match_strength"], "none")
+        self.assertTrue(cand_gw[0]["merchant_token_hit"])
+
+        ev_rec = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-15", total="230.00",
+            shop="BIEDRONKA", nip="7791011327", with_line=True, forwarded_sender_domain="shop.example.test",
+        )
+        with self.sessions.begin() as session:
+            ev_row = session.get(db.BudgetReceipt, ev_rec)
+            ev_row.gateway = "Example Pay"
+            ev_row.evidence_for_receipt_id = doc_rec
+        self.assertEqual(self.receipts.detail("owner", ev_rec)["candidates"], [])
+
 
 class ReceiptRetentionSweepTests(fixture.unittest.IsolatedAsyncioTestCase):
     async def test_sweep_calls_retain_expired_when_flag_is_off(self):
