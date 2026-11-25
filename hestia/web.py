@@ -41,7 +41,7 @@ from pathlib import Path
 
 from aiohttp import ClientConnectionError, web
 
-from . import auth, authz, store_sql
+from . import auth, auth_qr, authz, store_sql
 from .budget import api as budget_api
 from .budget import consent_api, consent_context, device_token
 from .budget.config import BudgetConfigError
@@ -176,7 +176,7 @@ def _is_public_route(method: str, path: str) -> bool:
     if method == "GET":
         return (path in ("/", "/ui/", "/api/auth/features")
                 or path in consent_api.PUBLIC_GET or path.startswith("/assets/"))
-    return method == "POST" and (path in ("/api/login", "/api/logout", device_token.REDEEM_PATH)
+    return method == "POST" and (path in ("/api/login", "/api/logout", device_token.REDEEM_PATH, auth_qr.REDEEM_PATH)
                                  or _ROUTE_MIN_ROLE.get((method, path)) == _PUBLIC)
 
 
@@ -290,6 +290,7 @@ _ROUTE_MIN_ROLE = {
     ("GET", _PATH_ROOM_ICONS): _VIEWER,
     ("GET", "/api/whoami"): _VIEWER,
     ("GET", "/api/me/capabilities"): _VIEWER,
+    ("POST", auth_qr.CODE_PATH): _VIEWER,
     ("POST", "/api/me/password"): _VIEWER,         # any signed-in user changes their OWN password (verifies current)
     # room actions: operator and admin (a viewer is read-only — the UI hides these, the server enforces it)
     ("POST", "/api/control"): _OPERATOR,
@@ -334,6 +335,7 @@ _RECEIPT_DATA_ROUTES = frozenset({
 _AUTHENTICATED_ROUTES = frozenset({
     ("GET", "/api/whoami"),
     ("GET", "/api/me/capabilities"),
+    ("POST", auth_qr.CODE_PATH),
     ("GET", _PATH_SETTINGS),
     ("POST", _PATH_SETTINGS),
     ("POST", "/api/me/password"),
@@ -421,7 +423,9 @@ _CORE_BROWSER_MUTATION_ROUTES = frozenset({
     ("POST", "/api/graduate"),
     ("POST", _PATH_ROOM_ICONS),
 })
-_CORE_BROWSER_ROUTES = _CORE_BROWSER_READ_ROUTES | _CORE_BROWSER_MUTATION_ROUTES
+_CORE_BROWSER_ROUTES = _CORE_BROWSER_READ_ROUTES | _CORE_BROWSER_MUTATION_ROUTES | {
+    ("POST", auth_qr.CODE_PATH),
+}
 
 
 _HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
@@ -496,6 +500,17 @@ def _canonical_origin_tuple(origin: str, *, allow_trailing_slash: bool = False) 
     if not 1 <= port <= 65535:
         return None
     return scheme, canonical_host, port
+
+
+def _canonical_https_origin(origin: "str | None", *, allow_trailing_slash: bool = False) -> "str | None":
+    if not isinstance(origin, str):
+        return None
+    parsed = _canonical_origin_tuple(origin, allow_trailing_slash=allow_trailing_slash)
+    if parsed is None or parsed[0] != "https":
+        return None
+    scheme, host, port = parsed
+    authority = f"[{host}]" if ":" in host else host
+    return f"{scheme}://{authority}" + ("" if port == 443 else f":{port}")
 
 
 def _check_core_origin(request) -> "web.Response | None":
@@ -602,7 +617,9 @@ def _envelope_matches_state(carrier: str, envelope: auth.SessionEnvelope, auth_s
 @web.middleware
 async def _auth_middleware(request, handler):
     """Authenticate + authorize requests across legacy and active session/policy bridge phases."""
-    if (request.method, request.path) == ("GET", "/api/auth/features"):
+    if (request.method, request.path) in {
+        ("GET", "/api/auth/features"), ("POST", auth_qr.REDEEM_PATH),
+    }:
         return await handler(request)
     if device_token.receipts_path(request.path) and not device_token.receipts_enabled():
         return device_token.disabled_response()
@@ -895,14 +912,90 @@ async def _me_capabilities(request):
     return response
 
 
+def _qr_error(status: int, code: str, *, retry: "int | None" = None):
+    response = _json(status, {"error": {"code": code}})
+    response.headers.update(budget_api.PRIVATE_HEADERS)
+    if retry is not None:
+        response.headers["Retry-After"] = str(retry)
+    return response
+
+
+def _qr_configured_origin() -> "str | None":
+    return _canonical_https_origin(os.environ.get("HESTIA_PUBLIC_ORIGIN"), allow_trailing_slash=True)
+
+
+async def _qr_code(request):
+    configured = _qr_configured_origin()
+    if configured is None:
+        return _qr_error(HTTPStatus.SERVICE_UNAVAILABLE, "auth_origin_unavailable")
+    body, error = await _read_json_body(request, reject_duplicates=True)
+    if error:
+        return body
+    supplied = _canonical_https_origin(body.get("origin")) if isinstance(body, dict) and set(body) == {"origin"} else None
+    origins = request.headers.getall("Origin", [])
+    if supplied != configured or len(origins) != 1 or _canonical_https_origin(origins[0]) != configured:
+        return _qr_error(HTTPStatus.BAD_REQUEST, "qr_origin_mismatch")
+    ctx = request[_SESSION_CONTEXT_KEY]
+    try:
+        payload = await asyncio.to_thread(
+            auth_qr.issue, ctx.username, configured, ctx.generation, now=_now(), secret=_SESSION_SECRET,
+        )
+    except auth_qr.QrLoginError as exc:
+        return _qr_error(exc.status, exc.code)
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return _incompatible_bridge_response()
+    response = _json(HTTPStatus.OK, {"qr_payload": payload})
+    response.headers.update(budget_api.PRIVATE_HEADERS)
+    return response
+
+
+async def _qr_redeem(request):
+    if "Cookie" in request.headers or "Authorization" in request.headers:
+        return _qr_error(HTTPStatus.BAD_REQUEST, "qr_auth_ambiguous")
+    configured = _qr_configured_origin()
+    if configured is None:
+        return _qr_error(HTTPStatus.SERVICE_UNAVAILABLE, "auth_origin_unavailable")
+    retry = auth_qr.redeem_limited(device_token.client_ip(request), time.monotonic())
+    if retry is not None:
+        return _qr_error(HTTPStatus.TOO_MANY_REQUESTS, "qr_rate_limited", retry=retry)
+    body, error = await _read_json_body(request, reject_duplicates=True)
+    if error:
+        return body
+    if not isinstance(body, dict) or set(body) != {"origin", "code"}:
+        return _qr_error(HTTPStatus.UNAUTHORIZED, "qr_code_invalid")
+    supplied = _canonical_https_origin(body["origin"])
+    if supplied != configured:
+        return _qr_error(HTTPStatus.BAD_REQUEST, "qr_origin_mismatch")
+    code = auth_qr.normalize_code(body["code"])
+    if code is None:
+        return _qr_error(HTTPStatus.UNAUTHORIZED, "qr_code_invalid")
+    retry = auth_qr.redeem_global_limited(time.monotonic())
+    if retry is not None:
+        return _qr_error(HTTPStatus.TOO_MANY_REQUESTS, "qr_rate_limited", retry=retry)
+    try:
+        result = await asyncio.to_thread(auth_qr.redeem, configured, code, now=_now(), secret=_SESSION_SECRET)
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return _incompatible_bridge_response()
+    if result is None:
+        return _qr_error(HTTPStatus.UNAUTHORIZED, "qr_code_invalid")
+    response = _json(HTTPStatus.OK, result)
+    response.headers.update(budget_api.PRIVATE_HEADERS)
+    return response
+
+
 async def _auth_features(request):
     calendar_instances = any(
         route.method == "GET" and route.resource.canonical == "/api/calendars/instances"
         for route in request.app.router.routes()
     )
-    features = ["capabilities"] + (["calendar_instances"] if calendar_instances else [])
+    qr_origin = _qr_configured_origin() if _AUTH_ENABLED else None
+    features = ["capabilities"]
+    if qr_origin is not None:
+        features.append("qr_login")
+    if calendar_instances:
+        features.append("calendar_instances")
     response = _json(HTTPStatus.OK, {
-        "auth_contract": 2, "features": features, "qr_origin": None,
+        "auth_contract": 2, "features": features, "qr_origin": qr_origin,
     })
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -1770,6 +1863,8 @@ def make_app(rt):
     app.router.add_post("/api/login", _login)
     app.router.add_post("/api/logout", _logout)
     app.router.add_get("/api/auth/features", _auth_features, allow_head=False)
+    app.router.add_post(auth_qr.CODE_PATH, _qr_code)
+    app.router.add_post(auth_qr.REDEEM_PATH, _qr_redeem)
     app.router.add_get("/api/whoami", _whoami, allow_head=False)
     app.router.add_get("/api/me/capabilities", _me_capabilities, allow_head=False)
     app.router.add_get("/api/discovery", _discovery, allow_head=False)

@@ -326,6 +326,7 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
             "/api/logout": 200,
             "/api/budget/receipts/device-token/login": 400,
             "/api/budget/receipts/device-token/redeem": 400,
+            "/api/auth/qr-redeem": 401,
         }
         for method, path in routes:
             with self.subTest(method=method, path=path):
@@ -337,6 +338,8 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
                             **({"json": {}} if method == "POST" else {}),
                         )
                         expected = public_post_status.get(path)
+                        if path == "/api/auth/qr-redeem" and headers:
+                            expected = 400
                         if expected is not None:
                             self.assertEqual(response.status, expected)
                         else:
@@ -363,19 +366,20 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         self.assertEqual(await response.json(), {
-            "auth_contract": 2, "features": ["capabilities", "calendar_instances"], "qr_origin": None,
+            "auth_contract": 2, "features": ["capabilities", "qr_login", "calendar_instances"],
+            "qr_origin": "https://unused.example",
         })
 
         app = aiohttp_web.Application()
         response = await web._auth_features(make_mocked_request("GET", "/api/auth/features", app=app))
-        self.assertEqual(json.loads(response.body)["features"], ["capabilities"])
+        self.assertEqual(json.loads(response.body)["features"], ["capabilities", "qr_login"])
 
         async def instances(_request):
             return aiohttp_web.json_response({"enabled": False})
 
         app.router.add_get("/api/calendars/instances", instances, allow_head=False)
         response = await web._auth_features(make_mocked_request("GET", "/api/auth/features", app=app))
-        self.assertEqual(json.loads(response.body)["features"], ["capabilities", "calendar_instances"])
+        self.assertEqual(json.loads(response.body)["features"], ["capabilities", "qr_login", "calendar_instances"])
         self.assertEqual(response.headers["Cache-Control"], "no-store")
 
     async def test_capabilities_exact_shape_and_whoami_stays_vesta_compatible(self):

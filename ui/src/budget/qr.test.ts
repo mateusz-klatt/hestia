@@ -17,7 +17,7 @@ function syndromes(block: Uint8Array): number[] {
     return exp[(log[left] ?? 0) + (log[right] ?? 0)] ?? 0;
   };
   const out: number[] = [];
-  for (let root = 0; root < 10; root += 1) {
+  for (let root = 0; root < 20; root += 1) {
     let sum = 0;
     const x = exp[root] ?? 1;
     for (const byte of block) sum = mul(sum, x) ^ byte;
@@ -26,35 +26,48 @@ function syndromes(block: Uint8Array): number[] {
   return out;
 }
 
-describe("pairing QR", () => {
-  it("uses the version-2 L mask-0 format bits", () => {
+describe("version 4 pairing and login QR", () => {
+  it("uses the L mask-0 format bits", () => {
     expect(formatBits(1, 0)).toBe(0x77c4);
   });
 
-  it("builds a 25 by 25 code whose ECC syndromes are zero", () => {
-    const payload = "hestia-pair:01234567";
+  it("builds a 33 by 33 code whose ECC syndromes are zero", () => {
+    const payload = "hestia-login:https://hestia.example#AAECAwQFBgcICQoLDA0";
     const block = encodeBlock(payload);
-    expect(block).not.toBeNull();
-    expect(syndromes(block ?? new Uint8Array())).toEqual(Array<number>(10).fill(0));
+    expect(block?.length).toBe(100);
+    expect(syndromes(block ?? new Uint8Array())).toEqual(Array<number>(20).fill(0));
     const matrix = qrMatrix(payload);
     expect(matrix).not.toBeNull();
-    expect(matrix?.length).toBe(25);
+    expect(matrix?.length).toBe(33);
     expect(matrix?.[0]?.[0]).toBe(true);
     expect(matrix?.[1]?.[1]).toBe(false);
     expect(matrix?.[3]?.[3]).toBe(true);
-    expect(matrix?.[17]?.[8]).toBe(true);
-    // Rows packed left to right from Project Nayuki's reference encoder, version 2/L, byte mode, mask 0.
-    expect(matrix?.map((row) => row.reduce((packed, on) => (packed << 1) | Number(on), 0))).toEqual([
-      0x1fc437f, 0x1048e41, 0x175205d, 0x174935d, 0x174935d,
-      0x1047741, 0x1fd557f, 0x0012800, 0x1df1cc4, 0x1a3bcc9,
-      0x057793b, 0x0b2dc20, 0x0a464cb, 0x0a9e043, 0x16fc857,
-      0x0f3a2e2, 0x14fd1f0, 0x001391f, 0x1fdf75f, 0x1055f12,
-      0x17525f3, 0x1746698, 0x17509bd, 0x10561ca, 0x1fd9123,
+    // Project Nayuki reference layout, version 4/L, byte mode, mask 0. Strings retain all 33 columns.
+    expect(matrix?.map((row) => row.map((on) => on ? "1" : "0").join(""))).toEqual([
+      "111111100100110010100111101111111", "100000100011101110111011101000001",
+      "101110101110111010101010101011101", "101110100111011101111011001011101",
+      "101110100010001000100011001011101", "100000100100010000011111101000001",
+      "111111101010101010101010101111111", "000000001110111011001111000000000",
+      "111011111011001101000101111000100", "010101000011001101001010101001111",
+      "010011101100010001000010111011111", "100000001001000101110101110000010",
+      "010100100000100011001100011100011", "011010000101110111011100101001001",
+      "010100111101101111100010001011111", "000010000110111011100110010111001",
+      "000001101011001110001100011000001", "111011011001001100011000101000101",
+      "100110110100010010100000001001111", "010010001011000101111111101110000",
+      "010010100100100000001100101100011", "010110000111110001011110101100111",
+      "100011111001101001100010100000111", "010110011110111101110101011010010",
+      "100011110001001010001101111110000", "000000001001001111111001100010111",
+      "111111101000010010100001101011011", "100000101101000111110100100010001",
+      "101110101000100011001100111110011", "101110100111110110011100110110001",
+      "101110101101101011000001000111001", "100000101100111111100111101000010",
+      "111111101101001110001110110000011",
     ]);
   });
 
-  it("returns null when the payload is longer than a version-2 byte code", () => {
-    expect(qrMatrix("x".repeat(33))).toBeNull();
-    expect(encodeBlock("x".repeat(33))).toBeNull();
+  it("keeps legacy pairing and enforces the 78-byte version-4 limit", () => {
+    expect(qrMatrix("hestia-pair:01234567")?.length).toBe(33);
+    expect(qrMatrix("x".repeat(78))).not.toBeNull();
+    expect(qrMatrix("x".repeat(79))).toBeNull();
+    expect(encodeBlock("x".repeat(79))).toBeNull();
   });
 });

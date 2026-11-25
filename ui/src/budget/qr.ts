@@ -1,9 +1,9 @@
-/** Version 2, ECC L, byte mode, mask 0. Enough for `hestia-pair:` plus an 8-character code. */
+/** Version 4, ECC L, byte mode, mask 0. Supports pairing and origin-bearing login payloads. */
 
-const SIZE = 25;
-const DATA_CODEWORDS = 34;
-const ECC_CODEWORDS = 10;
-const MAX_BYTES = 32;
+const SIZE = 33;
+const DATA_CODEWORDS = 80;
+const ECC_CODEWORDS = 20;
+const MAX_BYTES = 78;
 
 const EXP = new Uint8Array(512);
 const LOG = new Uint8Array(256);
@@ -138,7 +138,7 @@ export function qrMatrix(payload: string): boolean[][] | null {
     if (!reserved[index]?.[6]) set(6, index, index % 2 === 0);
   }
   for (let y = -2; y <= 2; y += 1) {
-    for (let x = -2; x <= 2; x += 1) set(18 + x, 18 + y, Math.max(Math.abs(x), Math.abs(y)) !== 1);
+    for (let x = -2; x <= 2; x += 1) set(26 + x, 26 + y, Math.max(Math.abs(x), Math.abs(y)) !== 1);
   }
   set(8, SIZE - 8, true);
   const format = formatBits(1, 0);
