@@ -33,3 +33,8 @@ data/
 # Local secrets + per-deployment Docker overrides
 .env
 docker-compose.override.yml
+
+# Temporary test-dependency dirs must never live in a checkout (Iris claims, git status size)
+.tmp_pytest/
+.pytest-runner/
+.pytest-venv/
