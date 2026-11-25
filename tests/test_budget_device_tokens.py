@@ -1369,7 +1369,7 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(device_token, "open_store") as open_store:
             for method, path in sorted(routes - allowed):
                 response = await self.client.request(method, path, headers=self._auth(device), allow_redirects=False)
-                expected = 400 if path == device_token.LOGIN_PATH else 403
+                expected = 200 if path == "/api/auth/features" else 400 if path == device_token.LOGIN_PATH else 403
                 self.assertEqual(response.status, expected, f"{method} {path}")
                 await response.read()
             open_store.assert_not_called()

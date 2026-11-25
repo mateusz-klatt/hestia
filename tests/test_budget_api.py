@@ -584,6 +584,17 @@ class BudgetGuardTests(unittest.TestCase):
                 api._secret(lambda: secret)
             self.assertNotIn("PRIVATE", str(caught.exception))
 
+    def test_expected_actor_rejects_duplicate_malformed_and_noncanonical_headers(self):
+        request = SimpleNamespace(headers=MultiDict())
+        for values in (
+            ["one", "two"], [""], ["A" * 257], ["Ági"], ["AB"], ["/w=="],
+        ):
+            with self.subTest(values=values):
+                request.headers = MultiDict()
+                for value in values:
+                    request.headers.add("X-Hestia-Expected-Actor", value)
+                self.assertFalse(api.expected_actor_matches(request, "alice"))
+
     def test_config_errors_stay_unavailable_without_a_forecast_conflict_code(self):
         consent = api._failure(ConsentFilesError(), "consent_start")
         plain = api._failure(BudgetConfigError("PRIVATE-key/path"), "accounts")

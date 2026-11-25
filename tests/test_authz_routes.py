@@ -516,6 +516,19 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status, 200)
                 self.assertEqual((await response.json())["auth_contract"], 2)
 
+    async def test_legacy_capabilities_project_admin_and_nonadmin(self):
+        with self.sessions.begin() as session:
+            session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_LEGACY
+        admin = await self.client.get("/api/me/capabilities", headers=self._cookie("admin"))
+        self.assertEqual(admin.status, 200)
+        own = (await admin.json())["own_budget"]
+        self.assertTrue(own["can_view"])
+        self.assertTrue(own["can_use_receipts"])
+        self.assertTrue(own["can_manage_devices"])
+        self.assertIn("budget.view", own["permissions"])
+        viewer = await self.client.get("/api/me/capabilities", headers=self._cookie("viewer"))
+        self.assertIsNone((await viewer.json())["own_budget"])
+
     async def test_auth_off_capabilities_have_no_private_budget_or_owner(self):
         with mock.patch.object(web, "_AUTH_ENABLED", False):
             response = await self.client.get("/api/me/capabilities")
