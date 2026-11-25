@@ -1737,6 +1737,79 @@ describe("receipts tab & capability gate", () => {
     expect(host.querySelector(".budget-views")).toBeNull();
   });
 
+  it("hides only Receipts and refreshes capabilities on receipt 403 while keeping ledger intact for budget.view, and restores when capabilities recover", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+    await renderWithReceipts(api, rApi, "owner");
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Tab Integration Market");
+
+    // 1. Listing 403 when capability refresh now revokes can_use_receipts hides only Receipts; ledger stays intact.
+    await click(button("Accounts"));
+    const listCallsBefore403 = vi.mocked(rApi.receiptsList).mock.calls.length;
+    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    api.capabilities
+      .mockImplementationOnce(() => ok(authorization))
+      .mockImplementation(() => ok({
+        ...authorization,
+        own_budget: { ...authorization.own_budget, can_use_receipts: false },
+      }));
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Synthetic Current");
+    expect(host.textContent).not.toContain("Tab Integration Market");
+    expect(host.textContent).not.toContain("Only the budget's owner");
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
+    expect(vi.mocked(rApi.receiptsList).mock.calls).toHaveLength(listCallsBefore403 + 1);
+
+    // 2. Subsequent capability refresh on focus restores Receipts based on new capabilities.
+    api.capabilities.mockImplementation(() => ok(authorization));
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+    await settle();
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(true);
+    expect(host.textContent).toContain("Tab Integration Market");
+
+    // 3. Listing 403 when capabilities still report can_use_receipts=true marks receipts unavailable without retrying in a loop.
+    await click(button("Accounts"));
+    const callsBeforeForbiddenLoop = vi.mocked(rApi.receiptsList).mock.calls.length;
+    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => fail(403, "budget_origin_required"));
+    await click(button("Receipts and documents"));
+    await settle(20);
+    expect(vi.mocked(rApi.receiptsList).mock.calls).toHaveLength(callsBeforeForbiddenLoop + 1);
+    expect(host.textContent).toContain("Synthetic Current");
+    expect(host.textContent).not.toContain("Tab Integration Market");
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
+
+    // Changing capability tuple clears receiptUnavailable and restores Receipts when allowed again.
+    api.capabilities.mockImplementation(() => ok({
+      ...authorization,
+      own_budget: { ...authorization.own_budget, can_use_receipts: false },
+    }));
+    await click(button("Reload"));
+    api.capabilities.mockImplementation(() => ok(authorization));
+    await click(button("Reload"));
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(true);
+
+    // 4. Non-listing receipt 403 (confirm) keeps Receipts accessible if refreshed capabilities still allow can_use_receipts=true,
+    //    and clears the entire ledger if refreshed capabilities now deny can_view / return 401.
+    await click(button("Receipts and documents"));
+    await click(button("Details"));
+    vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    await click(button("Confirm receipt"));
+    expect(host.textContent).toContain("Tab Integration Market");
+    expect(host.textContent).not.toContain("Only the budget's owner");
+
+    vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    api.capabilities.mockImplementationOnce(() => fail(401, "budget_http_401"));
+    await click(button("Details"));
+    await click(button("Confirm receipt"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.querySelector(".budget-views")).toBeNull();
+  });
+
   it("unmounts previous actor drawer on principal switch, re-authorizes view opening via capabilities, and clears receipt state on focus/visibilitychange", async () => {
     const api = fakeApi();
     const rApi = fakeReceiptsApi();

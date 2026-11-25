@@ -368,6 +368,10 @@ describe("budget api", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect((await scoped.receiptDevices()).ok).toBe(true);
     expect((await scoped.analyticsTransactionsByKeys({ row_keys: [], currency: "PLN" })).ok).toBe(true);
+    expect((await scoped.receiptsList({ limit: 10 })).ok).toBe(true);
+    expect((await scoped.receiptsSearch({ query: "Lidl", limit: 10 })).ok).toBe(true);
+    expect((await scoped.receiptDetail("rec-1")).ok).toBe(true);
+    expect((await scoped.receiptImage("rec-1")).ok).toBe(true);
     expect(await scoped.confirmReceipt({
       receipt_id: "rec-1",
       expected_version: 1,
@@ -386,11 +390,11 @@ describe("budget api", () => {
       ok: false, status: 503, error: "budget_server_changed",
     });
     expect(scoped.isAuthorizationLocked()).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(6);
     scoped.setAuthorizationLocked(false);
     expect(scoped.isAuthorizationLocked()).toBe(false);
     await scoped.setPaused(connection, true);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(7);
   });
 
   it("echoes X-Hestia-Expected-Actor on every receipt endpoint and aborts pending receipt reads on actor change", async () => {
