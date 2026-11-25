@@ -408,6 +408,10 @@ class HouseholdEdgeTests(unittest.TestCase):
                 "summary": {"start_budget": "0.00", "spent": "10.00"},
                 "expected_income": None,
                 "pass_through": None,
+                "card_exposure": {"status": "unavailable", "amount": None, "as_of_date": None},
+                "card_debt": {"status": "available", "amount": "100", "currency": "PLN", "as_of_date": "2026-11-20",
+                              "accounts": [{"account_id": "acc-1", "debt": "100", "limit": "5000",
+                                            "available": "4900", "currency": "PLN", "as_of": "2026-11-20"}]},
                 "category_spend": [
                     {"category_id": "cat-salary", "archived": False, "expenses": "4.00", "refunds": "1.00",
                      "net_spending": "3.00", "limit": "100.00", "one_off": False},
@@ -426,6 +430,12 @@ class HouseholdEdgeTests(unittest.TestCase):
         reader._evaluate = lambda session, snapshot, owner, period, currency, *, include_series: budget(
             include_series=include_series)
         monthly = reader._monthly(None, None, "alice", {"period": PERIOD, "currency": "PLN"}, book, GRANT)
+        self.assertEqual(monthly["budget"]["card_exposure"],
+                         {"status": "unavailable", "amount": None, "as_of_date": None})
+        self.assertEqual(monthly["budget"]["card_debt"],
+                         {"status": "available", "amount": "100", "currency": "PLN", "as_of_date": "2026-11-20"})
+        # Covers defensive guard when card_debt is None in synthetic test payloads.
+        self.assertIsNone(household_views._sanitize_budget({**budget(include_series=False), "card_debt": None}, book)["card_debt"])
         encoded = json.dumps(monthly)
         self.assertNotIn("Remont lazienki", encoded)
         self.assertNotIn("Prywatna etykieta", encoded)

@@ -68,6 +68,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/account-credit-limit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set or clear one owned card account's credit limit
+         * @description Requires the exact admin owner and a same-origin browser session; bearer-only mutations are rejected. expected_version is required. Missing versions or stale conflicting changes return 409 with current safe state after owner validation; an already-applied desired state returns 200 with changed=false even after a stale retry. No bank request is made.
+         */
+        post: operations["setBudgetAccountCreditLimit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/account-kind": {
         parameters: {
             query?: never;
@@ -374,7 +394,7 @@ export interface paths {
         };
         /**
          * Read the owner-private monthly budget dashboard
-         * @description Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates (including cross-account salary matching), and spending pace. Card exposure is reported as unavailable in P1. Makes no bank requests and no database writes.
+         * @description Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates (including cross-account salary matching), and spending pace. Legacy card_exposure stays unavailable for 0.47.0 compatibility; additive card_debt computes credit card debt as max(0, credit_limit - ITAV) in the budget currency from owner-set limits and fresh ITAV balances. Makes no bank requests and no database writes.
          */
         get: operations["getBudgetAnalyticsMonthlyBudget"];
         put?: never;
@@ -2290,6 +2310,7 @@ export interface components {
             connection: string;
             /** Control Version */
             control_version: number;
+            credit_limit?: components["schemas"]["BudgetAccountCreditLimit"] | null;
             /** @default null */
             display: components["schemas"]["BudgetAccountDisplay"] | null;
             /** Id */
@@ -2328,6 +2349,7 @@ export interface components {
             connection: string;
             /** Control Version */
             control_version: number;
+            credit_limit?: components["schemas"]["BudgetAccountCreditLimit"] | null;
             /** @default null */
             display: components["schemas"]["BudgetAccountDisplay"] | null;
             /** Id */
@@ -2352,6 +2374,13 @@ export interface components {
             paused: boolean;
             /** Selected */
             selected: boolean;
+        };
+        /** BudgetAccountCreditLimit */
+        BudgetAccountCreditLimit: {
+            /** Amount */
+            amount: string;
+            /** Currency */
+            currency: string;
         };
         /**
          * BudgetAccountDisplay
@@ -3184,6 +3213,7 @@ export interface components {
         BudgetAnalyticsMonthlyBudget: {
             /** Available Currencies */
             available_currencies: string[];
+            card_debt?: components["schemas"]["BudgetAnalyticsMonthlyBudgetCardDebt"] | null;
             card_exposure: components["schemas"]["BudgetAnalyticsMonthlyBudgetCardExposure"];
             /** Category Spend */
             category_spend: components["schemas"]["BudgetAnalyticsMonthlyBudgetCategorySpend"][];
@@ -3214,6 +3244,37 @@ export interface components {
             /** Start */
             start: string;
             summary: components["schemas"]["BudgetAnalyticsMonthlyBudgetSummary"] | null;
+        };
+        /** BudgetAnalyticsMonthlyBudgetCardDebt */
+        BudgetAnalyticsMonthlyBudgetCardDebt: {
+            /** Accounts */
+            accounts?: components["schemas"]["BudgetAnalyticsMonthlyBudgetCardDebtAccount"][] | null;
+            /** Amount */
+            amount: string | null;
+            /** As Of Date */
+            as_of_date: string | null;
+            /** Currency */
+            currency: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "partial" | "unavailable";
+        };
+        /** BudgetAnalyticsMonthlyBudgetCardDebtAccount */
+        BudgetAnalyticsMonthlyBudgetCardDebtAccount: {
+            /** Account Id */
+            account_id: string;
+            /** As Of */
+            as_of: string | null;
+            /** Available */
+            available: string;
+            /** Currency */
+            currency: string;
+            /** Debt */
+            debt: string;
+            /** Limit */
+            limit: string;
         };
         /** BudgetAnalyticsMonthlyBudgetCardExposure */
         BudgetAnalyticsMonthlyBudgetCardExposure: {
@@ -4992,6 +5053,27 @@ export interface components {
         BudgetConsents: {
             /** Consents */
             consents: components["schemas"]["BudgetConsent"][];
+        };
+        /**
+         * BudgetCreditLimitRequest
+         * @description Set or clear an owner-configured credit limit and currency for card debt calculation.
+         */
+        BudgetCreditLimitRequest: {
+            /** Account Id */
+            account_id: string;
+            credit_limit: components["schemas"]["BudgetCreditLimitValue"] | null;
+            /** Expected Version */
+            expected_version: number;
+        };
+        /**
+         * BudgetCreditLimitValue
+         * @description Positive decimal limit (> 0, <= 10,000,000) paired with its 3-letter ISO currency code.
+         */
+        BudgetCreditLimitValue: {
+            /** Amount */
+            amount: string;
+            /** Currency */
+            currency: string;
         };
         /** BudgetError */
         BudgetError: {
@@ -7720,6 +7802,93 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ControlError"];
+                };
+            };
+        };
+    };
+    setBudgetAccountCreditLimit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetCreditLimitRequest"];
+            };
+        };
+        responses: {
+            /** @description local control saved; changed=false is a no-op */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAccountSaved"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description missing version, stale conflicting change or SQLite session users required */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"] | components["schemas"]["BudgetConflict"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
                 };
             };
         };

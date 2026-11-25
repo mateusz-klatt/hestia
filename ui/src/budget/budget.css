@@ -19,6 +19,9 @@
 .budget-account.is-excluded .budget-account-name { opacity: .55; }
 .budget-account-name { text-align: start; border: none; background: transparent; padding: 0; font-weight: 600; overflow-wrap: anywhere; cursor: pointer; }
 .budget-kind { display: inline-flex; align-items: center; gap: .4rem; font-size: .8rem; color: var(--fg-soft); }
+.budget-account-limit { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; }
+.budget-account-limit input { width: 9rem; font: inherit; min-height: 2.2rem; }
+.budget-account-limit input[name="credit_limit_currency"] { width: 4.4rem; text-transform: uppercase; }
 .budget-detail { border: 1px solid var(--border); border-radius: .7rem; padding: .9rem 1rem; background: var(--surface); }
 .budget-detail > header { display: flex; justify-content: space-between; align-items: center; }
 .budget-detail h3 { margin: 0; }

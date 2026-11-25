@@ -475,6 +475,63 @@ class HouseholdAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(settings["income_category_ids"], [])
         self.assertIsNone(settings["pass_through"])
 
+    async def test_spouse_monthly_budget_shows_aggregate_card_exposure_without_account_breakdown(self):
+        from datetime import datetime, timezone
+        from hestia import api_contract
+        from hestia.budget import analytics_views
+
+        now = datetime(2026, 11, 22, 12, tzinfo=timezone.utc).timestamp()
+        with self.sessions.begin() as session:
+            alice = session.get(db.BudgetAccount, self.alice_id)
+            alice.kind, alice.kind_confirmed_at = "credit_card", now
+            alice.balances_json = json.dumps([
+                {"name": "Limit", "balance_type": "ITBD",
+                 "balance_amount": {"amount": "10000", "currency": "PLN"}, "reference_date": "2026-11-21"},
+                {"name": "Avail", "balance_type": "ITAV",
+                 "balance_amount": {"amount": "9900", "currency": "PLN"}, "reference_date": "2026-11-21"},
+            ])
+            comp = session.get(db.BudgetComponent, (self.alice_id, "balances"))
+            if comp is None:
+                session.add(db.BudgetComponent(account_id=self.alice_id, operation="balances", last_success=now))
+            else:
+                comp.last_success = now
+        self.store.set_account_credit_limit("alice", self.alice_id, {"amount": "10000", "currency": "PLN"}, actor="alice")
+        with mock.patch.object(analytics_views.BudgetAnalyticsViews, "_now", return_value=now):
+            owner_month = await (await self.client.get(
+                "/api/budget/analytics/monthly-budget", params={"period": PERIOD}, headers=self.headers("alice")
+            )).json()
+            spouse_res = await self.fetch("monthly-budget", params={"period": PERIOD})
+        self.assertEqual(spouse_res.status, 200)
+        spouse_month = await spouse_res.json()
+        api_contract.BudgetHouseholdMonthlyBudget.model_validate(spouse_month)
+        self.assertEqual(owner_month["card_exposure"], {"status": "unavailable", "amount": None, "as_of_date": None})
+        self.assertEqual(owner_month["card_debt"], {
+            "status": "available",
+            "amount": "100",
+            "currency": "PLN",
+            "as_of_date": "2026-11-21",
+            "accounts": [{
+                "account_id": self.alice_id,
+                "debt": "100",
+                "limit": "10000",
+                "available": "9900",
+                "currency": "PLN",
+                "as_of": "2026-11-21",
+            }],
+        })
+        self.assertEqual(spouse_month["budget"]["card_exposure"], {"status": "unavailable", "amount": None, "as_of_date": None})
+        self.assertEqual(spouse_month["budget"]["card_debt"], {
+            "status": "available",
+            "amount": "100",
+            "currency": "PLN",
+            "as_of_date": "2026-11-21",
+        })
+        self.assertNotIn("accounts", spouse_month["budget"]["card_debt"])
+        encoded = json.dumps(spouse_month["budget"]["card_debt"])
+        self.assertNotIn(self.alice_id, encoded)
+        self.assertNotIn("10000", encoded)
+        self.assertNotIn("9900", encoded)
+
     async def test_spouse_views_omit_counterparty_account_fields(self):
         mask = "PL** … 1234"
         digest = "cd" * 32

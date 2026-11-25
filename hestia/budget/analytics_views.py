@@ -38,6 +38,7 @@ from .analytics_store import BudgetAnalyticsStore, _CATEGORY_LIMIT_FIELDS, _dict
 from .client import _reject_constant, _unique_error_fields
 from .mortgage_reminders import MAX_PAID_MONTHS, MAX_SCHEDULES, MortgageSchedule
 from .scheduler import shared_state
+from .store import BudgetStoreError, load_credit_limits
 from .views import BudgetHTTPStore
 
 MAX_ROWS = 100_000
@@ -1100,6 +1101,45 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             account.owner == owner, db.BudgetConnection.owner == owner, account.enabled))
         return {account_id: stamp for account_id, stamp in rows}
 
+    @staticmethod
+    def _selected_card_exposure_inputs(session, owner):
+        rows = session.execute(
+            select(db.BudgetAccount.id, db.BudgetAccount.balances_json)
+            .join(db.BudgetConnection)
+            .where(
+                db.BudgetAccount.owner == owner,
+                db.BudgetConnection.owner == owner,
+                db.BudgetAccount.enabled,
+                db.BudgetAccount.kind == "credit_card",
+                db.BudgetAccount.kind_confirmed_at.is_not(None),
+            )
+            .order_by(db.BudgetAccount.id)
+        ).all()
+        if not rows:
+            return {}, {}, {}
+        card_ids = [account_id for account_id, _ in rows]
+        balances = {}
+        for account_id, raw_balances in rows:
+            try:
+                parsed = json.loads(raw_balances)
+            except (ValueError, TypeError):
+                raise AnalyticsError(_DATA_ERROR, 500) from None
+            if not isinstance(parsed, list):
+                raise AnalyticsError(_DATA_ERROR, 500)
+            balances[account_id] = parsed
+        comp_rows = session.execute(
+            select(db.BudgetComponent.account_id, db.BudgetComponent.last_success).where(
+                db.BudgetComponent.account_id.in_(card_ids),
+                db.BudgetComponent.operation == "balances",
+            )
+        )
+        balance_timestamps = {account_id: stamp for account_id, stamp in comp_rows}
+        try:
+            credit_limits = load_credit_limits(session, card_ids)
+        except BudgetStoreError:
+            raise AnalyticsError(_DATA_ERROR, 500) from None
+        return balances, credit_limits, balance_timestamps
+
     def _evaluate_monthly_budget_snapshot(self, owner, *, period, currency, evaluator):
         try:
             with _read_lock, self._read(owner) as session:
@@ -1117,13 +1157,15 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 account_timestamps = self._selected_transaction_component_timestamps(session, owner)
                 account_kinds = {row["id"]: row["kind"] for row in snapshot["accounts"]
                                  if row["enabled"] and row["kind_confirmed_at"] is not None}
+                card_balances, card_limits, card_balance_ts = self._selected_card_exposure_inputs(session, owner)
                 return evaluator(
                     owner=owner, period=period, currency=currency, evaluated_at=evaluated_at,
                     transactions=snapshot["transactions"], transfers=snapshot["_transfers"],
                     scan_limited=snapshot["_scan_limited"], categories=snapshot["categories"],
                     rules=snapshot["rules"], identities=snapshot["identities"], limits=all_limits,
                     account_component_timestamps=account_timestamps, account_kinds=account_kinds, settings=settings,
-                    one_off_secret=self._cursor_secret,
+                    account_balances=card_balances, account_credit_limits=card_limits,
+                    account_balance_timestamps=card_balance_ts, one_off_secret=self._cursor_secret,
                 )
         except month_budget_mod.MonthInputError:
             raise AnalyticsError() from None

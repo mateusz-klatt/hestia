@@ -414,6 +414,7 @@ export function monthlyBudgetOf(changes: Partial<AnalyticsMonthlyBudget> = {}): 
     category_spend: [monthlyBudgetCategorySpend()],
     pass_through: null,
     card_exposure: { status: "unavailable", amount: null, as_of_date: null },
+    card_debt: { status: "unavailable", amount: null, currency: "PLN", as_of_date: null, accounts: [] },
     ...changes,
   };
 }

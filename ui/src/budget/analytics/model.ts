@@ -76,6 +76,8 @@ export type AnalyticsMonthlyBudgetCategorySpend = Schemas["BudgetAnalyticsMonthl
 export type AnalyticsMonthlyBudgetCategoryLimit = Schemas["BudgetAnalyticsMonthlyBudgetCategoryLimit"];
 export type AnalyticsMonthlyBudgetPassThrough = Schemas["BudgetAnalyticsMonthlyBudgetPassThrough"];
 export type AnalyticsMonthlyBudgetCardExposure = Schemas["BudgetAnalyticsMonthlyBudgetCardExposure"];
+export type AnalyticsMonthlyBudgetCardDebt = Schemas["BudgetAnalyticsMonthlyBudgetCardDebt"];
+export type AnalyticsMonthlyBudgetCardDebtAccount = Schemas["BudgetAnalyticsMonthlyBudgetCardDebtAccount"];
 export type AnalyticsMonthlyBudgetCharts = Schemas["BudgetAnalyticsMonthlyBudgetCharts"];
 export type AnalyticsMonthlyBudgetSeries = Schemas["BudgetAnalyticsMonthlyBudgetSeries"];
 export type AnalyticsMonthlyBudgetDailyPoint = Schemas["BudgetAnalyticsMonthlyBudgetDailyPoint"];
@@ -318,6 +320,8 @@ export const MONTH_BUDGET_LIMIT_STATUS_KEYS: Readonly<Record<string, MessageKey>
 };
 
 export const MONTH_BUDGET_CARD_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
+  available: "budget.monthBudget.cardStatuses.available",
+  partial: "budget.monthBudget.cardStatuses.partial",
   unavailable: "budget.monthBudget.cardStatuses.unavailable",
 };
 

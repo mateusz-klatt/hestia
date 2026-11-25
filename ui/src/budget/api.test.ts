@@ -215,12 +215,16 @@ describe("budget api", () => {
     const fetchMock = respond(200, { ok: true });
     await budgetApi.setSelected(account({ control_version: 7 }), false);
     await budgetApi.setKind(account({ control_version: 8 }), "savings");
+    await budgetApi.setCreditLimit(account({ control_version: 9 }), { amount: "10000", currency: "PLN" });
+    await budgetApi.setCreditLimit(account({ control_version: 10 }), null);
     await budgetApi.setPaused(connection, true);
     await budgetApi.setBackground(connection, true);
     const bodies = fetchMock.mock.calls.map((_, index) => JSON.parse(sent(fetchMock, index).init.body as string) as unknown);
     expect(bodies).toEqual([
       { account_id: "local-a", selected: false, expected_version: 7 },
       { account_id: "local-a", kind: "savings", expected_version: 8 },
+      { account_id: "local-a", credit_limit: { amount: "10000", currency: "PLN" }, expected_version: 9 },
+      { account_id: "local-a", credit_limit: null, expected_version: 10 },
       { connection_id: "bank", paused: true, expected_version: 4 },
       { connection_id: "bank", enabled: true, expected_version: 4 },
     ]);
@@ -228,21 +232,21 @@ describe("budget api", () => {
     await budgetApi.jobs();
     await budgetApi.balances("local-a");
     await budgetApi.limits();
-    expect(sent(fetchMock, 7).url.pathname).toMatch(/\/api\/budget\/limits$/);
+    expect(sent(fetchMock, 9).url.pathname).toMatch(/\/api\/budget\/limits$/);
     await budgetApi.consentStatus();
     await budgetApi.consentPending();
     await budgetApi.consentRenewalReminders();
     await budgetApi.consentReconcile();
     await budgetApi.consentStart(connection, "renew");
     await budgetApi.consentCancel("flow-1");
-    expect([8, 9, 10, 11, 12, 13].map((index) => sent(fetchMock, index).url.pathname.replace(/.*\/api\/budget\//, "")))
+    expect([10, 11, 12, 13, 14, 15].map((index) => sent(fetchMock, index).url.pathname.replace(/.*\/api\/budget\//, "")))
       .toEqual(["consent/status", "consent/pending", "consent/renewal-reminders", "consent/reconcile", "consent/start", "consent/cancel"]);
-    expect(sent(fetchMock, 10).url.search).toBe("");
-    expect(sent(fetchMock, 11).url.search).toBe("");
-    expect(JSON.parse(sent(fetchMock, 12).init.body as string)).toEqual({ connection_id: "bank", expected_version: 4, intent: "renew" });
-    expect(JSON.parse(sent(fetchMock, 13).init.body as string)).toEqual({ flow_id: "flow-1" });
-    expect(sent(fetchMock, 4).url.searchParams.get("connection_id")).toBe("bank");
-    expect(sent(fetchMock, 5).url.search).toBe("");
+    expect(sent(fetchMock, 12).url.search).toBe("");
+    expect(sent(fetchMock, 13).url.search).toBe("");
+    expect(JSON.parse(sent(fetchMock, 14).init.body as string)).toEqual({ connection_id: "bank", expected_version: 4, intent: "renew" });
+    expect(JSON.parse(sent(fetchMock, 15).init.body as string)).toEqual({ flow_id: "flow-1" });
+    expect(sent(fetchMock, 6).url.searchParams.get("connection_id")).toBe("bank");
+    expect(sent(fetchMock, 7).url.search).toBe("");
   });
 
   it("treats an unreadable or incomplete success as an unknown outcome", async () => {

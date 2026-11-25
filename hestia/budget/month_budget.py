@@ -29,7 +29,7 @@ from . import analytics_core as core
 from .client import _reject_constant, _unique_error_fields
 from .config import BudgetConfigError
 from .spending_limits import MAX_LIMITS, SpendingLimitInputError, _parse_amount as _parse_limit_amount, _status as _limit_status
-from .store import STALE_AFTER
+from .store import STALE_AFTER, BudgetStoreError, parse_credit_limit
 
 RULE_VERSION = 1
 MONTH_CONFIG_ENV = "HESTIA_BUDGET_MONTH_CONFIG"
@@ -353,6 +353,123 @@ def _compute_ledger_freshness(
             stale_count += 1
         ledger_as_of = acct_ts if ledger_as_of is None else max(ledger_as_of, acct_ts)
     return ledger_as_of, stale_count
+
+
+def _valid_iso_date(value: object) -> str:
+    try:
+        if not isinstance(value, str) or len(value) != 10 or date.fromisoformat(value).isoformat() != value:
+            raise ValueError
+    except ValueError:
+        raise MonthDataError() from None
+    return value
+
+
+def _extract_itav_by_currency(entries: object) -> dict[str, list[tuple[str, str | None]]]:
+    if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
+        raise MonthDataError()
+    by_currency: dict[str, list[tuple[str, str | None]]] = defaultdict(list)
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            raise MonthDataError()
+        if entry.get("balance_type") != "ITAV":
+            continue
+        amount_obj = entry.get("balance_amount")
+        if not isinstance(amount_obj, Mapping):
+            raise MonthDataError()
+        currency = amount_obj.get("currency")
+        if not isinstance(currency, str) or not _CURRENCY_RE.fullmatch(currency):
+            raise MonthDataError()
+        try:
+            available = core.canonical_money(amount_obj.get("amount"))
+        except core.AnalyticsError:
+            raise MonthDataError() from None
+        ref_date = entry.get("reference_date")
+        if ref_date is not None:
+            _valid_iso_date(ref_date)
+        by_currency[currency].append((available, ref_date))
+    return by_currency
+
+
+def _is_card_balance_stale(
+    fetch_ts: float | None,
+    as_of_date: str | None,
+    evaluation_date: str,
+    evaluated_at: float,
+) -> bool:
+    if fetch_ts is None or (evaluated_at - fetch_ts) >= STALE_AFTER["balances"]:
+        return True
+    if as_of_date is not None and (date.fromisoformat(evaluation_date) - date.fromisoformat(as_of_date)).days > 1:
+        return True
+    return False
+
+
+def _compute_card_debt(
+    *,
+    account_kinds: Mapping[str, str],
+    account_balances: Mapping[str, Sequence[Mapping]] | None,
+    account_credit_limits: Mapping[str, Mapping[str, str] | None] | None,
+    account_balance_timestamps: Mapping[str, int | float | None] | None,
+    target_currency: str,
+    evaluation_date: str,
+    evaluated_at: float,
+) -> dict:
+    card_ids = sorted(account_id for account_id, kind in account_kinds.items() if kind == "credit_card")
+    if not card_ids:
+        return {
+            "status": "unavailable",
+            "amount": None,
+            "currency": target_currency,
+            "as_of_date": None,
+            "accounts": [],
+        }
+    accounts_out: list[dict] = []
+    has_partial = False
+    for account_id in card_ids:
+        raw_ts = None if account_balance_timestamps is None else account_balance_timestamps.get(account_id)
+        fetch_ts = None if raw_ts is None else min(_validate_timestamp(raw_ts), evaluated_at)
+        raw_balances = () if account_balances is None else account_balances.get(account_id, ())
+        itav_by_currency = _extract_itav_by_currency(raw_balances)
+        raw_limit = None if account_credit_limits is None else account_credit_limits.get(account_id)
+        if raw_limit is None:
+            has_partial = True
+            continue
+        try:
+            limit = parse_credit_limit(raw_limit)
+        except BudgetStoreError:
+            raise MonthDataError() from None
+        limit_amount, limit_currency = limit["amount"], limit["currency"]
+        if limit_currency != target_currency:
+            has_partial = True
+            continue
+        matching = itav_by_currency.get(limit_currency, ())
+        if len(matching) != 1:
+            has_partial = True
+            continue
+        available, ref_date = matching[0]
+        # Reject future-dated bank balances (> Warsaw evaluation_date) as unusable and mark partial.
+        if ref_date is not None and ref_date > evaluation_date:
+            has_partial = True
+            continue
+        # Prefer bank's reference_date when present; otherwise use fetch date in Europe/Warsaw.
+        card_as_of = ref_date if ref_date is not None else (warsaw_date(fetch_ts)[0] if fetch_ts is not None else None)
+        if _is_card_balance_stale(fetch_ts, card_as_of, evaluation_date, evaluated_at):
+            has_partial = True
+        accounts_out.append({
+            "account_id": account_id,
+            "debt": _max_money(_sub_money(limit_amount, available), _ZERO),
+            "limit": _check_aggregate(limit_amount),
+            "available": _check_aggregate(available),
+            "currency": limit_currency,
+            "as_of": card_as_of,
+        })
+    dates = [item["as_of"] for item in accounts_out if item["as_of"] is not None]
+    return {
+        "status": "partial" if has_partial else "available",
+        "amount": _sum_money_checked(item["debt"] for item in accounts_out) if accounts_out else None,
+        "currency": target_currency,
+        "as_of_date": min(dates) if (accounts_out and dates) else None,
+        "accounts": accounts_out,
+    }
 
 
 def _allocate_dated_adjustments(legs: list[_MortgageLeg], covered_total: str) -> dict[str, list[str]]:
@@ -931,6 +1048,9 @@ def _evaluate_monthly_budget_core(
     account_kinds: Mapping[str, str],
     settings: MonthBudgetSettings | None,
     history: int | None,
+    account_balances: Mapping[str, Sequence[Mapping]] | None = None,
+    account_credit_limits: Mapping[str, str | None] | None = None,
+    account_balance_timestamps: Mapping[str, int | float | None] | None = None,
     one_off_secret: bytes | None = None,
     household_daily: bool = False,
 ) -> tuple[dict, dict | None]:
@@ -1121,6 +1241,15 @@ def _evaluate_monthly_budget_core(
         "has_activity": selected_bucket.has_activity,
     }
     card_exposure = {"status": "unavailable", "amount": None, "as_of_date": None}
+    card_debt = _compute_card_debt(
+        account_kinds=account_kinds,
+        account_balances=account_balances,
+        account_credit_limits=account_credit_limits,
+        account_balance_timestamps=account_balance_timestamps,
+        target_currency=target_currency,
+        evaluation_date=evaluation_date,
+        evaluated_at=float(evaluated_at),
+    )
     envelope = {
         "period": effective_period,
         "start": start,
@@ -1134,6 +1263,7 @@ def _evaluate_monthly_budget_core(
         "available_currencies": available_currencies,
         "coverage": coverage,
         "card_exposure": card_exposure,
+        "card_debt": card_debt,
     }
 
     if not configured:
@@ -1273,6 +1403,9 @@ def evaluate_monthly_budget(
     account_component_timestamps: Mapping[str, int | float | None],
     account_kinds: Mapping[str, str],
     settings: MonthBudgetSettings | None,
+    account_balances: Mapping[str, Sequence[Mapping]] | None = None,
+    account_credit_limits: Mapping[str, str | None] | None = None,
+    account_balance_timestamps: Mapping[str, int | float | None] | None = None,
     one_off_secret: bytes | None = None,
     include_series: bool = False,
 ) -> dict:
@@ -1285,7 +1418,9 @@ def evaluate_monthly_budget(
         period=period, currency=currency, evaluated_at=evaluated_at, transactions=transactions,
         transfers=transfers, scan_limited=scan_limited, categories=categories, rules=rules,
         identities=identities, limits=limits, account_component_timestamps=account_component_timestamps,
-        account_kinds=account_kinds, settings=settings, history=None, one_off_secret=one_off_secret,
+        account_kinds=account_kinds, settings=settings, history=None,
+        account_balances=account_balances, account_credit_limits=account_credit_limits,
+        account_balance_timestamps=account_balance_timestamps, one_off_secret=one_off_secret,
         household_daily=include_series,
     )
     return budget
@@ -1308,6 +1443,9 @@ def evaluate_monthly_budget_charts(
     account_component_timestamps: Mapping[str, int | float | None],
     account_kinds: Mapping[str, str],
     settings: MonthBudgetSettings | None,
+    account_balances: Mapping[str, Sequence[Mapping]] | None = None,
+    account_credit_limits: Mapping[str, str | None] | None = None,
+    account_balance_timestamps: Mapping[str, int | float | None] | None = None,
     one_off_secret: bytes | None = None,
 ) -> dict:
     """Pure single-snapshot evaluation for ``GET /api/budget/analytics/monthly-budget/charts``."""
@@ -1317,6 +1455,8 @@ def evaluate_monthly_budget_charts(
         period=period, currency=currency, evaluated_at=evaluated_at, transactions=transactions,
         transfers=transfers, scan_limited=scan_limited, categories=categories, rules=rules,
         identities=identities, limits=limits, account_component_timestamps=account_component_timestamps,
-        account_kinds=account_kinds, settings=settings, history=history, one_off_secret=one_off_secret,
+        account_kinds=account_kinds, settings=settings, history=history,
+        account_balances=account_balances, account_credit_limits=account_credit_limits,
+        account_balance_timestamps=account_balance_timestamps, one_off_secret=one_off_secret,
     )
     return {"budget": budget, "series": series}

@@ -38,6 +38,11 @@ BALANCE = {"name": "Synthetic booked balance", "balance_type": "CLBD",
 class BudgetRequestContractTests(unittest.TestCase):
     CASES = ((contract.BudgetSelectionRequest, {"account_id": "local-account", "selected": True, "expected_version": 1}),
              (contract.BudgetKindRequest, {"account_id": "local-account", "kind": "credit_card", "expected_version": 1}),
+             (contract.BudgetCreditLimitRequest, {
+                 "account_id": "local-account",
+                 "credit_limit": {"amount": "10000", "currency": "PLN"},
+                 "expected_version": 1,
+             }),
              (contract.BudgetConnectionStateRequest, {"connection_id": "local-connection", "paused": False, "expected_version": 1}),
              (contract.BudgetBackgroundSelectionRequest, {"connection_id": "local-connection", "enabled": True, "expected_version": 1}),
              (contract.BudgetRefreshRequest, {"connection_id": "local-connection", "expected_version": 1,
@@ -79,6 +84,45 @@ class BudgetRequestContractTests(unittest.TestCase):
         for value in ("unknown", "PLN", "credit", None, True, 1):
             with self.subTest(kind=value), self.assertRaises(ValueError):
                 contract.BudgetKindRequest.model_validate({"account_id": "local-account", "kind": value, "expected_version": 1})
+
+    def test_credit_limit_accepts_positive_decimal_or_null_and_rejects_invalid_values(self):
+        for valid in (
+            None,
+            {"amount": "0.01", "currency": "PLN"},
+            {"amount": "10000", "currency": "PLN"},
+            {"amount": "10000.00", "currency": "EUR"},
+            {"amount": "10000000", "currency": "USD"},
+            {"amount": "10000000.00", "currency": "CHF"},
+        ):
+            model = contract.BudgetCreditLimitRequest.model_validate(
+                {"account_id": "local-account", "credit_limit": valid, "expected_version": 1}
+            )
+            self.assertEqual(model.model_dump()["credit_limit"], valid)
+        for bad in (
+            "10000",
+            {},
+            {"amount": "10000"},
+            {"currency": "PLN"},
+            {"amount": "10000", "currency": "PLN", "extra": 1},
+            {"amount": "", "currency": "PLN"},
+            {"amount": "0", "currency": "PLN"},
+            {"amount": "0.00", "currency": "PLN"},
+            {"amount": "-10", "currency": "PLN"},
+            {"amount": "+10", "currency": "PLN"},
+            {"amount": "10000000.01", "currency": "PLN"},
+            {"amount": "1e5", "currency": "PLN"},
+            {"amount": "10,000", "currency": "PLN"},
+            {"amount": 10000, "currency": "PLN"},
+            {"amount": "1000", "currency": "pln"},
+            {"amount": "1000", "currency": "PL"},
+            {"amount": "1000", "currency": "PLNN"},
+        ):
+            with self.subTest(credit_limit=bad), self.assertRaises(ValueError):
+                contract.BudgetCreditLimitRequest.model_validate(
+                    {"account_id": "local-account", "credit_limit": bad, "expected_version": 1}
+                )
+        with self.assertRaises(ValueError):
+            contract.BudgetCreditLimitRequest.model_validate({"account_id": "local-account", "expected_version": 1})
 
     def test_consent_uses_local_flow_ids_and_rejects_caller_credentials(self):
         value = {"flow_id": "11111111-1111-4111-8111-111111111111"}
@@ -182,7 +226,8 @@ class BudgetOpenApiTests(unittest.TestCase):
     def test_only_implemented_routes_are_declared_with_exact_callback_exception(self):
         document = contract.build_openapi()
         budget = {path: methods for path, methods in document["paths"].items() if path.startswith("/api/budget/")}
-        posts = ("account-selection", "account-kind", "connection-state", "background-selection", "refresh")
+        posts = ("account-selection", "account-kind", "account-credit-limit",
+                 "connection-state", "background-selection", "refresh")
         consent = {path: methods for path, methods in budget.items() if "/consent/" in path or "/enable-banking/" in path}
         analytics = {path: methods for path, methods in budget.items() if "/analytics/" in path}
         household = {path: methods for path, methods in budget.items() if "/household/" in path}
@@ -520,13 +565,15 @@ class BudgetOpenApiTests(unittest.TestCase):
 
     def test_monthly_budget_schemas_pin_wire_fields_and_bounds(self):
         schemas = contract.build_openapi()["components"]["schemas"]
-        optional_keys = {"Configuration": {"income_window"},
+        optional_keys = {"": {"card_debt"},
+                         "Configuration": {"income_window"},
                          "Coverage": {"pending_row_keys", "pending_row_keys_truncated"},
-                         "CategorySpend": {"one_off", "one_off_key", "display_name", "display_label", "color_hue"}}
+                         "CategorySpend": {"one_off", "one_off_key", "display_name", "display_label", "color_hue"},
+                         "CardDebt": {"accounts"}}
         for suffix, keys in {
             "": {"period", "start", "end", "cutoff", "current_month", "evaluated_at", "evaluation_date",
                  "evaluation_timezone", "currency", "available_currencies", "configuration", "coverage",
-                 "summary", "expected_income", "pace", "category_spend", "pass_through", "card_exposure"},
+                 "summary", "expected_income", "pace", "category_spend", "pass_through", "card_exposure", "card_debt"},
             "Configuration": {"status", "source", "income_window"},
             "IncomeWindow": {"start", "end", "start_day"},
             "Coverage": {"ledger_as_of", "stale_selected_accounts", "purchase_date_fallback_count",
@@ -545,6 +592,8 @@ class BudgetOpenApiTests(unittest.TestCase):
                             "mortgage_refunds", "unapplied_mortgage_refunds", "matched", "unapplied_rent",
                             "uncovered_mortgage"},
             "CardExposure": {"status", "amount", "as_of_date"},
+            "CardDebt": {"status", "amount", "currency", "as_of_date", "accounts"},
+            "CardDebtAccount": {"account_id", "debt", "limit", "available", "currency", "as_of"},
         }.items():
             with self.subTest(schema=suffix):
                 schema = schemas["BudgetAnalyticsMonthlyBudget" + suffix]
@@ -603,6 +652,10 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertEqual(root["evaluation_timezone"]["const"], "Europe/Warsaw")
         self.assertEqual(schemas["BudgetAnalyticsMonthlyBudgetCardExposure"]["properties"]["status"]["const"],
                          "unavailable")
+        self.assertEqual(
+            set(schemas["BudgetAnalyticsMonthlyBudgetCardDebt"]["properties"]["status"]["enum"]),
+            {"available", "partial", "unavailable"},
+        )
         self.assertEqual(schemas["BudgetAnalyticsMonthlyBudgetSummary"]["properties"]["spent"]["maxLength"], 192)
         self.assertEqual(
             schemas["BudgetAnalyticsMonthlyBudgetCategoryLimit"]["properties"]["percent_used_floor"]["type"],
@@ -666,7 +719,8 @@ class BudgetOpenApiTests(unittest.TestCase):
         schemas = contract.build_openapi()["components"]["schemas"]
         request_names = {model.__name__ for model, _ in BudgetRequestContractTests.CASES}
         request_names.add("BudgetConsentFlowRequest")
-        request_names.update({"BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest",
+        request_names.update({"BudgetCreditLimitValue",
+                              "BudgetAnalyticsCategoryCreateRequest", "BudgetAnalyticsCategoryUpdateRequest",
                               "BudgetAnalyticsCategoryColorSpreadRequest", "BudgetAnalyticsAnnotationRequest", "BudgetAnalyticsRulePreviewRequest",
                               "BudgetAnalyticsRuleSaveRequest", "BudgetAnalyticsRuleBatchPreviewRequest",
                               "BudgetAnalyticsRuleBatchSaveRequest", "BudgetAnalyticsTransferDecisionRequest",
@@ -729,7 +783,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             contract.BudgetComponentStatus.model_validate(future)
         account = schemas["BudgetAccount"]
-        for field in ("display", "observed_balance_currencies"):
+        for field in ("display", "observed_balance_currencies", "credit_limit"):
             self.assertNotIn(field, account["required"])
         display = schemas["BudgetAccountDisplay"]
         self.assertEqual(set(display["properties"]), {"product", "currency", "masked_suffix", "source", "observed_at", "imported_at"})
@@ -814,6 +868,16 @@ class BudgetProviderBindingTests(unittest.TestCase):
                                                          "current": conflict.exception.current})
         self.assertEqual(account.current.control_version, version + 1)
         self.assertIsNotNone(account.current.components)
+        confirmed = self.views.confirm_account_kind("owner", self.account_id, "credit_card",
+                                                    expected_version=version + 1, actor="owner", origin="web")
+        limit_set = self.views.set_account_credit_limit("owner", self.account_id,
+                                                        {"amount": "10000", "currency": "PLN"},
+                                                        expected_version=confirmed["control_version"],
+                                                        actor="owner", origin="web")
+        parsed_limit = contract.BudgetAccountSaved.model_validate({"ok": True, "account": limit_set})
+        self.assertEqual(parsed_limit.account.credit_limit.amount, "10000")
+        self.assertEqual(parsed_limit.account.credit_limit.currency, "PLN")
+        contract.BudgetAccounts.model_validate({"accounts": self.views.accounts("owner")})
         connection = self.views.set_connection_paused("owner", "bank", True,
                                                        expected_version=1, actor="owner", origin="web")
         contract.BudgetConnectionSaved.model_validate({"ok": True, "connection": connection})

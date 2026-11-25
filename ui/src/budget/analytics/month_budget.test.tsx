@@ -1334,6 +1334,7 @@ describe("MonthBudgetView", () => {
         }),
       ],
       card_exposure: { status: "unavailable", amount: null, as_of_date: null },
+      card_debt: { status: "unavailable", amount: null, currency: "PLN", as_of_date: null, accounts: [] },
     })));
     await show(api, { locale: "pl-PL" });
 
@@ -1345,7 +1346,7 @@ describe("MonthBudgetView", () => {
     expect(passThroughPl?.textContent).toContain("50,00 PLN");
     expect(passThroughPl?.textContent).toContain("Niepokryta część raty600,00 PLN");
 
-    const cardPl = host.querySelector('[aria-label="Niespłacone wydatki kartą"]');
+    const cardPl = host.querySelector('[aria-label="Zadłużenie na kartach"]');
     expect(cardPl?.textContent).toContain("Niedostępne");
 
     const tableRegion = host.querySelector('[role="region"][aria-label="Wydatki i limity"]');
@@ -1373,10 +1374,59 @@ describe("MonthBudgetView", () => {
     expect(passThroughEn?.textContent).toContain("3,200.00 PLN");
     expect(passThroughEn?.textContent).toContain("Uncovered mortgage1,200.00 PLN");
     expect(passThroughEn?.textContent).not.toContain("Mortgage refunds");
-    expect(host.querySelector('[aria-label="Unpaid card spending"]')?.textContent).toContain("Unavailable");
+    expect(host.querySelector('[aria-label="Card debt"]')?.textContent).toContain("Unavailable");
     expect(host.querySelector('section[aria-label="Spending and limits"] tbody')).toBeNull();
     expect(host.querySelector('[aria-label="Charts"]')).toBeNull();
     expect(host.textContent).toContain(en["budget.monthBudget.categoriesError"]);
+  });
+
+  it("renders available and partial card_debt with formatted amount and balance date even when unconfigured", async () => {
+    const api = fakeApi();
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      card_exposure: { status: "unavailable", amount: null, as_of_date: null },
+      card_debt: {
+        status: "available",
+        amount: "900",
+        currency: "PLN",
+        as_of_date: "2026-11-21",
+        accounts: [{ account_id: "card-a", debt: "900", limit: "10000", available: "9100", currency: "PLN", as_of: "2026-11-21" }],
+      },
+    })));
+    await show(api, { locale: "pl-PL" });
+    const plCard = host.querySelector('[aria-label="Zadłużenie na kartach"]');
+    expect(plCard?.textContent).toContain("900,00 PLN");
+    expect(plCard?.textContent).toContain("Stan na");
+    expect(plCard?.textContent).toContain("2026-11-21");
+
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      configuration: { status: "unconfigured", source: "none" },
+      summary: null,
+      expected_income: null,
+      pace: null,
+      category_spend: [],
+      pass_through: null,
+      card_exposure: { status: "unavailable", amount: null, as_of_date: null },
+      card_debt: {
+        status: "partial",
+        amount: "100",
+        currency: "PLN",
+        as_of_date: "2026-11-20",
+        accounts: [{ account_id: "card-a", debt: "100", limit: "5000", available: "4900", currency: "PLN", as_of: "2026-11-20" }],
+      },
+    }, null)));
+    await show(api, { locale: "en-US", revision: 1 });
+    const unconfiguredCard = host.querySelector('[aria-label="Card debt"]');
+    expect(unconfiguredCard?.textContent).toContain("100.00 PLN");
+    expect(unconfiguredCard?.textContent).toContain("Partial");
+    expect(unconfiguredCard?.textContent).toContain("2026-11-20");
+
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      card_debt: { status: "partial", amount: null, currency: "PLN", as_of_date: null, accounts: [] },
+    })));
+    await show(api, { locale: "en-US", revision: 2 });
+    const emptyPartial = host.querySelector('[aria-label="Card debt"]');
+    expect(emptyPartial?.textContent).toContain("Partial");
+    expect(emptyPartial?.textContent).not.toContain("Balance date");
   });
 
   it("shows a labelled amount on its own row beside the category, with the one-off tag", async () => {

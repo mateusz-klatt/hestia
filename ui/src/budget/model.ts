@@ -13,6 +13,8 @@ export type BudgetBalances = Schemas["BudgetBalances"];
 export type BudgetBalance = Schemas["BudgetBalance"];
 export type BudgetJob = Schemas["BudgetJob"];
 export type BudgetKind = Schemas["BudgetKindRequest"]["kind"];
+export type BudgetCreditLimit = Schemas["BudgetAccountCreditLimit"];
+export type BudgetCreditLimitValue = Schemas["BudgetCreditLimitValue"];
 export type BudgetSharedLimit = Schemas["BudgetSharedLimit"];
 export type BudgetComponentLimit = Schemas["BudgetComponentLimit"];
 export type BudgetLimit = BudgetSharedLimit | BudgetComponentLimit;
@@ -52,6 +54,32 @@ export type BudgetOperation = "transactions" | "balances";
 
 export const KINDS: readonly BudgetKind[] = ["current", "savings", "credit_card", "other"];
 export const ACTIVE_JOB = new Set(["queued", "running"]);
+
+/** Validate and canonicalize a decimal credit-limit input (> 0 and <= 10,000,000), or return null. */
+export function normalizeCreditLimitInput(raw: string): string | null {
+  const trimmed = raw.trim();
+  const normalized = trimmed.includes(".") ? trimmed : trimmed.replace(",", ".");
+  if (normalized.length === 0 || normalized.length > 80 || !/^\d+(?:\.\d+)?$/.test(normalized)) return null;
+  const [wholeRaw = "0", fracRaw = ""] = normalized.split(".");
+  const frac = fracRaw.replace(/0+$/, "");
+  const whole = wholeRaw.replace(/^0+/, "") || "0";
+  const canonical = frac === "" ? whole : `${whole}.${frac}`;
+  const intVal = BigInt(whole);
+  if (intVal === 0n && frac === "") return null;
+  if (intVal > 10_000_000n || (intVal === 10_000_000n && frac !== "")) return null;
+  return canonical;
+}
+
+/** Validate a 3-letter uppercase ISO currency code, or return null. */
+export function normalizeCreditCurrencyInput(raw: string): string | null {
+  const cleaned = raw.trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(cleaned) ? cleaned : null;
+}
+
+/** Default limit currency from stored limit, observed balance currency, display metadata, or PLN. */
+export function defaultCreditLimitCurrency(account: BudgetAccount): string {
+  return account.credit_limit?.currency ?? account.observed_balance_currencies?.[0] ?? account.display?.currency ?? "PLN";
+}
 
 const DECIMAL = /^(-?)(\d+)(?:\.(\d+))?$/;
 

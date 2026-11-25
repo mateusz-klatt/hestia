@@ -59,7 +59,25 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.48.0")
+        self.assertEqual(document["info"]["version"], "0.49.0")
+        document["paths"].pop("/api/budget/account-credit-limit")
+        schemas.pop("BudgetCreditLimitRequest")
+        schemas.pop("BudgetCreditLimitValue")
+        schemas.pop("BudgetAccountCreditLimit")
+        schemas["BudgetAccount"]["properties"].pop("credit_limit")
+        schemas["BudgetAccountChanged"]["properties"].pop("credit_limit")
+        mb_props = schemas["BudgetAnalyticsMonthlyBudget"]["properties"]
+        mb_props.pop("card_debt")
+        schemas.pop("BudgetAnalyticsMonthlyBudgetCardDebt")
+        schemas.pop("BudgetAnalyticsMonthlyBudgetCardDebtAccount")
+        document["paths"]["/api/budget/analytics/monthly-budget"]["get"]["description"] = (
+            "Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. "
+            "Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, "
+            "unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates "
+            "(including cross-account salary matching), and spending pace. Card exposure is reported as unavailable in P1. "
+            "Makes no bank requests and no database writes."
+        )
+        document["info"]["version"] = "0.48.0"
         instances_get = document["paths"]["/api/calendars/instances"]["get"]
         self.assertEqual(instances_get["x-required-role"], "viewer")
         del document["paths"]["/api/calendars/instances"]
@@ -751,7 +769,8 @@ class TolerantResponseContractTests(unittest.TestCase):
         "NameRequest", "ResetPasswordRequest", "RoomIconRequest", "RuleInput", "SceneRequest",
         "SetDisabledRequest", "SetRoleRequest", "SettingsUpdate", "WholeHomeRequest",
         "CalendarCreateRequest", "CalendarUpdateRequest", "CalendarDeleteRequest",
-        "BudgetSelectionRequest", "BudgetKindRequest", "BudgetConnectionStateRequest",
+        "BudgetSelectionRequest", "BudgetKindRequest", "BudgetCreditLimitRequest", "BudgetCreditLimitValue",
+        "BudgetConnectionStateRequest",
         "BudgetBackgroundSelectionRequest", "BudgetRefreshRequest", "BudgetConsentStartRequest", "BudgetConsentFlowRequest",
     }
 

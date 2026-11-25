@@ -2062,6 +2062,7 @@ SPOUSE_ROUTE_STATUS = {
     ("POST", "/api/automations"): 403,
     ("POST", "/api/automations/delete"): 403,
     ("POST", "/api/budget/account-kind"): 403,
+    ("POST", "/api/budget/account-credit-limit"): 403,
     ("POST", "/api/budget/account-selection"): 403,
     ("POST", "/api/budget/analytics/annotation"): 403,
     ("POST", "/api/budget/analytics/category-create"): 403,

@@ -67,6 +67,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     consentCancel: vi.fn<BudgetApi["consentCancel"]>(),
     setSelected: vi.fn<BudgetApi["setSelected"]>(),
     setKind: vi.fn<BudgetApi["setKind"]>(),
+    setCreditLimit: vi.fn<BudgetApi["setCreditLimit"]>(),
     setPaused: vi.fn<BudgetApi["setPaused"]>(),
     setBackground: vi.fn<BudgetApi["setBackground"]>(),
     refresh: vi.fn<BudgetApi["refresh"]>(),
@@ -837,6 +838,78 @@ describe("controls", () => {
     await click(background);
     expect(api.setBackground).toHaveBeenCalledWith(expect.objectContaining({ control_version: 5 }), true);
     expect(api.setSelected).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows, validates, saves, and clears credit limit only for confirmed credit_card accounts", async () => {
+    const api = fakeApi([
+      account({ id: "acct-current", display, kind: "current", kind_confirmed_at: 5, control_version: 1 }),
+      account({
+        id: "acct-card",
+        display: { ...display, product: "Synthetic Card", masked_suffix: "9999" },
+        kind: "credit_card",
+        kind_confirmed_at: 5,
+        control_version: 2,
+        observed_balance_currencies: ["PLN"],
+        credit_limit: null,
+      }),
+    ]);
+    api.setCreditLimit
+      .mockImplementationOnce(() => ok({
+        account: account({
+          id: "acct-card",
+          display: { ...display, product: "Synthetic Card", masked_suffix: "9999" },
+          kind: "credit_card",
+          kind_confirmed_at: 5,
+          control_version: 3,
+          observed_balance_currencies: ["PLN"],
+          credit_limit: { amount: "10000", currency: "EUR" },
+        }),
+      }))
+      .mockImplementationOnce(() => ok({
+        account: account({
+          id: "acct-card",
+          display: { ...display, product: "Synthetic Card", masked_suffix: "9999" },
+          kind: "credit_card",
+          kind_confirmed_at: 5,
+          control_version: 4,
+          observed_balance_currencies: ["PLN"],
+          credit_limit: null,
+        }),
+      }));
+
+    await render(api);
+    const inputs = host.querySelectorAll<HTMLInputElement>('input[name="credit_limit"]');
+    expect(inputs).toHaveLength(1);
+    const input = inputs[0];
+    if (input === undefined) throw new Error("credit_limit input missing");
+    const currencyInput = host.querySelector<HTMLInputElement>('input[name="credit_limit_currency"]');
+    if (currencyInput === null) throw new Error("credit_limit_currency input missing");
+    expect(currencyInput.value).toBe("PLN");
+
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "0");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await click(button("Save limit"));
+    expect(api.setCreditLimit).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("greater than 0");
+
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "10000,00");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(currencyInput, "eur");
+      currencyInput.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await click(button("Save limit"));
+    expect(api.setCreditLimit).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acct-card", control_version: 2 }),
+      { amount: "10000", currency: "EUR" },
+    );
+
+    await click(button("Clear"));
+    expect(api.setCreditLimit).toHaveBeenLastCalledWith(expect.objectContaining({ id: "acct-card", control_version: 3 }), null);
   });
 });
 

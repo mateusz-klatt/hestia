@@ -22,7 +22,8 @@ from ..db import BudgetAccountDisplay as AccountDisplay
 from .limits import BudgetLimits, SHARED_SCOPES
 from .scheduler import shared_state
 from .job_store import BudgetJobStore
-from .store import BudgetControlConflict, BudgetNotFound, BudgetStore, BudgetStoreError, OPERATIONS
+from .store import (BudgetControlConflict, BudgetNotFound, BudgetStore, BudgetStoreError, OPERATIONS,
+                    load_account_credit_limit, observed_balance_currencies)
 
 CURSOR_TTL = 900
 MAX_CURSOR_CHARS = 8192
@@ -93,10 +94,11 @@ class BudgetHTTPStore(BudgetJobStore):
         metadata = super()._account_dict(account, connection, session=session)
         state = shared_state(session, connection)
         display = session.get(AccountDisplay, account.id)
-        currencies = sorted({value["balance_amount"]["currency"] for value in json.loads(account.balances_json)})
+        currencies = observed_balance_currencies(account)
         return {**metadata, "components": self._account_status(session, account, connection, self.clock(), state)["components"],
                 "display": None if display is None else {field: getattr(display, field) for field in _DISPLAY_FIELDS},
-                "observed_balance_currencies": currencies}
+                "observed_balance_currencies": currencies,
+                "credit_limit": load_account_credit_limit(session, account.id)}
 
     def connections(self, owner):
         with self._read(owner) as session:
