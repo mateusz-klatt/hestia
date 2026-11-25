@@ -754,6 +754,67 @@ describe("MonthBudgetView", () => {
     for (const svg of host.querySelectorAll("svg")) assertBoundedSvgCoordinates(svg);
   });
 
+  it("rounds high-confidence recurring forecast estimates to grosze in pace chart labels, tooltips, and table while keeping scheduled mortgages exact", async () => {
+    const api = fakeApi();
+    api.forecast.mockResolvedValue(ok(forecastOf({
+      evaluation_date: "2026-12-01",
+      start_month: "2026-12",
+      end_month: "2027-01",
+      horizon_months: 2,
+      months: [
+        {
+          month: "2026-12",
+          currencies: [],
+          items: [
+            forecastItem({
+              source: "mortgage", schedule_id: "mtg-exact", confidence: "scheduled", label: "Exact Loan",
+              amount: "1234.567", expected_date: "2026-12-10", past_due: false,
+            }),
+            forecastItem({
+              source: "recurring", schedule_id: null, confidence: "high", label: "Estimated Utility",
+              amount: "54.335", expected_date: "2026-12-20", past_due: false,
+            }),
+          ],
+        },
+      ],
+    })));
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      period: "2026-12",
+      current_month: "2026-12",
+      start: "2026-12-01",
+      end: "2026-12-31",
+      cutoff: "2026-12-05",
+      evaluation_date: "2026-12-05",
+      summary: { start_budget: "10000", spent: "500", remaining: "9500" },
+      pace: monthlyBudgetPace({ budget: "10000" }),
+    }, {
+      daily: Array.from({ length: 5 }, (_, i) => ({
+        date: `2026-12-${String(i + 1).padStart(2, "0")}`,
+        cumulative_spent: String((i + 1) * 100),
+      })),
+      months: [],
+      category_labels: [],
+    })));
+    await show(api, { locale: "pl-PL" });
+
+    const normalize = (value: string | null | undefined) => (value ?? "").replace(/\s+/g, " ");
+    const dailyChart = host.querySelector('[aria-label="Wydatki narastająco · PLN"]');
+    const markers = [...(dailyChart?.querySelectorAll(".budget-chart-scheduled-step") ?? [])];
+    expect(markers).toHaveLength(2);
+    expect(normalize(markers[0]?.querySelector("title")?.textContent)).toBe("10 gru · Exact Loan · 1 234,567 PLN · nadchodzące");
+    expect(normalize(markers[1]?.querySelector("title")?.textContent)).toBe("20 gru · Estimated Utility · 54,34 PLN · nadchodzące");
+
+    const legendText = normalize(dailyChart?.querySelector(".budget-chart-legend")?.textContent);
+    expect(legendText).toContain("10 gru · Exact Loan · 1 234,567 PLN · nadchodzące");
+    expect(legendText).toContain("20 gru · Estimated Utility · 54,34 PLN · nadchodzące");
+
+    const tableText = normalize(dailyChart?.querySelector("table")?.textContent);
+    expect(tableText).toContain("10 gru · Exact Loan · 1 234,567 PLN · nadchodzące");
+    expect(tableText).toContain("20 gru · Estimated Utility · 54,34 PLN · nadchodzące");
+    expect(normalize(dailyChart?.textContent)).not.toContain("54,335");
+    for (const svg of host.querySelectorAll("svg")) assertBoundedSvgCoordinates(svg);
+  });
+
   it("shows pending state while schedule data load, error note on failure, and fires onAccessLoss per call", async () => {
     const api = fakeApi();
     const pendingForecast = deferred<ReturnType<typeof forecastOf>>();

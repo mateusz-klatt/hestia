@@ -3,7 +3,7 @@
 // plus keyboard-operable exact HTML data tables.
 import { useId } from "react";
 import { t, tPlural } from "../../i18n";
-import { formatAmount } from "../model";
+import { formatAmount, formatEstimate } from "../model";
 import { CategorySwatch } from "./category_badge";
 import { OTHER_CATEGORY_COLOR, buildCategoryColors, oneOffCategoryColor } from "./category_colors";
 import type { CategoryColorInput, CategoryColorOverrides } from "./category_colors";
@@ -171,7 +171,10 @@ function scheduledItemLabel(
 ): string {
   const date = formatShortDate(item.expectedDate, locale);
   const status = item.overdue ? t("budget.monthBudget.overdue") : t("budget.monthBudget.upcoming");
-  return `${date} · ${item.label} · ${formatAmount(item.amount, currency, locale)} · ${status}`;
+  const formatted = item.estimated
+    ? formatEstimate(item.amount, currency, locale)
+    : formatAmount(item.amount, currency, locale);
+  return `${date} · ${item.label} · ${formatted} · ${status}`;
 }
 
 function CumulativeDailyChart({ budget, daily, paceProjection, schedulePending, scheduleError, locale }: {

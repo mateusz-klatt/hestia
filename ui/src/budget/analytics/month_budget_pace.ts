@@ -1,4 +1,4 @@
-import { canonicalAmount, daysBetween, formatScaledBigInt, parseScaledInt } from "./model";
+import { canonicalAmount, daysBetween, formatScaledBigInt, isScheduledForecastItem, parseScaledInt } from "./model";
 import type { AnalyticsForecast, AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetPace, AnalyticsMonthlyBudgetRatio,
   AnalyticsMortgageSchedule, AnalyticsMortgages, AnalyticsRecurring, AnalyticsRecurringHint } from "./model";
 
@@ -14,6 +14,7 @@ export interface ScheduledPaceItem {
   expectedDate: string;
   stepDay: number;
   overdue: boolean;
+  estimated: boolean;
 }
 
 export interface MonthPacePoint {
@@ -151,6 +152,7 @@ function scheduledItems(budget: AnalyticsMonthlyBudget, data: MonthPaceScheduleD
         expectedDate: item.expected_date,
         stepDay: overdue ? cutoffDay : Number(item.expected_date.slice(8, 10)),
         overdue,
+        estimated: !isScheduledForecastItem(item),
       };
     })
     .sort((a, b) => a.stepDay - b.stepDay || a.expectedDate.localeCompare(b.expectedDate)
