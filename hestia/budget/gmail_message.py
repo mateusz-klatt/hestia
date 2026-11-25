@@ -198,7 +198,7 @@ class GmailMessageProcessor:
                                parse_failed_reason=None)
         return pending
 
-    def _payment(self, message, pending, sender, payment_senders):
+    def _payment(self, message, pending, sender):
         subjects = tuple(map(str, message.get_all("Subject", ())))
         failure = pending
         for kind, part in _body_parts(message):
@@ -215,7 +215,8 @@ class GmailMessageProcessor:
                 continue
             if not text.strip():
                 continue
-            inspected = inspect_payment(text, subjects=subjects, merchant=sender.merchant, gateway=sender.gateway)
+            inspected = inspect_payment(text, subjects=subjects, merchant=sender.merchant, gateway=sender.gateway,
+                                        provider=sender.provider)
             if inspected.missing_total:
                 continue
             secret = self.settings.hmac_secret
@@ -238,8 +239,6 @@ class GmailMessageProcessor:
             provenance = PendingPayment(
                 replace(payment, order_reference=None), receipt_date,
                 digest(secret, PAYMENT_SENDER_DOMAIN, sender.sender),
-                tuple(digest(secret, PAYMENT_SENDER_DOMAIN, rule.sender)
-                      for rule in payment_senders if rule.gateway != sender.gateway),
                 order_reference_hmac=digest(secret, ORDER_REFERENCE_DOMAIN, reference) if reference else None,
                 gateway=sender.gateway,
                 payee_hmac=(digest(secret, PAYMENT_PAYEE_DOMAIN, _payee_key(payment.merchant))
@@ -278,7 +277,7 @@ class GmailMessageProcessor:
         payment_senders = getattr(self.settings, "payment_senders", ())
         sender = payment_sender_for(message.raw_items(), payment_senders)
         if sender is not None:
-            return self._payment(message, pending, sender, payment_senders)
+            return self._payment(message, pending, sender)
         return self._invoice(message, pending)
 
     def process(self, run, message_id, gmail_hmac):

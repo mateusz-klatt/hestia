@@ -1,34 +1,27 @@
 """Synthetic v1f gateway payment evidence: status, refs, fees, hosts, merge and evidence."""
 import base64
 from dataclasses import replace
-from datetime import date, datetime, UTC
+from datetime import date
 from email.message import EmailMessage
-import io
 import json
-from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest import mock
 from unittest.mock import Mock
 
 from sqlalchemy import select
 
 from hestia import db
-from hestia.budget import gmail_message, gmail_sync
-from hestia.budget import __main__ as cli
-from hestia.budget import gmail_config
-from hestia.budget.gmail_client import GmailClient, GmailError
+from hestia.budget import gmail_message
 from hestia.budget.gmail_invoice import extract_invoice
 from hestia.budget.gmail_payment import ImportedPayment, inspect_payment
-from hestia.budget.gmail_store import (GATEWAY_REF_DOMAIN, GMAIL_MESSAGE_DOMAIN, PAYMENT_SENDER_DOMAIN, GmailStore,
-                                       PendingMessage, PendingPayment, digest)
-from hestia.budget.gmail_sync import GmailSync
+from hestia.budget.gmail_store import (DAY as SECONDS_PER_DAY, GATEWAY_REF_DOMAIN, PAYMENT_SENDER_DOMAIN, GmailStore,
+                                       PendingMessage, PendingPayment, _failed_gateway_key, digest, retain_imports)
 from hestia.budget.gmail_trust import PaymentSender
 from hestia.budget.receipt_parser import ReceiptError
 from hestia.budget.receipt_store import BudgetReceiptStore
-from tests.test_budget_gmail_sync import (SETTINGS, FakeClock, FakeGmailTransport, page, response)
+from tests.test_budget_gmail_sync import FakeClock
 
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "gmail" / "payment" / "v1f"
@@ -40,9 +33,9 @@ def _ref(value):
     return digest(_SECRET, GATEWAY_REF_DOMAIN, value)
 
 
-def _inspect(fixture, subject, *, gateway=True, merchant=_MERCHANT):
+def _inspect(fixture, subject, *, gateway=True, merchant=_MERCHANT, provider=None):
     body = (_FIXTURES / fixture).read_text(encoding="utf-8")
-    return inspect_payment(body, subjects=(subject,), merchant=merchant, gateway=gateway)
+    return inspect_payment(body, subjects=(subject,), merchant=merchant, gateway=gateway, provider=provider)
 
 
 class V1fFixtureTests(unittest.TestCase):
@@ -99,7 +92,10 @@ class V1fFixtureTests(unittest.TestCase):
         for fixture, subject, status, ref, reason, payment in cases:
             with self.subTest(fixture=fixture):
                 gateway = not fixture.startswith("shop_payment")
-                inspected = _inspect(fixture, subject, gateway=gateway)
+                provider = fixture.split("_", 1)[0]
+                if fixture in {"shop_gateway_paid.txt", "total_mismatch.txt"}:
+                    provider = "autopay"
+                inspected = _inspect(fixture, subject, gateway=gateway, provider=provider if gateway else None)
                 self.assertEqual((inspected.status, inspected.gateway_ref, inspected.reject_reason),
                                  (status, ref, reason))
                 self.assertEqual(inspected.payment, payment)
@@ -112,12 +108,51 @@ class V1fFixtureTests(unittest.TestCase):
 
 
 class V1fExtractionTests(unittest.TestCase):
-    def test_paid_wins_and_unknown_gateway_is_registered(self):
-        both = "Nowa transakcja płatnicza\nPłatność zakończona sukcesem\nKwota transakcji: 5,00 PLN"
-        self.assertEqual(_inspect_text(both, "Nowa transakcja płatnicza").status, "paid")
-        unknown = "Dziękujemy.\nKwota transakcji: 5,00 PLN"
-        self.assertEqual(_inspect_text(unknown, "Podsumowanie").status, "registered")
+    def test_status_precedence_and_provider_boundaries(self):
+        base = "Kwota transakcji: 5,00 PLN\n"
+        both = f"{base}Zarejestrowaliśmy Twoje zlecenie\nPłatność zakończona sukcesem"
+        self.assertEqual(_inspect_text(both, "Dziękujemy", provider="autopay").status, "registered")
+        self.assertEqual(_inspect_text(both, "Przekazaliśmy Twoją płatność", provider="autopay").status, "paid")
+        self.assertEqual(_inspect_text(base + "Płatność zakończona sukcesem", "Potwierdzenie", provider="payu").status,
+                         "registered")
+        self.assertEqual(_inspect_text(base + "Płatność zakończona sukcesem", "Potwierdzenie").status, "registered")
+        self.assertEqual(_inspect_text(base, "Receipt from Example", provider="stripe").status, "paid")
         self.assertIsNone(_inspect_text("Total: 5 PLN", "Receipt", gateway=False).status)
+
+    def test_registered_language_does_not_mean_paid_or_failed(self):
+        base = "Kwota transakcji: 5,00 PLN\n"
+        for provider, subject, body in (
+            ("p24", "Nowa transakcja płatnicza", "Jeżeli transakcja nie została opłacona"),
+            ("payu", "Sprawdź status swojej płatności", "Możesz sprawdzić, czy transakcja została już opłacona"),
+            ("paynow", "Zlecenie", "Możesz sprawdzić, czy transakcja została już opłacona"),
+            ("paynow", "Zlecenie", "Jeśli wpłata nie została dokonana, transakcja zostanie anulowana"),
+            ("p24", "Nowa transakcja płatnicza",
+             "Niniejsza wiadomość jest informacją o potwierdzeniu realizacji płatności."),
+            ("autopay", "Zarejestrowaliśmy Twoje zlecenie", "Czy płatność zakończona sukcesem?"),
+        ):
+            with self.subTest(provider=provider, body=body):
+                result = _inspect_text(base + body, subject, provider=provider)
+                self.assertEqual((result.status, result.reject_reason), ("registered", None))
+                self.assertIsNotNone(result.payment)
+
+    def test_explicit_paid_body_status_lines(self):
+        base = "Kwota transakcji: 5,00 PLN\n"
+        for provider, body in (
+            ("paynow", "Transakcja została\nopłacona"),
+            ("paynow", "Transakcja została opłacona"),
+            ("paynow", "Status płatności: opłacona"),
+            ("autopay", "Przekazaliśmy Twoje pieniądze"),
+            ("autopay", "Twoja wpłata została przekazana odbiorcy."),
+            ("p24", "Niniejsza wiadomość jest informacją o potwierdzeniu realizacji płatności."),
+        ):
+            with self.subTest(provider=provider, body=body):
+                result = _inspect_text(base + body, "Dziękujemy", provider=provider)
+                self.assertEqual((result.status, result.reject_reason), ("paid", None))
+        self.assertEqual(_inspect_text(base + "anulowana\nopłacona", "Zlecenie", provider="paynow").reject_reason,
+                         "failed")
+        card = base + "Rejestracja karty\nzostanie anulowana"
+        self.assertEqual(_inspect_text(card, "Potwierdzenie", provider="p24").reject_reason, "card_verification")
+        self.assertEqual(_inspect_text(card, "Potwierdzenie", provider="autopay").status, "registered")
 
     def test_fee_labels_values_and_currency_rules(self):
         base = "Płatność zakończona sukcesem\nKwota transakcji: 10,00 PLN\n"
@@ -128,6 +163,15 @@ class V1fExtractionTests(unittest.TestCase):
         self.assertIsNone(_inspect_text(base + "Dodatkowe opłaty: brak", "Potwierdzenie").payment.fee_amount)
         self.assertIsNone(_inspect_text(base + "Dodatkowe opłaty: -1,00 PLN", "Potwierdzenie").payment)
         self.assertIsNone(_inspect_text(base + "Dodatkowe opłaty: 1,00 EUR", "Potwierdzenie").payment)
+        for amounts in (
+            "Do zapłaty: 10,00 PLN\nDodatkowe opłaty: 1,00 EUR",
+            "Do zapłaty: 10,00 EUR\nDodatkowe opłaty: 0,00 PLN",
+            "Do zapłaty: 11,00 PLN\nDodatkowe opłaty: 1,00 PLN\nOpłata za realizację transakcji: 1,00 EUR",
+        ):
+            with self.subTest(amounts=amounts):
+                self.assertIsNone(_inspect_text(base + amounts, "Potwierdzenie", provider="p24").payment)
+        self.assertIsNone(_inspect_text("Do zapłaty: 10,00 PLN\nDodatkowe opłaty: 1,00 EUR", "Potwierdzenie",
+                                        provider="p24").payment)
         # Base + fee without a charged label; a charged label without a base.
         self.assertEqual(_inspect_text(base + "Opłata za realizację transakcji: 0,50 PLN", "Potwierdzenie").payment.total_amount, "10.5")
         self.assertEqual(_inspect_text("Do zapłaty: 10,00 PLN", "Potwierdzenie").payment.total_amount, "10")
@@ -139,20 +183,29 @@ class V1fExtractionTests(unittest.TestCase):
     def test_gateway_ref_patterns(self):
         body = "Kwota transakcji: 5,00 PLN\n"
         cases = (
-            (body, "Nowa transakcja płatnicza (P24-ABC-123-DEF)", "P24-ABC-123-DEF"),
-            (body + "Tytuł płatności: TR-ABCD-1234XYZX/9999", "Potwierdzenie", "TR-ABCD-1234XYZX"),
-            (body + "Identyfikator transakcji Autopay: synth0099xx", "Potwierdzenie", "SYNTH0099XX"),
-            (body + "Status: https://payu.example.test/status?transId=987654&token=secret", "Zlecenie", "987654"),
-            (body, "Zlecenie (555666777) dla Example", "555666777"),
-            (body + "Transakcja ZZ99-YYY-XXX-WWV", "Zlecenie", "ZZ99-YYY-XXX-WWV"),
-            (body, "Zwykłe potwierdzenie", None),
+            ("p24", body, "Nowa transakcja płatnicza (p24-abc-123-def)", "P24-ABC-123-DEF"),
+            ("tpay", body + "Tytuł płatności: TR-abcd-1234xyzx/9999", "Potwierdzenie", "TR-ABCD-1234XYZX"),
+            ("autopay", body + "Identyfikator transakcji Autopay: synth0099xx", "Potwierdzenie", "SYNTH0099XX"),
+            ("payu", body + "Status: https://payu.example.test/status?transId=abc987654&token=example",
+             "Zlecenie", "ABC987654"),
+            ("payu", body, "Zlecenie (555666777) dla Example", "555666777"),
+            ("paynow", body + "Transakcja zz99-yyy-xxx-wwv", "Zlecenie", "ZZ99-YYY-XXX-WWV"),
+            ("paynow", body, "Potwierdzenie TR-ZZ99-YYY-XXX-WWV", None),
+            ("paynow", body, "Zwykłe potwierdzenie", None),
+            ("p24", body + "Identyfikator transakcji: synth0009xx", "Potwierdzenie", None),
+            (None, body, "Nowa transakcja płatnicza (P24-ABC-123-DEF)", None),
         )
-        for text, subject, ref in cases:
+        for provider, text, subject, ref in cases:
             with self.subTest(subject=subject):
-                self.assertEqual(_inspect_text(text, subject).gateway_ref, ref)
+                self.assertEqual(_inspect_text(text, subject, provider=provider).gateway_ref, ref)
         # The PayU token is never the reference.
-        inspected = _inspect_text(body + "https://payu.example.test/status?token=abcdef&transId=112233", "Zlecenie")
+        inspected = _inspect_text(body + "https://payu.example.test/status?token=abcdef&transId=112233", "Zlecenie",
+                                  provider="payu")
         self.assertEqual(inspected.gateway_ref, "112233")
+        self.assertIsNone(_inspect_text(body + "https://payu.example.test/status?token=987654", "Zlecenie",
+                                        provider="payu").gateway_ref)
+        self.assertEqual(_inspect_text(body + "Transakcja AB12-CDE-FGH-IJK", "Zlecenie (P24-ABC-123-DEF)",
+                                       provider="paynow").gateway_ref, "AB12-CDE-FGH-IJK")
 
     def test_payee_host_sources_and_validation(self):
         base = "Kwota transakcji: 5,00 PLN\n"
@@ -171,27 +224,42 @@ class V1fExtractionTests(unittest.TestCase):
 
     def test_failed_and_card_verification_shapes(self):
         base = "Kwota transakcji: 5,00 PLN\n"
-        self.assertEqual(_inspect_text(base + "Transakcja straciła ważność", "Zlecenie").reject_reason, "failed")
-        self.assertEqual(_inspect_text(base + "Zlecenie anulowane", "Zlecenie").reject_reason, "failed")
-        self.assertEqual(_inspect_text(base + "Płatność odrzucona", "Zlecenie").reject_reason, "failed")
-        # A priced or overlong line is an item, not a failure notice.
-        self.assertIsNone(_inspect_text(base + "Książka odrzucona 5,00 PLN", "Zlecenie").reject_reason)
-        self.assertIsNone(_inspect_text(base + "anulowane " + "x" * 120, "Zlecenie").reject_reason)
-        self.assertIsNone(_inspect_text(base + "Odbiorca: anulowana", "Zlecenie").reject_reason)
-        self.assertEqual(_inspect_text(base + "Status płatności: anulowana", "Zlecenie").reject_reason, "failed")
-        self.assertEqual(_inspect_text(base + "Rejestracja karty\nzostanie anulowana", "Zlecenie").reject_reason,
-                         "card_verification")
-        self.assertIsNone(_inspect_text(base + "Rejestracja karty", "Zlecenie").reject_reason)
+        for line in ("Transakcja straciła ważność", "Płatność odrzucona", "Status płatności: anulowana"):
+            with self.subTest(line=line):
+                self.assertEqual(_inspect_text(base + line, "Zlecenie", provider="paynow").reject_reason, "failed")
+        for line in ("Książka odrzucona 5,00 PLN", "anulowane " + "x" * 120, "Odbiorca: anulowana"):
+            with self.subTest(line=line):
+                self.assertIsNone(_inspect_text(base + line, "Zlecenie", provider="paynow").reject_reason)
+        self.assertIsNone(_inspect_text(base + "Rejestracja karty", "Zlecenie", provider="p24").reject_reason)
+        self.assertIsNone(_inspect_text(base + "zostanie anulowana", "Zlecenie", provider="p24").reject_reason)
 
-    def test_started_subject_is_registered_only_for_gateways(self):
+    def test_started_subject_is_registered_for_autopay(self):
         body = "Kwota transakcji: 5,00 PLN"
-        registered = _inspect_text(body, "Potwierdzenie rozpoczęcia transakcji")
+        registered = _inspect_text(body, "Potwierdzenie rozpoczęcia transakcji", provider="autopay")
         self.assertEqual((registered.status, registered.reject_reason), ("registered", None))
         self.assertIsNone(_inspect_text(body, "Potwierdzenie rozpoczęcia transakcji", gateway=False).payment)
         self.assertIsNone(_inspect_text(body, "Rozpoczęcie transakcji").payment)
-        registered = _inspect_text("Potwierdzenie rozpoczęcia transakcji\n" + body, "Zlecenie")
+        self.assertIsNone(_inspect_text(body, "Rozpoczęcie transakcji", provider="autopay").payment)
+        registered = _inspect_text("Potwierdzenie rozpoczęcia transakcji\n" + body, "Zlecenie", provider="autopay")
         self.assertEqual((registered.status, registered.reject_reason), ("registered", None))
         self.assertIsNotNone(registered.payment)
+
+    def test_labeled_payee_wins_and_host_like_values_are_hosts(self):
+        body = ("Przekazaliśmy Twoje pieniądze\nDo software.example.test\n"
+                "Odbiorca:\n\nEXAMPLE SOFTWARE SP. Z O.O.\nKwota transakcji: 33 PLN")
+        result = _inspect_text(body, "Przekazaliśmy Twoją płatność dla Example Studio", provider="autopay")
+        self.assertEqual((result.status, result.payment.merchant, result.payment.payee_host),
+                         ("paid", "EXAMPLE SOFTWARE SP. Z O.O.", "software.example.test"))
+        body = "Transakcja została\nopłacona\nOdbiorca wpłaty:\n\nExample Shop\nDo zapłaty: 6 PLN"
+        result = _inspect_text(body, "Zlecenie", provider="paynow")
+        self.assertEqual((result.status, result.payment.merchant), ("paid", "Example Shop"))
+        body = "Przekazaliśmy Twoje pieniądze\nDo https://shop.example.test/\nKwota transakcji: 33 PLN"
+        payment = _inspect_text(body, "Przekazaliśmy Twoją płatność", provider="autopay").payment
+        self.assertEqual((payment.merchant, payment.payee_from_config, payment.payee_host),
+                         (_MERCHANT, True, "shop.example.test"))
+        body = "Transakcja została opłacona\nOdbiorca:\nKwota transakcji: 6 PLN"
+        payment = _inspect_text(body, "Zlecenie", provider="paynow").payment
+        self.assertEqual((payment.merchant, payment.payee_from_config), (_MERCHANT, True))
 
     def test_conflicting_charged_labels_reject(self):
         body = ("Płatność zakończona sukcesem\nKwota transakcji: 10,00 PLN\n"
@@ -211,8 +279,8 @@ class V1fExtractionTests(unittest.TestCase):
         self.assertIsNone(_inspect_text(base, "Potwierdzenie dla https://localhost/").payment.payee_host)
 
 
-def _inspect_text(text, subject, *, gateway=True):
-    return inspect_payment(text, subjects=(subject,), merchant=_MERCHANT, gateway=gateway)
+def _inspect_text(text, subject, *, gateway=True, provider=None):
+    return inspect_payment(text, subjects=(subject,), merchant=_MERCHANT, gateway=gateway, provider=provider)
 
 
 INVOICE = SimpleNamespace(issuer="T-Mobile", nip="5261040567", invoice_number="501234567890", amount="100",
@@ -224,13 +292,13 @@ def _gateway_payment(*, merchant="T-MOBILE POLSKA S.A.", total="101.5", currency
                      ref=_ref("ref-1"), gateway="Example Pay", fee="1.5", host=None, day=DAY,
                      description="Faktura 501234567890"):
     fields = ImportedPayment(merchant, description, total, currency, (), fee_amount=fee, payee_host=host)
-    return PendingPayment(fields, day, "a" * 64, (), gateway=True, status=status,
+    return PendingPayment(fields, day, "a" * 64, gateway=True, status=status,
                           gateway_ref_hmac=ref, gateway_name=gateway)
 
 
 def _shop_payment(*, merchant="Sklep Przykładowy", total="66", currency="PLN", day=DAY):
     fields = ImportedPayment(merchant, "Zamówienie", total, currency, ())
-    return PendingPayment(fields, day, "b" * 64, (), gateway=False)
+    return PendingPayment(fields, day, "b" * 64)
 
 
 class V1fStoreTests(unittest.TestCase):
@@ -332,6 +400,23 @@ class V1fStoreTests(unittest.TestCase):
         (row,) = self._receipts()
         self.assertEqual((row.gateway_status, row.total_amount, row.version), ("registered", "120", 1))
 
+    def test_paid_upgrade_with_a_different_currency_leaves_registration_untouched(self):
+        registered = _gateway_payment(total="120", fee="0", status="registered")
+        self.assertEqual(self._commit(self._message(1, payment=registered)), (1, 0, True))
+        paid = _gateway_payment(merchant="Other Shop", currency="EUR", day=date(2026, 11, 13),
+                                host="other.example.test")
+        self.assertEqual(self._commit(self._message(2, payment=paid)), (0, 1, True))
+        (row,) = self._receipts()
+        self.assertEqual((row.gateway_status, row.total_amount, row.currency, row.fee_amount, row.version,
+                          row.receipt_date, row.raw_shop_name, row.payee_host, row.updated_at),
+                         ("registered", "120", "PLN", "0", 1, DAY.isoformat(), "T-MOBILE POLSKA S.A.", None,
+                          row.created_at))
+        self.assertEqual(self._message_row(2).outcome, "skipped_duplicate")
+        with self.sessions() as session:
+            self.assertEqual(session.scalar(select(db.BudgetReceiptLine)).gross_line_total, "120")
+            self.assertIsNone(session.scalar(select(db.BudgetAnalyticsAudit).where(
+                db.BudgetAnalyticsAudit.action == "gateway_upgrade")))
+
     def test_failed_tombstones_unconfirmed_registered_row(self):
         registered = _gateway_payment(total="75", fee=None, status="registered", ref=_ref("ref-fail"))
         self.assertEqual(self._commit(self._message(1, payment=registered)), (1, 0, True))
@@ -341,6 +426,65 @@ class V1fStoreTests(unittest.TestCase):
         self.assertEqual(self._receipts(), [])
         self.assertEqual(self._message_row(1).outcome, "deleted")
         self.assertEqual(self._message_row(2).outcome, "skipped_non_receipt")
+        self.assertEqual(self._commit(self._message(3, payment=registered)), (0, 1, True))
+        self.assertEqual(self._message_row(3).outcome, "skipped_non_receipt")
+        self.assertEqual(self._receipts(), [])
+
+    def test_failed_before_registration_blocks_it_and_then_paid_wins(self):
+        reference = _ref("ref-fail")
+        key = _failed_gateway_key("owner", "Example Pay", reference)
+        failed = self._message(1, outcome="skipped_non_receipt", failed_gateway=("Example Pay", reference))
+        self.assertEqual(self._commit(failed), (0, 1, True))
+        with self.sessions() as session:
+            self.assertEqual(json.loads(session.get(db.AppMeta, key).value), {
+                "gateway": "Example Pay", "ref_hmac": reference,
+                "expires_at": self.clock.now + 365 * SECONDS_PER_DAY,
+            })
+        self.assertEqual(self._commit(self._message(2, payment=_gateway_payment(
+            status="registered", ref=reference))), (0, 1, True))
+        self.assertEqual(self._message_row(2).outcome, "skipped_non_receipt")
+        self.assertEqual(self._receipts(), [])
+        self.assertEqual(self._commit(self._message(3, payment=_gateway_payment(ref=reference))), (1, 0, True))
+        (row,) = self._receipts()
+        self.assertEqual((row.gateway_status, row.gateway_ref_hmac), ("paid", reference))
+        with self.sessions() as session:
+            self.assertIsNone(session.get(db.AppMeta, key))
+
+    def test_failed_dispositions_follow_the_import_window_and_grant(self):
+        ref = _ref("ref-fail")
+        old_ref = _ref("ref-old")
+        key = _failed_gateway_key("owner", "Example Pay", ref)
+        old_key = _failed_gateway_key("owner", "Example Pay", old_ref)
+        failed = self._message(1, outcome="skipped_non_receipt", failed_gateway=("Example Pay", ref))
+        self.store.commit("owner", 1, {}, (failed,), backfill_days=2)
+        later = replace(failed, gmail_id_hmac=f"{2:064x}", internal_date=failed.internal_date + 10)
+        earlier = replace(failed, gmail_id_hmac=f"{3:064x}", internal_date=failed.internal_date - 10)
+        self.store.commit("owner", 1, {}, (later, earlier), backfill_days=2)
+        expiry = later.internal_date + 2 * SECONDS_PER_DAY
+        old = replace(earlier, gmail_id_hmac=f"{4:064x}", failed_gateway=("Example Pay", old_ref),
+                      internal_date=failed.internal_date - 2 * SECONDS_PER_DAY)
+        self.store.commit("owner", 1, {}, (old,), backfill_days=2)
+        with self.sessions() as session:
+            self.assertEqual(json.loads(session.get(db.AppMeta, key).value)["expires_at"], expiry)
+            self.assertIsNone(session.get(db.AppMeta, old_key))
+        self.assertEqual(self._commit(self._message(5, payment=_gateway_payment(
+            status="registered", ref=ref, gateway="Other Pay"))), (1, 0, True))
+        self.clock.now = expiry
+        # A due marker no longer blocks even if maintenance has not yet pruned it.
+        self.assertEqual(self._commit(self._message(6, payment=_gateway_payment(
+            status="registered", ref=ref))), (1, 0, True))
+        self.store.retain("owner", 1)
+        with self.sessions() as session:
+            self.assertIsNone(session.get(db.AppMeta, key))
+
+        self.assertEqual(self._commit(self._message(7, outcome="skipped_non_receipt",
+                                                   failed_gateway=("Example Pay", old_ref))), (0, 1, True))
+        with self.sessions.begin() as session:
+            retain_imports(session, None, self.clock.now)
+            self.assertIsNotNone(session.get(db.AppMeta, old_key))
+        self.store.transition("owner", self.store.state("owner").version, "revoked")
+        with self.sessions() as session:
+            self.assertIsNone(session.get(db.AppMeta, old_key))
 
     def test_failed_leaves_confirmed_row_and_unknown_ref(self):
         registered = _gateway_payment(total="75", fee=None, status="registered", ref=_ref("ref-fail"))
@@ -391,6 +535,27 @@ class V1fStoreTests(unittest.TestCase):
         shop = [row for row in rows if row.gateway is None][0]
         gateway = [row for row in rows if row.gateway is not None][0]
         self.assertEqual((shop.document_kind, gateway.evidence_for_receipt_id), ("payment_confirmation", shop.id))
+
+    def test_gateway_and_shop_payments_at_the_same_total_import_in_both_orders(self):
+        for index, gateway_first in enumerate((False, True), start=1):
+            with self.subTest(gateway_first=gateway_first):
+                total = str(50 + index)
+                shop = self._message(index * 2, payment=_shop_payment(total=total))
+                gateway = self._message(index * 2 + 1, payment=_gateway_payment(
+                    merchant="Sklep Przykładowy", total=total, fee=None, ref=_ref(f"shop-{index}")))
+                first, second = (gateway, shop) if gateway_first else (shop, gateway)
+                self.assertEqual(self._commit(first), (1, 0, True))
+                self.assertEqual(self._commit(second), (1, 0, True))
+                shop_row, gateway_row = sorted((row for row in self._receipts() if row.total_amount == total),
+                                               key=lambda row: row.gateway is not None)
+                self.assertIsNone(shop_row.gateway)
+                self.assertEqual(gateway_row.evidence_for_receipt_id, shop_row.id)
+
+    def test_gateway_rows_do_not_attach_to_other_gateways(self):
+        self.assertEqual(self._commit(self._message(1, payment=_gateway_payment()),
+                                      self._message(2, payment=_gateway_payment(ref=_ref("distinct")))),
+                         (2, 0, True))
+        self.assertEqual([row.evidence_for_receipt_id for row in self._receipts()], [None, None])
 
     def test_ambiguous_documents_leave_gateway_standalone(self):
         self.assertEqual(self._commit(self._message(1, invoice=INVOICE)), (1, 0, True))
@@ -466,6 +631,36 @@ class V1fStoreTests(unittest.TestCase):
         self.assertEqual((gateway.gateway_status, gateway.total_amount, gateway.evidence_for_receipt_id),
                          ("paid", "101.5", invoice.id))
 
+    def test_upgrade_revalidates_an_invalid_attachment_and_can_pick_another_document(self):
+        self.assertEqual(self._commit(self._message(1, payment=_shop_payment(total="100")),
+                                      self._message(2, payment=_shop_payment(total="120"))), (2, 0, True))
+        registration = _gateway_payment(total="100", fee=None, status="registered")
+        self.assertEqual(self._commit(self._message(3, payment=registration)), (1, 0, True))
+        shop_ids = {row.total_amount: row.id for row in self._receipts() if row.gateway is None}
+        (gateway,) = [row for row in self._receipts() if row.gateway is not None]
+        self.assertEqual(gateway.evidence_for_receipt_id, shop_ids["100"])
+        self.assertEqual(self._commit(self._message(4, payment=_gateway_payment(total="121.5"))), (0, 1, True))
+        (gateway,) = [row for row in self._receipts() if row.gateway is not None]
+        self.assertEqual(gateway.evidence_for_receipt_id, shop_ids["120"])
+
+    def test_paid_date_change_invalidates_an_unconfirmed_document_only(self):
+        paid_day = date(2026, 11, 20)
+        for index, confirmed in enumerate((False, True), start=1):
+            with self.subTest(confirmed=confirmed):
+                total = str(60 + index)
+                ref = _ref(f"date-change-{index}")
+                register = _gateway_payment(total=total, fee=None, status="registered", ref=ref)
+                self.assertEqual(self._commit(self._message(index * 3, payment=_shop_payment(total=total)),
+                                              self._message(index * 3 + 1, payment=register)), (2, 0, True))
+                shop = next(row for row in self._receipts() if row.gateway is None and row.total_amount == total)
+                if confirmed:
+                    self._confirm(shop.id)
+                paid = _gateway_payment(total=total, fee=None, ref=ref, day=paid_day)
+                self.assertEqual(self._commit(self._message(index * 3 + 2, payment=paid)), (0, 1, True))
+                gateway = next(row for row in self._receipts() if row.gateway_ref_hmac == ref)
+                self.assertEqual((gateway.receipt_date, gateway.evidence_for_receipt_id),
+                                 (paid_day.isoformat(), shop.id if confirmed else None))
+
     def test_pending_cap_ignores_evidence_rows(self):
         self.assertEqual(self._commit(self._message(1, invoice=INVOICE)), (1, 0, True))
         self.assertEqual(self._commit(self._message(2, payment=_gateway_payment())), (1, 0, True))
@@ -520,196 +715,6 @@ class V1fStoreTests(unittest.TestCase):
         self.assertEqual((row.gateway_status, row.total_amount, row.version), ("paid", "101.5", 2))
         with self.sessions() as session:
             self.assertIsNone(session.scalar(select(db.BudgetReceiptLine)))
-
-
-class V1fReprocessBranchTests(unittest.TestCase):
-    """Store-level branches of the reprocess-payments scan."""
-
-    def setUp(self):
-        directory = TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        self.addCleanup(db.reset_engine_cache)
-        _engine, self.sessions = db.init_db(Path(directory.name) / "v1f-reprocess.db")
-        with self.sessions.begin() as session:
-            session.add(db.AppMeta(key="users_authoritative", value="1"))
-            session.add(db.User(username="owner", password_hash="synthetic", role="admin"))
-        self.clock = FakeClock()
-        self.store = GmailStore(self.sessions, clock=self.clock.wall)
-        self.store.transition("owner", 1, "active")
-
-    def _commit(self, *items):
-        return self.store.commit("owner", 1, {}, items)
-
-    def _message(self, index, *, payment=None, invoice=None, outcome="imported", failed_gateway=None):
-        return PendingMessage(f"{index:064x}", self.clock.now, "direct_allowlist", outcome,
-                              payment=payment, invoice=invoice, failed_gateway=failed_gateway)
-
-    def _receipts(self):
-        with self.sessions() as session:
-            return session.scalars(select(db.BudgetReceipt).order_by(db.BudgetReceipt.id)).all()
-
-    def _confirm(self, receipt_id):
-        with self.sessions.begin() as session:
-            row = session.get(db.BudgetReceipt, receipt_id)
-            row.status = "confirmed"
-            row.payment_method = "card"
-
-    def test_schedule_reprocess_validates_the_grant(self):
-        self.store.transition("owner", 2, "disabled")
-        with self.assertRaisesRegex(GmailError, "disabled"):
-            self.store.schedule_reprocess("owner", now=self.clock.now, cooldown=60)
-        self.store.transition("owner", 3, "active")
-        with self.sessions.begin() as session:
-            session.get(db.BudgetGmailState, "owner").attention = "identity_mismatch"
-        with self.assertRaisesRegex(GmailError, "mailbox_mismatch"):
-            self.store.schedule_reprocess("owner", now=self.clock.now, cooldown=60)
-        with self.sessions.begin() as session:
-            row = session.get(db.BudgetGmailState, "owner")
-            row.attention = None
-            row.backoff_until = self.clock.now + 100
-        with self.assertRaisesRegex(GmailError, "backoff"):
-            self.store.schedule_reprocess("owner", now=self.clock.now, cooldown=60)
-        with self.sessions.begin() as session:
-            row = session.get(db.BudgetGmailState, "owner")
-            row.backoff_until = 0
-            row.last_attempt_at = self.clock.now
-        with self.assertRaisesRegex(GmailError, "cooldown"):
-            self.store.schedule_reprocess("owner", now=self.clock.now, cooldown=60)
-        with self.sessions.begin() as session:
-            session.get(db.BudgetGmailState, "owner").last_attempt_at = None
-        queued = self.store.schedule_reprocess("owner", now=self.clock.now, cooldown=60)
-        self.assertTrue(queued["ok"])
-        version = self.store.state("owner").version
-        # A second request coalesces into the scheduled scan without a version bump.
-        again = self.store.schedule_reprocess("owner", now=self.clock.now, cooldown=60)
-        self.assertEqual(again["version"], version)
-        self.assertTrue(self.store.reprocess_pending("owner"))
-        self.assertIsNone(self.store.reprocess_token("owner"))
-
-    def test_reprocess_message_skips_ineligible_messages(self):
-        item = self._message(9, payment=_gateway_payment())
-        self.store.reprocess_message("owner", 1, f"{9:064x}", item)
-        self.assertEqual(self._commit(self._message(1, outcome="parse_failed")), (0, 1, True))
-        self.store.reprocess_message("owner", 1, f"{1:064x}", item)
-        self.assertEqual(self._receipts(), [])
-        # A message that no longer classifies as a gateway payment stays untouched.
-        self.assertEqual(self._commit(self._message(2, payment=_gateway_payment())), (1, 0, True))
-        self.store.reprocess_message("owner", 1, f"{2:064x}", self._message(2, outcome="skipped_non_receipt"))
-        self.store.reprocess_message("owner", 1, f"{2:064x}", self._message(2, payment=_shop_payment()))
-        self.store.reprocess_message("owner", 1, f"{2:064x}", self._message(2, payment=_gateway_payment(ref=None)))
-        (row,) = self._receipts()
-        self.assertEqual((row.gateway, row.gateway_status, row.version), ("Example Pay", "paid", 1))
-
-    def test_reprocess_message_never_touches_a_confirmed_receipt(self):
-        registered = _gateway_payment(total="100", fee=None, status="registered")
-        self.assertEqual(self._commit(self._message(1, payment=registered)), (1, 0, True))
-        (row,) = self._receipts()
-        self._confirm(row.id)
-        self.store.reprocess_message("owner", 1, f"{1:064x}", self._message(1, payment=_gateway_payment()))
-        (row,) = self._receipts()
-        self.assertEqual((row.gateway_status, row.total_amount, row.version), ("registered", "100", 1))
-
-    def test_reprocess_upgrades_the_holder_for_a_duplicate_message(self):
-        registered = _gateway_payment(total="100", fee=None, status="registered")
-        self.assertEqual(self._commit(self._message(1, payment=registered)), (1, 0, True))
-        self.assertEqual(self._commit(self._message(2, outcome="skipped_duplicate")), (0, 1, True))
-        # The v1e duplicate left no receipt; the paid reclassification upgrades the holder.
-        self.store.reprocess_message("owner", 1, f"{2:064x}", self._message(2, payment=_gateway_payment()))
-        (row,) = self._receipts()
-        self.assertEqual((row.gateway_status, row.total_amount, row.version), ("paid", "101.5", 2))
-        # A duplicate whose reference matches nothing changes nothing.
-        other = self._message(2, payment=_gateway_payment(ref=_ref("ref-other")))
-        self.store.reprocess_message("owner", 1, f"{2:064x}", other)
-        (row,) = self._receipts()
-        self.assertEqual((row.gateway_ref_hmac, row.version), (_ref("ref-1"), 2))
-
-    def _legacy_pair(self, *, total="100"):
-        registered = _gateway_payment(total=total, fee=None, status="registered")
-        self.assertEqual(self._commit(self._message(1, payment=registered)), (1, 0, True))
-        fields = ImportedPayment("T-MOBILE POLSKA S.A.", "Faktura 501234567890", total, "PLN", ())
-        legacy = PendingPayment(fields, DAY, "c" * 64, (), gateway=True)
-        self.assertEqual(self._commit(self._message(2, payment=legacy)), (1, 0, True))
-        self.assertEqual(len(self._receipts()), 2)
-
-    def test_reprocess_merges_the_produced_row_into_the_holder(self):
-        self._legacy_pair()
-        self.store.reprocess_message("owner", 1, f"{2:064x}", self._message(2, payment=_gateway_payment()))
-        (row,) = self._receipts()
-        self.assertEqual((row.gateway_status, row.total_amount, row.version), ("paid", "101.5", 2))
-        with self.sessions() as session:
-            message = session.get(db.BudgetGmailMessage, ("owner", f"{2:064x}"))
-            self.assertEqual((message.outcome, message.receipt_id), ("deleted", None))
-
-    def test_reprocess_marks_a_confirmed_holder_paid_on_equal_amounts(self):
-        self._legacy_pair(total="101.5")
-        (holder,) = [row for row in self._receipts() if row.gateway_ref_hmac is not None]
-        self._confirm(holder.id)
-        self.store.reprocess_message("owner", 1, f"{2:064x}", self._message(2, payment=_gateway_payment()))
-        (row,) = self._receipts()
-        self.assertEqual((row.gateway_status, row.status, row.total_amount, row.version),
-                         ("paid", "confirmed", "101.5", 1))
-
-    def test_reprocess_drops_the_produced_row_when_the_holder_is_paid(self):
-        self.assertEqual(self._commit(self._message(1, payment=_gateway_payment())), (1, 0, True))
-        fields = ImportedPayment("T-MOBILE POLSKA S.A.", "Faktura 501234567890", "101.5", "PLN", ())
-        legacy = PendingPayment(fields, DAY, "c" * 64, (), gateway=True)
-        self.assertEqual(self._commit(self._message(2, payment=legacy)), (1, 0, True))
-        self.store.reprocess_message("owner", 1, f"{2:064x}", self._message(2, payment=_gateway_payment()))
-        (row,) = self._receipts()
-        self.assertEqual((row.gateway_status, row.version), ("paid", 1))
-
-    def test_reprocess_retags_and_reattaches_only_once(self):
-        self.assertEqual(self._commit(self._message(1, invoice=INVOICE)), (1, 0, True))
-        item = self._message(1, payment=_gateway_payment())
-        self.store.reprocess_message("owner", 1, f"{1:064x}", item)
-        (row,) = self._receipts()
-        self.assertEqual((row.gateway, row.gateway_status, row.total_amount),
-                         ("Example Pay", "paid", "101.5"))
-        audits = self._audit_count()
-        # A second pass over the same message is a no-op.
-        self.store.reprocess_message("owner", 1, f"{1:064x}", item)
-        (row,) = self._receipts()
-        self.assertEqual((row.gateway, row.gateway_status, row.version), ("Example Pay", "paid", 2))
-        self.assertEqual(self._audit_count(), audits)
-
-    def _audit_count(self):
-        with self.sessions() as session:
-            return len(session.scalars(select(db.BudgetAnalyticsAudit).where(
-                db.BudgetAnalyticsAudit.action == "gateway_reprocess")).all())
-
-    def test_reprocess_failed_deletes_its_own_unconfirmed_receipt(self):
-        fields = ImportedPayment("SKLEP PAYNOW PRZYKŁAD", "Zlecenie płatności", "75", "PLN", ())
-        legacy = PendingPayment(fields, DAY, "c" * 64, (), gateway=True)
-        self.assertEqual(self._commit(self._message(1, payment=legacy)), (1, 0, True))
-        failed = self._message(1, outcome="skipped_non_receipt",
-                               failed_gateway=("Example Pay", _ref("ref-fail")))
-        self.store.reprocess_message("owner", 1, f"{1:064x}", failed)
-        self.assertEqual(self._receipts(), [])
-        with self.sessions() as session:
-            self.assertEqual(session.get(db.BudgetGmailMessage, ("owner", f"{1:064x}")).outcome, "deleted")
-
-    def test_reprocess_failed_keeps_confirmed_rows_and_records_for_finish(self):
-        registered = _gateway_payment(total="75", fee=None, status="registered", ref=_ref("ref-fail"))
-        self.assertEqual(self._commit(self._message(1, payment=registered)), (1, 0, True))
-        fields = ImportedPayment("SKLEP PAYNOW PRZYKŁAD", "Zlecenie płatności", "75", "PLN", ())
-        legacy = PendingPayment(fields, DAY, "c" * 64, (), gateway=True)
-        self.assertEqual(self._commit(self._message(2, payment=legacy)), (1, 0, True))
-        (produced,) = [row for row in self._receipts() if row.gateway_ref_hmac is None]
-        self._confirm(produced.id)
-        failed = self._message(2, outcome="skipped_non_receipt",
-                               failed_gateway=("Example Pay", _ref("ref-fail")))
-        # Without a scheduled scan nothing is recorded and nothing is deleted.
-        self.store.reprocess_message("owner", 1, f"{2:064x}", failed)
-        self.assertEqual(len(self._receipts()), 2)
-        # With a scan, finish deletes the unconfirmed registered holder only.
-        self.store.schedule_reprocess("owner", now=self.clock.now, cooldown=0)
-        self.store.reprocess_message("owner", 1, f"{2:064x}", failed)
-        self.store.finish_reprocess("owner")
-        (row,) = self._receipts()
-        self.assertEqual((row.id, row.status), (produced.id, "confirmed"))
-        self.assertFalse(self.store.reprocess_pending("owner"))
-        # Finishing without a scheduled scan is a no-op.
-        self.store.finish_reprocess("owner")
 
 
 class V1fApiTests(unittest.TestCase):
@@ -775,268 +780,14 @@ class V1fApiTests(unittest.TestCase):
         self.assertEqual(listed[rows["T-Mobile"].id]["gateway"], None)
 
 
-class V1fReprocessTests(unittest.TestCase):
-    def test_reprocess_merges_upgrades_and_deletes_idempotently(self):
-        from datetime import UTC, datetime
-        import subprocess
-        import sys
-        import time
-
-        from hestia.budget.gmail_client import GmailClient
-        from hestia.budget.gmail_sync import GmailSync
-        from hestia.budget.gmail_worker import ReceiptParserWorker
-        from tests.test_budget_gmail_sync import FakeGmailTransport, SETTINGS, page, response
-
-        owner = "owner"
-        gateway = "@gateway.example.test"
-        with TemporaryDirectory() as directory:
-            path = Path(directory) / "reprocess.db"
-            self.addCleanup(db.reset_engine_cache)
-            _engine, sessions = db.init_db(path)
-            with sessions.begin() as session:
-                session.add_all([db.User(username=owner, password_hash="synthetic", role="admin"),
-                                 db.AppMeta(key="users_authoritative", value="1")])
-            clock = FakeClock()
-            store = GmailStore(sessions, clock=clock.wall)
-            settings = replace(SETTINGS, payment_senders=(PaymentSender(gateway, "Example Pay", gateway=True),))
-
-            bodies = {
-                "p24-reg": ("p24_registered.txt", "Nowa transakcja płatnicza (P24-ABC-123-DEF)", 10),
-                "p24-paid": ("p24_paid.txt", "Potwierdzenie (P24-ABC-123-DEF)", 12),
-                "paynow-reg": ("paynow_registered.txt", "Zlecenie płatności", 14),
-                "paynow-failed": ("paynow_failed.txt", "Transakcja AB12-CDE-FGH-IJK straciła ważność", 16),
-                "paynow-solo": ("paynow_failed_solo.txt", "Transakcja ZZ99-YYY-XXX-WWV straciła ważność", 18),
-            }
-            transport = FakeGmailTransport()
-            transport.routes[("/messages", None)] = response(page(*reversed(list(bodies))))
-            for message_id, (fixture, subject, day) in bodies.items():
-                body = (_FIXTURES / fixture).read_text(encoding="utf-8")
-                message = EmailMessage()
-                message["From"] = "receipts@gateway.example.test"
-                message["Subject"] = subject
-                message["Authentication-Results"] = (
-                    "mx.google.com; dkim=pass header.d=gateway.example.test; "
-                    "dmarc=pass header.from=gateway.example.test"
-                )
-                message.set_content(body)
-                internal_date = str(int(datetime(2026, 11, day, 1, tzinfo=UTC).timestamp() * 1000))
-                payload = message.as_bytes()
-                metadata = {"id": message_id, "sizeEstimate": len(payload), "internalDate": internal_date,
-                            "payload": {"headers": [{"name": name, "value": value}
-                                                    for name, value in message.raw_items()]}}
-                raw = {"id": message_id, "raw": base64.urlsafe_b64encode(payload).decode().rstrip("=")}
-
-                def select_response(params, metadata=metadata, raw=raw):
-                    return response(metadata if params["format"] == ["metadata"] else raw)
-
-                transport.routes[("/messages/" + message_id, None)] = select_response
-
-            client = GmailClient(transport, monotonic=clock.monotonic, sleep=clock.sleep)
-            worker = ReceiptParserWorker(str(Path(directory) / "reprocess.sock"))
-            service = GmailSync(settings, store, client, gmail_message.GmailMessageProcessor(settings, worker), path)
-
-            sender_hmac = digest(settings.hmac_secret, PAYMENT_SENDER_DOMAIN, gateway)
-
-            def v1e_payment(total):
-                fields = ImportedPayment("SKLEP PRZYKŁADOWY", "Zamówienie", total, "PLN", ())
-                return PendingPayment(fields, date(2026, 11, 20), sender_hmac, (), gateway=True)
-
-            with subprocess.Popen((sys.executable, "-B", "-c",
-                                   "from hestia.budget.gmail_worker import serve; import sys; serve(sys.argv[1])",
-                                   worker.socket_path), env={}, stderr=subprocess.DEVNULL) as sidecar:
-                try:
-                    for _ in range(50):
-                        if worker.ready():
-                            break
-                        time.sleep(0.01)
-                    self.assertTrue(worker.ready())
-                    service.transition(owner, 1, "active")
-                    # Simulate the v1e imports: same messages, no gateway columns.
-                    legacy = {
-                        "p24-reg": ("120", "imported"), "p24-paid": ("121.5", "imported"),
-                        "paynow-reg": ("75", "imported"), "paynow-failed": ("75", "skipped_duplicate"),
-                        "paynow-solo": ("80", "imported"),
-                    }
-                    items = tuple(
-                        PendingMessage(digest(settings.hmac_secret, GMAIL_MESSAGE_DOMAIN, message_id),
-                                       clock.now, "direct_allowlist", outcome,
-                                       payment=None if outcome == "skipped_duplicate" else v1e_payment(total))
-                        for message_id, (total, outcome) in legacy.items()
-                    )
-                    self.assertEqual(store.commit(owner, 1, {}, items), (4, 1, True))
-                    service.schedule_reprocess(owner)
-                    outcome = service.sync(owner)
-                    self.assertEqual(outcome["sync_phase"], "idle")
-                finally:
-                    sidecar.terminate()
-
-            with sessions() as session:
-                rows = session.scalars(select(db.BudgetReceipt)).all()
-                self.assertEqual(len(rows), 1)
-                (paid,) = rows
-                self.assertEqual((paid.gateway, paid.gateway_status, paid.total_amount, paid.fee_amount,
-                                  paid.raw_shop_name),
-                                 ("Example Pay", "paid", "121.5", "1.5", "SKLEP PRZYKŁADOWY SP. Z O.O."))
-                self.assertIsNotNone(paid.gateway_ref_hmac)
-                outcomes = {row.outcome for row in session.scalars(select(db.BudgetGmailMessage))}
-                self.assertEqual(outcomes, {"imported", "skipped_duplicate", "deleted"})
-                self.assertIsNone(session.get(db.AppMeta, "budget_gmail_reprocess_payments:" + owner))
-                audits = session.scalars(select(db.BudgetAnalyticsAudit).where(
-                    db.BudgetAnalyticsAudit.action == "gateway_reprocess")).all()
-                self.assertEqual(len(audits), 2)
-
-            # A second scheduled run changes nothing.
-            clock.now += 61
-            with subprocess.Popen((sys.executable, "-B", "-c",
-                                   "from hestia.budget.gmail_worker import serve; import sys; serve(sys.argv[1])",
-                                   worker.socket_path), env={}, stderr=subprocess.DEVNULL) as sidecar:
-                try:
-                    for _ in range(50):
-                        if worker.ready():
-                            break
-                        time.sleep(0.01)
-                    self.assertTrue(worker.ready())
-                    service.schedule_reprocess(owner)
-                    service.sync(owner)
-                finally:
-                    sidecar.terminate()
-            with sessions() as session:
-                (paid_again,) = session.scalars(select(db.BudgetReceipt)).all()
-                self.assertEqual((paid_again.id, paid_again.gateway_status, paid_again.total_amount,
-                                  paid_again.version), (paid.id, "paid", "121.5", paid.version))
-
-
-class _StubProcessor:
-    """Returns prebuilt items so the reprocess scan branches run without a worker."""
-
-    def __init__(self):
-        self.items = {}
-        self.processed = []
-
-    def ready(self):
-        return True
-
-    def process(self, run, message_id, message_hmac):
-        self.processed.append(message_id)
-        return self.items.get(message_id)
-
-
-class V1fReprocessSyncTests(unittest.TestCase):
-    def setUp(self):
-        directory = TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        self.addCleanup(db.reset_engine_cache)
-        self.path = Path(directory.name) / "reprocess-sync.db"
-        _engine, self.sessions = db.init_db(self.path)
-        with self.sessions.begin() as session:
-            session.add_all([db.User(username="owner", password_hash="synthetic", role="admin"),
-                             db.AppMeta(key="users_authoritative", value="1")])
-        self.clock = FakeClock()
-        self.transport = FakeGmailTransport()
-        self.client = GmailClient(self.transport, monotonic=self.clock.monotonic, sleep=self.clock.sleep)
-        self.store = GmailStore(self.sessions, clock=self.clock.wall)
-        self.settings = replace(SETTINGS, payment_senders=(
-            PaymentSender("@gateway.example.test", "Example Pay", gateway=True),))
-        self.processor = _StubProcessor()
-        self.service = GmailSync(self.settings, self.store, self.client, self.processor, self.path,
-                                 jitter=lambda *_: 0)
-        self.service.transition("owner", 1, "active")
-
-    def _seed(self, *message_ids):
-        items = []
-        for message_id in message_ids:
-            message_hmac = digest(self.settings.hmac_secret, GMAIL_MESSAGE_DOMAIN, message_id)
-            payment = _gateway_payment(ref=_ref(message_id))
-            items.append(PendingMessage(message_hmac, self.clock.now, "direct_allowlist", "imported",
-                                        payment=payment))
-            self.processor.items[message_id] = PendingMessage(message_hmac, self.clock.now, "direct_allowlist",
-                                                              "imported", payment=payment)
-        self.assertEqual(self.store.commit("owner", 1, {}, items), (len(items), 0, True))
-
-    def test_reprocess_paginates_and_restarts_an_invalid_page_token(self):
-        self._seed("msg-a", "msg-b")
-        calls = {"count": 0}
-
-        def messages(params):
-            if "after:" in params["q"][0]:
-                return response(page())  # The backfill window finds nothing new.
-            calls["count"] += 1
-            token = params.get("pageToken", [None])[0]
-            if token == "bad":
-                return response({}, 400)
-            if token is None and calls["count"] == 1:
-                return response(page("msg-a", token="bad"))
-            return response(page("msg-b"))
-
-        self.transport.routes[("/messages", None)] = messages
-        self.transport.routes[("/messages", "bad")] = messages
-        self.service.schedule_reprocess("owner")
-        outcome = self.service.sync("owner")
-        self.assertEqual(outcome["sync_phase"], "idle")
-        self.assertFalse(self.store.reprocess_pending("owner"))
-        self.assertEqual(self.processor.processed, ["msg-a", "msg-b"])
-        self.assertIn({"pageToken": ["bad"]}, [{key: value for key, value in request.items() if key == "pageToken"}
-                                               for request in self.transport.requests("/messages")])
-
-    def test_reprocess_stops_at_the_run_message_limit(self):
-        self._seed("msg-a")
-        self.transport.routes[("/messages", None)] = lambda params: response(page("msg-a"))
-        self.service.schedule_reprocess("owner")
-        with mock.patch.object(gmail_sync, "MAX_SYNC_MESSAGES_PER_RUN", 0):
-            outcome = self.service.sync("owner")
-        self.assertEqual(outcome["sync_phase"], "idle")
-        self.assertEqual(self.processor.processed, [])
-        # The unfinished scan stays scheduled for the next run.
-        self.assertTrue(self.store.reprocess_pending("owner"))
-
-    def test_reprocess_without_gateway_rules_clears_the_scan(self):
-        self._seed("msg-a")
-        self.transport.routes[("/messages", None)] = lambda params: response(page())
-        self.service.settings = replace(SETTINGS)
-        self.service.schedule_reprocess("owner")
-        outcome = self.service.sync("owner")
-        self.assertEqual(outcome["sync_phase"], "idle")
-        self.assertFalse(self.store.reprocess_pending("owner"))
-        self.assertEqual(self.processor.processed, [])
-
-    def test_reprocess_skips_messages_that_no_longer_parse(self):
-        self._seed("msg-a")
-        self.processor.items["msg-a"] = None
-        self.transport.routes[("/messages", None)] = lambda params: response(page("msg-a"))
-        self.service.schedule_reprocess("owner")
-        outcome = self.service.sync("owner")
-        self.assertEqual(outcome["sync_phase"], "idle")
-        self.assertFalse(self.store.reprocess_pending("owner"))
-        with self.sessions() as session:
-            (row,) = session.scalars(select(db.BudgetReceipt)).all()
-            self.assertEqual((row.gateway_status, row.version), ("paid", 1))
-
-    def test_cli_reprocess_payments_schedules_the_scan(self):
-        def invoke(argv):
-            out, err = io.StringIO(), io.StringIO()
-            with mock.patch.object(gmail_config, "load_settings", return_value=self.settings), \
-                    mock.patch.object(cli.time, "time", self.clock.wall), \
-                    redirect_stdout(out), redirect_stderr(err):
-                code = cli.main(argv)
-            return code, out.getvalue(), err.getvalue()
-
-        code, out, err = invoke(["--db", str(self.path), "gmail", "reprocess-payments"])
-        self.assertEqual((code, err), (0, ""))
-        self.assertTrue(json.loads(out)["ok"])
-        self.assertTrue(self.store.reprocess_pending("owner"))
-        with self.sessions.begin() as session:
-            session.get(db.BudgetGmailState, "owner").grant_status = "disabled"
-        code, out, err = invoke(["--db", str(self.path), "gmail", "reprocess-payments"])
-        self.assertEqual((code, out), (2, ""))
-        self.assertEqual(err.strip(), "budget_receipt_gmail_disabled")
-
-
 class V1fMessageTests(unittest.TestCase):
     def setUp(self):
         self.settings = SimpleNamespace(
             sender_allowlist=(), spouse_forward_senders=(), hmac_secret=_SECRET,
             owner_mailbox="owner@gmail.com",
-            payment_senders=(PaymentSender("@gateway.example.test", "Example Pay", gateway=True),
+            payment_senders=(PaymentSender("@gateway.example.test", "Example Pay", gateway=True, provider="autopay"),
+                             PaymentSender("@paynow.example.test", "Example Pay", gateway=True, provider="paynow"),
+                             PaymentSender("@p24.example.test", "Example Pay", gateway=True, provider="p24"),
                              PaymentSender("@shop.example.test", "Example Shop")),
         )
         self.worker = Mock()
@@ -1061,7 +812,7 @@ class V1fMessageTests(unittest.TestCase):
         run.message.side_effect = [metadata, {"id": "msg", "raw": raw}]
         return self.processor.process(run, "msg", "a" * 64)
 
-    def test_registered_payment_carries_status_ref_fee_and_host(self):
+    def test_paid_payment_carries_status_ref_fee_and_host(self):
         body = ("Płatność zakończona sukcesem\n\nIdentyfikator transakcji: SYNTH0004DD\n"
                 "Odbiorca: SKLEP INTERNETOWY PRZYKŁAD\nAdres www: shop.example.test\n"
                 "Kwota transakcji: 66,00 PLN\nOpłata za realizację transakcji: 1,00 PLN\nDo zapłaty: 67,00 PLN")
@@ -1074,20 +825,20 @@ class V1fMessageTests(unittest.TestCase):
         self.assertEqual(payment.sender_hmac, digest(_SECRET, PAYMENT_SENDER_DOMAIN, "@gateway.example.test"))
 
     def test_failed_payment_marks_the_gateway_reference(self):
-        body = "Twoja transakcja AB12-CDE-FGH-IJK straciła ważność.\n\nKwota transakcji: 75,00 PLN"
-        pending = self._process(body, "Transakcja straciła ważność")
+        body = "Status transakcji: straciła ważność\nIdentyfikator transakcji: AB12-CDE-FGH-IJK\nKwota transakcji: 75 PLN"
+        pending = self._process(body, "Transakcja straciła ważność", sender="receipts@paynow.example.test")
         self.assertEqual((pending.outcome, pending.failed_gateway),
                          ("skipped_non_receipt", ("Example Pay", digest(_SECRET, GATEWAY_REF_DOMAIN, "AB12-CDE-FGH-IJK"))))
         self.assertIsNone(pending.payment)
 
     def test_failed_payment_without_a_reference_stays_plain(self):
-        body = "Twoja transakcja straciła ważność.\n\nKwota transakcji: 75,00 PLN"
-        pending = self._process(body, "Transakcja straciła ważność")
+        body = "Status transakcji: straciła ważność\nKwota transakcji: 75 PLN"
+        pending = self._process(body, "Transakcja straciła ważność", sender="receipts@paynow.example.test")
         self.assertEqual((pending.outcome, pending.failed_gateway), ("skipped_non_receipt", None))
 
     def test_card_verification_is_a_plain_rejection(self):
         body = "Rejestracja karty w aplikacji mobilnej.\nTransakacja zostanie anulowana.\n\nKwota transakcji: 0,01 PLN"
-        pending = self._process(body, "Rejestracja karty")
+        pending = self._process(body, "Rejestracja karty", sender="receipts@p24.example.test")
         self.assertEqual((pending.outcome, pending.failed_gateway, pending.payment),
                          ("skipped_non_receipt", None, None))
 
