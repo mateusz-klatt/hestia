@@ -60,7 +60,10 @@ async function request<T>(target: URL, init: RequestInit = {}): Promise<BudgetRe
     return { ok: false, status: response.status, error: "budget_uncertain" };
   }
   const record = (body ?? {}) as { error?: unknown; current?: unknown };
-  const error = typeof record.error === "string" ? record.error : `budget_http_${String(response.status)}`;
+  const nested = typeof record.error === "object" && record.error !== null
+    ? (record.error as { code?: unknown }).code : undefined;
+  const error = typeof record.error === "string" ? record.error
+    : typeof nested === "string" ? nested : `budget_http_${String(response.status)}`;
   return { ok: false, status: response.status, error, current: record.current };
 }
 
@@ -85,18 +88,24 @@ function encodeActor(actor: string): string {
 }
 
 export function createBudgetApi(expectedActor: string | null = null) {
+  let legacyReadOnly = false;
   function call<T>(target: URL, init: RequestInit = {}): Promise<BudgetResult<T>> {
     if (expectedActor === null || !target.pathname.includes("/api/budget/")) return request<T>(target, init);
     const headers = new Headers(init.headers);
     headers.set("X-Hestia-Expected-Actor", encodeActor(expectedActor));
     return request<T>(target, { ...init, headers });
   }
-  function post<T>(path: string, body: object, headers: Record<string, string> = {}): Promise<BudgetResult<T>> {
+  function post<T>(path: string, body: object, headers: Record<string, string> = {},
+    allowRead = false): Promise<BudgetResult<T>> {
+    if (legacyReadOnly && !allowRead) {
+      return Promise.resolve({ ok: false, status: 409, error: "budget_legacy_read_only" });
+    }
     return call<T>(url(path), {
       method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body),
     });
   }
   return {
+  setLegacyReadOnly: (value: boolean) => { legacyReadOnly = value; },
   capabilities: () => call<AuthorizationCapabilities>(apiUrl("me/capabilities")),
   whoami: () => call<{ user: string | null; role: string | null }>(apiUrl("whoami")),
   connections: () => call<ConnectionsData>(url("connections")),
@@ -134,7 +143,7 @@ export function createBudgetApi(expectedActor: string | null = null) {
     })),
   /** One server-bounded page matching 1..500 exact row keys across periods via JSON POST. */
   analyticsTransactionsByKeys: (request: AnalyticsTransactionsByKeysRequest) =>
-    post<AnalyticsTransactions>("analytics/transactions-by-keys", request),
+    post<AnalyticsTransactions>("analytics/transactions-by-keys", request, {}, true),
   categories: () => call<{ categories: AnalyticsCategory[] }>(url("analytics/categories")),
   /** The owner's explicit category/kind decision for one entry, versioned against concurrent edits. */
   annotate: (request: AnnotationRequest) => post<{ annotation: AnnotationSaved }>("analytics/annotation", request),
@@ -182,7 +191,7 @@ export function createBudgetApi(expectedActor: string | null = null) {
   markInbox: (request: AnalyticsInboxMarkRequest) =>
     post<{ inbox: AnalyticsInboxMarkSaved }>("analytics/inbox-mark", request),
   /** Unrevoked receipts devices. A 404 means the receipts flag is off. */
-  receiptDevices: () => post<ReceiptDevice[]>("receipts/device-token/list", {}),
+  receiptDevices: () => post<ReceiptDevice[]>("receipts/device-token/list", {}, {}, true),
   pairReceiptDevice: () => post<ReceiptPair>("receipts/device-token/pair-code", {}),
   cancelReceiptPairCode: (codeId: string) =>
     post<{ ok: true }>("receipts/device-token/pair-code-cancel", { code_id: codeId }),

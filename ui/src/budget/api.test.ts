@@ -287,6 +287,24 @@ describe("budget api", () => {
     expect(sent(fetchMock).url.pathname).toMatch(/\/api\/me\/capabilities$/);
   });
 
+  it("parses nested actor errors and makes legacy mode read-only", async () => {
+    respond(409, { error: { code: "budget_actor_changed" } });
+    expect(await budgetApi.connections()).toEqual({
+      ok: false, status: 409, error: "budget_actor_changed", current: undefined,
+    });
+
+    const scoped = createBudgetApi("owner");
+    scoped.setLegacyReadOnly(true);
+    const fetchMock = respond(200, {});
+    expect(await scoped.setPaused(connection, true)).toEqual({
+      ok: false, status: 409, error: "budget_legacy_read_only",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await scoped.receiptDevices()).ok).toBe(true);
+    expect((await scoped.analyticsTransactionsByKeys({ row_keys: [], currency: "PLN" })).ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("maps refusals, empty middleware bodies and network loss without throwing", async () => {
     respond(409, { ok: false, error: "budget_version_conflict", current: { id: "bank" } });
     expect(await budgetApi.connections()).toEqual({ ok: false, status: 409, error: "budget_version_conflict", current: { id: "bank" } });

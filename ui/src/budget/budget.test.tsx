@@ -52,6 +52,7 @@ const balancesData = {
 
 function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
   return {
+    setLegacyReadOnly: vi.fn(),
     capabilities: vi.fn<BudgetApi["capabilities"]>(() => ok(authorization)),
     whoami: vi.fn<BudgetApi["whoami"]>(() => ok({ user: "owner", role: "admin" })),
     connections: vi.fn<BudgetApi["connections"]>(() => ok({ connections: [connection], capabilities })),
@@ -230,6 +231,27 @@ describe("budget view states", () => {
     expect(host.textContent).toContain("Synthetic Current");
     expect(host.textContent).not.toContain("Only the budget's owner");
     expect(api.whoami).toHaveBeenCalled();
+  });
+
+  it("does not retry a disabled device list when legacy capabilities are unchanged", async () => {
+    const api = fakeApi();
+    api.capabilities.mockImplementation(() => fail(404, "budget_http_404"));
+    api.receiptDevices.mockImplementation(() => fail(404, "budget_receipts_disabled"));
+    await render(api, true, "owner");
+    await settle(20);
+    expect(api.receiptDevices).toHaveBeenCalledTimes(1);
+    expect(host.querySelector(".budget-devices")).toBeNull();
+    expect(api.setLegacyReadOnly).toHaveBeenCalledWith(true);
+  });
+
+  it("blocks mutations in the legacy fallback and shows the refresh notice", async () => {
+    const api = fakeApi();
+    api.capabilities.mockImplementation(() => fail(404, "budget_http_404"));
+    await render(api, true, "owner");
+    await click(button("Pause"));
+    expect(api.setPaused).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Read only");
+    expect(host.textContent).toContain("Reload");
   });
 
   it("clears the ledger when an owner request reports an actor change", async () => {
