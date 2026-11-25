@@ -838,6 +838,37 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("raw_shop_name?: string | null;", confirm_ts)
         self.assertIn("raw_nip?: string | null;", confirm_ts)
 
+    def test_receipt_candidate_match_strength_contract(self):
+        document = contract.build_openapi()
+        cand_schema = document["components"]["schemas"]["BudgetReceiptCandidate"]
+        self.assertIn("match_strength", cand_schema["required"])
+        self.assertEqual(
+            cand_schema["properties"]["match_strength"]["enum"],
+            ["nip", "distinctive", "generic", "none"],
+        )
+        base = {
+            "account_id": "acc-1",
+            "entry_reference": "a" * 64,
+            "amount": "42.50",
+            "currency": "PLN",
+            "credit_debit_indicator": "DBIT",
+            "booking_date": "2026-11-14",
+            "value_date": "2026-11-14",
+            "transaction_date": None,
+            "date_distance": 0,
+            "merchant_token_hit": True,
+            "candidate_token": "tok-1",
+        }
+        for valid_strength in ("nip", "distinctive", "generic", "none"):
+            model = contract.BudgetReceiptCandidate.model_validate({**base, "match_strength": valid_strength})
+            self.assertEqual(model.match_strength, valid_strength)
+        for bad_strength in ("strong", "", None, 123):
+            with self.subTest(bad_strength=bad_strength), self.assertRaises(ValueError):
+                contract.BudgetReceiptCandidate.model_validate({**base, "match_strength": bad_strength})
+        ts_path = Path(__file__).resolve().parent.parent / "ui" / "src" / "api" / "openapi.ts"
+        cand_ts = ts_path.read_text(encoding="utf-8").split("BudgetReceiptCandidate: {", 1)[1].split("\n        };", 1)[0]
+        self.assertIn('match_strength: "nip" | "distinctive" | "generic" | "none";', cand_ts)
+
 
 class BudgetProviderBindingTests(unittest.TestCase):
     """Validate actual owner-private SQLite views, including nested response drift."""

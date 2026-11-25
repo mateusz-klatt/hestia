@@ -10,6 +10,8 @@ import {
   buildPlainBulkConfirmRequest,
   buildReceiptListRequest,
   candidateDisplayDate,
+  candidateSelectionBinding,
+  clearStaleCandidateSelection,
   computeLinesDelta,
   createPendingReceiptStore,
   draftFromDetail,
@@ -26,6 +28,7 @@ import {
   isGmailImportSource,
   isRedactedValue,
   isStaleCursorError,
+  keepCandidateBinding,
   listMonthForFilter,
   merchantBulkGroups,
   mergeReceiptRows,
@@ -35,7 +38,11 @@ import {
   receiptMerchantGroupIdentity,
   receiptMerchantGroupKey,
   reconcileLinkChoice,
+  resolveDraftFromDetailSession,
+  selectCandidateDraft,
+  selectKeepDraft,
   subtractDecimals,
+  suggestedCandidateDates,
   validPolishNip,
   validReceiptDateRange,
 } from "./receipts_model";
@@ -130,6 +137,7 @@ function candidateOf(overrides: Partial<ReceiptCandidate> = {}): ReceiptCandidat
     transaction_date: null,
     date_distance: 0,
     merchant_token_hit: true,
+    match_strength: "none",
     candidate_token: "cand-token-1",
     ...overrides,
   };
@@ -196,6 +204,61 @@ describe("receipts_model", () => {
     expect(merged.map((r) => r.receipt_id)).toEqual(["r1", "r3"]);
 
     expect(candidateDisplayDate(candidateOf({ booking_date: null, value_date: "2026-11-13" }))).toBe("2026-11-13");
+    expect(suggestedCandidateDates(
+      candidateOf({ transaction_date: "2026-11-12", booking_date: "2026-11-14" }),
+      { receipt_date: "2026-11-12", document_kind: "receipt", due_date: null },
+    )).toEqual({
+      primaryDate: "2026-11-12",
+      bookingDayMonth: "14.11",
+      displayDistance: 0,
+    });
+    expect(suggestedCandidateDates(
+      candidateOf({ transaction_date: null, booking_date: "2026-11-16", value_date: "2026-11-14", date_distance: 0 }),
+      { receipt_date: "2026-11-14", document_kind: "receipt", due_date: null },
+    )).toEqual({
+      primaryDate: "2026-11-14",
+      bookingDayMonth: "16.11",
+      displayDistance: 0,
+    });
+    expect(suggestedCandidateDates(
+      candidateOf({ transaction_date: "2026-11-10", booking_date: "2026-11-16", value_date: "2026-11-18", date_distance: 2 }),
+      { receipt_date: "2026-11-14", document_kind: "invoice", due_date: "2026-11-20" },
+    )).toEqual({
+      primaryDate: "2026-11-16",
+      bookingDayMonth: null,
+      displayDistance: 2,
+    });
+    expect(suggestedCandidateDates(
+      candidateOf({ transaction_date: "2026-11-14", booking_date: "2026-11-14" }),
+      { receipt_date: "2026-11-14", document_kind: "invoice", due_date: null },
+    )).toEqual({
+      primaryDate: "2026-11-14",
+      bookingDayMonth: null,
+      displayDistance: 0,
+    });
+    expect(suggestedCandidateDates(candidateOf({ transaction_date: null, booking_date: "2026-11-14", value_date: "2026-11-13" }))).toEqual({
+      primaryDate: "2026-11-14",
+      bookingDayMonth: null,
+      displayDistance: 0,
+    });
+    expect(suggestedCandidateDates(candidateOf({ transaction_date: null, booking_date: null, value_date: "2026-11-13", date_distance: 1 }))).toEqual({
+      primaryDate: "2026-11-13",
+      bookingDayMonth: null,
+      displayDistance: 1,
+    });
+    expect(suggestedCandidateDates(candidateOf({ transaction_date: null, booking_date: null, value_date: null, date_distance: 0 }))).toEqual({
+      primaryDate: null,
+      bookingDayMonth: null,
+      displayDistance: 0,
+    });
+    expect(suggestedCandidateDates(
+      candidateOf({ transaction_date: "2026-02-30", booking_date: "2026", value_date: null, date_distance: 3 }),
+      { receipt_date: "2026-11-12", document_kind: "receipt", due_date: null },
+    )).toEqual({
+      primaryDate: "2026-02-30",
+      bookingDayMonth: "2026",
+      displayDistance: 3,
+    });
     const acc = account({
       id: "acc-1",
       connection: connection.id,
@@ -248,7 +311,7 @@ describe("receipts_model", () => {
       ok: false,
       errorKey: "budget.receipts.explicitUnlinkRequired",
     });
-    const draftKeep = { ...draftReview, linkChoice: "keep" };
+    const draftKeep = selectKeepDraft(draftReview, cand);
     const builtKeep = buildConfirmRequest(reviewLinked, draftKeep, [cand]);
     expect(builtKeep.ok).toBe(true);
     if (builtKeep.ok) {
@@ -348,7 +411,7 @@ describe("receipts_model", () => {
       expect(builtExplicitUnlinked.ok).toBe(true);
       if (builtExplicitUnlinked.ok) expect(builtExplicitUnlinked.request.link).toBeNull();
 
-      const builtExplicitLinked = buildConfirmRequest(unlinkedImport, { ...draftImport, linkChoice: "candidate:0" }, [cand]);
+      const builtExplicitLinked = buildConfirmRequest(unlinkedImport, selectCandidateDraft(draftImport, cand, 0), [cand]);
       expect(builtExplicitLinked.ok).toBe(true);
       if (builtExplicitLinked.ok) {
         expect(builtExplicitLinked.request.link).toEqual({
@@ -357,6 +420,47 @@ describe("receipts_model", () => {
           candidate_token: cand.candidate_token,
         });
       }
+      // Missing binding, altered match_strength, or altered evidence_fingerprint fails closed with candidateListChanged,
+      // while a randomized candidate_token rotation for an identical candidate submits the fresh token from CURRENT candidates.
+      expect(buildConfirmRequest(
+        unlinkedImport,
+        { ...draftImport, linkChoice: "candidate:0", selectedCandidate: null },
+        [cand],
+      )).toEqual({ ok: false, errorKey: "budget.receipts.candidateListChanged" });
+      const rotatedTokenBuilt = buildConfirmRequest(
+        unlinkedImport,
+        selectCandidateDraft(draftImport, cand, 0),
+        [{ ...cand, candidate_token: "tok-rotated" }],
+      );
+      expect(rotatedTokenBuilt.ok).toBe(true);
+      if (rotatedTokenBuilt.ok) {
+        expect(rotatedTokenBuilt.request.link).toEqual({
+          account_id: cand.account_id,
+          entry_reference: cand.entry_reference,
+          candidate_token: "tok-rotated",
+        });
+      }
+      expect(buildConfirmRequest(
+        unlinkedImport,
+        selectCandidateDraft(draftImport, { ...cand, match_strength: "nip" }, 0),
+        [{ ...cand, match_strength: "generic" }],
+      )).toEqual({ ok: false, errorKey: "budget.receipts.candidateListChanged" });
+      const candWithFp = { ...cand, evidence_fingerprint: "fp-1" } as ReceiptCandidate;
+      const candChangedFp = { ...cand, evidence_fingerprint: "fp-2" } as ReceiptCandidate;
+      expect(buildConfirmRequest(
+        unlinkedImport,
+        selectCandidateDraft(draftImport, candWithFp, 0),
+        [candChangedFp],
+      )).toEqual({ ok: false, errorKey: "budget.receipts.candidateListChanged" });
+
+      const draftOtherReceipt = draftFromDetail({ ...unlinkedImport, receipt_id: "other-receipt" }, [cand]);
+      expect(clearStaleCandidateSelection(draftOtherReceipt, unlinkedImport.receipt_id, draftImport.candidateSetKey)).toBeNull();
+      expect(clearStaleCandidateSelection(draftImport, unlinkedImport.receipt_id, draftImport.candidateSetKey)).toBe(draftImport);
+      expect(clearStaleCandidateSelection(
+        selectCandidateDraft(draftImport, cand, 0),
+        unlinkedImport.receipt_id,
+        "changed-set",
+      )).toMatchObject({ linkChoice: "", selectedCandidate: null });
       expect(reconcileLinkChoice(unlinkedImport, "candidate:0", { ...draftImport, rawShopName: "Changed" }, [cand])).toBe("");
 
       const noCandidatesDraft = draftFromDetail(unlinkedImport, []);
@@ -666,5 +770,263 @@ describe("receipts_model", () => {
     if (builtPay.ok) {
       expect(builtPay.request.link).toBeNull();
     }
+  });
+
+  it("preselects candidate:0 only for a single strong unlinked match and never in bulk or non-qualifying cases", () => {
+    const nipCand = candidateOf({ match_strength: "nip", candidate_token: "tok-nip" });
+    const distCand = candidateOf({ match_strength: "distinctive", candidate_token: "tok-dist" });
+    const genericCand = candidateOf({ match_strength: "generic", candidate_token: "tok-gen" });
+    const noneCand = candidateOf({ match_strength: "none", merchant_token_hit: false, candidate_token: "tok-none" });
+
+    for (const status of ["imported", "draft", "needs_review"] as const) {
+      for (const strongCand of [nipCand, distCand]) {
+        const unlinked = detailOf({
+          status,
+          linked: false,
+          linked_account_id: null,
+          linked_entry_ref: null,
+        });
+        const draft = draftFromDetail(unlinked, [strongCand]);
+        expect(draft.linkChoice).toBe("candidate:0");
+        const built = buildConfirmRequest(unlinked, draft, [strongCand]);
+        expect(built.ok).toBe(true);
+        if (built.ok) {
+          expect(built.request.link).toEqual({
+            account_id: strongCand.account_id,
+            entry_reference: strongCand.entry_reference,
+            candidate_token: strongCand.candidate_token,
+          });
+        }
+      }
+
+      expect(draftFromDetail(detailOf({ status, linked: false }), [genericCand]).linkChoice).toBe("");
+      expect(draftFromDetail(detailOf({ status, linked: false }), [noneCand]).linkChoice).toBe("");
+      expect(draftFromDetail(detailOf({ status, linked: false }), [nipCand, noneCand]).linkChoice).toBe("");
+      for (const genericShop of ["FIRMA HANDLOWA", "COMPANY", "SKLEP OGÓLNOSPOŻYWCZY"]) {
+        expect(draftFromDetail(detailOf({ status, linked: false, raw_shop_name: genericShop }), [genericCand]).linkChoice).toBe("");
+      }
+    }
+
+    // Never preselect if linked flag or stored link fields are set, or when confirmed, or for cash/mixed.
+    expect(draftFromDetail(detailOf({
+      status: "needs_review",
+      linked: false,
+      linked_account_id: "acc-1",
+      linked_entry_ref: "b".repeat(64),
+    }), [nipCand]).linkChoice).toBe("");
+    expect(draftFromDetail(detailOf({
+      status: "needs_review",
+      linked: true,
+      linked_account_id: "acc-1",
+      linked_entry_ref: "b".repeat(64),
+    }), [nipCand]).linkChoice).toBe("");
+    expect(draftFromDetail(detailOf({ status: "confirmed", linked: false }), [nipCand]).linkChoice).toBe("unlink");
+    expect(draftFromDetail(detailOf({ status: "imported", payment_method: "cash", linked: false }), [nipCand]).linkChoice).toBe("unlink");
+    expect(draftFromDetail(detailOf({ status: "imported", payment_method: "mixed", linked: false }), [nipCand]).linkChoice).toBe("unlink");
+
+    // Bulk confirm never preselects even when single strong candidate exists.
+    const bulkTarget = detailOf({ status: "imported", source_kind: "email", document_kind: "invoice", lines: [], linked: false });
+    const bulkDraft = draftFromDetail(bulkTarget, []);
+    expect(bulkDraft.linkChoice).toBe("unlink");
+    const builtBulk = buildPlainBulkConfirmRequest(bulkTarget, "Summary");
+    expect(builtBulk.ok).toBe(true);
+    if (builtBulk.ok) expect(builtBulk.request.link).toBeNull();
+  });
+
+  it("confirms zero-line Gmail invoices with or without a link while rejecting zero-line non-invoices", () => {
+    const nipCand = candidateOf({ match_strength: "nip", candidate_token: "tok-inv-nip" });
+    const zeroInv = detailOf({
+      status: "imported",
+      source_kind: "email",
+      document_kind: "invoice",
+      invoice_number: "FV/2026/05",
+      payment_method: null,
+      total_amount: "99.50",
+      lines: [],
+      linked: false,
+      version: 3,
+    });
+    const preDraft = draftFromDetail(zeroInv, [nipCand]);
+    expect(preDraft.linkChoice).toBe("candidate:0");
+    const builtLinked = buildConfirmRequest(zeroInv, preDraft, [nipCand], "Receipt summary");
+    expect(builtLinked.ok).toBe(true);
+    if (builtLinked.ok) {
+      expect(builtLinked.request.link).toEqual({
+        account_id: nipCand.account_id,
+        entry_reference: nipCand.entry_reference,
+        candidate_token: nipCand.candidate_token,
+      });
+      expect(builtLinked.request.lines).toEqual([{
+        line_kind: "other",
+        raw_name: "FV/2026/05",
+        ptu_code: null,
+        quantity: "1",
+        raw_unit: null,
+        unit_price_raw: null,
+        gross_line_total: "99.5",
+        discount_amount: "0",
+        net_line_total: "99.5",
+      }]);
+    }
+
+    const builtUnlinked = buildConfirmRequest(zeroInv, { ...preDraft, linkChoice: "unlink" }, [nipCand], "Receipt summary");
+    expect(builtUnlinked.ok).toBe(true);
+    if (builtUnlinked.ok) {
+      expect(builtUnlinked.request.link).toBeNull();
+      expect(builtUnlinked.request.lines?.length).toBe(1);
+    }
+
+    const redactedZeroInv = detailOf({
+      status: "imported",
+      source_kind: "email",
+      document_kind: "invoice",
+      invoice_number: REDACTED_VALUE,
+      raw_shop_name: REDACTED_VALUE,
+      raw_nip: REDACTED_VALUE,
+      payment_method: null,
+      total_amount: "42.50",
+      lines: [],
+      linked: false,
+    });
+    const builtRedactedInv = buildConfirmRequest(
+      redactedZeroInv,
+      draftFromDetail(redactedZeroInv, [nipCand]),
+      [nipCand],
+      "Receipt summary",
+    );
+    expect(builtRedactedInv.ok).toBe(true);
+    if (builtRedactedInv.ok) {
+      expect(builtRedactedInv.request.lines?.[0]?.raw_name).toBe("Receipt summary");
+    }
+
+    const zeroNonInv = detailOf({ status: "imported", source_kind: "email", document_kind: "payment_confirmation", lines: [] });
+    expect(buildConfirmRequest(zeroNonInv, { ...draftFromDetail(zeroNonInv, [nipCand]), linkChoice: "unlink" }, [nipCand])).toEqual({
+      ok: false,
+      errorKey: "budget.receipts.totalMismatch",
+    });
+  });
+
+  it("preserves explicit link choices across reloads and suppresses preselection when touched or candidates change", () => {
+    const candA = candidateOf({ entry_reference: "a".repeat(64), match_strength: "nip", candidate_token: "tok-a" });
+    const candB = candidateOf({ entry_reference: "b".repeat(64), match_strength: "nip", candidate_token: "tok-b" });
+    const inv = detailOf({ status: "imported", linked: false });
+
+    const first = resolveDraftFromDetailSession(inv, [candA], undefined);
+    expect(first.draft.linkChoice).toBe("candidate:0");
+    expect(first.showSuggestedBanner).toBe(true);
+
+    // Untouched + same candidate identity set with rotated random candidate_token keeps preselection and uses fresh token.
+    const candARotated: ReceiptCandidate = { ...candA, candidate_token: "tok-rand-2" };
+    const sameReload = resolveDraftFromDetailSession(inv, [candARotated], first.nextSessionEntry);
+    expect(sameReload.draft.linkChoice).toBe("candidate:0");
+    expect(sameReload.showSuggestedBanner).toBe(true);
+    const builtAfterReopen = buildConfirmRequest(inv, sameReload.draft, [candARotated]);
+    expect(builtAfterReopen.ok).toBe(true);
+    if (builtAfterReopen.ok) {
+      expect(builtAfterReopen.request.link?.candidate_token).toBe("tok-rand-2");
+    }
+
+    // Optional evidence_fingerprint participates in identity binding when present.
+    const candFp1 = { ...candA, evidence_fingerprint: "fp-1" } as ReceiptCandidate;
+    const candFp2 = { ...candA, candidate_token: "tok-fp-2", evidence_fingerprint: "fp-2" } as ReceiptCandidate;
+    const firstFp = resolveDraftFromDetailSession(inv, [candFp1], undefined);
+    expect(firstFp.draft.linkChoice).toBe("candidate:0");
+    const driftedFp = resolveDraftFromDetailSession(inv, [candFp2], firstFp.nextSessionEntry);
+    expect(driftedFp.draft.linkChoice).toBe("");
+    expect(driftedFp.showSuggestedBanner).toBe(false);
+
+    // User touched Odłącz -> stays unlink across reloads even though strong candA is returned.
+    const touchedUnlink = { ...first.nextSessionEntry, touched: true, choice: { kind: "unlink" as const } };
+    const afterUnlinkReload = resolveDraftFromDetailSession(inv, [candA], touchedUnlink);
+    expect(afterUnlinkReload.draft.linkChoice).toBe("unlink");
+    expect(afterUnlinkReload.showSuggestedBanner).toBe(false);
+
+    // User touched Zmień -> stays "" across reloads.
+    const touchedEmpty = { ...first.nextSessionEntry, touched: true, choice: { kind: "empty" as const } };
+    const afterEmptyReload = resolveDraftFromDetailSession(inv, [candA], touchedEmpty);
+    expect(afterEmptyReload.draft.linkChoice).toBe("");
+    expect(afterEmptyReload.showSuggestedBanner).toBe(false);
+
+    // User chose specific candidate -> rebinds by stable identity (even with rotated token/order) and drops if gone or strength changes.
+    const touchedCandA = {
+      ...first.nextSessionEntry,
+      touched: true,
+      choice: {
+        kind: "candidate" as const,
+        ...candidateSelectionBinding(candA),
+      },
+    };
+    expect(resolveDraftFromDetailSession(inv, [candB, candARotated], touchedCandA).draft.linkChoice).toBe("candidate:1");
+    expect(resolveDraftFromDetailSession(
+      inv,
+      [{ ...candA, match_strength: "generic" }],
+      touchedCandA,
+    ).draft.linkChoice).toBe("");
+    const afterMissing = resolveDraftFromDetailSession(inv, [candB], touchedCandA);
+    expect(afterMissing.draft.linkChoice).toBe("");
+    expect(afterMissing.showSuggestedBanner).toBe(false);
+
+    // Untouched, candidate set changes ([candA] -> [candB], strength change, or [] -> [candA]) -> never preselects.
+    const changedCandSet = resolveDraftFromDetailSession(inv, [candB], first.nextSessionEntry);
+    expect(changedCandSet.draft.linkChoice).toBe("");
+    expect(changedCandSet.showSuggestedBanner).toBe(false);
+    expect(changedCandSet.nextSessionEntry.candidateSetChanged).toBe(true);
+    expect(resolveDraftFromDetailSession(
+      inv,
+      [{ ...candA, match_strength: "generic" }],
+      first.nextSessionEntry,
+    ).draft.linkChoice).toBe("");
+
+    const startedEmpty = resolveDraftFromDetailSession(inv, [], undefined);
+    expect(startedEmpty.draft.linkChoice).toBe("unlink");
+    const laterArrived = resolveDraftFromDetailSession(inv, [candA], startedEmpty.nextSessionEntry);
+    expect(laterArrived.draft.linkChoice).toBe("");
+    expect(laterArrived.showSuggestedBanner).toBe(false);
+
+    // Keep choice submits reviewed_token when evidence matches (even if token rotated),
+    // fails closed with bankEvidenceChanged when bank evidence drifts, and clears on server version bump.
+    const reviewLinked = detailOf({ status: "needs_review", linked: true, linked_account_id: candA.account_id, linked_entry_ref: candA.entry_reference, version: 2 });
+    const touchedKeep = {
+      baselineVersion: 2,
+      baselineStatus: "needs_review" as const,
+      baselineLinked: true,
+      baselineCandidateKeys: [`${candA.account_id}:${candA.entry_reference}:${candA.match_strength}:`],
+      touched: true,
+      choice: { kind: "keep" as const, keepBinding: keepCandidateBinding(candA) },
+      candidateSetChanged: false,
+    };
+    const keepUnchanged = resolveDraftFromDetailSession(reviewLinked, [candARotated], touchedKeep);
+    expect(keepUnchanged.draft.linkChoice).toBe("keep");
+    expect(keepUnchanged.keepEvidenceInvalidated).toBe(false);
+    const keepBuilt = buildConfirmRequest(reviewLinked, keepUnchanged.draft, [candARotated]);
+    expect(keepBuilt.ok).toBe(true);
+    if (keepBuilt.ok) {
+      // Must submit reviewed_token ("tok-a"), NEVER swap in the fresh rotated token ("tok-rand-2").
+      expect(keepBuilt.request.link?.candidate_token).toBe("tok-a");
+    }
+
+    const candAChangedAmount: ReceiptCandidate = { ...candA, candidate_token: "tok-changed", amount: "43.00" };
+    expect(buildConfirmRequest(reviewLinked, keepUnchanged.draft, [candAChangedAmount])).toEqual({
+      ok: false,
+      errorKey: "budget.receipts.bankEvidenceChanged",
+    });
+    expect(clearStaleCandidateSelection(
+      keepUnchanged.draft,
+      reviewLinked.receipt_id,
+      keepUnchanged.draft.candidateSetKey,
+      candAChangedAmount,
+    )).toMatchObject({ linkChoice: "", selectedCandidate: null, keepBinding: null });
+    const afterEvidenceDrift = resolveDraftFromDetailSession(reviewLinked, [candAChangedAmount], touchedKeep);
+    expect(afterEvidenceDrift.draft.linkChoice).toBe("");
+    expect(afterEvidenceDrift.draft.keepBinding).toBeNull();
+    expect(afterEvidenceDrift.keepEvidenceInvalidated).toBe(true);
+    expect(afterEvidenceDrift.nextSessionEntry.choice).toEqual({ kind: "empty" });
+
+    expect(resolveDraftFromDetailSession(reviewLinked, [candB], touchedKeep).keepEvidenceInvalidated).toBe(true);
+    const bumpedVersion = detailOf({ status: "needs_review", linked: false, version: 3 });
+    const afterBump = resolveDraftFromDetailSession(bumpedVersion, [candA], touchedKeep);
+    expect(afterBump.draft.linkChoice).toBe("");
+    expect(afterBump.showSuggestedBanner).toBe(false);
+    expect(afterBump.nextSessionEntry.touched).toBe(true);
   });
 });

@@ -118,7 +118,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.51.0: optional/nullable lines and optional raw_shop_name/raw_nip on BudgetReceiptConfirmRequest to keep stored values unchanged.
 # 0.52.0: gateway payment evidence — receipt gateway/status/fee/payee_host/evidence fields, payment_evidence on detail, and the evidence list filter.
 # 0.54.0: origin-bound QR login, native device exchange/budget reads, delegated receipts, and grant editing.
-CONTRACT_VERSION = "0.54.0"
+# 0.55.0: additive match_strength ("nip" | "distinctive" | "generic" | "none") on BudgetReceiptCandidate.
+CONTRACT_VERSION = "0.55.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -3183,6 +3184,7 @@ class BudgetReceiptCandidate(BaseModel):
     booking_date: str | None
     value_date: str | None
     merchant_token_hit: bool
+    match_strength: Literal["nip", "distinctive", "generic", "none"]
     date_distance: int
     candidate_token: Annotated[str, Field(min_length=1, max_length=4096)]
 

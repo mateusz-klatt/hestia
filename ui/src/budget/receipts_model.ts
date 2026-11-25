@@ -206,6 +206,80 @@ export function candidateDisplayDate(
   return candidate.booking_date ?? candidate.value_date ?? candidate.transaction_date ?? null;
 }
 
+export interface SuggestedCandidateDateInfo {
+  readonly primaryDate: string | null;
+  readonly bookingDayMonth: string | null;
+  readonly displayDistance: number;
+}
+
+const ISO_DAY_MS = 86_400_000;
+
+function parseIsoDayNumber(value: string | null | undefined): number | null {
+  if (typeof value !== "string") return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (match === null) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const check = new Date(0);
+  check.setUTCFullYear(year, month - 1, day);
+  check.setUTCHours(0, 0, 0, 0);
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) {
+    return null;
+  }
+  return Math.round(check.getTime() / ISO_DAY_MS);
+}
+
+function formatIsoDayMonth(isoDate: string): string {
+  const parts = isoDate.split("-");
+  if (parts.length === 3 && parts[1]?.length === 2 && parts[2]?.length === 2) {
+    return `${parts[2]}.${parts[1]}`;
+  }
+  return isoDate;
+}
+
+/** Pick the exact bank date `_date_distance` scored against and derive day offset from it. */
+export function suggestedCandidateDates(
+  candidate: Pick<ReceiptCandidate, "booking_date" | "value_date" | "transaction_date" | "date_distance">,
+  receipt?: Pick<ReceiptDetail, "receipt_date" | "document_kind" | "due_date"> | null,
+): SuggestedCandidateDateInfo {
+  const orderedDates = [candidate.transaction_date, candidate.booking_date, candidate.value_date] as const;
+  const targetDay = parseIsoDayNumber(receipt?.receipt_date);
+  let primaryDate: string | null = null;
+  if (targetDay !== null) {
+    let startDay = targetDay - 4;
+    let endDay = targetDay + 4;
+    if (receipt?.document_kind === "invoice") {
+      const dueDay = parseIsoDayNumber(receipt.due_date) ?? targetDay;
+      startDay = targetDay - 1;
+      endDay = Math.max(dueDay, targetDay) + 14;
+    }
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const rawDate of orderedDates) {
+      const candidateDay = parseIsoDayNumber(rawDate);
+      if (candidateDay === null || candidateDay < startDay || candidateDay > endDay) continue;
+      const dist = Math.abs(candidateDay - targetDay);
+      if (dist < bestDistance) {
+        bestDistance = dist;
+        primaryDate = rawDate;
+      }
+    }
+  }
+  primaryDate ??= candidate.transaction_date ?? candidate.booking_date ?? candidate.value_date ?? null;
+  const primaryDay = parseIsoDayNumber(primaryDate);
+  const displayDistance = (targetDay !== null && primaryDay !== null)
+    ? Math.abs(primaryDay - targetDay)
+    : candidate.date_distance;
+  const bookingDayMonth = (
+    primaryDate !== null
+    && candidate.booking_date !== null
+    && primaryDate !== candidate.booking_date
+  )
+    ? formatIsoDayMonth(candidate.booking_date)
+    : null;
+  return { primaryDate, bookingDayMonth, displayDistance };
+}
+
 export function receiptAccountLabel(
   accounts: readonly BudgetAccount[],
   connections: readonly BudgetConnection[],
@@ -268,7 +342,24 @@ export function createPendingReceiptStore(): PendingReceiptStore {
   };
 }
 
+export interface SelectedCandidateBinding {
+  readonly account_id: string;
+  readonly entry_reference: string;
+  readonly match_strength: ReceiptCandidate["match_strength"];
+  readonly evidence_fingerprint: string | null;
+}
+
+export interface KeepCandidateBinding {
+  readonly account_id: string;
+  readonly entry_reference: string;
+  readonly match_strength: ReceiptCandidate["match_strength"];
+  readonly evidence_fingerprint: string | null;
+  readonly evidence_digest: string;
+  readonly reviewed_token: string;
+}
+
 export interface ReceiptConfirmDraft {
+  readonly receiptId: string;
   rawShopName: string;
   rawNip: string;
   receiptKind: ReceiptKind;
@@ -280,6 +371,135 @@ export interface ReceiptConfirmDraft {
   lines: ReceiptLineInput[];
   /** "" (explicit choice required on linked receipt without keep token) | "keep" | "unlink" | "candidate:<index>" */
   linkChoice: string;
+  selectedCandidate: SelectedCandidateBinding | null;
+  keepBinding: KeepCandidateBinding | null;
+  readonly candidateSetKey: string;
+}
+
+function candidateEvidenceFingerprint(candidate: ReceiptCandidate): string | null {
+  const extra = candidate as ReceiptCandidate & { evidence_fingerprint?: unknown };
+  return typeof extra.evidence_fingerprint === "string" && extra.evidence_fingerprint !== ""
+    ? extra.evidence_fingerprint
+    : null;
+}
+
+export function candidateEvidenceDigest(candidate: ReceiptCandidate): string {
+  return [
+    candidate.account_id,
+    candidate.entry_reference,
+    candidate.amount,
+    candidate.currency,
+    candidate.credit_debit_indicator,
+    candidate.transaction_date ?? "",
+    candidate.booking_date ?? "",
+    candidate.value_date ?? "",
+    candidate.merchant_token_hit ? "1" : "0",
+    candidate.match_strength,
+    String(candidate.date_distance),
+    candidateEvidenceFingerprint(candidate) ?? "",
+  ].join("\0");
+}
+
+export function candidateSelectionBinding(candidate: ReceiptCandidate): SelectedCandidateBinding {
+  return {
+    account_id: candidate.account_id,
+    entry_reference: candidate.entry_reference,
+    match_strength: candidate.match_strength,
+    evidence_fingerprint: candidateEvidenceFingerprint(candidate),
+  };
+}
+
+export function candidateMatchesBinding(
+  candidate: ReceiptCandidate,
+  binding: SelectedCandidateBinding | null,
+): boolean {
+  return binding !== null
+    && candidate.account_id === binding.account_id
+    && candidate.entry_reference === binding.entry_reference
+    && candidate.match_strength === binding.match_strength
+    && candidateEvidenceFingerprint(candidate) === binding.evidence_fingerprint;
+}
+
+export function keepCandidateBinding(candidate: ReceiptCandidate): KeepCandidateBinding {
+  return {
+    account_id: candidate.account_id,
+    entry_reference: candidate.entry_reference,
+    match_strength: candidate.match_strength,
+    evidence_fingerprint: candidateEvidenceFingerprint(candidate),
+    evidence_digest: candidateEvidenceDigest(candidate),
+    reviewed_token: candidate.candidate_token,
+  };
+}
+
+export function keepEvidenceMatches(
+  candidate: ReceiptCandidate | null,
+  binding: KeepCandidateBinding | null,
+): boolean {
+  return candidate !== null
+    && binding !== null
+    && candidateEvidenceDigest(candidate) === binding.evidence_digest;
+}
+
+export function buildCandidateSetKey(
+  detail: Pick<ReceiptDetail, "receipt_id" | "version" | "status" | "linked">,
+  candidates: readonly ReceiptCandidate[],
+): string {
+  const parts = candidates.map(
+    (cand) => `${cand.account_id}\0${cand.entry_reference}\0${cand.match_strength}\0${candidateEvidenceFingerprint(cand) ?? ""}`,
+  );
+  return `${detail.receipt_id}|${String(detail.version)}|${detail.status}|${detail.linked ? "1" : "0"}|${parts.join("\x1f")}`;
+}
+
+export function selectCandidateDraft(
+  draft: ReceiptConfirmDraft,
+  candidate: ReceiptCandidate,
+  index: number,
+): ReceiptConfirmDraft {
+  return {
+    ...draft,
+    linkChoice: `candidate:${String(index)}`,
+    selectedCandidate: candidateSelectionBinding(candidate),
+    keepBinding: null,
+  };
+}
+
+export function selectKeepDraft(
+  draft: ReceiptConfirmDraft,
+  currentCandidate: ReceiptCandidate | null,
+): ReceiptConfirmDraft {
+  return {
+    ...draft,
+    linkChoice: "keep",
+    selectedCandidate: null,
+    keepBinding: currentCandidate === null ? null : keepCandidateBinding(currentCandidate),
+  };
+}
+
+export function clearStaleCandidateSelection(
+  draft: ReceiptConfirmDraft,
+  currentReceiptId: string,
+  currentCandidateSetKey: string,
+  currentKeepCandidate?: ReceiptCandidate | null,
+): ReceiptConfirmDraft | null {
+  if (draft.receiptId !== currentReceiptId) return null;
+  if (draft.linkChoice === "keep" && currentKeepCandidate !== undefined && !keepEvidenceMatches(currentKeepCandidate, draft.keepBinding)) {
+    return {
+      ...draft,
+      linkChoice: "",
+      selectedCandidate: null,
+      keepBinding: null,
+    };
+  }
+  if (draft.candidateSetKey === currentCandidateSetKey) return draft;
+  if (!draft.linkChoice.startsWith("candidate:") && draft.selectedCandidate === null && draft.linkChoice !== "keep") {
+    return draft;
+  }
+  return {
+    ...draft,
+    linkChoice: "",
+    selectedCandidate: null,
+    keepBinding: null,
+  };
 }
 
 export interface ReceiptLinkOptions {
@@ -350,6 +570,224 @@ export function availableLinkOptions(
   };
 }
 
+export function isStrongMatchStrength(strength: ReceiptCandidate["match_strength"]): boolean {
+  return strength === "nip" || strength === "distinctive";
+}
+
+/**
+ * Preselects the single candidate only when the receipt is unlinked (`imported` / `draft` / `needs_review`
+ * with no stored link), payment allows linking, there is exactly one candidate, and `match_strength` is
+ * `"nip"` or `"distinctive"`.
+ */
+export function preselectedCandidate(
+  detail: Pick<ReceiptDetail, "status" | "linked" | "linked_account_id" | "linked_entry_ref">,
+  candidates: readonly ReceiptCandidate[],
+  paymentMethod: ReceiptPaymentMethod,
+): ReceiptCandidate | null {
+  if (detail.status !== "imported" && detail.status !== "draft" && detail.status !== "needs_review") {
+    return null;
+  }
+  if (detail.linked || detail.linked_account_id !== null || detail.linked_entry_ref !== null) {
+    return null;
+  }
+  if (paymentMethod === "cash" || paymentMethod === "mixed") {
+    return null;
+  }
+  if (candidates.length !== 1) {
+    return null;
+  }
+  const sole = candidates[0];
+  if (sole === undefined || !isStrongMatchStrength(sole.match_strength)) {
+    return null;
+  }
+  return sole;
+}
+
+export type ReceiptLinkExplicitChoice =
+  | { kind: "empty" }
+  | { kind: "unlink" }
+  | { kind: "keep"; keepBinding: KeepCandidateBinding | null }
+  | {
+      kind: "candidate";
+      account_id: string;
+      entry_reference: string;
+      match_strength: ReceiptCandidate["match_strength"];
+      evidence_fingerprint: string | null;
+    };
+
+export interface ReceiptLinkSessionEntry {
+  touched: boolean;
+  choice: ReceiptLinkExplicitChoice | null;
+  baselineVersion: number;
+  baselineStatus: ReceiptDetail["status"];
+  baselineLinked: boolean;
+  baselineCandidateKeys: readonly string[];
+  candidateSetChanged: boolean;
+}
+
+export function candidateIdentityKeys(candidates: readonly ReceiptCandidate[]): string[] {
+  return candidates.map(
+    (cand) => `${cand.account_id}:${cand.entry_reference}:${cand.match_strength}:${candidateEvidenceFingerprint(cand) ?? ""}`,
+  );
+}
+
+export function sameCandidateIdentitySet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  for (let i = 0; i < sortedA.length; i += 1) {
+    if (sortedA[i] !== sortedB[i]) return false;
+  }
+  return true;
+}
+
+function defaultAmbiguousOrUnlink(
+  detail: Pick<ReceiptDetail, "linked">,
+  options: Pick<ReceiptLinkOptions, "canPickCandidates">,
+): string {
+  return detail.linked || options.canPickCandidates ? "" : "unlink";
+}
+
+function resolveTouchedLinkChoice(
+  choice: ReceiptLinkExplicitChoice | null,
+  detail: Pick<ReceiptDetail, "status" | "linked">,
+  options: ReceiptLinkOptions,
+  candidates: readonly ReceiptCandidate[],
+): {
+  linkChoice: string;
+  selectedCandidate: SelectedCandidateBinding | null;
+  keepBinding: KeepCandidateBinding | null;
+  keepEvidenceInvalidated: boolean;
+} {
+  if (choice === null) {
+    return {
+      linkChoice: defaultAmbiguousOrUnlink(detail, options),
+      selectedCandidate: null,
+      keepBinding: null,
+      keepEvidenceInvalidated: false,
+    };
+  }
+  if (choice.kind === "unlink") {
+    return { linkChoice: "unlink", selectedCandidate: null, keepBinding: null, keepEvidenceInvalidated: false };
+  }
+  if (choice.kind === "empty") {
+    return {
+      linkChoice: !options.paymentAllowsLink && !detail.linked ? "unlink" : "",
+      selectedCandidate: null,
+      keepBinding: null,
+      keepEvidenceInvalidated: false,
+    };
+  }
+  if (choice.kind === "keep") {
+    if (options.canKeep && keepEvidenceMatches(options.currentCandidate, choice.keepBinding)) {
+      return { linkChoice: "keep", selectedCandidate: null, keepBinding: choice.keepBinding, keepEvidenceInvalidated: false };
+    }
+    const fallbackChoice = !options.paymentAllowsLink && !detail.linked ? "unlink" : "";
+    const invalidated = choice.keepBinding !== null && detail.status === "needs_review" && detail.linked;
+    return { linkChoice: fallbackChoice, selectedCandidate: null, keepBinding: null, keepEvidenceInvalidated: invalidated };
+  }
+  const idx = candidates.findIndex((cand) => candidateMatchesBinding(cand, choice));
+  const matched = idx >= 0 ? candidates[idx] : undefined;
+  if (options.canPickCandidates && matched !== undefined) {
+    return {
+      linkChoice: `candidate:${String(idx)}`,
+      selectedCandidate: candidateSelectionBinding(matched),
+      keepBinding: null,
+      keepEvidenceInvalidated: false,
+    };
+  }
+  if ((!options.paymentAllowsLink || detail.status === "confirmed") && !detail.linked) {
+    return { linkChoice: "unlink", selectedCandidate: null, keepBinding: null, keepEvidenceInvalidated: false };
+  }
+  return { linkChoice: "", selectedCandidate: null, keepBinding: null, keepEvidenceInvalidated: false };
+}
+
+/**
+ * Builds the drawer draft for a receipt while preserving the user's explicit link choice across
+ * reloads/refreshes in this session and never re-applying preselection after interaction or
+ * candidate-set changes.
+ */
+export function resolveDraftFromDetailSession(
+  detail: ReceiptDetail,
+  candidates: readonly ReceiptCandidate[],
+  previous: ReceiptLinkSessionEntry | undefined,
+): {
+  draft: ReceiptConfirmDraft;
+  nextSessionEntry: ReceiptLinkSessionEntry;
+  showSuggestedBanner: boolean;
+  keepEvidenceInvalidated: boolean;
+} {
+  const currentKeys = candidateIdentityKeys(candidates);
+  const serverStateChanged = previous !== undefined && (
+    previous.baselineVersion !== detail.version
+    || previous.baselineStatus !== detail.status
+    || previous.baselineLinked !== detail.linked
+  );
+  const nextSessionEntry: ReceiptLinkSessionEntry = previous === undefined
+    ? {
+        touched: false,
+        choice: null,
+        baselineVersion: detail.version,
+        baselineStatus: detail.status,
+        baselineLinked: detail.linked,
+        baselineCandidateKeys: currentKeys,
+        candidateSetChanged: false,
+      }
+    : {
+        ...previous,
+        choice: serverStateChanged ? null : previous.choice,
+        baselineVersion: detail.version,
+        baselineStatus: detail.status,
+        baselineLinked: detail.linked,
+        baselineCandidateKeys: serverStateChanged ? currentKeys : previous.baselineCandidateKeys,
+        candidateSetChanged:
+          previous.candidateSetChanged
+          || !sameCandidateIdentitySet(previous.baselineCandidateKeys, currentKeys),
+      };
+  const baseDraft = draftFromDetail(detail, candidates);
+  if (nextSessionEntry.touched) {
+    const paymentMethod = baseDraft.paymentMethod;
+    const options = availableLinkOptions(detail, candidates, paymentMethod, false);
+    const touched = resolveTouchedLinkChoice(nextSessionEntry.choice, detail, options, candidates);
+    const sanitizedEntry: ReceiptLinkSessionEntry = touched.keepEvidenceInvalidated
+      ? { ...nextSessionEntry, choice: { kind: "empty" } }
+      : nextSessionEntry;
+    return {
+      draft: {
+        ...baseDraft,
+        linkChoice: touched.linkChoice,
+        selectedCandidate: touched.selectedCandidate,
+        keepBinding: touched.keepBinding,
+      },
+      nextSessionEntry: sanitizedEntry,
+      showSuggestedBanner: false,
+      keepEvidenceInvalidated: touched.keepEvidenceInvalidated,
+    };
+  }
+  if (nextSessionEntry.candidateSetChanged) {
+    const options = availableLinkOptions(detail, candidates, baseDraft.paymentMethod, false);
+    return {
+      draft: {
+        ...baseDraft,
+        linkChoice: defaultAmbiguousOrUnlink(detail, options),
+        selectedCandidate: null,
+        keepBinding: null,
+      },
+      nextSessionEntry,
+      showSuggestedBanner: false,
+      keepEvidenceInvalidated: false,
+    };
+  }
+  const canPreselect = baseDraft.linkChoice === "candidate:0"
+    && preselectedCandidate(detail, candidates, baseDraft.paymentMethod) !== null;
+  return {
+    draft: baseDraft,
+    nextSessionEntry,
+    showSuggestedBanner: canPreselect,
+    keepEvidenceInvalidated: false,
+  };
+}
+
 export function draftFromDetail(
   detail: ReceiptDetail,
   candidates: readonly ReceiptCandidate[] = [],
@@ -359,13 +797,19 @@ export function draftFromDetail(
       ? (detail.payment_method as ReceiptPaymentMethod)
       : "unknown";
   const options = availableLinkOptions(detail, candidates, paymentMethod, false);
+  const preselected = preselectedCandidate(detail, candidates, paymentMethod);
   let linkChoice = "unlink";
-  if (detail.linked || options.canPickCandidates) {
-    // Ambiguous link state (changed/review link, confirmed re-edit, or unlinked row with candidates):
+  let selectedCandidate: SelectedCandidateBinding | null = null;
+  if (preselected !== null && options.canPickCandidates) {
+    linkChoice = "candidate:0";
+    selectedCandidate = candidateSelectionBinding(preselected);
+  } else if (detail.linked || options.canPickCandidates) {
+    // Ambiguous link state (changed/review link, confirmed re-edit, multiple or weak candidates):
     // leave linkChoice empty so Confirm stays disabled until the user explicitly chooses.
     linkChoice = "";
   }
   return {
+    receiptId: detail.receipt_id,
     rawShopName: detail.raw_shop_name ?? "",
     rawNip: detail.raw_nip ?? "",
     receiptKind: detail.receipt_kind,
@@ -386,6 +830,9 @@ export function draftFromDetail(
       net_line_total: line.net_line_total,
     })),
     linkChoice,
+    selectedCandidate,
+    keepBinding: null,
+    candidateSetKey: buildCandidateSetKey(detail, candidates),
   };
 }
 
@@ -574,10 +1021,41 @@ export function haveConfirmLinesChanged(
   return false;
 }
 
+function synthesizeInvoiceSummaryLine(
+  detail: Pick<ReceiptDetail, "invoice_number" | "raw_shop_name">,
+  draftShopName: string,
+  normalizedTotal: string,
+  summaryFallbackName: string,
+): ReceiptLineInput {
+  const invoiceName = detail.invoice_number !== null && !isRedactedValue(detail.invoice_number)
+    ? detail.invoice_number.trim()
+    : "";
+  const shopTrimmed = draftShopName.trim();
+  const rawShop = shopTrimmed !== "" && !isRedactedValue(shopTrimmed)
+    ? shopTrimmed
+    : (detail.raw_shop_name !== null && !isRedactedValue(detail.raw_shop_name)
+      ? detail.raw_shop_name.trim()
+      : "");
+  const candidateName = invoiceName || rawShop || summaryFallbackName;
+  const rawName = candidateName === "" || isRedactedValue(candidateName) ? "Document" : candidateName;
+  return {
+    line_kind: "other",
+    raw_name: rawName,
+    ptu_code: null,
+    quantity: "1",
+    raw_unit: null,
+    unit_price_raw: null,
+    gross_line_total: normalizedTotal,
+    discount_amount: "0",
+    net_line_total: normalizedTotal,
+  };
+}
+
 export function buildConfirmRequest(
   detail: ReceiptDetail,
   draft: ReceiptConfirmDraft,
   candidates: readonly ReceiptCandidate[],
+  summaryFallbackName = "Document",
 ): { ok: true; request: ReceiptConfirmRequest } | { ok: false; errorKey: MessageKey } {
   const origShop = (detail.raw_shop_name ?? "").trim();
   const shopName = draft.rawShopName.trim();
@@ -660,8 +1138,15 @@ export function buildConfirmRequest(
     });
   }
 
-  const netSum = addDecimals(cleanLines.map((line) => line.net_line_total));
-  if (netSum !== total) return { ok: false, errorKey: "budget.receipts.totalMismatch" };
+  let effectiveLines = cleanLines;
+  let sendLines = linesChanged;
+  if (detail.lines.length === 0 && cleanLines.length === 0 && detail.document_kind === "invoice") {
+    effectiveLines = [synthesizeInvoiceSummaryLine(detail, shopName, total, summaryFallbackName)];
+    sendLines = true;
+  } else {
+    const netSum = addDecimals(cleanLines.map((line) => line.net_line_total));
+    if (netSum !== total) return { ok: false, errorKey: "budget.receipts.totalMismatch" };
+  }
 
   if (draft.linkChoice === "") {
     return { ok: false, errorKey: "budget.receipts.explicitUnlinkRequired" };
@@ -674,21 +1159,35 @@ export function buildConfirmRequest(
   if (draft.linkChoice === "unlink") {
     link = null;
   } else if (draft.linkChoice === "keep") {
-    if (!options.paymentAllowsLink || !options.canKeep || options.currentCandidate === null) {
+    if (!options.paymentAllowsLink || options.matchingFieldsChanged || detail.status === "confirmed") {
       return { ok: false, errorKey: "budget.receipts.invalidForm" };
     }
+    if (
+      !options.canKeep
+      || options.currentCandidate === null
+      || draft.keepBinding === null
+      || !keepEvidenceMatches(options.currentCandidate, draft.keepBinding)
+    ) {
+      return { ok: false, errorKey: "budget.receipts.bankEvidenceChanged" };
+    }
     link = {
-      account_id: options.currentCandidate.account_id,
-      entry_reference: options.currentCandidate.entry_reference,
-      candidate_token: options.currentCandidate.candidate_token,
+      account_id: draft.keepBinding.account_id,
+      entry_reference: draft.keepBinding.entry_reference,
+      candidate_token: draft.keepBinding.reviewed_token,
     };
   } else if (draft.linkChoice.startsWith("candidate:")) {
-    if (!options.paymentAllowsLink || !options.canPickCandidates) {
+    if (!options.paymentAllowsLink || options.matchingFieldsChanged) {
       return { ok: false, errorKey: "budget.receipts.invalidForm" };
+    }
+    const binding = draft.selectedCandidate;
+    if (binding === null) {
+      return { ok: false, errorKey: "budget.receipts.candidateListChanged" };
     }
     const idx = Number(draft.linkChoice.slice("candidate:".length));
     const chosen = Number.isInteger(idx) ? candidates[idx] : undefined;
-    if (chosen === undefined) return { ok: false, errorKey: "budget.receipts.invalidForm" };
+    if (!options.canPickCandidates || chosen === undefined || !candidateMatchesBinding(chosen, binding)) {
+      return { ok: false, errorKey: "budget.receipts.candidateListChanged" };
+    }
     link = {
       account_id: chosen.account_id,
       entry_reference: chosen.entry_reference,
@@ -715,8 +1214,8 @@ export function buildConfirmRequest(
   if (nipEdited) {
     request.raw_nip = nip === "" ? null : nip;
   }
-  if (linesChanged) {
-    request.lines = cleanLines;
+  if (sendLines) {
+    request.lines = effectiveLines;
   }
   return { ok: true, request };
 }
@@ -883,27 +1382,11 @@ export function buildPlainBulkConfirmRequest(
     if (normalizedTotal === null) {
       return { ok: false, errorCode: "budget_receipt_invalid_request" };
     }
-    const invoiceName = detail.invoice_number !== null && !isRedactedValue(detail.invoice_number)
-      ? detail.invoice_number.trim()
-      : "";
-    const shopName = detail.raw_shop_name !== null && !isRedactedValue(detail.raw_shop_name)
-      ? detail.raw_shop_name.trim()
-      : "";
-    const candidateName = invoiceName || shopName || summaryFallbackName;
-    const rawName = isRedactedValue(candidateName) ? "Document" : candidateName;
-    draft.lines.push({
-      line_kind: "other",
-      raw_name: rawName,
-      ptu_code: null,
-      quantity: "1",
-      raw_unit: null,
-      unit_price_raw: null,
-      gross_line_total: normalizedTotal,
-      discount_amount: "0",
-      net_line_total: normalizedTotal,
-    });
+    draft.lines.push(
+      synthesizeInvoiceSummaryLine(detail, detail.raw_shop_name ?? "", normalizedTotal, summaryFallbackName),
+    );
   }
-  const built = buildConfirmRequest(detail, draft, []);
+  const built = buildConfirmRequest(detail, draft, [], summaryFallbackName);
   if (!built.ok) {
     return {
       ok: false,

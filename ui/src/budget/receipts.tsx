@@ -24,13 +24,15 @@ import {
   RECEIPT_STATUS_KEYS,
   availableLinkOptions,
   buildBulkSelectionPlan,
+  buildCandidateSetKey,
   buildConfirmRequest,
   buildPlainBulkConfirmRequest,
   buildReceiptListRequest,
   candidateDisplayDate,
+  candidateSelectionBinding,
+  clearStaleCandidateSelection,
   computeLinesDelta,
   createPendingReceiptStore,
-  draftFromDetail,
   editReceiptLine,
   filterReceiptRows,
   findCurrentLinkedCandidate,
@@ -42,13 +44,19 @@ import {
   isExcludedDraftForBulk,
   isRedactedValue,
   isStaleCursorError,
+  keepCandidateBinding,
   merchantBulkGroups,
   mergeReceiptRows,
   normalizeDecimalInput,
+  preselectedCandidate,
   receiptAccountLabel,
   receiptHasRedactedLines,
   receiptMerchantGroupKey,
   reconcileLinkChoice,
+  resolveDraftFromDetailSession,
+  selectCandidateDraft,
+  selectKeepDraft,
+  suggestedCandidateDates,
   validReceiptDateRange,
 } from "./receipts_model";
 import type {
@@ -62,6 +70,8 @@ import type {
   ReceiptFilter,
   ReceiptLineEditField,
   ReceiptLineInput,
+  ReceiptLinkExplicitChoice,
+  ReceiptLinkSessionEntry,
   ReceiptPaymentMethod,
   ReceiptSettledEvent,
   ReceiptSourceKind,
@@ -280,8 +290,10 @@ export function ReceiptsView({
   const detailGeneration = useRef(0);
   const imageGeneration = useRef(0);
   const receiptFloorGenRef = useRef<Map<string, number>>(new Map());
+  const receiptLinkMemoryRef = useRef<Map<string, ReceiptLinkSessionEntry>>(new Map());
   const openReceiptIdRef = useRef<string | null>(null);
   const loadedReceiptIdRef = useRef<string | null>(null);
+  const latestReadyCandidatesRef = useRef<{ receiptId: string; candidates: readonly ReceiptCandidate[] } | null>(null);
   const staleCursorReloadedRef = useRef(false);
   const activeImageUrl = useRef<string | null>(null);
   const bulkCancelledRef = useRef(false);
@@ -303,6 +315,7 @@ export function ReceiptsView({
     detailGeneration.current += 1;
     openReceiptIdRef.current = null;
     loadedReceiptIdRef.current = null;
+    latestReadyCandidatesRef.current = null;
     clearImage();
     setSelectedId(null);
     setDetailState({ kind: "loading" });
@@ -318,6 +331,7 @@ export function ReceiptsView({
     bulkCancelledRef.current = true;
     bulkRunGenRef.current += 1;
     receiptFloorGenRef.current.clear();
+    receiptLinkMemoryRef.current.clear();
     staleCursorReloadedRef.current = false;
     resetDrawer();
     setSelectedForBulk(new Set());
@@ -622,6 +636,7 @@ export function ReceiptsView({
     if (selectedId === null) {
       detailGeneration.current += 1;
       loadedReceiptIdRef.current = null;
+      latestReadyCandidatesRef.current = null;
       clearImage();
       setDetailState({ kind: "loading" });
       return;
@@ -629,6 +644,7 @@ export function ReceiptsView({
     const targetId = selectedId;
     const token = ++detailGeneration.current;
     if (loadedReceiptIdRef.current !== targetId) {
+      latestReadyCandidatesRef.current = null;
       setDetailState({ kind: "loading" });
       clearImage();
     }
@@ -645,12 +661,14 @@ export function ReceiptsView({
           return;
         }
         loadedReceiptIdRef.current = null;
+        latestReadyCandidatesRef.current = null;
         setDetailState({ kind: "error" });
         return;
       }
       const receipt = result.data.receipt;
       const candidates = result.data.candidates ?? [];
       loadedReceiptIdRef.current = receipt.receipt_id;
+      latestReadyCandidatesRef.current = { receiptId: receipt.receipt_id, candidates };
       setDetailState({ kind: "ready", detail: receipt, candidates });
       if (receipt.image_available) {
         const imgToken = ++imageGeneration.current;
@@ -680,12 +698,17 @@ export function ReceiptsView({
   const drawerActionBusy: ReceiptActionKind | null =
     selectedId === null ? null : (pendingMap.get(selectedId) ?? null);
 
+  const getLatestCandidates = useCallback((receiptId: string): readonly ReceiptCandidate[] | null => (
+    latestReadyCandidatesRef.current?.receiptId === receiptId ? latestReadyCandidatesRef.current.candidates : null
+  ), []);
+
   const openReceipt = useCallback((receiptId: string) => {
     if (bulkProgress !== null
       || (openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null)
       || openReceiptIdRef.current === receiptId) return;
     openReceiptIdRef.current = receiptId;
     loadedReceiptIdRef.current = null;
+    latestReadyCandidatesRef.current = null;
     setDetailState({ kind: "loading" });
     setNotice(null);
     setSelectedId(receiptId);
@@ -695,6 +718,42 @@ export function ReceiptsView({
     if (openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null) return;
     resetDrawer();
   }, [store, resetDrawer]);
+
+  const resolveDetailDraft = useCallback((
+    detail: ReceiptDetail,
+    candidates: readonly ReceiptCandidate[],
+  ): { draft: ReceiptConfirmDraft; showSuggestedBanner: boolean; keepEvidenceInvalidated: boolean } => {
+    const key = `${actorKey}:${detail.receipt_id}`;
+    const resolved = resolveDraftFromDetailSession(
+      detail,
+      candidates,
+      receiptLinkMemoryRef.current.get(key),
+    );
+    receiptLinkMemoryRef.current.set(key, resolved.nextSessionEntry);
+    return {
+      draft: resolved.draft,
+      showSuggestedBanner: resolved.showSuggestedBanner,
+      keepEvidenceInvalidated: resolved.keepEvidenceInvalidated,
+    };
+  }, [actorKey]);
+
+  const recordLinkChoiceTouched = useCallback((
+    receiptId: string,
+    choice: ReceiptLinkExplicitChoice,
+    detail?: Pick<ReceiptDetail, "version" | "status" | "linked">,
+  ) => {
+    const key = `${actorKey}:${receiptId}`;
+    const prev = receiptLinkMemoryRef.current.get(key);
+    receiptLinkMemoryRef.current.set(key, {
+      touched: true,
+      choice,
+      baselineVersion: prev?.baselineVersion ?? detail?.version ?? 0,
+      baselineStatus: prev?.baselineStatus ?? detail?.status ?? "draft",
+      baselineLinked: prev?.baselineLinked ?? detail?.linked ?? false,
+      baselineCandidateKeys: prev?.baselineCandidateKeys ?? [],
+      candidateSetChanged: prev?.candidateSetChanged ?? false,
+    });
+  }, [actorKey]);
 
   const applyFilter = (next: ReceiptFilter) => {
     if (bulkProgress !== null || !validReceiptDateRange(next)) return;
@@ -1157,23 +1216,30 @@ export function ReceiptsView({
           imageState={imageState}
           actionBusy={drawerActionBusy}
           isOpenReceipt={(receiptId) => openReceiptIdRef.current === receiptId}
+          getLatestCandidates={getLatestCandidates}
+          resolveDetailDraft={resolveDetailDraft}
+          onLinkChoiceTouched={recordLinkChoiceTouched}
           onAccessLoss={checkBarrier}
           onClose={closeDetail}
           onRetryDetail={() => { setDetailRefresh((current) => current + 1); }}
           onConfirmed={(updated) => {
+            receiptLinkMemoryRef.current.delete(`${actorKey}:${updated.receipt_id}`);
             const floorToken = ++detailGeneration.current;
             receiptFloorGenRef.current.set(updated.receipt_id, floorToken);
+            latestReadyCandidatesRef.current = { receiptId: updated.receipt_id, candidates: [] };
             setDetailState({ kind: "ready", detail: updated, candidates: [] });
             setNotice(t("budget.receipts.confirmSuccess"));
             reloadList();
           }}
           onConflictOrStale={(receiptId) => {
+            recordLinkChoiceTouched(receiptId, { kind: "empty" });
             const floorToken = ++detailGeneration.current;
             receiptFloorGenRef.current.set(receiptId, floorToken);
             setDetailRefresh((current) => current + 1);
             reloadList();
           }}
           onNotFound={(receiptId) => {
+            receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
             const floorToken = ++detailGeneration.current;
             receiptFloorGenRef.current.set(receiptId, floorToken);
             resetDrawer();
@@ -1181,6 +1247,7 @@ export function ReceiptsView({
             reloadList();
           }}
           onDeleted={(receiptId) => {
+            receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
             const floorToken = ++detailGeneration.current;
             receiptFloorGenRef.current.set(receiptId, floorToken);
             resetDrawer();
@@ -1203,6 +1270,12 @@ interface DrawerProps {
   imageState: ImageState;
   actionBusy: ReceiptActionKind | null;
   isOpenReceipt: (receiptId: string) => boolean;
+  getLatestCandidates: (receiptId: string) => readonly ReceiptCandidate[] | null;
+  resolveDetailDraft: (
+    detail: ReceiptDetail,
+    candidates: readonly ReceiptCandidate[],
+  ) => { draft: ReceiptConfirmDraft; showSuggestedBanner: boolean; keepEvidenceInvalidated: boolean };
+  onLinkChoiceTouched: (receiptId: string, choice: ReceiptLinkExplicitChoice) => void;
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
   onClose: () => void;
   onRetryDetail: () => void;
@@ -1223,6 +1296,9 @@ function ReceiptDetailDrawer({
   imageState,
   actionBusy,
   isOpenReceipt,
+  getLatestCandidates,
+  resolveDetailDraft,
+  onLinkChoiceTouched,
   onAccessLoss,
   onClose,
   onRetryDetail,
@@ -1235,8 +1311,10 @@ function ReceiptDetailDrawer({
   const [confirmDraft, setConfirmDraft] = useState<ReceiptConfirmDraft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
   const keepActionErrorRef = useRef(false);
   const drawerMountedRef = useRef(true);
+  const linkChoicesRef = useRef<HTMLFieldSetElement | null>(null);
 
   useEffect(() => {
     drawerMountedRef.current = true;
@@ -1253,24 +1331,30 @@ function ReceiptDetailDrawer({
 
   useEffect(() => {
     if (detailState.kind === "ready") {
-      setConfirmDraft(draftFromDetail(detailState.detail, detailState.candidates));
+      const resolved = resolveDetailDraft(detailState.detail, detailState.candidates);
+      setConfirmDraft(resolved.draft);
+      setSuggestionDismissed(!resolved.showSuggestedBanner);
       if (keepActionErrorRef.current) {
         keepActionErrorRef.current = false;
+      } else if (resolved.keepEvidenceInvalidated) {
+        setActionError(t("budget.receipts.bankEvidenceChanged"));
       } else {
         setActionError(null);
       }
       setConfirmingDelete(false);
     } else if (detailState.kind === "loading") {
+      setSuggestionDismissed(false);
       setConfirmDraft(null);
       if (!keepActionErrorRef.current) setActionError(null);
       setConfirmingDelete(false);
     } else {
+      setSuggestionDismissed(false);
       keepActionErrorRef.current = false;
       setConfirmDraft(null);
       setActionError(null);
       setConfirmingDelete(false);
     }
-  }, [detailState]);
+  }, [detailState, resolveDetailDraft]);
 
   const title = t("budget.receipts.detailTitle");
 
@@ -1282,16 +1366,31 @@ function ReceiptDetailDrawer({
     setConfirmDraft((current) => {
       if (current === null) return null;
       const next = { ...current, ...patch };
+      const nextLinkChoice = reconcileLinkChoice(detail, current.linkChoice, next, candidates);
       return {
         ...next,
-        linkChoice: reconcileLinkChoice(detail, current.linkChoice, next, candidates),
+        linkChoice: nextLinkChoice,
+        selectedCandidate: nextLinkChoice.startsWith("candidate:") ? current.selectedCandidate : null,
+        keepBinding: nextLinkChoice === "keep" ? current.keepBinding : null,
       };
     });
   };
 
   const submitConfirm = async (detail: ReceiptDetail, candidates: readonly ReceiptCandidate[], draft: ReceiptConfirmDraft) => {
-    const built = buildConfirmRequest(detail, draft, candidates);
+    const currentCandidates = getLatestCandidates(detail.receipt_id) ?? candidates;
+    const built = buildConfirmRequest(detail, draft, currentCandidates, t("budget.receipts.summaryLineDefault"));
     if (!built.ok) {
+      if (built.errorKey === "budget.receipts.candidateListChanged" || built.errorKey === "budget.receipts.bankEvidenceChanged") {
+        keepActionErrorRef.current = true;
+        if (built.errorKey === "budget.receipts.candidateListChanged") {
+          setSuggestionDismissed(true);
+        } else {
+          onLinkChoiceTouched(detail.receipt_id, { kind: "empty" });
+        }
+        setConfirmDraft((current) => (current === null
+          ? null
+          : { ...current, linkChoice: "", selectedCandidate: null, keepBinding: null }));
+      }
       setActionError(t(built.errorKey));
       return;
     }
@@ -1431,14 +1530,22 @@ function ReceiptDetailDrawer({
           </div>
         ) : (() => {
           const { detail, candidates } = detailState;
+          const currentCandidateSetKey = buildCandidateSetKey(detail, candidates);
+          const storedKeepCandidate = findCurrentLinkedCandidate(detail, candidates);
+          const activeDraft = confirmDraft === null
+            ? null
+            : clearStaleCandidateSelection(confirmDraft, detail.receipt_id, currentCandidateSetKey, storedKeepCandidate);
           const hasRedactedLines = receiptHasRedactedLines(detail.lines);
-          const draftMethod: ReceiptPaymentMethod = confirmDraft?.paymentMethod ?? "unknown";
-          const matchingChanged = confirmDraft !== null && hasMatchingFieldsChanged(detail, confirmDraft);
+          const draftMethod: ReceiptPaymentMethod = activeDraft?.paymentMethod ?? "unknown";
+          const matchingChanged = activeDraft !== null && hasMatchingFieldsChanged(detail, activeDraft);
           const linkOptions = availableLinkOptions(detail, candidates, draftMethod, matchingChanged);
           const { currentCandidate } = linkOptions;
-          const hasStoredKeepCandidate = findCurrentLinkedCandidate(detail, candidates) !== null;
-          const lineDelta = confirmDraft === null ? null : computeLinesDelta(confirmDraft.lines, confirmDraft.totalAmount);
-          const deltaCurrency = (confirmDraft?.currency.trim() || detail.currency) ?? "PLN";
+          const hasStoredKeepCandidate = storedKeepCandidate !== null;
+          const lineDelta = activeDraft === null
+            || (detail.document_kind === "invoice" && detail.lines.length === 0 && activeDraft.lines.length === 0)
+            ? null
+            : computeLinesDelta(activeDraft.lines, activeDraft.totalAmount);
+          const deltaCurrency = (activeDraft?.currency.trim() || detail.currency) ?? "PLN";
           const lineDeltaDisplay = lineDelta !== null && lineDelta !== "0"
             ? formatAmount(lineDelta, deltaCurrency, locale)
             : null;
@@ -1446,6 +1553,10 @@ function ReceiptDetailDrawer({
           const showCandidateRadios = detail.status !== "confirmed" && candidates.length > 0;
           const tokensDisabledByEdit = matchingChanged && (showKeepRadio || showCandidateRadios || detail.linked);
           const disableTokens = actionBusy !== null || !linkOptions.paymentAllowsLink || matchingChanged;
+          const suggestedCandidate = activeDraft === null || suggestionDismissed || !linkOptions.canPickCandidates
+            ? null
+            : preselectedCandidate(detail, candidates, draftMethod);
+          const bannerCandidate = activeDraft?.linkChoice === "candidate:0" ? suggestedCandidate : null;
 
           return (
             <div className="budget-receipt-drawer-body">
@@ -1480,6 +1591,95 @@ function ReceiptDetailDrawer({
                   {t("budget.receipts.forwardedManually", { domain: detail.forwarded_sender_domain })}
                 </p>
               ) : null}
+
+              {bannerCandidate === null ? null : ((candidate) => {
+                const accountText = receiptAccountLabel(
+                  accounts,
+                  connections,
+                  candidate.account_id,
+                  t("budget.main.account"),
+                );
+                const { primaryDate, bookingDayMonth, displayDistance } = suggestedCandidateDates(candidate, detail);
+                const baseDate = primaryDate ?? t("budget.receipts.noDate");
+                const dateText = bookingDayMonth === null
+                  ? baseDate
+                  : `${baseDate} ${t("budget.receipts.bookingDateNote", { date: bookingDayMonth })}`;
+                const daysText = displayDistance === 0
+                  ? t("budget.receipts.candidateSameDay")
+                  : t("budget.receipts.candidateDays", { days: displayDistance });
+                const amountText = formatAmount(
+                  candidate.amount,
+                  candidate.currency,
+                  locale,
+                  candidate.credit_debit_indicator,
+                );
+                const strengthBadge = candidate.match_strength === "nip"
+                  ? t("budget.receipts.matchBadgeNip")
+                  : t("budget.receipts.matchBadgeMerchant");
+                return (
+                  <section
+                    className="budget-notice budget-receipt-suggested"
+                    aria-label={t("budget.receipts.suggestedMatchHeading")}
+                  >
+                    <div className="budget-receipt-suggested-head">
+                      <strong>{t("budget.receipts.suggestedMatchHeading")}</strong>
+                      <span
+                        className="budget-chip budget-receipt-match-badge"
+                        data-match-strength={candidate.match_strength}
+                      >
+                        {strengthBadge}
+                      </span>
+                    </div>
+                    <div className="budget-entry-main">
+                      <span className="budget-muted">{dateText}</span>
+                      <span className="budget-entry-text">
+                        {accountText}
+                        {` (${daysText})`}
+                      </span>
+                      <strong className={candidate.credit_debit_indicator === "DBIT" ? "is-debit" : "is-credit"}>
+                        {amountText}
+                      </strong>
+                    </div>
+                    <div className="budget-actions">
+                      <button
+                        type="button"
+                        className="budget-link"
+                        disabled={actionBusy !== null}
+                        onClick={() => {
+                          onLinkChoiceTouched(detail.receipt_id, { kind: "empty" });
+                          setSuggestionDismissed(true);
+                          setConfirmDraft((current) => (
+                            current === null
+                              ? null
+                              : { ...current, linkChoice: "", selectedCandidate: null, keepBinding: null }
+                          ));
+                          linkChoicesRef.current?.focus();
+                          const target: { scrollIntoView?: (options?: ScrollIntoViewOptions) => void } | null =
+                            linkChoicesRef.current;
+                          target?.scrollIntoView?.({ block: "nearest" });
+                        }}
+                      >
+                        {t("budget.receipts.suggestedMatchChange")}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={actionBusy !== null}
+                        onClick={() => {
+                          onLinkChoiceTouched(detail.receipt_id, { kind: "unlink" });
+                          setSuggestionDismissed(true);
+                          setConfirmDraft((current) => (
+                            current === null
+                              ? null
+                              : { ...current, linkChoice: "unlink", selectedCandidate: null, keepBinding: null }
+                          ));
+                        }}
+                      >
+                        {t("budget.receipts.suggestedMatchUnlink")}
+                      </button>
+                    </div>
+                  </section>
+                );
+              })(bannerCandidate)}
 
               <dl className="budget-receipt-meta">
                 <dt>{t("budget.receipts.date")}</dt>
@@ -1655,12 +1855,11 @@ function ReceiptDetailDrawer({
                 )}
               </section>
 
-              {confirmDraft === null ? null : (
+              {activeDraft === null ? null : (
                 <form
                   className="budget-receipt-section budget-receipt-confirm"
                   onSubmit={(event) => {
                     event.preventDefault();
-                    void submitConfirm(detail, candidates, confirmDraft);
                   }}
                 >
                   <h5>{t("budget.receipts.confirmHeading")}</h5>
@@ -1672,7 +1871,7 @@ function ReceiptDetailDrawer({
                         type="text"
                         maxLength={128}
                         disabled={actionBusy !== null}
-                        value={confirmDraft.rawShopName}
+                        value={activeDraft.rawShopName}
                         onChange={(event) => {
                           updateDraftFields(detail, candidates, { rawShopName: event.currentTarget.value });
                         }}
@@ -1685,7 +1884,7 @@ function ReceiptDetailDrawer({
                         type="text"
                         maxLength={10}
                         disabled={actionBusy !== null}
-                        value={confirmDraft.rawNip}
+                        value={activeDraft.rawNip}
                         onChange={(event) => {
                           updateDraftFields(detail, candidates, { rawNip: event.currentTarget.value });
                         }}
@@ -1696,7 +1895,7 @@ function ReceiptDetailDrawer({
                       <select
                         name="receipt_kind"
                         disabled={actionBusy !== null}
-                        value={confirmDraft.receiptKind}
+                        value={activeDraft.receiptKind}
                         onChange={(event) => {
                           updateDraftFields(detail, candidates, {
                             receiptKind: event.currentTarget.value as ReceiptConfirmDraft["receiptKind"],
@@ -1715,7 +1914,7 @@ function ReceiptDetailDrawer({
                         type="date"
                         required
                         disabled={actionBusy !== null}
-                        value={confirmDraft.receiptDate}
+                        value={activeDraft.receiptDate}
                         onChange={(event) => {
                           updateDraftFields(detail, candidates, { receiptDate: event.currentTarget.value });
                         }}
@@ -1729,9 +1928,9 @@ function ReceiptDetailDrawer({
                         placeholder={t("rule.phWindowStart")}
                         maxLength={5}
                         disabled={actionBusy !== null}
-                        value={confirmDraft.receiptTime}
+                        value={activeDraft.receiptTime}
                         onChange={(event) => {
-                          setConfirmDraft({ ...confirmDraft, receiptTime: event.currentTarget.value });
+                          setConfirmDraft({ ...activeDraft, receiptTime: event.currentTarget.value });
                         }}
                       />
                     </label>
@@ -1743,7 +1942,7 @@ function ReceiptDetailDrawer({
                         inputMode="decimal"
                         required
                         disabled={actionBusy !== null}
-                        value={confirmDraft.totalAmount}
+                        value={activeDraft.totalAmount}
                         onChange={(event) => {
                           updateDraftFields(detail, candidates, { totalAmount: event.currentTarget.value });
                         }}
@@ -1757,7 +1956,7 @@ function ReceiptDetailDrawer({
                         maxLength={3}
                         required
                         disabled={actionBusy !== null}
-                        value={confirmDraft.currency}
+                        value={activeDraft.currency}
                         onChange={(event) => {
                           updateDraftFields(detail, candidates, { currency: event.currentTarget.value.toUpperCase() });
                         }}
@@ -1768,7 +1967,7 @@ function ReceiptDetailDrawer({
                       <select
                         name="payment_method"
                         disabled={actionBusy !== null}
-                        value={confirmDraft.paymentMethod}
+                        value={activeDraft.paymentMethod}
                         onChange={(event) => {
                           updateDraftFields(detail, candidates, {
                             paymentMethod: event.currentTarget.value as ReceiptPaymentMethod,
@@ -1785,14 +1984,14 @@ function ReceiptDetailDrawer({
                   <div className="budget-receipt-edit-lines">
                     <div className="budget-entries-head">
                       <span className="budget-muted">
-                        {t("budget.receipts.linesHeading", { count: confirmDraft.lines.length })}
+                        {t("budget.receipts.linesHeading", { count: activeDraft.lines.length })}
                       </span>
                       <div className="budget-actions">
-                        {confirmDraft.lines.length === 0 ? (
+                        {activeDraft.lines.length === 0 ? (
                           <button
                             type="button"
                             disabled={actionBusy !== null || hasRedactedLines}
-                            onClick={() => { addSummaryLine(detail, confirmDraft); }}
+                            onClick={() => { addSummaryLine(detail, activeDraft); }}
                           >
                             {t("budget.receipts.addSummaryLine")}
                           </button>
@@ -1800,7 +1999,7 @@ function ReceiptDetailDrawer({
                           <button
                             type="button"
                             disabled={actionBusy !== null || hasRedactedLines}
-                            onClick={() => { addSummaryLine(detail, confirmDraft); }}
+                            onClick={() => { addSummaryLine(detail, activeDraft); }}
                           >
                             {t("budget.receipts.addLine")}
                           </button>
@@ -1815,7 +2014,7 @@ function ReceiptDetailDrawer({
                         {t("budget.receipts.mathDelta")}: {lineDeltaDisplay}
                       </p>
                     )}
-                    {confirmDraft.lines.map((line, idx) => (
+                    {activeDraft.lines.map((line, idx) => (
                       <div key={idx} className="budget-receipt-line-edit">
                         <label>
                           {t("budget.receipts.lineName")}
@@ -1874,7 +2073,7 @@ function ReceiptDetailDrawer({
                     ))}
                   </div>
 
-                  <fieldset className="budget-receipt-link-choices">
+                  <fieldset ref={linkChoicesRef} tabIndex={-1} className="budget-receipt-link-choices">
                     <legend>{t("budget.receipts.linkChoiceHeading")}</legend>
                     {!linkOptions.paymentAllowsLink ? (
                       <p className="budget-muted">{t("budget.receipts.cashNoLinkNote")}</p>
@@ -1888,7 +2087,7 @@ function ReceiptDetailDrawer({
                     {tokensDisabledByEdit ? (
                       <p className="budget-warn" role="note">{t("budget.receipts.staleSourceEditHint")}</p>
                     ) : null}
-                    {confirmDraft.linkChoice === "" && detail.linked ? (
+                    {activeDraft.linkChoice === "" && detail.linked ? (
                       <p className="budget-warn" role="note">
                         {linkOptions.canKeep
                           ? t("budget.receipts.reviewLinkChoiceRequired")
@@ -1903,8 +2102,14 @@ function ReceiptDetailDrawer({
                           name="link_choice"
                           value="keep"
                           disabled={disableTokens}
-                          checked={confirmDraft.linkChoice === "keep" && linkOptions.canKeep}
-                          onChange={() => { setConfirmDraft({ ...confirmDraft, linkChoice: "keep" }); }}
+                          checked={activeDraft.linkChoice === "keep" && linkOptions.canKeep}
+                          onChange={() => {
+                            onLinkChoiceTouched(detail.receipt_id, {
+                              kind: "keep",
+                              keepBinding: currentCandidate === null ? null : keepCandidateBinding(currentCandidate),
+                            });
+                            setConfirmDraft(selectKeepDraft(activeDraft, currentCandidate));
+                          }}
                         />
                         <span>{t("budget.receipts.linkChoiceKeep")}</span>
                       </label>
@@ -1916,8 +2121,11 @@ function ReceiptDetailDrawer({
                         name="link_choice"
                         value="unlink"
                         disabled={actionBusy !== null}
-                        checked={confirmDraft.linkChoice === "unlink"}
-                        onChange={() => { setConfirmDraft({ ...confirmDraft, linkChoice: "unlink" }); }}
+                        checked={activeDraft.linkChoice === "unlink"}
+                        onChange={() => {
+                          onLinkChoiceTouched(detail.receipt_id, { kind: "unlink" });
+                          setConfirmDraft({ ...activeDraft, linkChoice: "unlink", selectedCandidate: null, keepBinding: null });
+                        }}
                       />
                       <span>
                         {detail.linked ? t("budget.receipts.linkChoiceUnlink") : t("budget.receipts.linkChoiceNone")}
@@ -1949,8 +2157,14 @@ function ReceiptDetailDrawer({
                             name="link_choice"
                             value={choiceValue}
                             disabled={disableTokens}
-                            checked={confirmDraft.linkChoice === choiceValue && linkOptions.canPickCandidates}
-                            onChange={() => { setConfirmDraft({ ...confirmDraft, linkChoice: choiceValue }); }}
+                            checked={activeDraft.linkChoice === choiceValue && linkOptions.canPickCandidates}
+                            onChange={() => {
+                              onLinkChoiceTouched(detail.receipt_id, {
+                                kind: "candidate",
+                                ...candidateSelectionBinding(candidate),
+                              });
+                              setConfirmDraft(selectCandidateDraft(activeDraft, candidate, index));
+                            }}
                           />
                           <span>
                             {accountText} · {dateText} · {amountText}
@@ -1966,9 +2180,12 @@ function ReceiptDetailDrawer({
 
                   <div className="budget-actions">
                     <button
-                      type="submit"
+                      type="button"
                       className="budget-primary"
-                      disabled={actionBusy !== null || confirmDraft.linkChoice === ""}
+                      disabled={actionBusy !== null || activeDraft.linkChoice === ""}
+                      onClick={() => {
+                        void submitConfirm(detail, candidates, activeDraft);
+                      }}
                     >
                       {actionBusy === "confirm"
                         ? t("budget.receipts.confirming")

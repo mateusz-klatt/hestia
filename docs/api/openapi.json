@@ -10846,6 +10846,16 @@
             "title": "Entry Reference",
             "type": "string"
           },
+          "match_strength": {
+            "enum": [
+              "nip",
+              "distinctive",
+              "generic",
+              "none"
+            ],
+            "title": "Match Strength",
+            "type": "string"
+          },
           "merchant_token_hit": {
             "title": "Merchant Token Hit",
             "type": "boolean"
@@ -10883,6 +10893,7 @@
           "booking_date",
           "value_date",
           "merchant_token_hit",
+          "match_strength",
           "date_distance",
           "candidate_token"
         ],
@@ -16994,7 +17005,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.54.0"
+    "version": "0.55.0"
   },
   "openapi": "3.1.0",
   "paths": {

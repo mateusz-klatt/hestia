@@ -113,16 +113,249 @@ _CHAIN_ALIAS_GROUPS = {
     "lidl": (frozenset({"lidl"}),),
 }
 _CHAIN_WORDS = {chain: frozenset().union(*groups) for chain, groups in _CHAIN_ALIAS_GROUPS.items()}
+GATEWAY_TOKENS = frozenset({
+    "p24", "przelewy24", "paypro", "payu", "autopay", "tpay", "paynow", "dotpay",
+    "blik", "bluemedia", "stripe", "paypal", "adyen", "klarna",
+    "eservice", "elavon", "fiserv", "polcard", "ecard", "cashbill", "hotpay", "imoje",
+})
+GATEWAY_PHRASE_TOKENS = frozenset({
+    ("blue", "media"),
+    ("first", "data"),
+    ("krajowy", "integrator", "platnosci"),
+    ("pay", "pro"),
+    ("revolut", "pay"),
+})
+_LEGAL_FORMS_RE = re.compile(
+    r"(?<![^\W_])(?:"
+    r"spolka\s+z\s+ograniczona\s+odpowiedzialnoscia"
+    r"|z\s+ograniczona\s+odpowiedzialnoscia"
+    r"|spolka\s+akcyjna"
+    r"|spolka\s+komandytowa"
+    r"|spolka\s+jawna"
+    r"|sp\.?[\s.]*z[\s.]*o\.?[\s.]*o\.?"
+    r"|sp\.?\s*k\.?"
+    r"|s\.?\s*k\.?\s*a\.?"
+    r"|s\.?\s*r\.?\s*o\.?"
+    r"|s\.?\s*a\.?\s*r\.?\s*l\.?"
+    r"|s\.?\s*r\.?\s*l\.?"
+    r"|b\.?\s*v\.?"
+    r"|s\.?\s*a\.?"
+    r"|(?:gmbh|limited|ltd|inc|llc|sarl|srl|ag|plc|oy|ab|as|kft|bv)\b\.?"
+    r")(?![^\W_])",
+    re.UNICODE,
+)
 _NON_MERCHANT_TOKENS = frozenset({
     "sp", "z", "o", "oo", "sa", "spolka", "zoo",
     "com", "pl", "www", "net", "eu",
-    "p24", "przelewy24", "payu", "autopay", "tpay", "paynow", "dotpay", "blik",
     "fiskalny", "paragon",
+}) | GATEWAY_TOKENS
+_POLISH_CITY_TOKENS = frozenset({
+    # 50+ largest Polish cities (with and without diacritics; multi-word components included).
+    "warszawa",
+    "krakow", "kraków",
+    "wroclaw", "wrocław",
+    "lodz", "łódź",
+    "poznan", "poznań",
+    "gdansk", "gdańsk",
+    "szczecin",
+    "bydgoszcz",
+    "lublin",
+    "bialystok", "białystok",
+    "katowice",
+    "gdynia",
+    "czestochowa", "częstochowa",
+    "radom",
+    "rzeszow", "rzeszów",
+    "torun", "toruń",
+    "sosnowiec",
+    "kielce",
+    "gliwice",
+    "olsztyn",
+    "zabrze",
+    "bielsko", "biala", "biała",
+    "bytom",
+    "zielona", "gora", "góra",
+    "rybnik",
+    "ruda", "slaska", "śląska",
+    "opole",
+    "tychy",
+    "gorzow", "gorzów", "wielkopolski",
+    "dabrowa", "dąbrowa", "gornicza", "górnicza",
+    "elblag", "elbląg",
+    "plock", "płock",
+    "koszalin",
+    "tarnow", "tarnów",
+    "wloclawek", "włocławek",
+    "walbrzych", "wałbrzych",
+    "chorzow", "chorzów",
+    "kalisz",
+    "legnica",
+    "grudziadz", "grudziądz",
+    "jaworzno",
+    "slupsk", "słupsk",
+    "jastrzebie", "jastrzębie", "zdroj", "zdrój",
+    "nowy", "sacz", "sącz",
+    "jelenia",
+    "siedlce",
+    "myslowice", "mysłowice",
+    "konin",
+    "pila", "piła",
+    "piotrkow", "piotrków", "trybunalski",
+    "inowroclaw", "inowrocław",
+    "lubin",
+    "ostrow", "ostrów",
+    "suwalki", "suwałki",
+    "stargard",
+    "gniezno",
+    "ostrowiec", "swietokrzyski", "świętokrzyski",
+    "glogow", "głogów",
+    "pabianice",
+})
+_LOCATION_STOP_TOKENS = frozenset({
+    "ul", "ulica", "al", "aleja", "plac", "centrum", "centra", "center", "centers", "centre", "centres", "galeria",
+})
+_SHOP_CATEGORY_TOKENS = frozenset({
+    # Polish and English shop-category nouns (with/without diacritics and common inflections).
+    "apteka", "apteki", "aptece", "apteke", "aptekę", "apteko", "apteką", "aptek", "aptekom", "aptekami", "aptekach",
+    "apteczny", "apteczna", "apteczne", "aptecznej",
+    "sklep", "sklepu", "sklepowi", "sklepem", "sklepie", "sklepy", "sklepow", "sklepów", "sklepom", "sklepami",
+    "sklepach", "sklepik", "sklepiku", "sklepowy", "sklepowa",
+    "piekarnia", "piekarni", "piekarnie", "piekarnię", "piekarnią", "piekarnio", "piekarn", "piekarń", "piekarniom",
+    "piekarniami", "piekarniach", "piekarniczy",
+    "cukiernia", "cukierni", "cukiernie", "cukiernię", "cukiernią", "cukiernio", "cukiern", "cukierń", "cukierniom",
+    "cukierniami", "cukierniach", "cukierniczy",
+    "restauracja", "restauracji", "restauracje", "restaurację", "restauracją", "restauracjo", "restauracyj",
+    "restauracjom", "restauracjami", "restauracjach", "restauracyjny",
+    "kawiarnia", "kawiarni", "kawiarnie", "kawiarnię", "kawiarnią", "kawiarnio", "kawiarn", "kawiarnią", "kawiarnom",
+    "kawiarniom", "kawiarniami", "kawiarniach", "kawiarenka", "kawiarenki",
+    "bar", "baru", "barowi", "barem", "barze", "bary", "barow", "barów", "barom", "barami", "barach", "bars",
+    "pizzeria", "pizzerii", "pizzerie", "pizzerię", "pizzerią", "pizzerio", "pizzeriom", "pizzeriami", "pizzeriach",
+    "pizzerias",
+    "bistro", "bistra", "bistru", "bistrem", "bistrze", "bistrom", "bistrami", "bistrach", "bistros",
+    "stacja", "stacji", "stacje", "stację", "stacją", "stacjo", "stacyj", "stacjom", "stacjami", "stacjach",
+    "paliwa", "paliwo", "paliw", "paliwu", "paliwem", "paliwie", "paliwom", "paliwami", "paliwach", "paliwowy",
+    "paliwowa", "paliwowe", "paliwowej",
+    "hotel", "hotelu", "hotelowi", "hotelem", "hotele", "hoteli", "hotelow", "hotelów", "hotelom", "hotelami",
+    "hotelach", "hotels", "hotelik", "hotelowy", "hotelowa", "hotelowe",
+    "hostel", "hostelu", "hostelowi", "hostelem", "hostele", "hosteli", "hostelow", "hostelów", "hostelom",
+    "hostelami", "hostelach", "hostels", "hostelowy",
+    "kino", "kina", "kinu", "kinem", "kinie", "kin", "kinom", "kinami", "kinach", "kinowy", "kinowa", "kinowe",
+    "salon", "salonu", "salonowi", "salonem", "salonie", "salony", "salonow", "salonów", "salonom", "salonami",
+    "salonach", "salonik", "saloniku", "salons",
+    "studio", "studia", "studiu", "studiem", "studiow", "studiów", "studiom", "studiami", "studiach", "studios",
+    "drogeria", "drogerii", "drogerie", "drogerię", "drogerią", "drogerio", "drogeriom", "drogeriami",
+    "drogeriach", "drogeryjny",
+    "ksiegarnia", "księgarnia", "ksiegarni", "księgarni", "ksiegarnie", "księgarnię", "ksiegarnią", "księgarnią",
+    "ksiegarnio", "księgarnio", "ksiegarn", "księgarn", "księgarń", "ksiegarniom", "księgarniom", "ksiegarniami",
+    "księgarniami", "ksiegarniach", "księgarniach",
+    "kwiaciarnia", "kwiaciarni", "kwiaciarnie", "kwiaciarnię", "kwiaciarnią", "kwiaciarnio", "kwiaciarn",
+    "kwiaciarń", "kwiaciarniom", "kwiaciarniami", "kwiaciarniach",
+    "optyk", "optyka", "optykowi", "optykiem", "optyku", "optycy", "optykow", "optyków", "optykom", "optykami",
+    "optykach", "optyczny", "optyczna", "optyczne",
+    "fryzjer", "fryzjera", "fryzjerowi", "fryzjerem", "fryzjerze", "fryzjerzy", "fryzjerow", "fryzjerów", "fryzjerom",
+    "fryzjerami", "fryzjerach", "fryzjerski", "fryzjerska", "fryzjerskie", "fryzjerskiej", "fryzjerka", "fryzjerki",
+    "fryzjerstwo",
+    "kebab", "kebabu", "kebaba", "kebabowi", "kebabem", "kebabie", "kebaby", "kebabow", "kebabów", "kebabom",
+    "kebabami", "kebabach", "kebabs",
+    "sushi",
+    "delikatesy", "delikatesow", "delikatesów", "delikatesom", "delikatesami", "delikatesach", "delikatesowy",
+    "delikatesowa", "delikatesowe",
+    "spozywczy", "spożywczy", "spozywcza", "spożywcza", "spozywcze", "spożywcze", "spozywczego", "spożywczego",
+    "spozywczej", "spożywczej", "spozywczym", "spożywczym", "spozywczych", "spożywczych", "spozywczemu",
+    "spożywczemu", "spozywcza", "spożywczą", "spozywcy", "spożywcy", "spozywczo", "spożywczo", "spozywczak",
+    "spożywczak",
+    "ogolnospozywczy", "ogólnospożywczy", "ogolnospozywcza", "ogólnospożywcza", "ogolnospozywcze",
+    "ogólnospożywcze", "ogolnospozywczego", "ogólnospożywczego", "ogolnospozywczej", "ogólnospożywczej",
+    "ogolnospozywczym", "ogólnospożywczym", "ogolnospozywczych", "ogólnospożywczych", "ogolnospozywczemu",
+    "ogólnospożywczemu", "ogolnospozywczą", "ogólnospożywczą",
+    "wielobranzowy", "wielobranżowy", "wielobranzowa", "wielobranżowa", "wielobranzowe", "wielobranżowe",
+    "wielobranzowej", "wielobranżowej",
+    "market", "marketu", "marketowi", "marketem", "markecie", "markety", "marketow", "marketów", "marketom",
+    "marketami", "marketach", "markets",
+    "supermarket", "supermarketu", "supermarketowi", "supermarketem", "supermarkecie", "supermarkety",
+    "supermarketow", "supermarketów", "supermarketom", "supermarketami", "supermarketach", "supermarkets",
+    "hipermarket", "hipermarketu", "hipermarketowi", "hipermarketem", "hipermarkecie", "hipermarkety",
+    "hipermarketow", "hipermarketów", "hipermarketom", "hipermarketami", "hipermarketach", "hypermarket",
+    "hypermarkets",
+    "parking", "parkingu", "parkingowi", "parkingiem", "parkingi", "parkingow", "parkingów", "parkingom",
+    "parkingami", "parkingach", "parkingowy", "parkingowa", "parkingowe", "parkings",
+    "myjnia", "myjni", "myjnie", "myjnię", "myjnią", "myjnio", "myjniom", "myjniami", "myjniach",
+    "warsztat", "warsztatu", "warsztatowi", "warsztatem", "warsztacie", "warsztaty", "warsztatow", "warsztatów",
+    "warsztatom", "warsztatami", "warsztatach", "warsztatowy",
+    "serwis", "serwisu", "serwisowi", "serwisem", "serwisie", "serwisy", "serwisow", "serwisów", "serwisom",
+    "serwisami", "serwisach", "serwisowy", "serwisowa", "serwisowe",
+    "przychodnia", "przychodni", "przychodnie", "przychodnię", "przychodnią", "przychodnio", "przychodniom",
+    "przychodniami", "przychodniach",
+    "gabinet", "gabinetu", "gabinetowi", "gabinetem", "gabinecie", "gabinety", "gabinetow", "gabinetów",
+    "gabinetom", "gabinetami", "gabinetach", "gabinetowy",
+    "klinika", "kliniki", "klinice", "klinike", "klinikę", "kliniko", "kliniką", "klinik", "klinikom", "klinikami",
+    "klinikach", "kliniczny", "kliniczna",
+    "pharmacy", "pharmacies", "bakery", "bakeries", "cafe", "café", "cafes", "cafés", "coffee", "coffees",
+    "restaurant", "restaurants", "station", "stations", "fuel", "fuels", "cinema", "cinemas", "clinic", "clinics",
+})
+_ECOMMERCE_GENERIC_TOKENS = frozenset({
+    # Generic Polish and English e-commerce / billing words (with/without diacritics and inflections).
+    "internet", "internetowy", "internetowa", "internetowe", "internetowego", "internetowej", "internetowemu",
+    "internetowym", "internetowych", "internetowymi", "internetową", "internetowo",
+    "zakup", "zakupu", "zakupowi", "zakupem", "zakupie", "zakupy", "zakupow", "zakupów", "zakupom", "zakupami",
+    "zakupach", "zakupowy", "zakupowa", "zakupowe",
+    "zamowienie", "zamówienie", "zamowienia", "zamówienia", "zamowieniu", "zamówieniu", "zamowieniem", "zamówieniem",
+    "zamowien", "zamówień", "zamowieniom", "zamówieniom", "zamowieniami", "zamówieniami", "zamowieniach",
+    "zamówieniach", "order", "orders",
+    "platnosc", "płatność", "platnosci", "płatności", "platnoscia", "płatnością", "platnosciom", "płatnościom",
+    "platnosciami", "płatnościami", "platnosciach", "płatnościach", "platniczy", "płatniczy", "platnicza",
+    "płatnicza", "platnicze", "płatnicze", "payments",
+    "usluga", "usługa", "uslugi", "usługi", "usludze", "usłudze", "usluge", "usługę", "uslugo", "usługo", "uslug",
+    "usług", "uslugom", "usługom", "uslugami", "usługami", "uslugach", "usługach", "uslugowy", "usługowy",
+    "uslugowa", "usługowa", "uslugowe", "usługowe", "uslugowego", "usługowego", "uslugowej", "usługowej",
+    "uslugowemu", "usługowemu", "uslugowym", "usługowym", "uslugowych", "usługowych", "uslugowymi", "usługowymi",
+    "uslugową", "usługową", "uslugowo", "usługowo",
+    "abonament", "abonamentu", "abonamentowi", "abonamentem", "abonamencie", "abonamenty", "abonamentow",
+    "abonamentów", "abonamentom", "abonamentami", "abonamentach", "abonamentowy", "abonamentowa", "abonamentowe",
+    "opłata", "oplaty", "opłaty", "oplacie", "opłacie", "oplate", "opłatę", "opłatą", "oplato", "opłato", "oplat",
+    "opłat", "oplatom", "opłatom", "oplatami", "opłatami", "oplatach", "opłatach",
+    "faktura", "faktury", "fakturze", "fakture", "fakturę", "fakturą", "fakturo", "faktur", "fakturom",
+    "fakturami", "fakturach", "fakturowy", "invoice", "invoices",
+    "rachunek", "rachunku", "rachunkowi", "rachunkiem", "rachunki", "rachunkow", "rachunków", "rachunkom",
+    "rachunkami", "rachunkach", "rachunkowy",
+    "transakcja", "transakcji", "transakcje", "transakcję", "transakcją", "transakcjo", "transakcyj", "transakcjom",
+    "transakcjami", "transakcjach", "transakcyjny",
+    "karta", "karty", "karcie", "karte", "kartę", "kartą", "karto", "kart", "kartom", "kartami", "kartach",
+    "kartowy", "kartowa", "kartowe",
+    "przelew", "przelewu", "przelewowi", "przelewem", "przelewie", "przelewy", "przelewow", "przelewów",
+    "przelewom", "przelewami", "przelewach", "przelewowy",
+    "transfer", "transferu", "transferowi", "transferem", "transferze", "transfery", "transferow", "transferów",
+    "transferom", "transferami", "transferach", "transfers",
+    "polecenie", "polecenia", "poleceniu", "poleceniem", "polecen", "poleceń", "poleceniom", "poleceniami",
+    "poleceniach",
+    "zaplata", "zapłata", "zaplaty", "zapłaty", "zaplacie", "zapłacie", "zaplate", "zapłatę", "zapłatą",
+    "zaplato", "zapłato", "zaplat", "zapłat",
+})
+_CORPORATE_GENERIC_TOKENS = frozenset({
+    # Generic business / corporate nouns and qualifiers (PL/EN, with/without diacritics & inflections).
+    "firma", "firmy", "firmie", "firme", "firmę", "firmą", "firmo", "firm", "firmom", "firmami", "firmach",
+    "handlowa", "handlowy", "handlowe", "handlowego", "handlowej", "handlowemu", "handlowym", "handlowych",
+    "handlowymi", "handlową", "handlowo", "handel", "handlu",
+    "company", "companies",
+    "przedsiebiorstwo", "przedsiębiorstwo", "przedsiebiorstwa", "przedsiębiorstwa", "przedsiebiorstwu",
+    "przedsiębiorstwu", "przedsiebiorstwem", "przedsiębiorstwem", "przedsiebiorstwie", "przedsiębiorstwie",
+    "przedsiebiorstw", "przedsiębiorstw", "przedsiebiorstwom", "przedsiębiorstwom", "przedsiebiorstwami",
+    "przedsiębiorstwami", "przedsiebiorstwach", "przedsiębiorstwach",
+    "produkcyjne", "produkcyjny", "produkcyjna", "produkcyjnego", "produkcyjnej", "produkcyjnemu", "produkcyjnym",
+    "produkcyjnych", "produkcyjnymi", "produkcyjną", "produkcyjno", "produkcja", "produkcji",
+    "hurtownia", "hurtowni", "hurtownie", "hurtownię", "hurtownią", "hurtownio", "hurtowniom", "hurtowniami",
+    "hurtowniach", "hurtowy", "hurtowa", "hurtowe", "hurtowego", "hurtowej", "hurtowym", "hurtowych",
+    "grupa", "grupy", "grupie", "grupe", "grupę", "grupą", "grupo", "grup", "grupom", "grupami", "grupach",
+    "holding", "holdingu", "holdingowi", "holdingiem", "holdingi", "holdingow", "holdingów", "holdingom",
+    "holdingami", "holdingach", "holdings", "holdingowy", "holdingowa", "holdingowe",
+    "international", "trading", "solutions", "solution", "systems", "system", "systemy", "systemow", "systemów",
+    "consulting", "konsulting", "konsultingowy", "konsultingowa", "konsultingowe",
+    "polski", "polskie", "polskiego", "polskiej", "polskiemu", "polskim", "polskich", "polskimi", "polską", "polish",
 })
 _GENERIC_MERCHANT_TOKENS = frozenset({
-    "grocery", "groceries", "grocer", "energy", "energia", "polska", "poland", "services", "service",
+    "grocery", "groceries", "grocer", "energy", "energia", "polska", "poland", "pl", "services", "service",
     "group", "store", "shop", "sklep", "market", "online", "pay", "payment", "oplata",
-})
+}) | _POLISH_CITY_TOKENS | _LOCATION_STOP_TOKENS | _SHOP_CATEGORY_TOKENS | _ECOMMERCE_GENERIC_TOKENS | _CORPORATE_GENERIC_TOKENS
 _STOP_TOKENS = _NON_MERCHANT_TOKENS | _GENERIC_MERCHANT_TOKENS
 
 
@@ -467,10 +700,32 @@ def chain_for(shop_name, nip):
                  if any(group.issubset(words) for group in groups)), None)
 
 
+def strip_legal_forms(value):
+    """Strip Polish and foreign legal-form phrases (diacritic-insensitive) before tokenization."""
+    if not isinstance(value, str):
+        return ""
+    return _LEGAL_FORMS_RE.sub(" ", fold_text(value))
+
+
 def merchant_word_tokens(value):
     if not isinstance(value, str):
         return ()
-    return tuple(re.findall(r"[^\W_]+", fold_text(value), re.UNICODE))
+    return tuple(re.findall(r"[^\W_]+", strip_legal_forms(value), re.UNICODE))
+
+
+def contains_gateway_marker(text):
+    """True when text contains any payment gateway token, legal institution name, or phrase."""
+    words = merchant_word_tokens(text)
+    if not words:
+        return False
+    if GATEWAY_TOKENS.intersection(words):
+        return True
+    limit = len(words)
+    for size in (2, 3):
+        for start in range(limit - size + 1):
+            if words[start:start + size] in GATEWAY_PHRASE_TOKENS:
+                return True
+    return False
 
 
 def merchant_match_groups(shop_name, nip):
@@ -478,9 +733,20 @@ def merchant_match_groups(shop_name, nip):
     return tuple(alias for group in groups for alias in group)
 
 
+def _distinctive_shop_words(shop_name):
+    """Return distinctive shop tokens (at least 4 chars, not stop/generic/location, and >= 3 letters).
+
+    Never falls back to generic or stop words: if every word is generic, returns an empty set.
+    """
+    return {
+        token for token in merchant_word_tokens(shop_name)
+        if len(token) >= 4 and token not in _STOP_TOKENS and sum(1 for ch in token if ch.isalpha()) >= 3
+    }
+
+
 def merchant_score_groups(shop_name, nip):
     words = [token for token in merchant_word_tokens(shop_name) if len(token) >= 4]
-    distinctive = sorted({token for token in words if token not in _STOP_TOKENS})
+    distinctive = sorted(_distinctive_shop_words(shop_name))
     generic = tuple(sorted({token for token in words if token in _GENERIC_MERCHANT_TOKENS}))
     chain = chain_for(shop_name, nip)
     if chain is not None:
@@ -490,10 +756,7 @@ def merchant_score_groups(shop_name, nip):
 
 
 def merchant_tokens(shop_name, nip):
-    distinctive = {
-        token for token in merchant_word_tokens(shop_name)
-        if len(token) >= 4 and token not in _STOP_TOKENS
-    }
+    distinctive = _distinctive_shop_words(shop_name)
     chain = chain_for(shop_name, nip)
     if chain is not None:
         distinctive.update(_CHAIN_WORDS[chain])

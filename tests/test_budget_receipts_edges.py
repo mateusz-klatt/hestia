@@ -133,7 +133,15 @@ class ParserEdgeTests(unittest.TestCase):
         for generic in ("grocery", "groceries", "grocer", "energy", "energia", "polska", "poland", "services",
                         "service", "group", "store", "shop", "sklep", "market", "online", "pay", "payment",
                         "oplata", "opłata", "sp", "z", "o", "oo", "sa", "spółka", "zoo", "com", "pl", "www",
-                        "net", "eu", "p24", "przelewy24", "payu", "autopay", "tpay", "paynow", "dotpay", "blik", "abc"):
+                        "net", "eu", "p24", "przelewy24", "paypro", "payu", "autopay", "tpay", "paynow", "dotpay",
+                        "blik", "bluemedia", "stripe", "paypal", "adyen", "klarna", "eservice", "elavon",
+                        "fiserv", "polcard", "ecard", "cashbill", "hotpay", "imoje",
+                        "krakow", "kraków", "warszawa", "wrocław", "łódź", "poznań", "gdańsk",
+                        "ul", "ulica", "al", "aleja", "plac", "centrum", "galeria",
+                        "spółka z ograniczoną odpowiedzialnością", "z ograniczoną odpowiedzialnością",
+                        "spółka akcyjna", "spółka komandytowa", "spółka jawna",
+                        "sp. z o.o.", "sp.k.", "s.a.", "s.k.a.", "gmbh", "ltd", "limited", "inc", "llc",
+                        "bv", "b.v.", "sarl", "srl", "ag", "plc", "oy", "ab", "as", "kft", "s.r.o.", "abc"):
             self.assertEqual(merchant_tokens(generic, None), frozenset(), generic)
         self.assertNotIn("polska", merchant_tokens("ab polska market piernik", None))
         self.assertFalse(valid_nip(None))
@@ -543,6 +551,226 @@ class StoreEdgeTests(AnalyticsCase):
         with self.assertRaises(ReceiptError) as conflict:
             self.receipts.delete("owner", {"receipt_id": identifier, "expected_version": 9})
         self.assertEqual(conflict.exception.code, "budget_receipt_conflict")
+
+    def test_gateway_domain_and_receipt_helpers_cover_all_branches(self):
+        from types import SimpleNamespace
+        from hestia.budget.gmail_store import _payment_payee_key
+        from hestia.budget.receipt_store import _is_gateway_domain, _is_gateway_receipt
+        from hestia.db import AppMeta
+
+        for non_gateway in (None, 123, "", "localhost", "sklep.example.com", "merchant.payu"):
+            self.assertFalse(_is_gateway_domain(non_gateway), repr(non_gateway))
+        for gateway_dom in (
+            "przelewy24.pl", "mail.przelewy24.pl", "p24.pl", "paypro.pl",
+            "autopay.pl", "sub.autopay.pl", "tpay.com", "paynow.pl", "dotpay.pl",
+            "payu.pl", "secure.payu.com", "pay.bluemedia.pl",
+        ):
+            self.assertTrue(_is_gateway_domain(gateway_dom), gateway_dom)
+
+        with self.sessions.begin() as session:
+            self.assertFalse(_is_gateway_receipt(session, SimpleNamespace(
+                id=None, raw_shop_name="Biedronka", forwarded_sender_domain=None, sender_domain="biedronka.pl",
+            )))
+            self.assertTrue(_is_gateway_receipt(session, SimpleNamespace(
+                id=None, raw_shop_name="Sklep PAYPRO", forwarded_sender_domain=None, sender_domain=None,
+            )))
+            self.assertTrue(_is_gateway_receipt(session, SimpleNamespace(
+                id=None, raw_shop_name="Biedronka", forwarded_sender_domain="mail.payu.pl", sender_domain=None,
+            )))
+            self.assertTrue(_is_gateway_receipt(session, SimpleNamespace(
+                id=None, raw_shop_name="Biedronka", forwarded_sender_domain=None, sender_domain="autopay.pl",
+            )))
+            session.add(AppMeta(key=_payment_payee_key("gw-rec-1"), value="hashed-payee"))
+            session.flush()
+            self.assertFalse(_is_gateway_receipt(session, SimpleNamespace(
+                id="other-rec-1", raw_shop_name="Lidl", forwarded_sender_domain=None, sender_domain="lidl.pl",
+            )))
+            self.assertTrue(_is_gateway_receipt(session, SimpleNamespace(
+                id="gw-rec-1", raw_shop_name="Lidl", forwarded_sender_domain=None, sender_domain="lidl.pl",
+            )))
+            self.assertTrue(_is_gateway_receipt(session, SimpleNamespace(
+                id=None, raw_shop_name="SKLEP / BLUE MEDIA", forwarded_sender_domain=None, sender_domain=None,
+            )))
+            self.assertTrue(_is_gateway_receipt(session, SimpleNamespace(
+                id=None, raw_shop_name="SKLEP REVOLUT PAY", forwarded_sender_domain=None, sender_domain=None,
+            )))
+
+    def test_iban_masking_nip_proximity_party_names_and_gateway_phrases_cover_branches(self):
+        from hestia.budget.receipt_parser import contains_gateway_marker, strip_legal_forms
+        from hestia.budget.receipt_reconcile import _payload_party_name, resolved_party_names, transaction_party_names
+        from hestia.budget.receipt_store import _mask_iban_sequences, _nip_in_text, _nip_match, _payload_party_texts
+
+        # Legal-form stripping (with/without diacritics, non-string guard, word boundaries).
+        self.assertEqual(strip_legal_forms(None), "")
+        for suffix in (
+            "spółka z ograniczoną odpowiedzialnością", "spolka z ograniczona odpowiedzialnoscia",
+            "z ograniczoną odpowiedzialnością", "z ograniczona odpowiedzialnoscia",
+            "spółka akcyjna", "spolka akcyjna", "spółka komandytowa", "spolka komandytowa",
+            "spółka jawna", "spolka jawna", "sp. z o.o.", "sp.k.", "s.a.", "s.k.a.",
+            "gmbh", "ltd", "limited", "inc", "llc", "bv", "b.v.", "sarl", "srl", "ag",
+            "plc", "oy", "ab", "as", "kft", "s.r.o.",
+        ):
+            self.assertEqual(merchant_tokens(f"Alfa {suffix}", None), frozenset({"alfa"}), suffix)
+            self.assertEqual(merchant_tokens(f"Alfa {suffix.upper()}", None), frozenset({"alfa"}), suffix)
+
+        # Gateway marker edge branches: empty, non-gateway pairs vs all phrase/token variants.
+        self.assertFalse(contains_gateway_marker(None))
+        self.assertFalse(contains_gateway_marker("MEDIA MARKT"))
+        self.assertFalse(contains_gateway_marker("REVOLUT TRANSFER"))
+        for marker in (
+            "BLUE MEDIA", "Blue-Media", "BLUEMEDIA", "REVOLUT PAY", "Stripe", "PayPal", "Adyen", "Klarna",
+            "Krajowy Integrator Płatności S.A.", "Krajowy Integrator Platnosci", "Autopay S.A.",
+            "PayU S.A.", "Pay Pro S.A.", "PayPal (Europe)", "mBank SA PayNow", "eService",
+            "Elavon", "First Data", "Fiserv", "Polcard", "eCard", "CashBill", "HotPay", "imoje",
+            "ING Bank Śląski imoje",
+        ):
+            self.assertTrue(contains_gateway_marker(marker), marker)
+
+        # IBAN masking + strict NIP/VAT/TAX ID vs excluded NR/FAKTURA/FV/INVOICE/NO branches.
+        self.assertEqual(_mask_iban_sequences(""), "")
+        self.assertEqual(_mask_iban_sequences("..."), "...")
+        self.assertIn("5260 2509 95", _mask_iban_sequences("ref_nl92 abna 5260 2509 95"))
+        self.assertIn("5260250995", _mask_iban_sequences("ab12 sklepy 5260250995"))
+        over_34 = "pl61 1090 1014 0000 0712 1981 2874 1234 5260250995"
+        self.assertIn("5260250995", _mask_iban_sequences(over_34))
+        self.assertEqual(_nip_match("5260250995", "nl92 abna 5260 2509 95"), (False, False))
+        self.assertEqual(_nip_match("5260250995", "nl92abna5260250995"), (False, False))
+        self.assertEqual(_nip_match("5260250995", "nl92 abna 5260 2509 95 nip 5260250995"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "vat pl 526-025-09-95"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "vat id: 5260250995"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "nip pl 5260250995"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "/nip/5260250995"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "tax id: 5260250995"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "pl5260250995"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "faktura vat 5260250995"), (True, False))
+        self.assertEqual(_nip_match("5260250995", "faktura vat nr 5260250995"), (False, False))
+        self.assertEqual(_nip_match("5260250995", "fv/5260250995"), (False, False))
+        self.assertEqual(_nip_match("5260250995", "invoice 5260250995"), (False, False))
+        self.assertEqual(_nip_match("5260250995", "no. pl5260250995"), (False, False))
+        self.assertTrue(_nip_in_text("5260250995", "pl5260250995"))
+
+        # Payload party extraction and metadata debtor/creditor branches.
+        self.assertIsNone(_payload_party_name("bad", "creditor"))
+        self.assertIsNone(_payload_party_name({"creditor": "not-dict"}, "creditor"))
+        self.assertEqual(_payload_party_name({"creditor_name": "BLUE MEDIA"}, "creditor"), "BLUE MEDIA")
+        self.assertEqual(_payload_party_name({"debtor": {"name": "PayU"}}, "debtor"), "PayU")
+        with self.sessions.begin() as session:
+            self.assertEqual(
+                resolved_party_names(session, "owner", self.accounts["a"], "missing-tx", {"debtor": {"name": "PayU"}}, None),
+                (None, "PayU"),
+            )
+        self.assertEqual(
+            _payload_party_texts({
+                "creditor_name": "BLUE MEDIA", "debtor_name": "",
+                "creditor": "not-dict", "debtor": {"name": "PayU"},
+            }),
+            ["BLUE MEDIA", "PayU"],
+        )
+        self.add_transaction("a", "meta-bad-json", amount="12.30", booking_date="2026-11-30")
+        self.metadata("a", "meta-bad-json", {"creditor_name": "ACME", "debtor_name": "PAYU"})
+        with self.sessions.begin() as session:
+            self.assertEqual(transaction_party_names(session, "owner", self.accounts["a"], "meta-bad-json", None),
+                             (None, None))
+            meta = session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "meta-bad-json"))
+            self.assertEqual(
+                transaction_party_names(session, "owner", self.accounts["a"], "meta-bad-json", meta.ledger_fingerprint),
+                ("ACME", "PAYU"),
+            )
+            self.assertEqual(
+                transaction_party_names(session, "other", self.accounts["a"], "meta-bad-json", meta.ledger_fingerprint),
+                (None, None),
+            )
+            meta.payload_json = "{bad"
+            session.flush()
+            self.assertEqual(
+                transaction_party_names(session, "owner", self.accounts["a"], "meta-bad-json", meta.ledger_fingerprint),
+                (None, None),
+            )
+
+    def test_round3_token_letter_floor_strict_iban_and_corrupt_evidence_edges(self):
+        import uuid
+        from hestia.budget.analytics_core import financial_fingerprint
+        from hestia.budget.receipt_parser import merchant_score_groups
+        from hestia.budget.receipt_reconcile import reconcile_receipt_links
+        from hestia.budget.receipt_store import _mask_iban_sequences, _nip_match
+
+        # Numeric and <3-letter tokens never qualify as distinctive; >=3 letters with digits (>=4 chars) do.
+        self.assertEqual(merchant_score_groups("SKLEP 1234 A123 AB12", None), ((), ("sklep",)))
+        self.assertEqual(merchant_tokens("SKLEP 1234 A123 AB12 ABC1", None), frozenset({"abc1"}))
+
+        # PL+10 digits VAT ID is never eaten by IBAN masker; country length / mod-97 IBANs ARE masked.
+        self.assertIn("PL5260250995", _mask_iban_sequences("NIP PL5260250995 FV2026"))
+        self.assertIn("2026", _mask_iban_sequences("NL92 ABNA 5260 2509 95 2026"))
+        self.assertNotIn("5260250995", _mask_iban_sequences("NL92ABNA5260250995"))
+        self.assertNotIn("5260", _mask_iban_sequences("PL61 1090 1014 0000 5260 2509 9500"))
+        self.assertNotIn("8601", _mask_iban_sequences("NO93 8601 1117 947"))
+        self.assertIn("5260 2509 95", _mask_iban_sequences("DE89 1234 5260 2509 95"))
+        self.assertNotIn("5260", _mask_iban_sequences("XX25 1234 5260 2509 95"))
+        self.assertIn("5260 2509 95", _mask_iban_sequences("XX00 1234 5260 2509 95"))
+        self.assertIn("EFGH IJKL", _mask_iban_sequences("BE92 ABCD EFGH IJKL"))
+        long_single = "PL61" + "0" * 34
+        self.assertEqual(_mask_iban_sequences(long_single), long_single)
+
+        self.assertEqual(_nip_match("5260250995", "NIP PL5260250995 FV2026"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "NL92 ABNA 5260 2509 95 2026"), (False, False))
+        self.assertEqual(_nip_match("5260250995", "a5260250995 5260250995b nr 5260250995"), (False, False))
+
+        # Invalid JSON and non-dict JSON on linked_evidence cleanly fall through to needs_review.
+        for idx, bad_ev in enumerate(("not-json", "[]")):
+            tx_ref = f"r3-bad-ev-{idx}"
+            payload = self.add_transaction("a", tx_ref, amount="12.00", booking_date="2026-11-30")
+            fp = financial_fingerprint(payload)
+            rid = str(uuid.uuid4())
+            with self.sessions.begin() as session:
+                session.add(db.BudgetReceipt(
+                    id=rid, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                    receipt_kind="purchase", receipt_date="2026-11-30", total_amount="12.00", currency="PLN",
+                    payment_method="card", status="confirmed", source_kind="local_ocr", document_kind="receipt",
+                    linked_account_id=self.accounts["a"], linked_entry_ref=tx_ref,
+                    linked_fingerprint=fp, linked_evidence=bad_ev,
+                    version=1, created_at=self.now + idx, updated_at=self.now + idx,
+                ))
+                self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 50 + idx), 1)
+
+        # Shop-category nouns (PL/EN with diacritics & inflections) never enter distinctive merchant tokens.
+        for category_shop in (
+            "APTEKA CENTRUM", "APTEKI CENTRUM", "SKLEP SPOŻYWCZY", "PIEKARNIA CUKIERNIA",
+            "PIEKARNI CUKIERNI", "RESTAURACJA KAWIARNIA", "BAR PIZZERIA BISTRO", "STACJA PALIWA",
+            "HOTEL HOSTEL KINO", "SALON STUDIO DROGERIA", "KSIĘGARNIA KSIEGARNI KWIACIARNIA",
+            "OPTYK FRYZJERA KEBAB SUSHI", "DELIKATESY MARKET SUPERMARKET HIPERMARKET",
+            "PARKING MYJNIA WARSZTAT SERWIS", "PRZYCHODNIA GABINET KLINIKA",
+            "PHARMACY BAKERY CAFE CAFÉ COFFEE RESTAURANT STATION FUEL CINEMA CLINIC",
+        ):
+            self.assertEqual(merchant_tokens(category_shop, None), frozenset(), category_shop)
+        self.assertEqual(merchant_score_groups("Księgarnia Centrum", None), ((), ("centrum", "ksiegarnia")))
+
+        # E-commerce and billing words/inflections never qualify as distinctive tokens.
+        for ecom_shop in (
+            "SKLEP INTERNETOWY INTERNETOWA INTERNETOWE INTERNETOWEJ",
+            "ZAKUP ZAKUPY ZAKUPÓW ZAMÓWIENIE ZAMOWIENIA ORDER ORDERS",
+            "PŁATNOŚĆ PLATNOSCI PAYMENT PAYMENTS USŁUGA USLUGI USŁUG",
+            "ABONAMENT ABONAMENTU OPŁATA OPŁATY FAKTURA RACHUNEK TRANSAKCJA",
+            "KARTA KARTY PRZELEW PRZELEWU TRANSFER POLECENIE ZAPŁATA ZAPLATA",
+        ):
+            self.assertEqual(merchant_tokens(ecom_shop, None), frozenset(), ecom_shop)
+        self.assertEqual(
+            merchant_score_groups("Sklep Internetowy Zamówienie", None),
+            ((), ("internetowy", "sklep", "zamowienie")),
+        )
+
+        # Generic-only business/corporate names never fall back to distinctive tokens.
+        for corporate_generic in (
+            "FIRMA HANDLOWA",
+            "FIRMA HANDLOWO-USŁUGOWA",
+            "COMPANY",
+            "SKLEP OGÓLNOSPOŻYWCZY",
+            "PRZEDSIĘBIORSTWO HANDLOWE USŁUGOWE PRODUKCYJNE HURTOWNIA CENTRUM",
+            "GRUPA HOLDING INTERNATIONAL TRADING SOLUTIONS SYSTEMS CONSULTING POLAND POLSKA PL",
+        ):
+            self.assertEqual(merchant_tokens(corporate_generic, None), frozenset(), corporate_generic)
+            groups, _generic = merchant_score_groups(corporate_generic, None)
+            self.assertEqual(groups, (), corporate_generic)
+        self.assertEqual(merchant_score_groups("FIRMA HANDLOWA ALFA", None)[0], ((frozenset({"alfa"}),),))
 
 
 class ReceiptApiEdgeTests(unittest.TestCase):

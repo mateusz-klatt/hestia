@@ -1320,6 +1320,7 @@ NR KARTY ****5555
         self.assertNotIn("remittance_information", evidence)
         self.assertNotIn("creditor_name", evidence)
         self.assertIsNone(evidence["creditor_digest"])
+        self.assertIsNone(evidence["debtor_digest"])
         self.assertEqual(len(evidence["financial_fingerprint"]), 64)
         self.assertTrue(saved["linked"])
 
@@ -2084,6 +2085,867 @@ NR KARTY ****5555
         self.assertEqual([item["entry_reference"] for item in self.receipts.detail("owner", max_pc)["candidates"]],
                          [reference_digest("max-date-tx")])
 
+    def test_candidate_match_strength_and_gateway_suppression(self):
+        import uuid
+        from hestia.budget.gmail_store import _payment_payee_key
+        from hestia.budget.receipt_parser import GATEWAY_TOKENS
+
+        # 1. Exact NIP hit -> "nip" only when strictly labeled; excluded prefixes (NR/FAKTURA/FV/INVOICE/NO) are never NIP.
+        self.add_transaction(
+            "a", "ms-nip", amount="21.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["Faktura VAT PL 526-025-09-95"],
+        )
+        self.add_transaction(
+            "a", "ms-nip-slash", amount="21.10", booking_date="2026-11-15", value_date=None,
+            remittance_information=["/NIP/5260250995 PRZELEW"],
+        )
+        self.add_transaction(
+            "a", "ms-nip-taxid", amount="21.20", booking_date="2026-11-15", value_date=None,
+            remittance_information=["TAX ID: 5260250995"],
+        )
+        self.add_transaction(
+            "a", "ms-nip-vatid", amount="21.21", booking_date="2026-11-15", value_date=None,
+            remittance_information=["VAT ID: 5260250995"],
+        )
+        self.add_transaction(
+            "a", "ms-nip-pl-direct", amount="21.22", booking_date="2026-11-15", value_date=None,
+            remittance_information=["SKLEP PL5260250995 ZAKUP"],
+        )
+        self.add_transaction(
+            "a", "ms-nip-unlabeled", amount="21.30", booking_date="2026-11-15", value_date=None,
+            remittance_information=["REF 5260250995 ZAKUP"],
+        )
+        self.add_transaction(
+            "a", "ms-nip-bare-vat", amount="21.31", booking_date="2026-11-15", value_date=None,
+            remittance_information=["FAKTURA VAT 5260250995"],
+        )
+        self.add_transaction(
+            "a", "ms-nip-faktura-nr", amount="21.32", booking_date="2026-11-15", value_date=None,
+            remittance_information=["FAKTURA VAT NR 5260250995"],
+        )
+        self.add_transaction(
+            "a", "ms-nip-iban", amount="21.40", booking_date="2026-11-15", value_date=None,
+            remittance_information=["PRZELEW NL92 ABNA 5260 2509 95"],
+        )
+        for amt, tx_ref, exp_strength, exp_hit in (
+            ("21.00", "ms-nip", "nip", True),
+            ("21.10", "ms-nip-slash", "nip", True),
+            ("21.20", "ms-nip-taxid", "nip", True),
+            ("21.21", "ms-nip-vatid", "nip", True),
+            ("21.22", "ms-nip-pl-direct", "nip", True),
+            ("21.30", "ms-nip-unlabeled", "none", True),
+            ("21.31", "ms-nip-bare-vat", "none", True),
+            ("21.32", "ms-nip-faktura-nr", "none", False),
+            ("21.40", "ms-nip-iban", "none", False),
+        ):
+            rec_i = self._seed_imported(
+                document_kind="invoice", issue_date="2026-11-15", total=amt,
+                shop="NIEZNANY FIRMA", nip="5260250995",
+            )
+            cand_i = self.receipts.detail("owner", rec_i)["candidates"]
+            self.assertEqual(len(cand_i), 1, tx_ref)
+            self.assertEqual(cand_i[0]["match_strength"], exp_strength, tx_ref)
+            self.assertEqual(cand_i[0]["merchant_token_hit"], exp_hit, tx_ref)
+
+        # 2. Distinctive alias whole-word match without NIP -> "distinctive";
+        #    shared city names & partial non-chain token hits must NOT count as "distinctive".
+        self.add_transaction(
+            "a", "ms-dist", amount="22.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["ORANGE FIBER OPLATA"],
+        )
+        rec_dist = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="22.00",
+            shop="ORANGE POLSKA", nip=None,
+        )
+        cand_dist = self.receipts.detail("owner", rec_dist)["candidates"]
+        self.assertEqual(len(cand_dist), 1)
+        self.assertEqual(cand_dist[0]["match_strength"], "distinctive")
+        self.assertTrue(cand_dist[0]["merchant_token_hit"])
+
+        self.add_transaction(
+            "a", "ms-city-mismatch", amount="22.10", booking_date="2026-11-15", value_date=None,
+            remittance_information=["CARREFOUR KRAKOW GALERIA"],
+        )
+        rec_city = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="22.10",
+            shop="LIDL KRAKÓW", nip=None,
+        )
+        cand_city = self.receipts.detail("owner", rec_city)["candidates"]
+        self.assertEqual(cand_city[0]["match_strength"], "generic")
+
+        self.add_transaction(
+            "a", "ms-partial-nonchain", amount="22.20", booking_date="2026-11-15", value_date=None,
+            remittance_information=["GREEN CAFE KRAKOW"],
+        )
+        rec_partial = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="22.20",
+            shop="GREEN TECH KRAKÓW", nip=None,
+        )
+        cand_partial = self.receipts.detail("owner", rec_partial)["candidates"]
+        self.assertTrue(cand_partial[0]["merchant_token_hit"])
+        self.assertEqual(cand_partial[0]["match_strength"], "generic")
+
+        self.add_transaction(
+            "a", "ms-all-nonchain", amount="22.30", booking_date="2026-11-15", value_date=None,
+            remittance_information=["GREEN TECH UL DLUGA"],
+        )
+        rec_all = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="22.30",
+            shop="GREEN TECH UL. DŁUGA KRAKÓW", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_all)["candidates"][0]["match_strength"], "distinctive")
+
+        # Legal-form stripping on BOTH receipt and bank sides prevents shared legal suffix false positives
+        # while still matching the core merchant name across differing legal forms.
+        self.add_transaction(
+            "a", "ms-legal-other", amount="22.40", booking_date="2026-11-15", value_date=None,
+            remittance_information=["BETA SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ GMBH LTD"],
+        )
+        rec_legal_mismatch = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="22.40",
+            shop="ALFA Spółka z ograniczoną odpowiedzialnością GmbH Limited", nip=None,
+        )
+        cand_legal_mismatch = self.receipts.detail("owner", rec_legal_mismatch)["candidates"][0]
+        self.assertEqual(cand_legal_mismatch["match_strength"], "none")
+        self.assertFalse(cand_legal_mismatch["merchant_token_hit"])
+
+        self.add_transaction(
+            "a", "ms-legal-same", amount="22.50", booking_date="2026-11-15", value_date=None,
+            remittance_information=["ALFA SP. Z O.O."],
+        )
+        rec_legal_same = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="22.50",
+            shop="ALFA Spółka Komandytowa", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_legal_same)["candidates"][0]["match_strength"], "distinctive")
+
+        # 3. Generic-only token match -> "generic" (preserving merchant_token_hit behavior).
+        self.add_transaction(
+            "a", "ms-gen-part", amount="23.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["ENERGY RACHUNEK"],
+        )
+        rec_gen_part = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="23.00",
+            shop="ACME ENERGY", nip=None,
+        )
+        cand_gen_part = self.receipts.detail("owner", rec_gen_part)["candidates"]
+        self.assertEqual(len(cand_gen_part), 1)
+        self.assertEqual(cand_gen_part[0]["match_strength"], "generic")
+        self.assertFalse(cand_gen_part[0]["merchant_token_hit"])
+
+        self.add_transaction(
+            "a", "ms-gen-sole", amount="24.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["ENERGIA RACHUNEK"],
+        )
+        rec_gen_sole = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="24.00",
+            shop="ENERGIA", nip=None,
+        )
+        cand_gen_sole = self.receipts.detail("owner", rec_gen_sole)["candidates"]
+        self.assertEqual(len(cand_gen_sole), 1)
+        self.assertEqual(cand_gen_sole[0]["match_strength"], "generic")
+        self.assertTrue(cand_gen_sole[0]["merchant_token_hit"])
+
+        # 4. No merchant or NIP match -> "none".
+        self.add_transaction(
+            "a", "ms-none", amount="25.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["PRZELEW WLASNY 999"],
+        )
+        rec_none = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="25.00",
+            shop="BIEDRONKA", nip="7791011327",
+        )
+        cand_none = self.receipts.detail("owner", rec_none)["candidates"]
+        self.assertEqual(len(cand_none), 1)
+        self.assertEqual(cand_none[0]["match_strength"], "none")
+        self.assertFalse(cand_none[0]["merchant_token_hit"])
+
+        # 5. Gateway tokens, legal names, and phrases in remittance, creditor_name, or debtor_name force match_strength="none".
+        from hestia.budget.receipt_parser import GATEWAY_PHRASE_TOKENS
+        self.assertEqual(
+            GATEWAY_TOKENS,
+            frozenset({
+                "p24", "przelewy24", "paypro", "payu", "autopay", "tpay", "paynow", "dotpay",
+                "blik", "bluemedia", "stripe", "paypal", "adyen", "klarna",
+                "eservice", "elavon", "fiserv", "polcard", "ecard", "cashbill", "hotpay", "imoje",
+            }),
+        )
+        self.assertEqual(
+            GATEWAY_PHRASE_TOKENS,
+            frozenset({
+                ("blue", "media"), ("first", "data"), ("krajowy", "integrator", "platnosci"),
+                ("pay", "pro"), ("revolut", "pay"),
+            }),
+        )
+        gateway_inputs = sorted(GATEWAY_TOKENS) + [
+            "Krajowy Integrator Płatności S.A.", "krajowy integrator platnosci",
+            "blue media", "blue-media", "Autopay S.A.", "PayU S.A.", "Pay Pro S.A.",
+            "PayPal (Europe)", "mBank SA PayNow", "eService", "Elavon", "First Data", "Fiserv",
+            "Polcard", "eCard", "CashBill", "HotPay", "imoje", "ING Bank Śląski imoje",
+            "revolut pay",
+        ]
+        for idx, token in enumerate(gateway_inputs):
+            amt = f"{110 + idx}.00"
+            self.add_transaction(
+                "a", f"ms-gw-{idx}", amount=amt, booking_date="2026-11-15", value_date=None,
+                remittance_information=[f"{token} BIEDRONKA NIP 7791011327"],
+            )
+            rec_gw_tx = self._seed_imported(
+                document_kind="invoice", issue_date="2026-11-15", total=amt,
+                shop="BIEDRONKA", nip="7791011327",
+            )
+            cands = self.receipts.detail("owner", rec_gw_tx)["candidates"]
+            self.assertEqual(len(cands), 1, token)
+            self.assertEqual(cands[0]["match_strength"], "none", token)
+            self.assertTrue(cands[0]["merchant_token_hit"], token)
+
+        self.add_transaction(
+            "a", "ms-gw-cred-bluemedia", amount="180.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["ZAKUP NIP 7791011327"],
+        )
+        self.metadata("a", "ms-gw-cred-bluemedia", {"creditor_name": "Krajowy Integrator Płatności S.A."})
+        rec_gw_cred = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="180.00",
+            shop="BIEDRONKA", nip="7791011327",
+        )
+        cand_gw_cred = self.receipts.detail("owner", rec_gw_cred)["candidates"]
+        self.assertEqual(cand_gw_cred[0]["match_strength"], "none")
+        self.assertTrue(cand_gw_cred[0]["merchant_token_hit"])
+        self.assertNotIn("creditor_name", cand_gw_cred[0])
+
+        # Refund (CRDT) with "PayU" in debtor_name (metadata AND payload debtor) gives "none",
+        # and changing debtor_name or creditor_name before Confirm invalidates the token with 409 stale_source.
+        self.add_transaction(
+            "a", "ms-gw-refund-debtor", amount="181.00", credit_debit_indicator="CRDT",
+            booking_date="2026-11-15", value_date=None,
+            remittance_information=["ZWROT BIEDRONKA NIP 7791011327"],
+        )
+        self.metadata("a", "ms-gw-refund-debtor", {"debtor_name": "PayU S.A."})
+        rec_refund_gw = str(uuid.uuid4())
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(
+                id=rec_refund_gw, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                receipt_kind="refund", receipt_date="2026-11-15", total_amount="181.00", currency="PLN",
+                payment_method="card", status="draft", source_kind="local_ocr", document_kind="receipt",
+                version=1, created_at=self.now, updated_at=self.now,
+            ))
+        cand_refund_gw = self.receipts.detail("owner", rec_refund_gw)["candidates"]
+        self.assertEqual(cand_refund_gw[0]["match_strength"], "none")
+
+        self.add_transaction(
+            "a", "ms-gw-refund-payload", amount="182.00", credit_debit_indicator="CRDT",
+            booking_date="2026-11-15", value_date=None,
+            remittance_information=["ZWROT BIEDRONKA NIP 7791011327"],
+            creditor={"name": "OWNER"}, debtor={"name": "PayU"},
+        )
+        rec_refund_payload = str(uuid.uuid4())
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(
+                id=rec_refund_payload, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                receipt_kind="refund", receipt_date="2026-11-15", total_amount="182.00", currency="PLN",
+                payment_method="card", status="draft", source_kind="local_ocr", document_kind="receipt",
+                version=1, created_at=self.now, updated_at=self.now,
+            ))
+        self.assertEqual(self.receipts.detail("owner", rec_refund_payload)["candidates"][0]["match_strength"], "none")
+
+        # Token binding for debtor_name: refund candidate token must become stale (409) if debtor changes to PayU before Confirm.
+        self.add_transaction(
+            "a", "ms-refund-bind", amount="183.00", credit_debit_indicator="CRDT",
+            booking_date="2026-11-15", value_date=None,
+            remittance_information=["ZWROT BIEDRONKA NIP 7791011327"],
+        )
+        self.metadata("a", "ms-refund-bind", {"creditor_name": "OWNER", "debtor_name": "BIEDRONKA"})
+        rec_refund_bind = str(uuid.uuid4())
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(
+                id=rec_refund_bind, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                receipt_kind="refund", receipt_date="2026-11-15", total_amount="183.00", currency="PLN",
+                payment_method="card", status="draft", source_kind="local_ocr", document_kind="receipt",
+                version=1, created_at=self.now, updated_at=self.now,
+            ))
+            session.add(db.BudgetReceiptLine(
+                receipt_id=rec_refund_bind, owner="owner", line_no=1, line_kind="item",
+                raw_name="Zwrot", raw_name_key="zwrot", quantity="1",
+                gross_line_total="183.00", discount_amount="0", net_line_total="183.00",
+            ))
+        bind_cand = self.receipts.detail("owner", rec_refund_bind)["candidates"][0]
+        self.assertEqual(bind_cand["match_strength"], "nip")
+        with self.sessions.begin() as session:
+            meta_row = session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "ms-refund-bind"))
+            meta_row.payload_json = json.dumps({"creditor_name": "OWNER", "debtor_name": "PayU"})
+        with self.assertRaises(ReceiptError) as debtor_stale:
+            self.receipts.confirm("owner", {
+                "receipt_id": rec_refund_bind, "expected_version": 1, "receipt_kind": "refund",
+                "receipt_date": "2026-11-15", "receipt_time": None, "total_amount": "183.00",
+                "currency": "PLN", "payment_method": "card", "lines": None,
+                "link": {
+                    "account_id": bind_cand["account_id"],
+                    "entry_reference": bind_cand["entry_reference"],
+                    "candidate_token": bind_cand["candidate_token"],
+                },
+            })
+        self.assertEqual((debtor_stale.exception.code, debtor_stale.exception.status),
+                         ("budget_receipt_stale_source", 409))
+
+        # Confirmed legacy evidence without debtor_digest keeps working cleanly in reconcile_receipt_links when debtor stays absent.
+        from hestia.budget.analytics_core import financial_fingerprint
+        from hestia.budget.receipt_reconcile import evidence_json, link_evidence, reconcile_receipt_links
+        legacy_tx_payload = self.add_transaction(
+            "a", "ms-legacy-nodebtor", amount="184.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["BIEDRONKA NIP 7791011327"],
+        )
+        legacy_fp = financial_fingerprint(legacy_tx_payload)
+        legacy_ev = link_evidence(
+            "owner", self.accounts["a"], "ms-legacy-nodebtor", legacy_tx_payload,
+            "BIEDRONKA", "7791011327", None, legacy_fp,
+        )
+        legacy_ev.pop("debtor_digest")
+        legacy_rec_id = str(uuid.uuid4())
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(
+                id=legacy_rec_id, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                receipt_kind="purchase", receipt_date="2026-11-15", total_amount="184.00", currency="PLN",
+                payment_method="card", status="confirmed", source_kind="local_ocr", document_kind="receipt",
+                linked_account_id=self.accounts["a"], linked_entry_ref="ms-legacy-nodebtor",
+                linked_fingerprint=legacy_fp, linked_evidence=evidence_json(legacy_ev),
+                version=1, created_at=self.now, updated_at=self.now,
+            ))
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 10), 0)
+
+        # Confirmed receipt with non-empty debtor_name stays confirmed when debtor unchanged and latches on debtor change.
+        rec_refund_reconcile = str(uuid.uuid4())
+        self.add_transaction(
+            "a", "ms-refund-reconcile", amount="185.00", credit_debit_indicator="CRDT",
+            booking_date="2026-11-15", value_date=None,
+            remittance_information=["ZWROT BIEDRONKA NIP 7791011327"],
+        )
+        self.metadata("a", "ms-refund-reconcile", {"creditor_name": "OWNER", "debtor_name": "BIEDRONKA"})
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(
+                id=rec_refund_reconcile, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                receipt_kind="refund", receipt_date="2026-11-15", total_amount="185.00", currency="PLN",
+                payment_method="card", status="draft", source_kind="local_ocr", document_kind="receipt",
+                version=1, created_at=self.now, updated_at=self.now,
+            ))
+            session.add(db.BudgetReceiptLine(
+                receipt_id=rec_refund_reconcile, owner="owner", line_no=1, line_kind="item",
+                raw_name="Zwrot", raw_name_key="zwrot", quantity="1",
+                gross_line_total="185.00", discount_amount="0", net_line_total="185.00",
+            ))
+        rec_cand = self.receipts.detail("owner", rec_refund_reconcile)["candidates"][0]
+        self.receipts.confirm("owner", {
+            "receipt_id": rec_refund_reconcile, "expected_version": 1, "receipt_kind": "refund",
+            "receipt_date": "2026-11-15", "receipt_time": None, "total_amount": "185.00",
+            "currency": "PLN", "payment_method": "card", "lines": None,
+            "link": {
+                "account_id": rec_cand["account_id"],
+                "entry_reference": rec_cand["entry_reference"],
+                "candidate_token": rec_cand["candidate_token"],
+            },
+        })
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 20), 0)
+            meta_row = session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "ms-refund-reconcile"))
+            meta_row.payload_json = json.dumps({"creditor_name": "OWNER", "debtor_name": "PayU"})
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 30), 1)
+        self.assertEqual(self.receipt_row(rec_refund_reconcile).status, "needs_review")
+
+        # 6. Gateway-sourced receipt (AppMeta payee, gateway shop token, or gateway domain) gives "none" on clean bank tx.
+        self.add_transaction(
+            "a", "ms-clean-bank", amount="140.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["BIEDRONKA SKLEP NIP 7791011327"],
+        )
+        rec_appmeta = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-15", total="140.00",
+            shop="BIEDRONKA", nip="7791011327", with_line=True,
+        )
+        with self.sessions.begin() as session:
+            session.add(db.AppMeta(key=_payment_payee_key(rec_appmeta), value="gw-hash"))
+        cand_appmeta = self.receipts.detail("owner", rec_appmeta)["candidates"]
+        self.assertEqual(cand_appmeta[0]["match_strength"], "none")
+        self.assertTrue(cand_appmeta[0]["merchant_token_hit"])
+
+        rec_shop_gw = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-15", total="140.00",
+            shop="PAYNOW / BIEDRONKA", nip="7791011327", with_line=True,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_shop_gw)["candidates"][0]["match_strength"], "none")
+
+        for dom in ("przelewy24.pl", "payu.pl", "payu.com", "autopay.pl", "mail.bluemedia.pl",
+                    "tpay.com", "paynow.pl", "dotpay.pl", "paypro.pl", "p24.pl"):
+            rec_dom_gw = self._seed_imported(
+                document_kind="payment_confirmation", issue_date="2026-11-15", total="140.00",
+                shop="BIEDRONKA", nip="7791011327", with_line=True, forwarded_sender_domain=dom,
+            )
+            self.assertEqual(self.receipts.detail("owner", rec_dom_gw)["candidates"][0]["match_strength"], "none", dom)
+
+        rec_non_gw_dom = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="140.00",
+            shop="BIEDRONKA", nip="7791011327", forwarded_sender_domain="faktury.biedronka.pl",
+        )
+        cand_non_gw = self.receipts.detail("owner", rec_non_gw_dom)["candidates"]
+        self.assertEqual(cand_non_gw[0]["match_strength"], "nip")
+
+        # 7. Zero-line Gmail invoice confirms cleanly with a preselected link AND without a link using a single summary line.
+        inv_unlinked_0 = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="140.00",
+            shop="BIEDRONKA", nip="7791011327",
+        )
+        inv_cand_0 = self.receipts.detail("owner", inv_unlinked_0)["candidates"][0]
+        confirmed_zero_linked = self.receipts.confirm("owner", {
+            "receipt_id": inv_unlinked_0,
+            "expected_version": 1,
+            "receipt_kind": "purchase",
+            "receipt_date": "2026-11-15",
+            "receipt_time": None,
+            "total_amount": "140",
+            "currency": "PLN",
+            "payment_method": "unknown",
+            "lines": [{
+                "line_kind": "other",
+                "raw_name": "BIEDRONKA",
+                "ptu_code": None,
+                "quantity": "1",
+                "raw_unit": None,
+                "unit_price_raw": None,
+                "gross_line_total": "140",
+                "discount_amount": "0",
+                "net_line_total": "140",
+            }],
+            "link": {
+                "account_id": inv_cand_0["account_id"],
+                "entry_reference": inv_cand_0["entry_reference"],
+                "candidate_token": inv_cand_0["candidate_token"],
+            },
+        })["receipt"]
+        self.assertEqual((confirmed_zero_linked["status"], confirmed_zero_linked["linked"]), ("confirmed", True))
+
+        inv_unlinked_1 = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="140.00",
+            shop="BIEDRONKA", nip="7791011327",
+        )
+        confirmed_zero_unlinked = self.receipts.confirm("owner", {
+            "receipt_id": inv_unlinked_1,
+            "expected_version": 1,
+            "receipt_kind": "purchase",
+            "receipt_date": "2026-11-15",
+            "receipt_time": None,
+            "total_amount": "140",
+            "currency": "PLN",
+            "payment_method": "unknown",
+            "lines": [{
+                "line_kind": "other",
+                "raw_name": "BIEDRONKA",
+                "ptu_code": None,
+                "quantity": "1",
+                "raw_unit": None,
+                "unit_price_raw": None,
+                "gross_line_total": "140",
+                "discount_amount": "0",
+                "net_line_total": "140",
+            }],
+            "link": None,
+        })["receipt"]
+        self.assertEqual((confirmed_zero_unlinked["status"], confirmed_zero_unlinked["linked"]), ("confirmed", False))
+
+    def test_round3_reconcile_migration_numeric_tokens_and_nip_before_iban_regressions(self):
+        import hashlib
+        import uuid
+        from hestia.budget.analytics_core import financial_fingerprint
+        from hestia.budget.receipt_reconcile import evidence_json, link_evidence, reconcile_receipt_links
+
+        # 1. Pre-creditor/debtor digest legacy evidence stays confirmed when present fields match and silently upgrades.
+        self.add_transaction(
+            "a", "r3-legacy-mig", amount="186.00", credit_debit_indicator="CRDT",
+            booking_date="2026-11-15", value_date=None,
+            remittance_information=["ZWROT BIEDRONKA NIP 7791011327"],
+        )
+        self.metadata("a", "r3-legacy-mig", {"creditor_name": "OWNER", "debtor_name": "BIEDRONKA S.A."})
+        with self.sessions.begin() as session:
+            tx_row = session.get(db.BudgetTransaction, (self.accounts["a"], "r3-legacy-mig"))
+            tx_payload = json.loads(tx_row.payload_json)
+        fp = financial_fingerprint(tx_payload)
+        full_ev = link_evidence(
+            "owner", self.accounts["a"], "r3-legacy-mig", tx_payload,
+            "BIEDRONKA", "7791011327", "OWNER", fp, debtor="BIEDRONKA S.A.",
+        )
+
+        # 1a. 11-key legacy evidence (missing debtor_digest) with present debtor on bank tx.
+        legacy_11 = {k: v for k, v in full_ev.items() if k != "debtor_digest"}
+        rec_11 = str(uuid.uuid4())
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(
+                id=rec_11, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                receipt_kind="refund", receipt_date="2026-11-15", total_amount="186.00", currency="PLN",
+                payment_method="card", status="confirmed", source_kind="local_ocr", document_kind="receipt",
+                linked_account_id=self.accounts["a"], linked_entry_ref="r3-legacy-mig",
+                linked_fingerprint=fp, linked_evidence=evidence_json(legacy_11),
+                version=1, created_at=self.now, updated_at=self.now,
+            ))
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 10), 0)
+            upgraded_11 = json.loads(session.get(db.BudgetReceipt, rec_11).linked_evidence)
+            self.assertEqual(upgraded_11["debtor_digest"], hashlib.sha256(b"BIEDRONKA S.A.").hexdigest())
+            self.assertEqual(len(upgraded_11), 12)
+        self.assertEqual(self.receipt_row(rec_11).status, "confirmed")
+
+        # Once silently upgraded to 12 keys, subsequent debtor drift triggers needs_review.
+        with self.sessions.begin() as session:
+            meta_row = session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "r3-legacy-mig"))
+            meta_row.payload_json = json.dumps({"creditor_name": "OWNER", "debtor_name": "PayU"})
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 20), 1)
+        self.assertEqual(self.receipt_row(rec_11).status, "needs_review")
+
+        # 1b. 10-key legacy evidence (missing both creditor_digest and debtor_digest) also silently upgrades.
+        self.add_transaction(
+            "a", "r3-legacy-mig-10", amount="187.00", credit_debit_indicator="CRDT",
+            booking_date="2026-11-15", value_date=None,
+            remittance_information=["ZWROT BIEDRONKA NIP 7791011327"],
+        )
+        self.metadata("a", "r3-legacy-mig-10", {"creditor_name": "OWNER", "debtor_name": "BIEDRONKA S.A."})
+        with self.sessions.begin() as session:
+            tx_row_10 = session.get(db.BudgetTransaction, (self.accounts["a"], "r3-legacy-mig-10"))
+            tx_payload_10 = json.loads(tx_row_10.payload_json)
+        fp_10 = financial_fingerprint(tx_payload_10)
+        full_ev_10 = link_evidence(
+            "owner", self.accounts["a"], "r3-legacy-mig-10", tx_payload_10,
+            "BIEDRONKA  S.A.", "7791011327", "OWNER", fp_10, debtor="BIEDRONKA S.A.",
+        )
+        legacy_10 = {k: v for k, v in full_ev_10.items() if k not in ("creditor_digest", "debtor_digest")}
+        rec_10 = str(uuid.uuid4())
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(
+                id=rec_10, owner="owner", raw_shop_name="BIEDRONKA  S.A.", raw_nip="7791011327",
+                receipt_kind="refund", receipt_date="2026-11-15", total_amount="187.00", currency="PLN",
+                payment_method="card", status="confirmed", source_kind="local_ocr", document_kind="receipt",
+                linked_account_id=self.accounts["a"], linked_entry_ref="r3-legacy-mig-10",
+                linked_fingerprint=fp_10, linked_evidence=evidence_json(legacy_10),
+                version=1, created_at=self.now, updated_at=self.now,
+            ))
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 30), 0)
+            upgraded_10 = json.loads(session.get(db.BudgetReceipt, rec_10).linked_evidence)
+            self.assertEqual(upgraded_10["creditor_digest"], hashlib.sha256(b"OWNER").hexdigest())
+            self.assertEqual(upgraded_10["debtor_digest"], hashlib.sha256(b"BIEDRONKA S.A.").hexdigest())
+            self.assertEqual(len(upgraded_10), 12)
+
+        # 1c. Legacy 11-key row with changed creditor/remittance does NOT upgrade and flips to needs_review.
+        with self.sessions.begin() as session:
+            meta_row = session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "r3-legacy-mig-10"))
+            meta_row.payload_json = json.dumps({"creditor_name": "OTHER", "debtor_name": "BIEDRONKA S.A."})
+        with self.sessions.begin() as session:
+            row_10 = session.get(db.BudgetReceipt, rec_10)
+            row_10.linked_evidence = evidence_json({k: v for k, v in full_ev_10.items() if k != "debtor_digest"})
+            row_10.status = "confirmed"
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 40), 1)
+        self.assertEqual(self.receipt_row(rec_10).status, "needs_review")
+
+        # 2. Purely numeric and <3-letter tokens never count as distinctive.
+        self.add_transaction(
+            "a", "r3-num-tok", amount="201.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["INNY 1234 A123 AB12"],
+        )
+        rec_num = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="201.00",
+            shop="SKLEP 1234 A123 AB12", nip=None,
+        )
+        cand_num = self.receipts.detail("owner", rec_num)["candidates"][0]
+        self.assertEqual(cand_num["match_strength"], "none")
+        self.assertFalse(cand_num["merchant_token_hit"])
+
+        self.add_transaction(
+            "a", "r3-three-let", amount="202.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["FIRMA ABC1 ZAKUP"],
+        )
+        rec_three = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="202.00",
+            shop="SKLEP ABC1", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_three)["candidates"][0]["match_strength"], "distinctive")
+
+        # 3. Labeled NIP extracted before IBAN masking; PL+10 digits VAT ID not masked; real IBAN + year still masked.
+        self.add_transaction(
+            "a", "r3-nip-pl-fv", amount="203.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["SKLEP NIP PL5260250995 FV2026"],
+        )
+        self.add_transaction(
+            "a", "r3-iban-year", amount="204.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["PRZELEW NL92 ABNA 5260 2509 95 2026"],
+        )
+        rec_pl_fv = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="203.00",
+            shop="NIEZNANY", nip="5260250995",
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_pl_fv)["candidates"][0]["match_strength"], "nip")
+        rec_iban_yr = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="204.00",
+            shop="NIEZNANY", nip="5260250995",
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_iban_yr)["candidates"][0]["match_strength"], "none")
+        self.assertFalse(self.receipts.detail("owner", rec_iban_yr)["candidates"][0]["merchant_token_hit"])
+
+    def test_round4_shop_category_tokens_never_distinctive(self):
+        # 1. Shared shop-category token without shared distinctive brand stays "generic", never "distinctive".
+        self.add_transaction(
+            "a", "r4-apteka-gemini", amount="210.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["APTEKA GEMINI"],
+        )
+        rec_apteka = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="210.00",
+            shop="APTEKA CENTRUM", nip=None,
+        )
+        cand_apteka = self.receipts.detail("owner", rec_apteka)["candidates"]
+        self.assertEqual(cand_apteka[0]["match_strength"], "generic")
+
+        # 2. When ALL receipt tokens are category or generic words (even exact match), strength stays "generic".
+        self.add_transaction(
+            "a", "r4-all-cat", amount="211.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["APTEKA CENTRUM WARSZAWA"],
+        )
+        rec_all_cat = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="211.00",
+            shop="APTEKA CENTRUM WARSZAWA", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_all_cat)["candidates"][0]["match_strength"], "generic")
+
+        self.add_transaction(
+            "a", "r4-stacja-paliwa", amount="212.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["STACJA PALIWA PHARMACY CAFE"],
+        )
+        rec_stacja = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="212.00",
+            shop="STACJA PALIWA PHARMACY CAFE", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_stacja)["candidates"][0]["match_strength"], "generic")
+
+        # 3. Category word + distinctive brand requires the distinctive brand to match for "distinctive".
+        self.add_transaction(
+            "a", "r4-drogeria-other", amount="213.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["DROGERIA NATURA"],
+        )
+        self.add_transaction(
+            "a", "r4-drogeria-brand", amount="214.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["HEBE WARSZAWA"],
+        )
+        rec_drog_other = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="213.00",
+            shop="DROGERIA HEBE", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_drog_other)["candidates"][0]["match_strength"], "generic")
+        rec_drog_brand = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="214.00",
+            shop="DROGERIA HEBE", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_drog_brand)["candidates"][0]["match_strength"], "distinctive")
+
+    def test_round5_ecommerce_billing_words_never_distinctive(self):
+        self.add_transaction(
+            "a", "r5-ecom-shop", amount="220.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["SKLEP INTERNETOWY ZAKUPY PLATNOSC KARTA"],
+        )
+        rec_ecom = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="220.00",
+            shop="SKLEP INTERNETOWY ABONAMENT FAKTURA", nip=None,
+        )
+        cand_ecom = self.receipts.detail("owner", rec_ecom)["candidates"]
+        self.assertEqual(cand_ecom[0]["match_strength"], "generic")
+
+        self.add_transaction(
+            "a", "r5-ecom-brand", amount="221.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["ALFA PRZELEW RACHUNEK"],
+        )
+        rec_brand = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="221.00",
+            shop="SKLEP INTERNETOWY ALFA", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_brand)["candidates"][0]["match_strength"], "distinctive")
+
+    def test_v1f_durable_gateway_suppresses_strength_and_evidence_rows_skip_candidates(self):
+        self.add_transaction(
+            "a", "r5-v1f-gw", amount="230.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["BIEDRONKA NIP 7791011327"],
+        )
+        doc_rec = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="230.00",
+            shop="BIEDRONKA", nip="7791011327", forwarded_sender_domain="shop.example.test",
+        )
+        self.assertEqual(self.receipts.detail("owner", doc_rec)["candidates"][0]["match_strength"], "nip")
+
+        dur_gw_rec = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-15", total="230.00",
+            shop="BIEDRONKA", nip="7791011327", with_line=True, forwarded_sender_domain="shop.example.test",
+        )
+        with self.sessions.begin() as session:
+            session.get(db.BudgetReceipt, dur_gw_rec).gateway = "Example Pay"
+        cand_gw = self.receipts.detail("owner", dur_gw_rec)["candidates"]
+        self.assertEqual(cand_gw[0]["match_strength"], "none")
+        self.assertTrue(cand_gw[0]["merchant_token_hit"])
+
+        ev_rec = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-15", total="230.00",
+            shop="BIEDRONKA", nip="7791011327", with_line=True, forwarded_sender_domain="shop.example.test",
+        )
+        with self.sessions.begin() as session:
+            ev_row = session.get(db.BudgetReceipt, ev_rec)
+            ev_row.gateway = "Example Pay"
+            ev_row.evidence_for_receipt_id = doc_rec
+        self.assertEqual(self.receipts.detail("owner", ev_rec)["candidates"], [])
+
+    def test_round6_confirm_refuses_evidence_row_attached_after_preview(self):
+        self.add_transaction(
+            "a", "r6-ev-tx", amount="230.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["BIEDRONKA NIP 7791011327"],
+        )
+        doc_rec = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="230.00",
+            shop="BIEDRONKA", nip="7791011327",
+        )
+        ev_rec = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-15", total="230.00",
+            shop="BIEDRONKA", nip="7791011327", with_line=True,
+        )
+        preview = self.receipts.detail("owner", ev_rec)
+        chosen = preview["candidates"][0]
+
+        # Simulate Gmail attaching ev_rec as evidence after preview without bumping its version.
+        with self.sessions.begin() as session:
+            ev_row = session.get(db.BudgetReceipt, ev_rec)
+            ev_row.gateway = "PayU"
+            ev_row.evidence_for_receipt_id = doc_rec
+
+        payload = {
+            "receipt_id": ev_rec, "expected_version": 1, "raw_shop_name": "BIEDRONKA",
+            "raw_nip": "7791011327", "receipt_kind": "purchase", "receipt_date": "2026-11-15",
+            "receipt_time": None, "total_amount": "230.00", "currency": "PLN", "payment_method": "card",
+            "lines": [{
+                "line_kind": "other", "raw_name": "Opłata miesięczna", "ptu_code": None, "quantity": "1",
+                "raw_unit": None, "unit_price_raw": None, "gross_line_total": "230.00",
+                "discount_amount": "0", "net_line_total": "230.00",
+            }],
+        }
+        for link in (
+            None,
+            {
+                "account_id": chosen["account_id"],
+                "entry_reference": chosen["entry_reference"],
+                "candidate_token": chosen["candidate_token"],
+            },
+        ):
+            with self.subTest(link=link is not None), self.assertRaises(ReceiptError) as rejected:
+                self.receipts.confirm("owner", {**payload, "link": link})
+            self.assertEqual((rejected.exception.code, rejected.exception.status),
+                             ("budget_receipt_stale_source", 409))
+
+        ev_after = self.receipt_row(ev_rec)
+        self.assertEqual(ev_after.status, "imported")
+        self.assertIsNone(ev_after.linked_entry_ref)
+        with self.assertRaises(ReceiptError) as del_rejected:
+            self.receipts.delete("owner", {"receipt_id": ev_rec, "expected_version": 1})
+        self.assertEqual((del_rejected.exception.code, del_rejected.exception.status),
+                         ("budget_receipt_stale_source", 409))
+        # Bank transaction remains unreserved for the real invoice document.
+        self.assertEqual(len(self.receipts.detail("owner", doc_rec)["candidates"]), 1)
+
+    def test_round6_keep_stale_reviewed_token_rejected_after_bank_evidence_change(self):
+        from hestia.budget.receipt_reconcile import reconcile_receipt_links
+
+        self.add_transaction(
+            "a", "r6-keep-tx", amount="231.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["BIEDRONKA NIP 7791011327"],
+        )
+        rec_id = self._seed_imported(
+            document_kind="receipt", issue_date="2026-11-15", total="231.00",
+            shop="BIEDRONKA", nip="7791011327", with_line=True,
+        )
+        init_cand = self.receipts.detail("owner", rec_id)["candidates"][0]
+        base_payload = {
+            "receipt_id": rec_id, "expected_version": 1, "raw_shop_name": "BIEDRONKA",
+            "raw_nip": "7791011327", "receipt_kind": "purchase", "receipt_date": "2026-11-15",
+            "receipt_time": None, "total_amount": "231.00", "currency": "PLN", "payment_method": "card",
+            "lines": [{
+                "line_kind": "other", "raw_name": "Opłata miesięczna", "ptu_code": None, "quantity": "1",
+                "raw_unit": None, "unit_price_raw": None, "gross_line_total": "231.00",
+                "discount_amount": "0", "net_line_total": "231.00",
+            }],
+        }
+        self.receipts.confirm("owner", {
+            **base_payload,
+            "link": {
+                "account_id": init_cand["account_id"],
+                "entry_reference": init_cand["entry_reference"],
+                "candidate_token": init_cand["candidate_token"],
+            },
+        })
+        self.change_transaction("a", "r6-keep-tx", remittance_information=["BIEDRONKA NIP 7791011327 POS 1"])
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now), 1)
+
+        reviewed = self.receipts.detail("owner", rec_id)
+        self.assertEqual(reviewed["receipt"]["status"], "needs_review")
+        reviewed_cand = reviewed["candidates"][0]
+
+        # Bank evidence changes again without bumping receipt version; owner's reviewed Keep token must 409.
+        self.change_transaction("a", "r6-keep-tx", remittance_information=["BIEDRONKA NIP 7791011327 CHANGED"])
+        with self.assertRaises(ReceiptError) as rejected:
+            self.receipts.confirm("owner", {
+                **base_payload,
+                "expected_version": reviewed["receipt"]["version"],
+                "link": {
+                    "account_id": reviewed_cand["account_id"],
+                    "entry_reference": reviewed_cand["entry_reference"],
+                    "candidate_token": reviewed_cand["candidate_token"],
+                },
+            })
+        self.assertEqual((rejected.exception.code, rejected.exception.status),
+                         ("budget_receipt_stale_source", 409))
+        self.assertEqual(self.receipt_row(rec_id).status, "needs_review")
+
+        # After re-previewing the new bank evidence, confirming with the fresh token succeeds.
+        refreshed = self.receipts.detail("owner", rec_id)
+        fresh_cand = refreshed["candidates"][0]
+        saved = self.receipts.confirm("owner", {
+            **base_payload,
+            "expected_version": refreshed["receipt"]["version"],
+            "link": {
+                "account_id": fresh_cand["account_id"],
+                "entry_reference": fresh_cand["entry_reference"],
+                "candidate_token": fresh_cand["candidate_token"],
+            },
+        })
+        self.assertEqual(saved["receipt"]["status"], "confirmed")
+
+    def test_kimi_generic_only_merchant_names_never_distinctive(self):
+        for idx, (shop, tx_text, expected_strength) in enumerate((
+            ("FIRMA HANDLOWA", ["FIRMA HANDLOWA"], "generic"),
+            ("COMPANY", ["COMPANY"], "generic"),
+            ("SKLEP OGÓLNOSPOŻYWCZY", ["SKLEP OGÓLNOSPOŻYWCZY"], "generic"),
+            ("PRZEDSIĘBIORSTWO USŁUGOWE PRODUKCYJNE HURTOWNIA CENTRUM GRUPA HOLDING",
+             ["INTERNATIONAL TRADING SOLUTIONS SYSTEMS CONSULTING POLAND POLSKA PL"], "none"),
+        )):
+            amount = f"24{idx}.00"
+            self.add_transaction(
+                "a", f"kimi-gen-{idx}", amount=amount, booking_date="2026-11-15", value_date=None,
+                remittance_information=tx_text,
+            )
+            rec_id = self._seed_imported(
+                document_kind="invoice", issue_date="2026-11-15", total=amount, shop=shop, nip=None,
+            )
+            cand = self.receipts.detail("owner", rec_id)["candidates"]
+            self.assertEqual(len(cand), 1, shop)
+            self.assertEqual(cand[0]["match_strength"], expected_strength, shop)
+
+        # Adding a genuine brand token alongside corporate generic words restores "distinctive".
+        self.add_transaction(
+            "a", "kimi-gen-brand", amount="249.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["POLBUD PL"],
+        )
+        rec_brand = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="249.00",
+            shop="PRZEDSIĘBIORSTWO HANDLOWO USŁUGOWE POLBUD POLSKA", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_brand)["candidates"][0]["match_strength"], "distinctive")
+
 
 class ReceiptRetentionSweepTests(fixture.unittest.IsolatedAsyncioTestCase):
     async def test_sweep_calls_retain_expired_when_flag_is_off(self):
@@ -2375,6 +3237,63 @@ class ReceiptHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         max_detail_body = await max_detail_res.json()
         self.assertEqual([item["entry_reference"] for item in max_detail_body["candidates"]],
                          [reference_digest("tx-max-date")])
+        self.assertEqual(max_detail_body["candidates"][0]["match_strength"], "distinctive")
+
+        with self.sessions.begin() as session:
+            session.add(db.BudgetTransaction(
+                account_id="acc-http", entry_reference="tx-http-nip",
+                payload_json=json.dumps({
+                    "entry_reference": "tx-http-nip", "amount": "88.00", "currency": "PLN",
+                    "credit_debit_indicator": "DBIT", "status": "BOOK", "booking_date": "2026-11-29",
+                    "value_date": "2026-11-29", "transaction_date": None,
+                    "remittance_information": ["SKLEP NIP 5260250995"],
+                }),
+                observed_at=now, source="api", api_observed_at=now, uncertain=False,
+            ))
+            nip_invoice_id = str(uuid.uuid4())
+            session.add(db.BudgetReceipt(
+                id=nip_invoice_id, owner="alice", raw_shop_name="ORANGE", raw_nip="5260250995",
+                receipt_kind="purchase", receipt_date="2026-11-29", due_date="2026-12-10",
+                total_amount="88.00", currency="PLN", payment_method=None, status="imported",
+                source_kind="email", document_kind="invoice", import_expires_at=now + 86400,
+                version=1, created_at=now, updated_at=now,
+            ))
+        nip_detail_res = await self.get("detail", nip_invoice_id, headers=headers)
+        self.assertEqual(nip_detail_res.status, 200, await nip_detail_res.text())
+        nip_detail_body = await nip_detail_res.json()
+        self.assertEqual(nip_detail_body["candidates"][0]["match_strength"], "nip")
+
+        zero_inv_payload = {
+            "receipt_id": nip_invoice_id,
+            "expected_version": 1,
+            "receipt_kind": "purchase",
+            "receipt_date": "2026-11-29",
+            "receipt_time": None,
+            "total_amount": "88",
+            "currency": "PLN",
+            "payment_method": "unknown",
+            "lines": [{
+                "line_kind": "other",
+                "raw_name": "ORANGE",
+                "ptu_code": None,
+                "quantity": "1",
+                "raw_unit": None,
+                "unit_price_raw": None,
+                "gross_line_total": "88",
+                "discount_amount": "0",
+                "net_line_total": "88",
+            }],
+            "link": {
+                "account_id": nip_detail_body["candidates"][0]["account_id"],
+                "entry_reference": nip_detail_body["candidates"][0]["entry_reference"],
+                "candidate_token": nip_detail_body["candidates"][0]["candidate_token"],
+            },
+        }
+        api_contract.BudgetReceiptConfirmRequest.model_validate(zero_inv_payload)
+        zero_inv_confirmed = await self.post("confirm", zero_inv_payload)
+        self.assertEqual(zero_inv_confirmed.status, 200, await zero_inv_confirmed.text())
+        zero_inv_saved = (await zero_inv_confirmed.json())["receipt"]
+        self.assertEqual((zero_inv_saved["status"], zero_inv_saved["linked"]), ("confirmed", True))
 
 
 if __name__ == "__main__":

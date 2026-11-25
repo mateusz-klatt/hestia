@@ -20,18 +20,19 @@ from sqlalchemy import delete, exists, func, literal_column, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from .. import authz
-from ..db import (BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
+from ..db import (AppMeta, BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
                   BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line, BudgetShop as Shop,
                   BudgetTransaction as Transaction, BudgetTransferLeg as Leg)
 from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint, negate_money, sum_money
 from .device_token import DeviceTokenError, _issued_mask, _legacy_bearer_allowed, write_device_audit
-from .gmail_store import retain_imports, tombstone_receipt
-from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES,
-                             ReceiptError, chain_for, merchant_score_groups, merchant_word_tokens,
-                             normalize_shop_name, parse_receipt, redact_digit_field, valid_nip, validate_confirm,
-                             validate_confirm_line_totals)
-from .receipt_reconcile import (audit_payload, creditor_name, entry_reference_digest, evidence_json,
-                                erase_receipt_audit, link_evidence, write_audit)
+from .gmail_store import _payment_payee_key, retain_imports, tombstone_receipt
+from .receipt_parser import (_IBAN_MAX, _IBAN_MIN, CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS,
+                             MAX_RECEIPT_LINES, ReceiptError, _iban_checksum, chain_for, contains_gateway_marker,
+                             merchant_score_groups, merchant_word_tokens, normalize_shop_name, parse_receipt,
+                             redact_digit_field, valid_nip, validate_confirm, validate_confirm_line_totals)
+from .receipt_reconcile import (audit_payload, entry_reference_digest, evidence_json,
+                                erase_receipt_audit, link_evidence, resolved_party_names,
+                                transaction_party_names, write_audit)
 from .views import BudgetHTTPStore
 
 MAX_DRAFTS = 20
@@ -106,25 +107,172 @@ def _date_distance(payload, receipt_date, *, document_kind=None, due_date=None):
 
 
 _TX_DIGIT_RUN_RE = re.compile(r"[0-9]+(?:[\s/.\-\u2010-\u2015]+[0-9]+)*")
+_TOKEN_SPAN_RE = re.compile(r"[A-Za-z0-9]+")
+_IBAN_PREFIX_RE = re.compile(r"[A-Za-z]{2}[0-9]{2}")
+_EXCLUDED_NIP_PREFIX_RE = re.compile(
+    r"(?<![a-z0-9])(?:nr|faktura|fv|invoice|no)(?![a-z0-9])[\s:/.\-#\u2010-\u2015]*\Z",
+    re.IGNORECASE | re.ASCII,
+)
+_STRICT_NIP_LABEL_RE = re.compile(
+    r"(?:(?<![a-z0-9])/nip/"
+    r"|(?<![a-z0-9])(?:nip(?:[\s:/.\-]+pl)?|vat(?:[\s:/.\-]+pl|[\s-]+id)|tax\s+id)(?![a-z0-9]))"
+    r"[\s:/.\-\u2010-\u2015]*\Z",
+    re.IGNORECASE | re.ASCII,
+)
+_GATEWAY_DOMAINS = frozenset({
+    "przelewy24.pl", "p24.pl", "paypro.pl", "autopay.pl", "bluemedia.pl", "tpay.com",
+    "paynow.pl", "dotpay.pl", "stripe.com", "paypal.com", "paypal.pl", "adyen.com", "klarna.com",
+    "eservice.com.pl", "polcard.pl", "ecard.pl", "cashbill.pl", "hotpay.pl", "imoje.pl",
+})
+
+
+def _is_gateway_domain(domain):
+    if not isinstance(domain, str):
+        return False
+    cleaned = domain.strip().lower().rstrip(".")
+    if "." not in cleaned:
+        return False
+    if any(cleaned == root or cleaned.endswith("." + root) for root in _GATEWAY_DOMAINS):
+        return True
+    labels = cleaned.split(".")
+    return any(label in ("payu", "bluemedia") for label in labels[:-1])
+
+
+def _is_gateway_receipt(session, row):
+    if getattr(row, "gateway", None) is not None:
+        return True
+    row_id = getattr(row, "id", None)
+    if row_id is not None and session.get(AppMeta, _payment_payee_key(row_id)) is not None:
+        return True
+    if contains_gateway_marker(getattr(row, "raw_shop_name", None)):
+        return True
+    return any(
+        _is_gateway_domain(getattr(row, field, None))
+        for field in ("forwarded_sender_domain", "sender_domain")
+    )
+
+
+def _payload_party_texts(payload):
+    texts = []
+    for key in ("creditor_name", "debtor_name"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            texts.append(value)
+    for key in ("creditor", "debtor"):
+        party = payload.get(key)
+        if isinstance(party, dict) and isinstance(party.get("name"), str) and party["name"]:
+            texts.append(party["name"])
+    return texts
+
+
+_IBAN_COUNTRY_LENGTHS = {
+    "AD": 24, "AE": 23, "AL": 28, "AT": 20, "AZ": 28, "BA": 20, "BE": 16, "BG": 22, "BH": 22, "BR": 29,
+    "BY": 28, "CH": 21, "CR": 22, "CY": 28, "CZ": 24, "DE": 22, "DK": 18, "DO": 28, "EE": 20, "EG": 29,
+    "ES": 24, "FI": 18, "FO": 18, "FR": 27, "GB": 22, "GE": 22, "GI": 23, "GL": 18, "GR": 27, "GT": 28,
+    "HR": 21, "HU": 28, "IE": 22, "IL": 23, "IQ": 23, "IS": 26, "IT": 27, "JO": 30, "KW": 30, "KZ": 20,
+    "LB": 28, "LC": 32, "LI": 21, "LT": 20, "LU": 20, "LV": 21, "MC": 27, "MD": 24, "ME": 22, "MK": 19,
+    "MR": 27, "MT": 31, "MU": 30, "NL": 18, "NO": 15, "PK": 24, "PL": 28, "PS": 29, "PT": 25, "QA": 29,
+    "RO": 24, "RS": 22, "SA": 24, "SC": 31, "SE": 24, "SI": 19, "SK": 24, "SM": 27, "ST": 25, "SV": 28,
+    "TL": 23, "TN": 24, "TR": 26, "UA": 29, "VA": 22, "VG": 24, "XK": 20,
+}
+
+
+def _is_iban_candidate(compact):
+    return _IBAN_MIN <= len(compact) <= _IBAN_MAX and (
+        len(compact) == _IBAN_COUNTRY_LENGTHS.get(compact[:2]) or _iban_checksum(compact)
+    )
+
+
+def _mask_iban_sequences(haystack):
+    """Replace real IBAN sequences (15..34 chars matching country length or mod-97) with spaces.
+
+    ``PL`` followed by exactly 10 digits is a Polish VAT ID, never an IBAN.
+    """
+    spans = list(_TOKEN_SPAN_RE.finditer(haystack))
+    if not spans:
+        return haystack
+    chars = list(haystack)
+    index = 0
+    total = len(spans)
+    while index < total:
+        token = spans[index].group(0)
+        start_pos = spans[index].start()
+        if (start_pos > 0 and haystack[start_pos - 1] == "_") or _IBAN_PREFIX_RE.match(token) is None:
+            index += 1
+            continue
+        if len(token) == 12 and token[:2].lower() == "pl" and token[2:].isdigit():
+            index += 1
+            continue
+        compact = token.upper()
+        saw_digits = any(ch.isdigit() for ch in compact[4:])
+        matched_last = index if saw_digits and _is_iban_candidate(compact) else None
+        last = index
+        cursor = index + 1
+        while cursor < total:
+            gap = haystack[spans[last].end():spans[cursor].start()]
+            if not gap or not all(ch in " -" for ch in gap):
+                break
+            nxt = spans[cursor].group(0)
+            if len(compact) + len(nxt) > _IBAN_MAX:
+                break
+            if nxt.isalpha():
+                if saw_digits or len(nxt) > 4:
+                    break
+            else:
+                saw_digits = True
+            compact += nxt.upper()
+            last = cursor
+            cursor += 1
+            if saw_digits and _is_iban_candidate(compact):
+                matched_last = last
+        if matched_last is not None:
+            for pos in range(spans[index].start(), spans[matched_last].end()):
+                chars[pos] = " "
+            index = matched_last + 1
+            continue
+        index += 1
+    return "".join(chars)
+
+
+def _matched_nip_prefix(text, match, nip):
+    """Return ``(before_pl, start)`` if ``match`` is a boundary-valid non-doc hit for ``nip``."""
+    start, end = match.span()
+    before_pl = (
+        start >= 2 and text[start - 2:start].lower() == "pl"
+        and (start == 2 or not (text[start - 3].isalnum() or text[start - 3] == "_"))
+    )
+    if start > 0 and not before_pl and (text[start - 1].isalnum() or text[start - 1] == "_"):
+        return None
+    if end < len(text) and (text[end].isalnum() or text[end] == "_"):
+        return None
+    if re.sub(r"\D", "", match.group(0)) != nip:
+        return None
+    doc_prefix = text[:start - 2] if before_pl else text[:start]
+    if _EXCLUDED_NIP_PREFIX_RE.search(doc_prefix) is not None:
+        return None
+    return before_pl, start
+
+
+def _nip_match(nip, haystack):
+    """Return ``(hit, labeled)`` extracting labeled NIPs before IBAN masking, then unlabeled after."""
+    if not valid_nip(nip):
+        return False, False
+    for match in _TX_DIGIT_RUN_RE.finditer(haystack):
+        matched = _matched_nip_prefix(haystack, match, nip)
+        if matched is None:
+            continue
+        before_pl, start = matched
+        if before_pl or _STRICT_NIP_LABEL_RE.search(haystack[:start]) is not None:
+            return True, True
+    masked = _mask_iban_sequences(haystack)
+    for match in _TX_DIGIT_RUN_RE.finditer(masked):
+        if _matched_nip_prefix(masked, match, nip) is not None:
+            return True, False
+    return False, False
 
 
 def _nip_in_text(nip, haystack):
-    if not valid_nip(nip):
-        return False
-    limit = len(haystack)
-    for match in _TX_DIGIT_RUN_RE.finditer(haystack):
-        start, end = match.span()
-        before_pl = (
-            start >= 2 and haystack[start - 2:start] == "pl"
-            and (start == 2 or not (haystack[start - 3].isalnum() or haystack[start - 3] == "_"))
-        )
-        if start > 0 and not before_pl and (haystack[start - 1].isalnum() or haystack[start - 1] == "_"):
-            continue
-        if end < limit and (haystack[end].isalnum() or haystack[end] == "_"):
-            continue
-        if re.sub(r"\D", "", match.group(0)) == nip:
-            return True
-    return False
+    return _nip_match(nip, haystack)[0]
 
 
 def _subkey(material, info):
@@ -409,7 +557,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
 
     def _candidates(self, session, owner, row, parsed, *, include_receipt_id=None):
         if (row.total_amount is None or row.currency is None or row.receipt_date is None
-                or row.payment_method in ("cash", "mixed")):
+                or row.payment_method in ("cash", "mixed")
+                or getattr(row, "evidence_for_receipt_id", None) is not None):
             return []
         try:
             total = canonical_money(row.total_amount)
@@ -417,7 +566,9 @@ class BudgetReceiptStore(BudgetHTTPStore):
             return []
         direction = "CRDT" if row.receipt_kind == "refund" else "DBIT"
         shop_name = normalize_shop_name(row.raw_shop_name)
+        chain = chain_for(row.raw_shop_name, row.raw_nip)
         groups, generic_tokens = merchant_score_groups(row.raw_shop_name, row.raw_nip)
+        receipt_is_gateway = _is_gateway_receipt(session, row)
         linked_key = (getattr(row, "linked_account_id", None), getattr(row, "linked_entry_ref", None))
         ranked = []
         for transaction, tx_row_id in self._candidate_rows(session, owner, include_receipt_id=include_receipt_id):
@@ -442,10 +593,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
             except AnalyticsError:
                 continue
             try:
-                creditor = creditor_name(session, owner, transaction.account_id, transaction.entry_reference, fingerprint)
+                creditor, debtor = resolved_party_names(
+                    session, owner, transaction.account_id, transaction.entry_reference, payload, fingerprint)
                 evidence = link_evidence(
                     owner, transaction.account_id, transaction.entry_reference, payload,
-                    shop_name, row.raw_nip, creditor, fingerprint)
+                    shop_name, row.raw_nip, creditor, fingerprint, debtor=debtor)
                 token = self._candidate_token(evidence, transaction.account_id, tx_row_id)
             except (AnalyticsError, ValueError, TypeError, RecursionError):
                 continue
@@ -453,15 +605,36 @@ class BudgetReceiptStore(BudgetHTTPStore):
             if not isinstance(remittance, list):
                 remittance = []
             description = " ".join(value for value in remittance if isinstance(value, str))
-            haystack = fold_for_match(description + " " + (creditor or ""))
+            party_texts = _payload_party_texts(payload)
+            counterparty = debtor if direction == "CRDT" else creditor
+            haystack = fold_for_match(" ".join(part for part in (description, counterparty) if part))
             haystack_words = frozenset(merchant_word_tokens(haystack))
-            nip_hit = _nip_in_text(row.raw_nip, haystack)
+            nip_hit, nip_labeled = _nip_match(row.raw_nip, haystack)
             distinctive_score = sum(
                 1 for group in groups if any(alias.issubset(haystack_words) for alias in group)
             )
             generic_score = sum(1 for token in generic_tokens if token in haystack_words)
             sole_generic_hit = not groups and len(generic_tokens) == 1 and generic_score > 0
             hit = nip_hit or distinctive_score > 0 or sole_generic_hit
+            chain_group_hit = (
+                chain is not None
+                and any(alias.issubset(haystack_words) for alias in groups[0])
+            )
+            all_distinctive_hit = bool(groups) and distinctive_score == len(groups)
+            bank_has_gateway = any(
+                contains_gateway_marker(text)
+                for text in (description, creditor, debtor, *party_texts)
+            )
+            if receipt_is_gateway or bank_has_gateway:
+                strength = "none"
+            elif nip_labeled:
+                strength = "nip"
+            elif chain_group_hit or all_distinctive_hit:
+                strength = "distinctive"
+            elif generic_score > 0:
+                strength = "generic"
+            else:
+                strength = "none"
             is_current_link = (transaction.account_id, transaction.entry_reference) == linked_key
             candidate = {
                 "account_id": transaction.account_id,
@@ -470,7 +643,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 "credit_debit_indicator": direction,
                 "transaction_date": evidence["transaction_date"],
                 "booking_date": evidence["booking_date"], "value_date": evidence["value_date"],
-                "merchant_token_hit": hit, "date_distance": distance,
+                "merchant_token_hit": hit, "match_strength": strength, "date_distance": distance,
                 "candidate_token": token,
             }
             ranked.append((
@@ -594,10 +767,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
         try:
             payload = _json(transaction.payload_json)
             fingerprint = None if transaction.uncertain else financial_fingerprint(payload)
-            creditor = creditor_name(session, owner, account_id, reference, fingerprint)
+            creditor, debtor = resolved_party_names(session, owner, account_id, reference, payload, fingerprint)
             current = link_evidence(
                 owner, account_id, reference, payload,
-                normalize_shop_name(cleaned["raw_shop_name"]), cleaned["raw_nip"], creditor, fingerprint)
+                normalize_shop_name(cleaned["raw_shop_name"]), cleaned["raw_nip"], creditor, fingerprint,
+                debtor=debtor)
             expected = self._evidence_mac(current)
             stored = evidence_json(current)
         except (AnalyticsError, ValueError, TypeError, KeyError, RecursionError):
@@ -642,6 +816,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 self._owner(session, owner, "budget.receipts.edit")
             if row.version != values["expected_version"]:
                 raise ReceiptError("budget_receipt_conflict", 409)
+            if row.evidence_for_receipt_id is not None:
+                raise ReceiptError("budget_receipt_stale_source", 409)
             effective = dict(cleaned)
             effective.setdefault("raw_shop_name", row.raw_shop_name)
             effective.setdefault("raw_nip", row.raw_nip)
@@ -865,6 +1041,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 payment_method=row.payment_method, receipt_kind=row.receipt_kind,
                 raw_shop_name=row.raw_shop_name, raw_nip=row.raw_nip,
                 document_kind=row.document_kind, due_date=row.due_date, id=row.id,
+                forwarded_sender_domain=row.forwarded_sender_domain,
+                gateway=row.gateway, evidence_for_receipt_id=row.evidence_for_receipt_id,
                 linked_account_id=row.linked_account_id, linked_entry_ref=row.linked_entry_ref,
             )
         if preview is None:
@@ -902,6 +1080,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 raise DeviceTokenError(403, "budget_forbidden")
             if row.version != values["expected_version"]:
                 raise ReceiptError("budget_receipt_conflict", 409)
+            if row.evidence_for_receipt_id is not None:
+                raise ReceiptError("budget_receipt_stale_source", 409)
             tombstone_receipt(session, owner, row.id)
             session.execute(delete(Line).where(Line.receipt_id == row.id, Line.owner == owner))
             erase_receipt_audit(session, owner, row.id)
