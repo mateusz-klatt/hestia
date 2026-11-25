@@ -54,10 +54,11 @@ import secrets
 from pathlib import Path
 
 from alembic.script import ScriptDirectory
-from sqlalchemy import event, text
+from sqlalchemy import event, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
+from .. import authz, store_sql
 from ..db import AppMeta, BudgetHouseholdMember, User, _alembic_config, make_engine
 
 log = logging.getLogger("hestia.budget.household")
@@ -127,6 +128,8 @@ def authorize_household(session, member, *, header, require_header):
     """
     if require_header and not valid_grant_id(header):
         raise HouseholdAuthError(403, "budget_forbidden")
+    store_sql.auth_session_phase(session)
+    phase = authz.require_supported_policy_phase(session)
     if session.get(AppMeta, _USERS_MARKER) is None:
         from .views import BudgetUsersBackendRequired
         raise BudgetUsersBackendRequired()
@@ -135,8 +138,8 @@ def authorize_household(session, member, *, header, require_header):
     grant = session.get(BudgetHouseholdMember, member)
     if grant is None or grant.member_username != member or grant.owner == member:
         raise HouseholdAuthError(403, "budget_forbidden")
-    owner = session.get(User, grant.owner)
-    if owner is None or owner.disabled or owner.role != "admin":
+    owner = _active(session, grant.owner, "admin", check_budget_owner=(phase == authz.POLICY_PHASE_COMPAT))
+    if owner is None or (phase == authz.POLICY_PHASE_COMPAT and not owner.budget_owner):
         raise HouseholdAuthError(403, "budget_forbidden")
     if require_header and not hmac.compare_digest(header, grant.grant_id):
         raise HouseholdAuthError(403, "budget_forbidden")
@@ -184,23 +187,28 @@ def _require_lineage(session):
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'budget_household_members'")).first()
     if found is None:
         raise HouseholdCommandError("household_schema_required")
+    store_sql.auth_session_phase(session)
+    authz.require_supported_policy_phase(session)
     if session.get(AppMeta, _USERS_MARKER) is None:
         raise HouseholdCommandError("household_users_required")
 
 
-def _active(session, username, *roles):
+def _active(session, username, *roles, check_budget_owner=False):
     if not isinstance(username, str) or not username:
         return None
-    row = session.get(User, username)
+    columns = (User.disabled, User.role, User.budget_owner) if check_budget_owner else (User.disabled, User.role)
+    row = session.execute(select(*columns).where(User.username == username)).first()
     if row is None or row.disabled or row.role not in roles:
         return None
     return row
 
 
 def _grant(session, member, owner):
+    phase = authz.require_supported_policy_phase(session)
     if _active(session, member, *_MEMBER_ROLES) is None or member == owner:
         raise HouseholdCommandError("household_member_invalid")
-    if _active(session, owner, "admin") is None:
+    owner_row = _active(session, owner, "admin", check_budget_owner=(phase == authz.POLICY_PHASE_COMPAT))
+    if owner_row is None or (phase == authz.POLICY_PHASE_COMPAT and not owner_row.budget_owner):
         raise HouseholdCommandError("household_owner_invalid")
     existing = session.get(BudgetHouseholdMember, member)
     if existing is not None:
@@ -213,6 +221,7 @@ def _grant(session, member, owner):
         session.flush()
     except IntegrityError:
         raise HouseholdCommandError("household_grant_conflict") from None
+    store_sql.sync_legacy_grants(session)
     return {"ok": True, "status": "granted", "grant_id": grant_id}
 
 
@@ -222,6 +231,7 @@ def _revoke(session, member, owner, grant_id):
             or not hmac.compare_digest(row.grant_id, grant_id)):
         raise HouseholdCommandError("household_grant_mismatch")
     session.delete(row)
+    store_sql.sync_legacy_grants(session)
     return {"ok": True, "status": "revoked"}
 
 
@@ -261,6 +271,10 @@ def run_household_command(args):
         log.error("household status=%s", exc.code)
         print(exc.code, file=_stderr())
         return 2
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        log.error("household status=authorization_bridge_incompatible")
+        print("authorization_bridge_incompatible", file=_stderr())
+        return 1
     except Exception as exc:
         log.error("household status=household_internal exception=%s", type(exc).__name__)
         print("household_internal", file=_stderr())

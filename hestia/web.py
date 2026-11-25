@@ -27,10 +27,13 @@ Env: ``HESTIA_WEB_HOST`` (default ``127.0.0.1``), ``HESTIA_WEB_PORT``
 from __future__ import annotations
 
 import asyncio
+import hmac
+import ipaddress
 import json
 import logging
 import math
 import os
+import re
 import time
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -38,7 +41,7 @@ from pathlib import Path
 
 from aiohttp import ClientConnectionError, web
 
-from . import auth, store_sql
+from . import auth, authz, store_sql
 from .budget import consent_api, consent_context, device_token
 from .budget.config import BudgetConfigError
 from .budget.i18n import validate_languages
@@ -100,7 +103,24 @@ _COOKIE_SECURE = _truthy_env(os.environ.get("HESTIA_COOKIE_SECURE"))   # set on 
 _SESSION_COOKIE = "hestia_session"
 _USER_KEY = "hestia_user"
 _ROLE_KEY = "hestia_role"          # the request's resolved RBAC role (set by the auth middleware)
+_SESSION_CONTEXT_KEY = "hestia_session_context"
 _now = time.time          # WALL clock for session expiry (must survive restarts, unlike _clock); rebindable for tests
+
+
+@dataclass(frozen=True)
+class ValidatedSessionContext:
+    """Validated ingress session metadata passed downstream to browser-sensitive guards."""
+
+    username: str
+    role: str
+    carrier: str
+    version: int
+    purpose: "str | None"
+    generation: int
+    expiry: int
+    session_phase: str
+    policy_phase: str
+    raw_token: str
 
 
 def _require_safe_web_bind(host: str) -> None:
@@ -289,6 +309,120 @@ _ROUTE_MIN_ROLE = {
     ("POST", "/api/users/reset-password"): _ADMIN,
 }
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_CORE_BROWSER_READ_ROUTES = frozenset({
+    ("GET", _PATH_USERS),
+})
+_CORE_BROWSER_MUTATION_ROUTES = frozenset({
+    ("POST", _PATH_USERS),
+    ("POST", "/api/users/role"),
+    ("POST", "/api/users/disabled"),
+    ("POST", "/api/users/reset-password"),
+    ("POST", "/api/me/password"),
+    ("POST", "/api/name"),
+    ("POST", _PATH_WHOLE_HOME),
+    ("POST", _PATH_AUTOMATIONS),
+    ("POST", "/api/automations/delete"),
+    ("POST", "/api/graduate"),
+    ("POST", _PATH_ROOM_ICONS),
+})
+_CORE_BROWSER_ROUTES = _CORE_BROWSER_READ_ROUTES | _CORE_BROWSER_MUTATION_ROUTES
+
+
+_HOST_LABEL_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+
+
+def _parse_canonical_host(authority: str) -> "tuple[str, str | None] | None":
+    if authority.startswith("["):
+        inner, has_close, remainder = authority[1:].partition("]")
+        if not has_close or "%" in inner:
+            return None
+        if remainder == "":
+            port_str = None
+        elif remainder.startswith(":"):
+            port_str = remainder[1:]
+        else:
+            return None
+        try:
+            return str(ipaddress.IPv6Address(inner)), port_str
+        except ValueError:
+            return None
+    if "[" in authority or "]" in authority:
+        return None
+    host_raw, has_port, port_part = authority.partition(":")
+    if has_port and ":" in port_part:
+        return None
+    port_str = port_part if has_port else None
+    has_terminal_dot = host_raw.endswith(".")
+    dns_raw = host_raw[:-1] if has_terminal_dot else host_raw
+    if not dns_raw or len(dns_raw) > 253:
+        return None
+    try:
+        host_raw.encode("idna")
+    except UnicodeError:
+        return None
+    labels = dns_raw.split(".")
+    if not all(_HOST_LABEL_RE.fullmatch(label) for label in labels):
+        return None
+    try:
+        return str(ipaddress.IPv4Address(host_raw)), port_str
+    except ValueError:
+        if labels[-1].isdigit():
+            return None
+        return host_raw.lower(), port_str
+
+
+def _canonical_origin_tuple(origin: str, *, allow_trailing_slash: bool = False) -> "tuple[str, str, int] | None":
+    if (
+        not origin
+        or not origin.isascii()
+        or any(ord(ch) <= 32 or ord(ch) == 127 for ch in origin)
+        or "\\" in origin
+        or "://" not in origin
+    ):
+        return None
+    raw_scheme, rest = origin.split("://", 1)
+    scheme = raw_scheme.lower()
+    if scheme not in ("http", "https") or "?" in rest or "#" in rest:
+        return None
+    authority, has_slash, tail = rest.partition("/")
+    if (has_slash and (not allow_trailing_slash or bool(tail))) or not authority or "@" in authority:
+        return None
+    parsed = _parse_canonical_host(authority)
+    if parsed is None:
+        return None
+    canonical_host, port_str = parsed
+    default_port = 80 if scheme == "http" else 443
+    if port_str is None:
+        return scheme, canonical_host, default_port
+    if not port_str or len(port_str) > 5 or not port_str.isdigit():
+        return None
+    port = int(port_str)
+    if not 1 <= port <= 65535:
+        return None
+    return scheme, canonical_host, port
+
+
+def _check_core_origin(request) -> "web.Response | None":
+    configured = os.environ.get("HESTIA_PUBLIC_ORIGIN")
+    if configured is not None and configured != "":
+        expected = _canonical_origin_tuple(configured, allow_trailing_slash=True)
+        if expected is None:
+            return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": "auth_origin_unavailable"})
+    else:
+        hosts = request.headers.getall("Host", [])
+        if len(hosts) != 1:
+            return _json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "origin_required"})
+        expected = _canonical_origin_tuple(f"{request.scheme}://{hosts[0]}")
+        if expected is None:
+            return _json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "origin_required"})
+    origins = request.headers.getall("Origin", [])
+    if len(origins) != 1 or _canonical_origin_tuple(origins[0]) != expected:
+        return _json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "origin_required"})
+    return None
+
+
+def _incompatible_bridge_response():
+    return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": "authorization_bridge_incompatible"})
 
 
 def _required_role(method: str, path: str) -> str:
@@ -309,24 +443,28 @@ def _role_allows(role, floor: str) -> bool:
 _BEARER_PREFIX = "Bearer "
 
 
-def _request_token(request) -> str:
-    """The session token for this request: ``Authorization: Bearer <token>`` (native clients, e.g. the
-    iOS app) when present, else the ``hestia_session`` cookie (the browser). Both carry the SAME signed
-    ``username|expiry`` token; the bearer header wins so a native client never depends on the cookie jar."""
+def _request_carrier(request) -> "tuple[str, str]":
+    """Return ``("bearer", token)`` or ``("cookie", token)`` for session extraction."""
     header = request.headers.get("Authorization", "")
     if header.startswith(_BEARER_PREFIX):
-        return header[len(_BEARER_PREFIX):]
-    return request.cookies.get(_SESSION_COOKIE, "")
+        return "bearer", header[len(_BEARER_PREFIX):]
+    return "cookie", request.cookies.get(_SESSION_COOKIE, "")
+
+
+def _envelope_matches_state(carrier: str, envelope: auth.SessionEnvelope, auth_state: store_sql.AuthState) -> bool:
+    if auth_state.session_phase == store_sql.SESSION_PHASE_V2:
+        if envelope.generation != auth_state.generation:
+            return False
+        if envelope.version == 2:
+            expected_purpose = auth.SESSION_PURPOSE_BROWSER if carrier == "cookie" else auth.SESSION_PURPOSE_NATIVE
+            return envelope.purpose == expected_purpose
+        return True
+    return envelope.version == 1
 
 
 @web.middleware
 async def _auth_middleware(request, handler):
-    """Authenticate + authorize every non-public route when auth is enabled (a HESTIA_SESSION_SECRET is
-    set). An absent / expired / forged token → 401 (the TS app then shows the login form); a token for
-    an account that no longer exists → 401 (immediate revocation, not at token expiry); a valid user
-    whose role is below the route's floor → 403. No-op when auth is off (loopback/dev stays fully open).
-    The token comes from the bearer header or the session cookie (see ``_request_token``). Runs OUTERMOST
-    so an unauthenticated/unauthorized request is rejected before it reaches any handler."""
+    """Authenticate + authorize requests across legacy and active session/policy bridge phases."""
     if device_token.receipts_path(request.path) and not device_token.receipts_enabled():
         return device_token.disabled_response()
     authorization = request.headers.get("Authorization", "")
@@ -350,31 +488,72 @@ async def _auth_middleware(request, handler):
                     ("POST", device_token.REDEEM_PATH), ("GET", consent_api.CALLBACK),
                 )
                 and authorization.startswith(_BEARER_PREFIX)
-                and auth.verify_session(authorization[len(_BEARER_PREFIX):], now=_now(), secret=_SESSION_SECRET)):
+                and auth.decode_session(
+                    authorization[len(_BEARER_PREFIX):], now=_now(), secret=_SESSION_SECRET,
+                ) is not None):
             return device_token.json_error({"status": 403, "code": "budget_browser_session_required"})
     public = _is_public_route(request.method, request.path)
     # A redeem request carrying a browser session must also clear the owner
     # role floor. The handler returns the generic rejection for any cookie.
     redeem_cookie = public and request.path == device_token.REDEEM_PATH and _SESSION_COOKIE in request.cookies
     if not _AUTH_ENABLED or (public and not redeem_cookie):
+        if os.environ.get("HESTIA_PERSIST", "json").lower() == "sqlite":
+            try:
+                await asyncio.to_thread(store_sql.check_supported_policy_phase)
+            except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+                return _incompatible_bridge_response()
         return await handler(request)
-    user = auth.verify_session(_request_token(request), now=_now(), secret=_SESSION_SECRET)
-    if user is None:
+    carrier, raw_token = _request_carrier(request)
+    envelope = auth.decode_session(raw_token, now=_now(), secret=_SESSION_SECRET) if raw_token else None
+    if envelope is None:
+        if os.environ.get("HESTIA_PERSIST", "json").lower() == "sqlite":
+            try:
+                await asyncio.to_thread(store_sql.check_supported_policy_phase)
+            except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+                return _incompatible_bridge_response()
         if redeem_cookie:
             return await handler(request)
         return _empty(HTTPStatus.UNAUTHORIZED)
-    # Resolve the role fresh on EVERY authenticated request (offloaded off the loop): a demotion or a
-    # removed account takes effect immediately, instead of living on in the 30-day signed cookie.
-    role = await asyncio.get_running_loop().run_in_executor(
-        None, lambda: store_sql.current_user_role(user))
-    if role is None:                              # the account is gone → the still-signed cookie is moot
+    try:
+        auth_state = await asyncio.to_thread(store_sql.load_auth_state, envelope.username)
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return _incompatible_bridge_response()
+    if (
+        not auth_state.enabled
+        or auth_state.role is None
+        or not _envelope_matches_state(carrier, envelope, auth_state)
+    ):
         if redeem_cookie:
             return await handler(request)
         return _empty(HTTPStatus.UNAUTHORIZED)
-    request[_USER_KEY] = user                     # for /api/whoami + the audit actor
-    request[_ROLE_KEY] = role                     # for /api/whoami + the floor check below
-    if not _role_allows(role, _required_role(request.method, request.path)):
+    request[_USER_KEY] = envelope.username
+    request[_ROLE_KEY] = auth_state.role
+    request[_SESSION_CONTEXT_KEY] = ValidatedSessionContext(
+        username=envelope.username,
+        role=auth_state.role,
+        carrier=carrier,
+        version=envelope.version,
+        purpose=envelope.purpose,
+        generation=envelope.generation,
+        expiry=envelope.expiry,
+        session_phase=auth_state.session_phase,
+        policy_phase=auth_state.policy_phase,
+        raw_token=raw_token,
+    )
+    if not _role_allows(auth_state.role, _required_role(request.method, request.path)):
         return _empty(HTTPStatus.FORBIDDEN)
+    if (
+        auth_state.session_phase == store_sql.SESSION_PHASE_V2
+        and (request.method, request.path) in _CORE_BROWSER_ROUTES
+    ):
+        if carrier != "cookie":
+            return _json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "browser_session_required"})
+        if envelope.version != 2:
+            return _json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "browser_session_upgrade_required"})
+        if (request.method, request.path) in _CORE_BROWSER_MUTATION_ROUTES:
+            origin_err = _check_core_origin(request)
+            if origin_err is not None:
+                return origin_err
     return await handler(request)
 
 
@@ -398,6 +577,8 @@ async def _login(request):
         return op
     user = op.get("user") if isinstance(op, dict) else None
     password = op.get("password") if isinstance(op, dict) else None
+    native = isinstance(op, dict) and op.get("bearer") is True
+    snapshot = None
     if _AUTH_ENABLED and isinstance(user, str) and isinstance(password, str):
         # Same source resolution as the device login, so both share one bucket per client and a
         # malformed forwarded chain cannot collapse callers onto the trusted proxy's address.
@@ -410,27 +591,47 @@ async def _login(request):
             response = _json(HTTPStatus.TOO_MANY_REQUESTS, {"ok": False, "error": "login rate limited"})
             response.headers["Retry-After"] = str(retry)
             return response
-        authenticated = await asyncio.to_thread(lambda: auth.authenticate(user, password, store_sql.current_users()))
+        try:
+            snapshot = await asyncio.to_thread(store_sql.load_login_snapshot, user)
+        except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+            return _incompatible_bridge_response()
+        users_map = {} if snapshot.password_hash is None else {snapshot.username: snapshot.password_hash}
+        authenticated = await asyncio.to_thread(lambda: auth.authenticate(user, password, users_map))
     else:
         authenticated = False
     if not authenticated:
         _audit(_rt(request), user if isinstance(user, str) else "?", "login", result="invalid")
         return _json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "invalid credentials"})
-    token = auth.make_session(user, now=_now(), secret=_SESSION_SECRET)
+    if snapshot.backend == "sqlite":
+        try:
+            issued = await asyncio.to_thread(
+                lambda: store_sql.finish_sqlite_login(
+                    snapshot, native=native, now=_now(), secret=_SESSION_SECRET
+                )
+            )
+        except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+            return _incompatible_bridge_response()
+        if issued is None:
+            _audit(_rt(request), user, "login", result="invalid")
+            return _json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "invalid credentials"})
+        token = issued.token
+        active_v2 = issued.session_phase == store_sql.SESSION_PHASE_V2
+    else:
+        token = auth.make_session(user, now=_now(), secret=_SESSION_SECRET)
+        active_v2 = False
     body = {"ok": True, "user": user}
-    # A native client opts in with {"bearer": true} and stores the returned token (sent back as
-    # `Authorization: Bearer`). The browser does NOT ask, so the token never reaches page JS — the
-    # httponly cookie below stays the web session's sole carrier (XSS can't read it).
-    if op.get("bearer") is True:
+    if native:
         body["token"] = token
     resp = _json(HTTPStatus.OK, body)
-    try:
-        await consent_api.auth_transition(request, resp)
-    except Exception as exc:
-        return consent_api._failure(exc, "login_invalidation")
+    if not (active_v2 and native):
+        try:
+            await consent_api.auth_transition(request, resp)
+        except Exception as exc:
+            return consent_api._failure(exc, "login_invalidation")
     _audit(_rt(request), user, "login", result="ok")
-    resp.set_cookie(_SESSION_COOKIE, token, max_age=int(auth.SESSION_TTL), httponly=True,
-                    samesite="Strict", secure=_COOKIE_SECURE, path="/")
+    if not (active_v2 and native):
+        resp.set_cookie(_SESSION_COOKIE, token, max_age=int(auth.SESSION_TTL), httponly=True,
+                        samesite="Strict", secure=_COOKIE_SECURE, path="/")
     return resp
 
 
@@ -696,13 +897,23 @@ async def _me_password(request):
     loop = asyncio.get_running_loop()
     if not await _users_backend_ready():
         return _requires_sqlite()
+    snapshot = await loop.run_in_executor(None, lambda: store_sql.load_login_snapshot(user))
+    users_map = {} if snapshot.password_hash is None else {snapshot.username: snapshot.password_hash}
     verified = await loop.run_in_executor(
-        None, lambda: auth.authenticate(user, current, store_sql.current_users()))
+        None, lambda: auth.authenticate(user, current, users_map))
     if not verified:
         _audit(_rt(request), user, "password", result="invalid")
         return _json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "current password is incorrect"})
     new_hash = await loop.run_in_executor(None, lambda: auth.hash_password(new))
-    wrote = await loop.run_in_executor(None, lambda: store_sql.set_user_password(user, new_hash))
+    wrote = await loop.run_in_executor(
+        None,
+        lambda: store_sql.set_user_password(
+            user,
+            new_hash,
+            expected_hash=snapshot.password_hash,
+            expected_generation=snapshot.generation,
+        ),
+    )
     if not wrote:                                      # account vanished between verify and write
         return _json(HTTPStatus.CONFLICT, {"ok": False, "error": "account no longer exists"})
     _audit(_rt(request), user, "password", result="ok")
@@ -1340,6 +1551,8 @@ async def start_web(rt, host: str = None, port: int = None):
     if port is None:
         port = int(os.environ.get("HESTIA_WEB_PORT", "8927"))
     _require_safe_web_bind(host)
+    if os.environ.get("HESTIA_PERSIST", "json").lower() == "sqlite":
+        store_sql.check_supported_policy_phase()
     runner = web.AppRunner(make_app(rt), shutdown_timeout=2.0, access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, host, port)

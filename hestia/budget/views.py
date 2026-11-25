@@ -14,6 +14,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlalchemy import and_, func, or_, select, text
 
+from .. import authz, store_sql
 from ..db import AppMeta, User, BudgetAccount as Account, BudgetConnection as Connection
 from ..db import BudgetComponent as Component, BudgetTransaction as Transaction, BudgetImportBatch as ImportBatch
 from ..db import BudgetRequestLimit as RequestLimit
@@ -71,12 +72,14 @@ class BudgetHTTPStore(BudgetJobStore):
 
     @staticmethod
     def _owner(session, username):
+        store_sql.auth_session_phase(session)
+        phase = authz.require_supported_policy_phase(session)
         if session.get(AppMeta, "users_authoritative") is None:
             raise BudgetUsersBackendRequired()
         user = session.get(User, username)
         if user is None or user.disabled:
             raise BudgetAccessDenied(401)
-        if user.role != "admin":
+        if user.role != "admin" or (phase == authz.POLICY_PHASE_COMPAT and not user.budget_owner):
             raise BudgetAccessDenied(403)
 
     @contextmanager

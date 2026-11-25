@@ -29,9 +29,10 @@ def resolve_mode(env_mode, registry_path) -> str:
         return env_mode.lower()
     if os.environ.get("HESTIA_PERSIST", "json").lower() == "sqlite":
         from .db import init_db
-        from .store_sql import is_db_authoritative, read_mode
+        from .store_sql import check_supported_policy_phase, is_db_authoritative, read_mode
         engine, _ = init_db()
         try:
+            check_supported_policy_phase()
             if is_db_authoritative(engine):      # cut over → the DB holds the persisted mode
                 return read_mode(engine)
             # not yet cut over: the JSON registry still owns the mode for this boot

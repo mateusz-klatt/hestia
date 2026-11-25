@@ -29,7 +29,7 @@ import os
 
 from aiohttp import web
 
-from .. import store_sql
+from .. import authz, store_sql
 from ..db import init_db
 from . import api
 from .analytics_core import AnalyticsError
@@ -109,6 +109,9 @@ def _reader(secret):
     engine, sessions = init_db()
     if not store_sql.is_users_db_authoritative(engine):
         raise BudgetUsersBackendRequired()
+    with sessions() as session:
+        store_sql.auth_session_phase(session)
+        authz.require_supported_policy_phase(session)
     return HouseholdReader(sessions, cursor_secret=secret)
 
 

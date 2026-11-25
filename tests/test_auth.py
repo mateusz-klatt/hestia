@@ -121,7 +121,7 @@ class SessionTests(unittest.TestCase):
         self.assertIsNone(auth.verify_session(forged, now=1050.0, secret=SECRET))
 
     def test_malformed_token_rejected(self):
-        for bad in ("", "nodot", "a.b.c", "@@@.@@@"):
+        for bad in ("", "nodot", "a.a", "a.b.c", "@@@.@@@"):
             self.assertIsNone(auth.verify_session(bad, now=1.0, secret=SECRET))
 
     def _signed(self, payload: bytes) -> str:
@@ -135,6 +135,126 @@ class SessionTests(unittest.TestCase):
 
     def test_validly_signed_non_utf8_rejected(self):
         self.assertIsNone(auth.verify_session(self._signed(b"\xff\xfe|10"), now=1.0, secret=SECRET))
+
+    def _signed_v2_raw(self, payload_b64: str) -> str:
+        mac = hmac.new(SECRET, b"hestia/session/v2\0" + payload_b64.encode("ascii"), hashlib.sha256).digest()
+        return f"v2.{payload_b64}.{auth._b64u_encode(mac)}"
+
+    def _signed_v2_json(self, raw_json: bytes) -> str:
+        return self._signed_v2_raw(auth._b64u_encode(raw_json))
+
+    def test_v1_envelope_compatibility(self):
+        token = auth.make_session("tata", now=1000.0, secret=SECRET, ttl=100.0)
+        env = auth.decode_session(token, now=1050.0, secret=SECRET)
+        self.assertEqual(
+            env,
+            auth.SessionEnvelope(username="tata", expiry=1100, generation=0, version=1, purpose=None),
+        )
+
+    def test_v2_round_trip_browser_and_native(self):
+        for purpose in ("browser", "native"):
+            with self.subTest(purpose=purpose):
+                token = auth.make_session(
+                    "alice|żółć",
+                    now=1000.0,
+                    secret=SECRET,
+                    ttl=100.0,
+                    generation=3,
+                    purpose=purpose,
+                )
+                parts = token.split(".")
+                self.assertEqual(len(parts), 3)
+                self.assertEqual(parts[0], "v2")
+                self.assertNotIn("=", parts[1])
+                self.assertNotIn("=", parts[2])
+                # Compact UTF-8 JSON preserves Unicode without \\u escaping.
+                decoded_json = auth._b64u_decode(parts[1]).decode("utf-8")
+                self.assertIn("alice|żółć", decoded_json)
+                env = auth.decode_session(token, now=1050.0, secret=SECRET)
+                self.assertEqual(
+                    env,
+                    auth.SessionEnvelope(
+                        username="alice|żółć",
+                        expiry=1100,
+                        generation=3,
+                        version=2,
+                        purpose=purpose,
+                    ),
+                )
+                self.assertEqual(auth.verify_session(token, now=1050.0, secret=SECRET), "alice|żółć")
+
+    def test_make_session_v2_argument_validation(self):
+        with self.assertRaises(ValueError):
+            auth.make_session("alice", now=10.0, secret=SECRET, generation=0)
+        with self.assertRaises(ValueError):
+            auth.make_session("alice", now=10.0, secret=SECRET, purpose="browser")
+        with self.assertRaises(ValueError):
+            auth.make_session("", now=10.0, secret=SECRET, generation=0, purpose="browser")
+        with self.assertRaises(ValueError):
+            auth.make_session("alice", now=10.0, secret=SECRET, generation=-1, purpose="browser")
+        with self.assertRaises(ValueError):
+            auth.make_session("alice", now=10.0, secret=SECRET, generation=True, purpose="browser")
+        with self.assertRaises(ValueError):
+            auth.make_session("alice", now=10.0, secret=SECRET, generation=0, purpose="admin")
+
+    def test_decode_v2_checks_mac_before_json(self):
+        # Non-JSON payload with wrong MAC must be rejected at MAC comparison without decoding JSON.
+        forged = "v2.bm90LWpzb24." + auth._b64u_encode(b"\x00" * 32)
+        with mock.patch("hestia.auth.json.loads", side_effect=AssertionError("JSON parsed before MAC")):
+            self.assertIsNone(auth.decode_session(forged, now=10.0, secret=SECRET))
+
+    def test_decode_v2_rejects_malformed_envelopes_and_claims(self):
+        # Non-string, unsupported versions, wrong segment count, bad base64url
+        self.assertIsNone(auth.decode_session(None, now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session("v3.abc.def", now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session("v2.abc", now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session("v2.abc.def.ghi", now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session("v2..def", now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session("v2.ż.def", now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session("v2.abc.====", now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session("v2.abc.!!!", now=10.0, secret=SECRET))
+        # MAC has valid base64url chars and 32-byte length check: non-canonical trailing bits in payload_b64 (valid MAC)
+        # Encodes b"a" -> "YQ"; "YR" has non-zero unused low bits so _b64u_encode(b"a") == "YQ" != "YR".
+        self.assertIsNone(auth.decode_session(self._signed_v2_raw("YR"), now=10.0, secret=SECRET))
+        # Valid base64url JSON failures
+        self.assertIsNone(auth.decode_session(self._signed_v2_json(b"\xff\xfe"), now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session(self._signed_v2_json(b"{not-json"), now=10.0, secret=SECRET))
+        self.assertIsNone(auth.decode_session(self._signed_v2_json(b"[1,2,3]"), now=10.0, secret=SECRET))
+        self.assertIsNone(
+            auth.decode_session(
+                self._signed_v2_json(
+                    b'{"username":"a","username":"b","expiry":2000,"generation":0,"purpose":"browser"}'
+                ),
+                now=10.0,
+                secret=SECRET,
+            )
+        )
+        # Missing / extra / wrong-typed / out-of-range claims
+        bad_payloads = [
+            {"username": "a", "expiry": 2000, "generation": 0},
+            {"username": "a", "expiry": 2000, "generation": 0, "purpose": "browser", "extra": 1},
+            {"username": "", "expiry": 2000, "generation": 0, "purpose": "browser"},
+            {"username": 123, "expiry": 2000, "generation": 0, "purpose": "browser"},
+            {"username": "a", "expiry": True, "generation": 0, "purpose": "browser"},
+            {"username": "a", "expiry": 2000.5, "generation": 0, "purpose": "browser"},
+            {"username": "a", "expiry": 100, "generation": 0, "purpose": "browser"},  # expired when now == 100
+            {"username": "a", "expiry": 2000, "generation": -1, "purpose": "browser"},
+            {"username": "a", "expiry": 2000, "generation": True, "purpose": "browser"},
+            {"username": "a", "expiry": 2000, "generation": 0, "purpose": 123},
+            {"username": "a", "expiry": 2000, "generation": 0, "purpose": "receipt"},
+        ]
+        for payload in bad_payloads:
+            with self.subTest(payload=payload):
+                token = self._signed_v2_json(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+                self.assertIsNone(auth.decode_session(token, now=100.0, secret=SECRET))
+        # NaN constant
+        self.assertIsNone(
+            auth.decode_session(
+                self._signed_v2_json(b'{"username":"a","expiry":NaN,"generation":0,"purpose":"browser"}'),
+                now=10.0,
+                secret=SECRET,
+            )
+        )
 
 
 class UsersStoreTests(unittest.TestCase):
@@ -331,6 +451,85 @@ class CliSqliteTests(unittest.TestCase):
         other = self.dir / "fresh2.db"
         with mock.patch.dict(os.environ, {"HESTIA_DB": str(other)}):
             self.assertEqual(auth._cli(["disable", "tata"]), 1)
+
+    def test_add_falls_back_to_json_when_sqlite_users_not_cut_over(self):
+        other = self.dir / "fresh_add.db"
+        json_users = self.dir / "users.json"
+        with mock.patch.dict(
+            os.environ,
+            {"HESTIA_DB": str(other), "HESTIA_AUTH_USERS_FILE": str(json_users)},
+        ):
+            db.init_db(other)
+            self.assertEqual(auth._cli(["add", "kid"], prompt=_Prompt("pw", "pw")), 0)
+        self.assertIn("kid", json.loads(json_users.read_text(encoding="utf-8")))
+
+    def test_activate_sessions_v2_cli(self):
+        self.assertEqual(auth._cli(["activate-sessions-v2", "extra"]), 2)
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json"}):
+            self.assertEqual(auth._cli(["activate-sessions-v2"]), 1)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HESTIA_SESSION_SECRET", None)
+            self.assertEqual(auth._cli(["activate-sessions-v2"]), 1)
+        other = self.dir / "fresh_v2.db"
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(other), "HESTIA_SESSION_SECRET": "secret"}):
+            self.assertEqual(auth._cli(["activate-sessions-v2"]), 1)
+        with mock.patch.dict(os.environ, {"HESTIA_SESSION_SECRET": "secret"}):
+            self.assertEqual(auth._cli(["activate-sessions-v2"]), 0)
+            self.assertEqual(auth._cli(["activate-sessions-v2"]), 0)  # idempotent repeat
+
+    def test_budget_owner_cli(self):
+        from sqlalchemy import select
+        self.assertEqual(auth._cli(["budget-owner"]), 2)
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "json"}):
+            self.assertEqual(auth._cli(["budget-owner", "tata"]), 1)
+        other = self.dir / "fresh_owner.db"
+        with mock.patch.dict(os.environ, {"HESTIA_DB": str(other)}):
+            self.assertEqual(auth._cli(["budget-owner", "tata"]), 1)
+        self.assertEqual(auth._cli(["budget-owner", "ghost|name"]), 1)
+        self.assertEqual(auth._cli(["budget-owner", ""]), 1)
+        self.assertEqual(auth._cli(["add", "kid", "--role", "viewer"], prompt=_Prompt("pw", "pw")), 0)
+        self.assertEqual(auth._cli(["budget-owner", "ghost"]), 1)
+        self.assertEqual(auth._cli(["budget-owner", "kid"]), 1)
+        self.assertEqual(auth._cli(["budget-owner", "tata"]), 0)
+        self.assertEqual(auth._cli(["budget-owner", "tata"]), 0)  # idempotent repeat
+
+        # Existing JSON-imported usernames containing '|' are accepted via locked DB lookup.
+        pipe_db = self.dir / "pipe_owner.db"
+        with mock.patch.dict(os.environ, {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(pipe_db)}):
+            eng, _ = db.init_db(pipe_db)
+            store_sql.cutover_users(eng, {"legacy|owner": auth.hash_password("pw")})
+            eng.dispose()
+            self.assertEqual(auth._cli(["budget-owner", "legacy|owner"]), 0)
+            eng, sessions = db.init_db(pipe_db)
+            with sessions() as s:
+                user_row = s.get(db.User, "legacy|owner")
+                self.assertTrue(user_row.budget_owner)
+                grants = {
+                    (g.permission_id, g.target_owner)
+                    for g in s.execute(
+                        select(db.PermissionGrant).where(db.PermissionGrant.username == "legacy|owner")
+                    ).scalars()
+                }
+            self.assertEqual(grants, {(pid, "legacy|owner") for pid in store_sql._LEGACY_SELF_BUDGET_GRANTS})
+            eng.dispose()
+
+    def test_cli_fails_closed_with_fixed_error_on_unsupported_policy_phase(self):
+        import io
+        engine, _ = db.init_db(self.db)
+        with engine.begin() as conn:
+            conn.exec_driver_sql("INSERT INTO app_meta (key, value) VALUES ('authz_policy_phase', 'catalog_custom')")
+        engine.dispose()
+        with mock.patch.dict(os.environ, {"HESTIA_SESSION_SECRET": "secret"}):
+            for argv, kw in (
+                (["role", "tata", "viewer"], {}),
+                (["disable", "tata"], {}),
+                (["add", "newu"], {"prompt": _Prompt("pw", "pw")}),
+                (["activate-sessions-v2"], {}),
+                (["budget-owner", "tata"], {}),
+            ):
+                with self.subTest(argv=argv), mock.patch("sys.stderr", new_callable=io.StringIO) as buf:
+                    self.assertEqual(auth._cli(argv, **kw), 1)
+                    self.assertIn("incompatible authorization bridge phase", buf.getvalue())
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -13,6 +13,7 @@ import uuid
 from sqlalchemy import delete, exists, func, select
 from sqlalchemy.exc import IntegrityError
 
+from .. import authz, store_sql
 from ..db import AppMeta, BudgetAccount as Account, BudgetConnection as Connection
 from ..db import BudgetComponent as Component, BudgetConnectionAudit as ConnectionAudit
 from ..db import BudgetJob as Job, BudgetJobRequest as JobRequest
@@ -78,6 +79,8 @@ class BudgetJobStore(BudgetStore):
 
     @staticmethod
     def _owner(session, username):
+        store_sql.auth_session_phase(session)
+        authz.require_supported_policy_phase(session)
         if session.get(AppMeta, "users_authoritative") is None:
             raise BudgetUsersRequired()
         BudgetStore._owner(session, username)
@@ -213,6 +216,8 @@ class BudgetJobStore(BudgetStore):
 
     @staticmethod
     def users_authoritative(session):
+        store_sql.auth_session_phase(session)
+        authz.require_supported_policy_phase(session)
         return session.get(AppMeta, "users_authoritative") is not None
 
     def interrupt_orphans(self):

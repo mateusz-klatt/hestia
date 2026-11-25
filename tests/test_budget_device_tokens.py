@@ -1480,3 +1480,167 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 401)
             self.assertEqual((await response.json())["error"], error)
         self.assertEqual(self.rows(db.BudgetReceipt), [])
+
+
+class DeviceTokenAuthorizationBridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.addCleanup(db.reset_engine_cache)
+        self.addCleanup(device_token.reset_limits)
+        self.path = Path(self.directory.name) / "bridge_dt.db"
+        self.env = mock.patch.dict(
+            os.environ,
+            {
+                "HESTIA_DB": str(self.path),
+                "HESTIA_PERSIST": "sqlite",
+                RULE_KEY_FILE: str(_make_rule_key(self.path.parent)),
+                device_token.FLAG: "1",
+                "HESTIA_BUDGET_HTTP_ENABLED": "1",
+                "HESTIA_BUDGET_ANALYTICS_ENABLED": "1",
+                "HESTIA_BUDGET_PUBLIC_ORIGIN": ORIGIN,
+            },
+        )
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        for patch in (mock.patch.object(web, "_AUTH_ENABLED", True), mock.patch.object(web, "_SESSION_SECRET", SECRET)):
+            patch.start()
+            self.addCleanup(patch.stop)
+        engine, self.sessions = db.init_db(self.path)
+        self.alice_hash = auth.hash_password(LOGIN_PASSWORD)
+        store_sql.cutover_users(engine, {"alice": self.alice_hash, "unprov": self.alice_hash})
+        store_sql.add_user("viewer", auth.hash_password("vp"), "viewer", path=self.path)
+        store_sql.provision_budget_owner("alice", path=self.path)
+        with self.sessions.begin() as s:
+            s.add(db.BudgetConnection(id="bank", owner="alice", application_id="app", bank_name="B", country="PL",
+                                      enabled=True, next_attempt=0, failures=0))
+            s.add(db.BudgetConnection(id="unprov-bank", owner="unprov", application_id="app", bank_name="B", country="PL",
+                                      enabled=True, next_attempt=0, failures=0))
+        self.moment = 1_700_000_000.0
+        self.store = device_token.DeviceTokenStore(self.sessions, clock=lambda: self.moment)
+
+    def _set_meta(self, key: str, value: str) -> None:
+        with self.sessions.begin() as s:
+            row = s.get(db.AppMeta, key)
+            if row is None:
+                s.add(db.AppMeta(key=key, value=value))
+            else:
+                row.value = value
+
+    def test_decide_v2_sessions_and_bridge_incompatibility(self):
+        v1 = auth.make_session("alice", now=self.moment, secret=SECRET)
+        v2_native = auth.make_session("alice", now=self.moment, secret=SECRET, generation=0, purpose="native")
+        v2_bad = "v2.badpayload.badmac"
+        for tok in (v1, v2_native):
+            self.assertEqual(
+                device_token.decide("POST", device_token.PARSE_PATH, {"Authorization": f"Bearer {tok}"}, {}, SECRET, self.moment),
+                {"action": "pass"},
+            )
+        self.assertEqual(
+            device_token.decide("POST", device_token.PARSE_PATH, {"Authorization": f"Bearer {v2_bad}"}, {}, SECRET, self.moment),
+            {"action": "response", "status": 401, "code": "device_token_invalid"},
+        )
+        self.assertEqual(
+            device_token.decide("GET", "/api/discovery", {"Authorization": f"Bearer {v2_bad}"}, {}, SECRET, self.moment),
+            {"action": "pass"},
+        )
+        self.assertEqual(
+            device_token.decide(
+                "POST",
+                device_token.PARSE_PATH,
+                {"Authorization": f"Bearer {v2_native}"},
+                {device_token.COOKIE: v1},
+                SECRET,
+                self.moment,
+            ),
+            {"action": "response", "status": 400, "code": "budget_auth_ambiguous"},
+        )
+
+        issued = self.store.login("alice", LOGIN_PASSWORD, "Vesta")
+        self._set_meta("authz_policy_phase", "catalog_custom")
+        decided = device_token.decide(
+            "POST", device_token.PARSE_PATH, {"Authorization": f"Bearer {issued['token']}"}, {}, SECRET, self.moment
+        )
+        self.assertEqual(decided, {"action": "response", "status": 503, "code": "authorization_bridge_incompatible"})
+
+    def test_login_generation_recheck_and_catalog_compat_budget_owner_requirement(self):
+        self._set_meta("auth_session_phase", "v2")
+        self._set_meta("authz_policy_phase", "catalog_compat")
+
+        real_auth = auth.authenticate
+
+        def reset_same_hash_during_scrypt(u, pw, users):
+            ok = real_auth(u, pw, users)
+            store_sql.set_user_password("alice", self.alice_hash, path=self.path)
+            return ok
+
+        with mock.patch("hestia.auth.authenticate", side_effect=reset_same_hash_during_scrypt):
+            self.assertIsNone(self.store.login("alice", LOGIN_PASSWORD, "Vesta"))
+
+        self.assertIsNone(self.store.login("unprov", LOGIN_PASSWORD, "Vesta"))
+        with self.assertRaises(device_token.DeviceTokenError) as exc:
+            self.store.issue_code("unprov")
+        self.assertEqual(exc.exception.code, "budget_forbidden")
+        with self.assertRaises(household.HouseholdCommandError) as h_exc:
+            household.grant_member("viewer", "unprov", path=str(self.path))
+        self.assertEqual(h_exc.exception.code, "household_owner_invalid")
+
+        granted = household.grant_member("viewer", "alice", path=str(self.path))
+        with self.sessions() as s:
+            self.assertEqual(household.authorize_household(s, "viewer", header=granted["grant_id"], require_header=True)[1], "alice")
+        with self.sessions.begin() as s:
+            s.get(db.User, "alice").budget_owner = False
+        with self.sessions() as s:
+            with self.assertRaises(household.HouseholdAuthError):
+                household.authorize_household(s, "viewer", header=granted["grant_id"], require_header=True)
+        with self.sessions.begin() as s:
+            s.get(db.User, "alice").budget_owner = True
+
+        code_info = self.store.issue_code("alice")
+        self.assertIsNotNone(self.store.redeem(code_info["code"], "VestaRedeem"))
+        with self.sessions.begin() as s:
+            digest = device_token._mac(device_token._rule_key(), device_token._CODE_DOMAIN, "BBBBBBBB")
+            s.add(db.BudgetReceiptPairCode(
+                id="unprov-code", owner="unprov", code_hmac=digest, created_at=self.moment, expires_at=self.moment + 300
+            ))
+        self.assertIsNone(self.store.redeem("BBBBBBBB", "VestaBlocked"))
+        self.assertEqual(household.revoke_grant("viewer", "alice", granted["grant_id"], path=str(self.path))["status"], "revoked")
+
+        issued = self.store.login("alice", LOGIN_PASSWORD, "Vesta")
+        with self.sessions.begin() as s:
+            s.get(db.User, "alice").budget_owner = False
+        self.assertEqual(self.store.identify(issued["token"], slide=False)["status"], "revoked")
+
+    def test_custom_phase_blocks_all_device_token_and_household_paths(self):
+        from hestia import authz
+        import io
+        from types import SimpleNamespace
+
+        issued = self.store.login("alice", LOGIN_PASSWORD, "Vesta")
+        self._set_meta("authz_policy_phase", "catalog_custom")
+
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            device_token.open_store()
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            self.store.issue_code("alice")
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            self.store.cancel_code("alice", "c1")
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            self.store.login("alice", LOGIN_PASSWORD, "Vesta2")
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            self.store.redeem("AAAAAAAA", "Vesta2")
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            self.store.identify(issued["token"], slide=False)
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            self.store.list_tokens("alice")
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            self.store.revoke("alice", issued["token_id"], actor_token_id=issued["token_id"])
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            household.grant_member("viewer", "alice", path=str(self.path))
+        with self.sessions() as s:
+            with self.assertRaises(authz.PolicyPhaseUnsupported):
+                household.authorize_household(s, "viewer", header=None, require_header=False)
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as buf:
+            rc = household.run_household_command(SimpleNamespace(action="grant", member="viewer", owner="alice", db=str(self.path)))
+        self.assertEqual(rc, 1)
+        self.assertIn("authorization_bridge_incompatible", buf.getvalue())

@@ -26,7 +26,7 @@ from unittest import mock
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.web_middlewares import middleware
 
-from hestia import auth, db, proxy, store_sql, web
+from hestia import auth, authz, db, proxy, store_sql, web
 from hestia.automations import AutomationEngine, AutomationStore, rule_vocab
 from hestia.budget import household, household_api
 from hestia.protocol import Frame, build_frame, tlv
@@ -2159,7 +2159,18 @@ class AuthzTests(_WebTestBase):
             mock.patch.object(web, "_SESSION_SECRET", b"test-secret-bytes"),
             mock.patch.object(web, "_COOKIE_SECURE", False),
             mock.patch.object(auth, "load_users", return_value=self.users),
-            mock.patch.object(store_sql, "current_user_role", side_effect=lambda user: self.role),
+            mock.patch.object(
+                store_sql,
+                "load_auth_state",
+                side_effect=lambda _user: store_sql.AuthState(
+                    backend="json",
+                    session_phase="legacy",
+                    policy_phase="legacy",
+                    enabled=self.role is not None,
+                    role=self.role,
+                    generation=0,
+                ),
+            ),
             mock.patch.dict(os.environ, {"HESTIA_DB": str(self.tmp / "authz.db")}),  # keep db-stats off /data
         ]
         for p in patches:
@@ -2732,6 +2743,445 @@ class JsonBodyFramingTests(unittest.IsolatedAsyncioTestCase):
                 pass
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {"ok": True, "n": len(pad), "tail": "END"})
+
+
+class SessionBridgeWebTests(unittest.IsolatedAsyncioTestCase):
+    """Tests for active v2 session bridge, core Origin checks, CAS password writes, and phase fail-closed."""
+
+    async def asyncSetUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.addCleanup(db.reset_engine_cache)
+        self.db_path = Path(self._dir.name) / "bridge_web.db"
+        self.secret = b"session-bridge-web-secret"
+        self.env = mock.patch.dict(
+            os.environ,
+            {
+                "HESTIA_PERSIST": "sqlite",
+                "HESTIA_DB": str(self.db_path),
+                "HESTIA_AUTH_USERS_FILE": str(Path(self._dir.name) / "missing-users.json"),
+                "HESTIA_BUDGET_HTTP_ENABLED": "1",
+                "HESTIA_BUDGET_RECEIPTS_ENABLED": "1",
+                "HESTIA_BUDGET_CONSENT_ENABLED": "0",
+                "HESTIA_BUDGET_ANALYTICS_ENABLED": "1",
+            },
+        )
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        for p in (
+            mock.patch.object(web, "_AUTH_ENABLED", True),
+            mock.patch.object(web, "_SESSION_SECRET", self.secret),
+            mock.patch.object(web, "_COOKIE_SECURE", False),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+
+        engine, _ = db.init_db(self.db_path)
+        store_sql.cutover_users(
+            engine,
+            {
+                "admin": auth.hash_password("adminpw12345"),
+                "admin2": auth.hash_password("admin2pw1234"),
+            },
+        )
+        store_sql.add_user("op", auth.hash_password("oppw12345678"), "operator", path=self.db_path)
+        store_sql.add_user("viewer", auth.hash_password("viewpw123456"), "viewer", path=self.db_path)
+        engine.dispose()
+
+        reg = proxy.Registry(Path(self._dir.name) / "reg.json")
+        store = AutomationStore(Path(self._dir.name) / "auto.json")
+        self.rt = SimpleNamespace(
+            registry=reg,
+            engine=SimpleNamespace(store=store),
+            event_bus=proxy.EventBus(),
+            audit_engine=None,
+            protocol=None,
+        )
+        self.client = TestClient(TestServer(web.make_app(self.rt)))
+        await self.client.start_server()
+        self.addAsyncCleanup(self.client.close)
+
+    def _origin(self) -> str:
+        return f"http://{self.client.host}:{self.client.port}"
+
+    def _set_meta(self, key: str, value: str) -> None:
+        engine, _ = db.init_db(self.db_path)
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                "INSERT INTO app_meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+    async def test_legacy_phase_login_keeps_v1_and_bearer_cookie_parity(self):
+        resp = await self.client.post("/api/login", json={"user": "admin", "password": "adminpw12345", "bearer": True})
+        self.assertEqual(resp.status, 200)
+        body = await resp.json()
+        self.assertIn("Set-Cookie", resp.headers)
+        env = auth.decode_session(body["token"], now=web._now(), secret=self.secret)
+        self.assertEqual(env.version, 1)
+
+        # Phase off: password change leaves earlier v1 token valid because generation stays 0.
+        reset_ok = await self.client.post(
+            "/api/me/password",
+            json={"current": "adminpw12345", "new": "newadminpw123"},
+            headers={"Cookie": f"hestia_session={body['token']}"},
+        )
+        self.assertEqual(reset_ok.status, 200)
+        after = await self.client.get("/api/whoami", headers={"Authorization": f"Bearer {body['token']}"})
+        self.assertEqual(after.status, 200)
+
+    async def test_active_v2_login_cookie_native_separation_generation_and_concurrent_reset(self):
+        store_sql.activate_sessions_v2(path=self.db_path)
+
+        # Browser login emits v2 browser cookie and clears stale consent cookies via auth_transition.
+        flow_cookie = "__Host-hestia_budget_11111111-2222-4333-8444-555555555555"
+        browser_resp = await self.client.post(
+            "/api/login",
+            json={"user": "admin", "password": "adminpw12345"},
+            headers={"Cookie": f"{flow_cookie}={'m' * 43}"},
+        )
+        self.assertEqual(browser_resp.status, 200)
+        browser_cookie = browser_resp.cookies["hestia_session"].value
+        self.client.session.cookie_jar.clear()
+        self.assertEqual(auth.decode_session(browser_cookie, now=web._now(), secret=self.secret).purpose, "browser")
+        self.assertEqual(browser_resp.cookies[flow_cookie]["expires"], "Thu, 01 Jan 1970 00:00:00 GMT")
+
+        # Native login returns v2 native token, no Set-Cookie, and skips auth_transition.
+        with mock.patch("hestia.budget.consent_api.auth_transition", side_effect=AssertionError("called transition")):
+            native_resp = await self.client.post(
+                "/api/login",
+                json={"user": "admin", "password": "adminpw12345", "bearer": True},
+            )
+        self.assertEqual(native_resp.status, 200)
+        self.assertNotIn("Set-Cookie", native_resp.headers)
+        native_token = (await native_resp.json())["token"]
+        self.assertEqual(auth.decode_session(native_token, now=web._now(), secret=self.secret).purpose, "native")
+
+        # Carrier substitution rejected at ingress (401).
+        self.assertEqual((await self.client.get("/api/whoami", headers={"Cookie": f"hestia_session={native_token}"})).status, 401)
+        self.assertEqual((await self.client.get("/api/whoami", headers={"Authorization": f"Bearer {browser_cookie}"})).status, 401)
+
+        # Concurrent reset during scrypt rejects login without minting.
+        real_auth = auth.authenticate
+
+        def reset_during_scrypt(u, pw, users):
+            ok = real_auth(u, pw, users)
+            store_sql.set_user_password("admin", auth.hash_password("adminpw12345"), path=self.db_path)
+            return ok
+
+        with mock.patch("hestia.auth.authenticate", side_effect=reset_during_scrypt):
+            raced = await self.client.post("/api/login", json={"user": "admin", "password": "adminpw12345"})
+        self.assertEqual(raced.status, 401)
+
+        # Generation bump invalidated earlier v2 browser and native tokens as well as v1 generation=0.
+        v1_stale = auth.make_session("admin", now=web._now(), secret=self.secret)
+        for hdrs in (
+            {"Cookie": f"hestia_session={browser_cookie}"},
+            {"Authorization": f"Bearer {native_token}"},
+            {"Cookie": f"hestia_session={v1_stale}"},
+        ):
+            self.assertEqual((await self.client.get("/api/whoami", headers=hdrs)).status, 401)
+
+        # Disable and re-enable keeps bumped generation so pre-disable tokens remain invalid.
+        fresh_resp = await self.client.post("/api/login", json={"user": "op", "password": "oppw12345678", "bearer": True})
+        op_token = (await fresh_resp.json())["token"]
+        store_sql.set_user_disabled("op", True, path=self.db_path)
+        store_sql.set_user_disabled("op", False, path=self.db_path)
+        self.assertEqual((await self.client.get("/api/whoami", headers={"Authorization": f"Bearer {op_token}"})).status, 401)
+
+    async def test_active_v2_core_browser_route_and_origin_matrix(self):
+        store_sql.activate_sessions_v2(path=self.db_path)
+        login_b = await self.client.post("/api/login", json={"user": "admin", "password": "adminpw12345"})
+        b_cookie = login_b.cookies["hestia_session"].value
+        self.client.session.cookie_jar.clear()
+        login_n = await self.client.post("/api/login", json={"user": "admin", "password": "adminpw12345", "bearer": True})
+        n_token = (await login_n.json())["token"]
+        login_op = await self.client.post("/api/login", json={"user": "op", "password": "oppw12345678", "bearer": True})
+        op_token = (await login_op.json())["token"]
+        v1_cookie = auth.make_session("admin", now=web._now(), secret=self.secret)
+
+        # Role floor retains precedence over browser-only check: operator bearer -> empty 403, admin bearer -> JSON 403.
+        op_denied = await self.client.post("/api/users", json={}, headers={"Authorization": f"Bearer {op_token}"})
+        self.assertEqual(op_denied.status, 403)
+        self.assertEqual(await op_denied.read(), b"")
+
+        # GET /api/users: v2 browser cookie without Origin -> 200; v1 -> 401 upgrade; native bearer -> 403 browser_session_required.
+        self.assertEqual((await self.client.get("/api/users", headers={"Cookie": f"hestia_session={b_cookie}"})).status, 200)
+        u_v1 = await self.client.get("/api/users", headers={"Cookie": f"hestia_session={v1_cookie}"})
+        self.assertEqual(u_v1.status, 401)
+        self.assertEqual((await u_v1.json())["error"], "browser_session_upgrade_required")
+        u_nat = await self.client.get("/api/users", headers={"Authorization": f"Bearer {n_token}"})
+        self.assertEqual(u_nat.status, 403)
+        self.assertEqual((await u_nat.json())["error"], "browser_session_required")
+
+        # Exact 11 core browser mutation routes enforce v2 cookie + direct LAN Origin (ignoring forwarded headers).
+        direct_origin = self._origin()
+        core_mutations = (
+            ("/api/users", {}),
+            ("/api/users/role", {}),
+            ("/api/users/disabled", {}),
+            ("/api/users/reset-password", {}),
+            ("/api/me/password", {}),
+            ("/api/name", {}),
+            ("/api/whole-home", {}),
+            ("/api/automations", {}),
+            ("/api/automations/delete", {}),
+            ("/api/graduate", None),
+            ("/api/rooms/icons", {}),
+        )
+        for path, payload in core_mutations:
+            with self.subTest(path=path):
+                kwargs = {"json": payload} if payload is not None else {}
+                # Missing Origin -> 403 origin_required
+                no_org = await self.client.post(path, **kwargs, headers={"Cookie": f"hestia_session={b_cookie}"})
+                self.assertEqual(no_org.status, 403)
+                self.assertEqual((await no_org.json())["error"], "origin_required")
+                # Native bearer -> 403 browser_session_required
+                nat = await self.client.post(path, **kwargs, headers={"Authorization": f"Bearer {n_token}"})
+                self.assertEqual(nat.status, 403)
+                self.assertEqual((await nat.json())["error"], "browser_session_required")
+                # v1 cookie -> 401 browser_session_upgrade_required
+                v1r = await self.client.post(path, **kwargs, headers={"Cookie": f"hestia_session={v1_cookie}", "Origin": direct_origin})
+                self.assertEqual(v1r.status, 401)
+                self.assertEqual((await v1r.json())["error"], "browser_session_upgrade_required")
+                # Direct matching Origin (even with spoofed X-Forwarded headers) passes ingress & Origin check.
+                ok_hdrs = {
+                    "Cookie": f"hestia_session={b_cookie}",
+                    "Origin": direct_origin,
+                    "X-Forwarded-Host": "evil.example",
+                    "X-Forwarded-Proto": "https",
+                }
+                ok = await self.client.post(path, **kwargs, headers=ok_hdrs)
+                self.assertNotIn(ok.status, (401, 403))
+
+        # Configured HESTIA_PUBLIC_ORIGIN (DNS, terminal dot, IPv6, IPv4, trailing slash) and malformed origin handling.
+        for cfg_origin, hdr_origin, mismatched_origin in (
+            ("https://hestia.example:8443", "https://hestia.example:8443", direct_origin),
+            ("https://hestia.klatt.ie", "https://hestia.klatt.ie", "https://hestia.klatt.ie/"),
+            ("https://hestia.klatt.ie/", "https://hestia.klatt.ie", "https://hestia.klatt.ie."),
+            ("https://hestia.example.", "https://hestia.example.", "https://hestia.example"),
+            ("https://[::1]:8443", "https://[::1]:8443", direct_origin),
+            ("https://[::1]", "https://[::1]", direct_origin),
+            ("http://192.168.1.10:8080", "http://192.168.1.10:8080", direct_origin),
+        ):
+            with mock.patch.dict(os.environ, {"HESTIA_PUBLIC_ORIGIN": cfg_origin}):
+                bad_origin = await self.client.post(
+                    "/api/name", json={}, headers={"Cookie": f"hestia_session={b_cookie}", "Origin": mismatched_origin}
+                )
+                self.assertEqual(bad_origin.status, 403, f"expected 403 for {mismatched_origin!r} vs {cfg_origin!r}")
+                self.assertEqual((await bad_origin.json())["error"], "origin_required")
+                good_cfg = await self.client.post(
+                    "/api/name",
+                    json={},
+                    headers={"Cookie": f"hestia_session={b_cookie}", "Origin": hdr_origin},
+                )
+                self.assertEqual(good_cfg.status, 400)  # cleared auth & origin, reached body validation
+
+        for bad_cfg, hdr_origin in (
+            ("not-a-url", direct_origin),
+            ("ftp://hestia.example", direct_origin),
+            ("https://[v1.hestia.example]", "https://v1.hestia.example"),
+            ("https://[192.168.1.1]", direct_origin),
+            ("https://[::1", direct_origin),
+            ("https://[::1]extra", direct_origin),
+            ("https://[::1]:", direct_origin),
+            ("https://[::1%eth0]:8443", direct_origin),
+            ("https://foo]bar", direct_origin),
+            ("https://::1", direct_origin),
+            ("https://-bad.example", direct_origin),
+            ("https://bad-.example", direct_origin),
+            ("https://bad_host.example", direct_origin),
+            ("https://.", direct_origin),
+            ("https://..", direct_origin),
+            ("https://hestia.example..", direct_origin),
+            ("http://192.168.1.10.", direct_origin),
+            ("https://héllo.example", direct_origin),
+            ("https://" + ("a" * 64) + ".example", direct_origin),
+            ("https://" + ("a." * 126) + "bb", direct_origin),
+            ("http://192.168.1.999:8080", direct_origin),
+            ("https://hestia.example/path", direct_origin),
+            ("https://hestia.example//", direct_origin),
+            ("https://hestia.example?q=1", direct_origin),
+            ("https://hestia.example#frag", direct_origin),
+            ("https://hestia.example/?q=1", direct_origin),
+            ("https://hestia.example/#frag", direct_origin),
+            ("https://hestia.example:0", direct_origin),
+            ("https://hestia.example:65536", direct_origin),
+            ("https://hestia.example:99999", direct_origin),
+            ("https://hestia.example:" + ("9" * 4301), direct_origin),
+            ("https://hestia.example:abc", direct_origin),
+            ("https://u@hestia.example", direct_origin),
+            ("https://bad host", direct_origin),
+            ("\x01https://hestia.example", "https://hestia.example"),
+            ("\x7fhttps://hestia.example", "https://hestia.example"),
+            ("https://\x01hestia.example", "https://hestia.example"),
+            ("https://hestia.example:", direct_origin),
+            ("https://:8080", direct_origin),
+        ):
+            with mock.patch.dict(os.environ, {"HESTIA_PUBLIC_ORIGIN": bad_cfg}):
+                cfg_err = await self.client.post(
+                    "/api/name", json={}, headers={"Cookie": f"hestia_session={b_cookie}", "Origin": hdr_origin}
+                )
+                self.assertEqual(cfg_err.status, 503, f"expected 503 for {bad_cfg!r}")
+                self.assertEqual((await cfg_err.json())["error"], "auth_origin_unavailable")
+
+        # Malformed request Origin (4301-digit port / trailing slash) and fallback Host (4301-digit port / trailing slash) -> 403.
+        with mock.patch.dict(os.environ, {"HESTIA_PUBLIC_ORIGIN": "https://hestia.example"}):
+            huge_origin_resp = await self.client.post(
+                "/api/name",
+                json={},
+                headers={"Cookie": f"hestia_session={b_cookie}", "Origin": "https://hestia.example:" + ("9" * 4301)},
+            )
+            self.assertEqual(huge_origin_resp.status, 403)
+            self.assertEqual((await huge_origin_resp.json())["error"], "origin_required")
+        for bad_fallback_host in ("hestia.example/", "hestia.example:" + ("9" * 4301)):
+            fallback_err = web._check_core_origin(
+                SimpleNamespace(scheme="https", headers=mock.Mock(getall=lambda k, d=None, h=bad_fallback_host: [] if k == "Origin" else [h]))
+            )
+            self.assertIsNotNone(fallback_err)
+            self.assertEqual(fallback_err.status, 403)
+
+        # Non-browser-only routes allow v2 native, v2 browser without Origin, and live v1 compatibility cookies.
+        for path, method, body in (
+            ("/api/settings", "GET", None),
+            ("/api/settings", "POST", {"locale": "pl"}),
+            ("/api/whole-home", "GET", None),
+            ("/api/automations", "GET", None),
+            ("/api/rooms/icons", "GET", None),
+            ("/api/whoami", "GET", None),
+            ("/api/calendars", "GET", None),
+            ("/api/scene", "POST", {"op": "lights_off"}),
+        ):
+            for hdrs in (
+                {"Authorization": f"Bearer {n_token}"},
+                {"Cookie": f"hestia_session={b_cookie}"},
+                {"Cookie": f"hestia_session={v1_cookie}"},
+            ):
+                resp = await self.client.request(method, path, json=body, headers=hdrs)
+                self.assertNotIn(resp.status, (401, 403), f"{method} {path} unexpectedly rejected: {resp.status}")
+
+        # Duplicate Host header fails Origin fallback cleanly.
+        self.assertIsNotNone(
+            web._check_core_origin(SimpleNamespace(scheme="http", headers=mock.Mock(getall=lambda k, d=None: [] if k == "Origin" else ["a", "b"])))
+        )
+        self.assertIsNotNone(
+            web._check_core_origin(SimpleNamespace(scheme="http", headers=mock.Mock(getall=lambda k, d=None: ["http://bad host"])))
+        )
+
+    async def test_me_password_cas_rejects_concurrent_reset_and_custom_phase_blocks_start_and_http(self):
+        store_sql.activate_sessions_v2(path=self.db_path)
+        login_b = await self.client.post("/api/login", json={"user": "admin2", "password": "admin2pw1234"})
+        b_cookie = login_b.cookies["hestia_session"].value
+        self.client.session.cookie_jar.clear()
+
+        # Simulate admin resetting admin2 right after _me_password verifies current password.
+        real_auth = auth.authenticate
+
+        def race_reset(u, pw, users):
+            ok = real_auth(u, pw, users)
+            store_sql.set_user_password("admin2", auth.hash_password("concurrentpw12"), path=self.db_path)
+            return ok
+
+        with mock.patch("hestia.auth.authenticate", side_effect=race_reset):
+            raced = await self.client.post(
+                "/api/me/password",
+                json={"current": "admin2pw1234", "new": "mynewpassword1"},
+                headers={"Cookie": f"hestia_session={b_cookie}", "Origin": self._origin()},
+            )
+        self.assertEqual(raced.status, 409)
+
+        # Custom policy phase fails start_web before listening and returns 503 on HTTP paths.
+        self._set_meta("authz_policy_phase", "catalog_custom")
+        with mock.patch("aiohttp.web.AppRunner.setup", side_effect=AssertionError("runner started on custom phase")):
+            with self.assertRaises(authz.PolicyPhaseUnsupported):
+                await web.start_web(self.rt, host="127.0.0.1", port=0)
+        for req in (
+            self.client.get("/api/discovery", headers={"Cookie": f"hestia_session={b_cookie}"}),
+            self.client.get("/api/discovery"),
+            self.client.post("/api/logout"),
+            self.client.post("/api/login", json={"user": "admin", "password": "adminpw12345"}),
+        ):
+            r = await req
+            self.assertEqual(r.status, 503)
+            self.assertEqual((await r.json())["error"], "authorization_bridge_incompatible")
+        with mock.patch.object(web, "_AUTH_ENABLED", False):
+            r_off = await self.client.get("/api/discovery")
+            self.assertEqual(r_off.status, 503)
+            self.assertEqual((await r_off.json())["error"], "authorization_bridge_incompatible")
+        # Also if phase flips between login snapshot & finish_sqlite_login, login maps to 503.
+        self._set_meta("authz_policy_phase", "catalog_compat")
+        real_auth2 = auth.authenticate
+
+        def flip_custom_during_scrypt(u, pw, users):
+            ok = real_auth2(u, pw, users)
+            self._set_meta("authz_policy_phase", "catalog_custom")
+            return ok
+
+        with mock.patch("hestia.auth.authenticate", side_effect=flip_custom_during_scrypt):
+            r_flip = await self.client.post("/api/login", json={"user": "admin", "password": "adminpw12345"})
+            self.assertEqual(r_flip.status, 503)
+            self.assertEqual((await r_flip.json())["error"], "authorization_bridge_incompatible")
+
+        # Direct _login invocation without middleware also maps snapshot-phase unsupported to 503.
+        from aiohttp.test_utils import make_mocked_request
+        login_req = make_mocked_request("POST", "/api/login", headers={"Content-Type": "application/json"}, app=self.client.server.app)
+        with mock.patch.object(web, "_read_json_body", return_value=({"user": "admin", "password": "adminpw12345"}, False)), \
+             mock.patch("hestia.web.consent_context.login_ip", return_value="127.0.0.1"):
+            direct_resp = await web._login(login_req)
+        self.assertEqual(direct_resp.status, 503)
+        self.assertEqual(json.loads(direct_resp.body)["error"], "authorization_bridge_incompatible")
+
+    async def test_login_surrogate_username_runs_dummy_scrypt_and_returns_401(self):
+        verify_calls = []
+        real_verify = auth.verify_password
+
+        def track_verify(password, stored):
+            verify_calls.append(stored)
+            return real_verify(password, stored)
+
+        with mock.patch("hestia.auth.verify_password", side_effect=track_verify):
+            resp = await self.client.post(
+                "/api/login",
+                data='{"user": "\\ud800", "password": "wrong"}',
+                headers={"Content-Type": "application/json"},
+            )
+        self.assertEqual(resp.status, 401)
+        self.assertEqual((await resp.json())["error"], "invalid credentials")
+        self.assertEqual(verify_calls, [auth._DUMMY_STORED])
+
+    async def test_middleware_v1_revocation_race_keeps_single_snapshot(self):
+        login_v1 = await self.client.post("/api/login", json={"user": "admin", "password": "adminpw12345"})
+        self.assertEqual(login_v1.status, 200)
+        v1_cookie = login_v1.cookies["hestia_session"].value
+        self.client.session.cookie_jar.clear()
+
+        real_load = store_sql.load_auth_state
+        real_req = authz.require_supported_policy_phase
+        seen_states = []
+        interleaved = {"done": False}
+
+        def interleave(session):
+            phase = real_req(session)
+            if not interleaved["done"]:
+                interleaved["done"] = True
+                store_sql.activate_sessions_v2(path=self.db_path)
+                store_sql.set_user_password("admin", auth.hash_password("adminpw-reset"), path=self.db_path)
+            return phase
+
+        def capture_state(*args, **kwargs):
+            state = real_load(*args, **kwargs)
+            seen_states.append((state.session_phase, state.generation))
+            return state
+
+        with mock.patch("hestia.store_sql.load_auth_state", side_effect=capture_state), \
+             mock.patch("hestia.authz.require_supported_policy_phase", side_effect=interleave):
+            first = await self.client.get("/api/whoami", headers={"Cookie": f"hestia_session={v1_cookie}"})
+            self.assertEqual(first.status, 200)
+        self.assertEqual(seen_states, [("legacy", 0)])
+
+        revoked = await self.client.get("/api/whoami", headers={"Cookie": f"hestia_session={v1_cookie}"})
+        self.assertEqual(revoked.status, 401)
 
 
 if __name__ == "__main__":

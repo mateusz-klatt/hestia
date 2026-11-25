@@ -14,7 +14,7 @@ import uuid
 
 from aiohttp import web
 
-from .. import auth, store_sql
+from .. import auth, authz, store_sql
 from ..api_contract import BudgetConsentFlowRequest, BudgetConsentStartRequest
 from ..db import db_path, init_db
 from . import api
@@ -99,14 +99,15 @@ def enabled(app):
     return os.environ.get(FLAG) == "1" and app[KEY].service is not None
 
 
+def validate_browser_context(request, *, actor, now):
+    """Consume the validated browser cookie context for consent endpoints."""
+    return api.validate_browser_context(request, actor=actor, now=now)
+
+
 def _browser(request, auth_enabled, session_secret, *, mutation):
     owner = api._principal(request, auth_enabled)
     secret = api._secret(session_secret)
-    token = request.cookies.get("hestia_session", "")
-    if "Authorization" in request.headers:
-        raise api._Rejected(403, "budget_browser_session_required")
-    if auth.verify_session(token, now=api.time.time(), secret=secret) != owner:
-        raise api._Rejected(401, "budget_not_signed_in")
+    token = validate_browser_context(request, actor=owner, now=api._now())
     if mutation:
         api._browser(request, owner, secret)
     return owner, _fingerprint(token, secret)
@@ -128,6 +129,9 @@ def create_service(*, auth_enabled, session_secret, secure_cookie):
     path = db_path()
     with budget_lock(path):
         engine, sessions = init_db(path)
+        with sessions() as session:
+            store_sql.auth_session_phase(session)
+            authz.require_supported_policy_phase(session)
         if not store_sql.is_users_db_authoritative(engine):
             raise BudgetConfigError("Budget consent requires authoritative SQLite users")
         store = BudgetConsentControlStore(sessions)
@@ -152,6 +156,9 @@ async def auth_transition(request, response=None):
                 if os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
                     raise BudgetConfigError("Consent binding invalidation is unavailable")
                 engine, sessions = init_db()
+                with sessions() as session:
+                    store_sql.auth_session_phase(session)
+                    authz.require_supported_policy_phase(session)
                 if not store_sql.is_users_db_authoritative(engine):
                     raise BudgetConfigError("Consent binding invalidation is unavailable")
                 hashes = {flow_id: hashlib.sha256(nonce.encode("ascii")).hexdigest()
@@ -203,6 +210,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret, secure_cookie
             try:
                 application[KEY].service = await asyncio.to_thread(
                     create_service, auth_enabled=auth_enabled, session_secret=session_secret, secure_cookie=secure_cookie)
+            except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+                raise
             except Exception as exc:
                 log.error("Budget consent startup exception=%s", type(exc).__name__)
         yield

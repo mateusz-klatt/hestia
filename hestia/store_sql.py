@@ -16,20 +16,23 @@ never stop the JSON-backed house from booting (the live path stays on JSON in Ph
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from dataclasses import dataclass
 import json
 import logging
 import os
 from pathlib import Path
+import time
 
-from sqlalchemy import delete, event, func, select
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy import delete, event, func, select, text, update
 from sqlalchemy.orm import Session
 
-from . import auth
+from . import auth, authz
 from .automations import AutomationStore, Rule
 from .budget.i18n import preferred_languages
-from .db import (AppMeta, Audit, Automation, Node, User, UserSetting, db_path, init_db, make_engine,
-                 session_scope)
+from .db import (AppMeta, Audit, Automation, BudgetHouseholdMember, BudgetReceiptDeviceToken,
+                 BudgetReceiptPairCode, NativeLoginCode, Node, PermissionGrant, User, UserSetting,
+                 db_path, init_db, make_engine, session_scope)
 from .registry import Registry
 
 log = logging.getLogger("hestia.store_sql")
@@ -46,7 +49,64 @@ DEFAULT_NEW_ROLE = "viewer"
 # the (now-frozen) JSON. registry + automations cut over together (Phase 3); users separately (Phase 4).
 _AUTHORITATIVE = "registry_authoritative"
 _USERS_AUTHORITATIVE = "users_authoritative"
+_SESSION_PHASE_KEY = "auth_session_phase"
+SESSION_PHASE_LEGACY = "legacy"
+SESSION_PHASE_V2 = "v2"
+_SUPPORTED_SESSION_PHASES = frozenset({SESSION_PHASE_LEGACY, SESSION_PHASE_V2})
+_LEGACY_VIEWER_GRANTS = frozenset({"ioc.view", "calendar.view", "system.audit.view"})
+_LEGACY_OPERATOR_GRANTS = _LEGACY_VIEWER_GRANTS | frozenset({"ioc.control", "calendar.edit"})
+_LEGACY_ADMIN_GRANTS = _LEGACY_OPERATOR_GRANTS | frozenset({"ioc.configure", "system.manage_users"})
+_LEGACY_SELF_BUDGET_GRANTS = frozenset({
+    "budget.view",
+    "budget.edit",
+    "budget.receipts.add",
+    "budget.receipts.view",
+    "budget.receipts.edit",
+    "budget.receipts.match",
+})
 _DEVICE_STATE_KEY = "device_state"
+
+
+class SessionPhaseUnsupported(RuntimeError):
+    """Raised when SQLite holds an unsupported ``auth_session_phase`` value."""
+
+    def __init__(self, phase: str) -> None:
+        self.phase = phase
+        super().__init__(f"unsupported auth session phase: {phase!r}")
+
+
+@dataclass(frozen=True)
+class AuthState:
+    """Authorization bridge state for a single identity lookup."""
+
+    backend: str
+    session_phase: str
+    policy_phase: str
+    enabled: bool
+    role: "str | None"
+    generation: int
+
+
+@dataclass(frozen=True)
+class LoginSnapshot:
+    """Pre-scrypt account snapshot consumed by ``finish_sqlite_login``."""
+
+    username: str
+    backend: str
+    password_hash: "str | None"
+    generation: int
+    policy_phase: str
+    session_phase: str
+    db_path: "Path | None" = None
+
+
+@dataclass(frozen=True)
+class IssuedLogin:
+    """Issued token envelope metadata produced by ``finish_sqlite_login``."""
+
+    token: str
+    session_phase: str
+    generation: int
 _ROOM_ICONS_KEY = "room_icons"
 _STATS_TABLES = (
     ("app_meta", AppMeta),
@@ -74,10 +134,10 @@ def _upsert(session: Session, model, pk_name: str, pk_value, values: dict) -> No
 
 
 def mirror_json_to_db(session: Session, *, registry: Registry, store: AutomationStore, users: dict) -> None:
-    """Replace-mirror the three JSON stores into the DB within ``session`` (caller commits):
-    upsert every present row, delete DB rows absent from the JSON. The DB ends up an exact copy.
-    A ``not_in`` over an EMPTY set deletes ALL rows (SQLAlchemy renders delete-all) — intended:
-    an emptied JSON store empties its mirror too."""
+    """Replace-mirror the JSON stores into the DB within ``session`` (caller commits).
+    Never modifies ``users`` once ``users_authoritative`` is set, and validates bridge phases first."""
+    auth_session_phase(session)
+    authz.require_supported_policy_phase(session)
     _upsert(session, AppMeta, "key", "mode", {"value": registry.mode})
 
     node_keys = set(registry.nodes)
@@ -90,23 +150,24 @@ def mirror_json_to_db(session: Session, *, registry: Registry, store: Automation
         _upsert(session, Automation, "id", rule_id, {"position": position, "rule_json": _dump(rule.to_dict())})
     session.execute(delete(Automation).where(Automation.id.not_in(rule_ids)))
 
-    usernames = set(users)
-    for username, password_hash in users.items():
-        # JSON users predate roles → import them as admin (legacy single-tier). This mirror runs only
-        # pre-cutover (the shadow is a no-op once HESTIA_PERSIST=sqlite) and at the one-time cutover, so
-        # it never clobbers a role set in the authoritative DB.
-        _upsert(session, User, "username", username,
-                {"password_hash": password_hash, "role": LEGACY_ROLE})
-    session.execute(delete(User).where(User.username.not_in(usernames)))
+    if session.get(AppMeta, _USERS_AUTHORITATIVE) is None:
+        usernames = set(users)
+        for username, password_hash in users.items():
+            # JSON users predate roles -> import them as admin (legacy single-tier).
+            _upsert(session, User, "username", username,
+                    {"password_hash": password_hash, "role": LEGACY_ROLE})
+        session.execute(delete(User).where(User.username.not_in(usernames)))
+        session.flush()
+        sync_legacy_grants(session)
 
 
 def shadow_import(registry: Registry, store: AutomationStore, users: dict, *, path=None) -> bool:
-    """Open/upgrade the DB and replace-mirror the JSON stores into it. Returns True on success.
-    Best-effort: ANY failure is logged and returns False — the shadow must never break boot."""
+    """Open/upgrade the DB and replace-mirror the JSON stores into it under a write lock.
+    Returns True on success. Best-effort: ANY failure is logged and returns False."""
     engine = None
     try:
-        engine, session_factory = init_db(path)
-        with session_scope(session_factory) as session:
+        engine = _immediate_engine(path)
+        with Session(engine) as session, session.begin():
             mirror_json_to_db(session, registry=registry, store=store, users=users)
         return True
     except Exception:   # shadow is best-effort; a DB issue must NOT stop a JSON-backed boot
@@ -205,13 +266,52 @@ def load_automations(engine, path, *, writer) -> AutomationStore:
     return store
 
 
+def _valid_username(username) -> bool:
+    """Return True iff ``username`` is a non-empty UTF-8-encodable string safe for SQLite binding."""
+    if not isinstance(username, str) or not username:
+        return False
+    try:
+        username.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+@contextmanager
+def _read_snapshot(engine):
+    """Run multiple SQLite reads in one explicit ``BEGIN`` snapshot."""
+    with Session(engine) as session:
+        session.execute(text("BEGIN"))
+        try:
+            yield session
+        finally:
+            session.rollback()
+
+
+@contextmanager
+def _immediate_transaction(engine):
+    """Run work inside an explicit ``BEGIN IMMEDIATE`` write transaction on ``engine``."""
+    with Session(engine) as session:
+        session.execute(text("BEGIN IMMEDIATE"))
+        try:
+            yield session
+            session.commit()
+        except BaseException:
+            session.rollback()
+            raise
+
+
 def cutover_import(engine, registry: Registry, store: AutomationStore, users: dict) -> None:
     """One-time: replace-mirror the current JSON-loaded state into the DB and set the authority
     marker, in ONE transaction — after this the DB is the source of truth for registry+automations.
     The mode mirrored here is the JSON registry's persisted mode; the shipped docker-compose leaves
     HESTIA_MODE unset so the DB mode stays the single source of truth (an env override that is later
     removed would surface the DB mode on the next boot — don't mix HESTIA_MODE with the sqlite backend)."""
-    with Session(engine) as session, session.begin():
+    with _immediate_transaction(engine) as session:
+        auth_session_phase(session)
+        authz.require_supported_policy_phase(session)
+        if session.get(AppMeta, _AUTHORITATIVE) is not None:
+            return
         mirror_json_to_db(session, registry=registry, store=store, users=users)
         _upsert(session, AppMeta, "key", _AUTHORITATIVE, {"value": "1"})
 
@@ -225,15 +325,20 @@ def open_stores(*, registry_path, automations_path, users_path, persist=None):
     if persist != "sqlite":
         return Registry.load(registry_path), AutomationStore.load(automations_path)
     engine, _ = init_db()
-    if not is_db_authoritative(engine):
+    with _read_snapshot(engine) as session:
+        auth_session_phase(session)
+        authz.require_supported_policy_phase(session)
+        registry_auth = session.get(AppMeta, _AUTHORITATIVE) is not None
+        users_auth = session.get(AppMeta, _USERS_AUTHORITATIVE) is not None
+    if not registry_auth:
         cutover_import(engine, Registry.load(registry_path), AutomationStore.load(automations_path),
                        auth.load_users(Path(users_path)))
-    if not is_users_db_authoritative(engine):   # Phase 4: flip users (independent of the registry cutover)
+    if not users_auth:                          # Phase 4: flip users (independent of the registry cutover)
         users = auth.load_users(Path(users_path))
-        if users:                                # only promote a REAL, non-empty users.json: load_users returns
-            cutover_users(engine, users)         # {} for a missing/unreadable/malformed file, and promoting that
-            #                                      would wipe the DB users + set the marker → permanent lockout.
-            #                                      Empty/bad → skip (stay on JSON, retry next boot).
+        if users:                               # only promote a REAL, non-empty users.json: load_users returns
+            cutover_users(engine, users)        # {} for a missing/unreadable/malformed file, and promoting that
+            #                                     would wipe the DB users + set the marker → permanent lockout.
+            #                                     Empty/bad → skip (stay on JSON, retry next boot).
     return (load_registry(engine, registry_path, writer=registry_db_writer(engine)),
             load_automations(engine, automations_path, writer=automations_db_writer(engine)))
 
@@ -265,6 +370,82 @@ def export_to_json(*, registry_path, automations_path, path=None) -> bool:
 # per-login engine is fine; the stdlib auth primitives (hash/verify/session) stay backend-agnostic.
 
 
+def auth_session_phase(session: Session) -> str:
+    """Read ``app_meta.auth_session_phase``, defaulting absent to ``legacy`` and failing closed."""
+    row = session.get(AppMeta, _SESSION_PHASE_KEY)
+    phase = SESSION_PHASE_LEGACY if row is None else row.value
+    if phase not in _SUPPORTED_SESSION_PHASES:
+        raise SessionPhaseUnsupported(phase)
+    return phase
+
+
+def check_supported_policy_phase(*, path=None) -> str:
+    """Validate SQLite session and policy phases before startup or middleware auth-off bypass."""
+    engine, _ = init_db(path)
+    with Session(engine) as session:
+        auth_session_phase(session)
+        return authz.require_supported_policy_phase(session)
+
+
+def _is_managed_grant(row: PermissionGrant) -> bool:
+    return (
+        (row.target_owner is None and row.permission_id in _LEGACY_ADMIN_GRANTS)
+        or (row.target_owner == row.username and row.permission_id in _LEGACY_SELF_BUDGET_GRANTS)
+        or (row.target_owner is not None and row.permission_id == "household.view")
+    )
+
+
+def _desired_legacy_grants(session: Session) -> set[tuple[str, str, "str | None"]]:
+    role_grants = {
+        "viewer": _LEGACY_VIEWER_GRANTS,
+        "operator": _LEGACY_OPERATOR_GRANTS,
+        "admin": _LEGACY_ADMIN_GRANTS,
+    }
+    users_by_name = {u.username: u for u in session.execute(select(User)).scalars()}
+    desired: set[tuple[str, str, "str | None"]] = set()
+    for user in users_by_name.values():
+        for pid in role_grants.get(user.role, ()):
+            desired.add((user.username, pid, None))
+        if user.role == "admin" and user.budget_owner:
+            for pid in _LEGACY_SELF_BUDGET_GRANTS:
+                desired.add((user.username, pid, user.username))
+    for hm in session.execute(select(BudgetHouseholdMember)).scalars():
+        member = users_by_name.get(hm.member_username)
+        owner = users_by_name.get(hm.owner)
+        if (
+            member is not None
+            and owner is not None
+            and hm.member_username != hm.owner
+            and member.role in {"viewer", "operator"}
+            and owner.role == "admin"
+            and owner.budget_owner
+        ):
+            desired.add((hm.member_username, "household.view", hm.owner))
+    return desired
+
+
+def sync_legacy_grants(session: Session) -> None:
+    """Reconcile legacy role and household grant projections in ``catalog_compat``.
+    Requires caller to hold a write-locked ``BEGIN IMMEDIATE`` transaction."""
+    session.flush()
+    phase = authz.require_supported_policy_phase(session)
+    if phase == authz.POLICY_PHASE_LEGACY:
+        return
+    desired = _desired_legacy_grants(session)
+    existing_rows = session.execute(select(PermissionGrant)).scalars().all()
+    existing_managed = {
+        (r.username, r.permission_id, r.target_owner): r
+        for r in existing_rows
+        if _is_managed_grant(r)
+    }
+    for key, row in existing_managed.items():
+        if key not in desired:
+            session.delete(row)
+    for username, pid, owner in desired:
+        if (username, pid, owner) not in existing_managed:
+            session.add(PermissionGrant(username=username, permission_id=pid, target_owner=owner))
+
+
 def is_users_db_authoritative(engine) -> bool:
     with Session(engine) as session:
         return session.get(AppMeta, _USERS_AUTHORITATIVE) is not None
@@ -276,7 +457,10 @@ def users_db_authoritative() -> bool:
     marker is simply absent and this returns False, so the caller falls back to JSON."""
     engine, _ = init_db()
     try:
-        return is_users_db_authoritative(engine)
+        with Session(engine) as session:
+            auth_session_phase(session)
+            authz.require_supported_policy_phase(session)
+            return session.get(AppMeta, _USERS_AUTHORITATIVE) is not None
     finally:
         engine.dispose()
 
@@ -289,33 +473,51 @@ def load_users_db(engine) -> dict:
 
 
 def cutover_users(engine, users: dict) -> None:
-    """One-time: replace-mirror users.json into the DB and set the users authority marker (one txn).
-    Runs at boot in sqlite mode until set — independent of the registry cutover, so a box already on
-    sqlite for registry+automations (Phase 3) flips users on the next boot."""
-    with Session(engine) as session, session.begin():
+    """One-time: replace-mirror users.json into the DB and set the users authority marker (one txn)."""
+    with _immediate_transaction(engine) as session:
+        auth_session_phase(session)
+        authz.require_supported_policy_phase(session)
+        if session.get(AppMeta, _USERS_AUTHORITATIVE) is not None:
+            return
         for username, password_hash in users.items():
-            # legacy (pre-roles) JSON accounts → admin so the operator keeps full access after cutover
+            # legacy (pre-roles) JSON accounts -> admin so the operator keeps full access after cutover
             _upsert(session, User, "username", username,
                     {"password_hash": password_hash, "role": LEGACY_ROLE})
         session.execute(delete(User).where(User.username.not_in(set(users))))
         _upsert(session, AppMeta, "key", _USERS_AUTHORITATIVE, {"value": "1"})
+        sync_legacy_grants(session)
 
 
-def set_user_db(username: str, password_hash: str, role: str = DEFAULT_NEW_ROLE, *, path=None) -> None:
-    """Upsert one user and revoke their receipts credentials in one write-locked transaction.
-    The CLI passes the existing role on a password reset. New accounts default to viewer."""
+def set_user_db(username: str, password_hash: str, role: "str | None" = None, *, path=None) -> str:
+    """Upsert one user and revoke their credentials in one write-locked transaction.
+    When ``role`` is ``None``, preserves an existing user's role or defaults new accounts to viewer."""
     engine = _immediate_engine(path)
     try:
         with Session(engine) as session, session.begin():
-            _upsert(session, User, "username", username, {"password_hash": password_hash, "role": role})
-            _revoke_receipt_devices(session, username)
+            s_phase = auth_session_phase(session)
+            authz.require_supported_policy_phase(session)
+            row = session.get(User, username)
+            if row is None:
+                effective_role = DEFAULT_NEW_ROLE if role is None else role
+                row = User(username=username, password_hash=password_hash, role=effective_role)
+                session.add(row)
+                sync_legacy_grants(session)
+                return effective_role
+            effective_role = row.role if role is None else role
+            role_changed = effective_role != row.role
+            row.password_hash = password_hash
+            row.role = effective_role
+            _invalidate_account_credentials(session, row, s_phase=s_phase, include_owner_tokens=False)
+            if role is not None and role_changed:
+                sync_legacy_grants(session)
+            return effective_role
     finally:
         engine.dispose()
 
 
 def get_user_db_role(username: str, *, path=None) -> "str | None":
     """The role stored for ``username`` in the DB, or ``None`` if the account doesn't exist. DB-only (no
-    JSON fallback) — for the auth CLI's preserve-role-on-password-reset and the ``role`` subcommand."""
+    JSON fallback) — for tests and the auth CLI."""
     engine, _ = init_db(path)
     try:
         with Session(engine) as session:
@@ -349,21 +551,60 @@ def _other_enabled_admins(session, exclude_username: str) -> int:
     ).scalar_one()
 
 
-def _revoke_receipt_devices(session, username: str) -> None:
-    """Revoke receipts credentials in the same transaction as an account change."""
-    from .budget.device_token import revoke_owner_tokens
+def _revoke_receipt_devices(session: Session, username: str) -> None:
+    """Revoke receipts credentials (actor-bound or legacy null-actor self) and native codes."""
+    when = time.time()
+    session.execute(
+        update(BudgetReceiptDeviceToken)
+        .where(
+            (BudgetReceiptDeviceToken.actor == username)
+            | (BudgetReceiptDeviceToken.actor.is_(None) & (BudgetReceiptDeviceToken.owner == username)),
+            BudgetReceiptDeviceToken.revoked_at.is_(None),
+        )
+        .values(revoked_at=when)
+    )
+    session.execute(
+        update(BudgetReceiptPairCode)
+        .where(BudgetReceiptPairCode.owner == username, BudgetReceiptPairCode.consumed_at.is_(None))
+        .values(consumed_at=when)
+    )
+    session.execute(
+        update(NativeLoginCode)
+        .where(NativeLoginCode.username == username, NativeLoginCode.consumed_at.is_(None))
+        .values(consumed_at=when)
+    )
 
-    revoke_owner_tokens(session, username)
+
+def _invalidate_account_credentials(
+    session: Session,
+    user_row: User,
+    *,
+    s_phase: str,
+    include_owner_tokens: bool,
+) -> None:
+    """Bump ``credential_generation`` when v2 sessions are active and revoke credentials."""
+    if s_phase == SESSION_PHASE_V2:
+        user_row.credential_generation = int(user_row.credential_generation) + 1
+    _revoke_receipt_devices(session, user_row.username)
+    if include_owner_tokens:
+        when = time.time()
+        session.execute(
+            update(BudgetReceiptDeviceToken)
+            .where(
+                BudgetReceiptDeviceToken.owner == user_row.username,
+                BudgetReceiptDeviceToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=when)
+        )
 
 
 def set_user_role(username: str, role: str, *, path=None) -> str:
     """Change an existing user's role under a write-locked (BEGIN IMMEDIATE) transaction. Returns
-    ``"ok"``, ``"not_found"`` (no such user — never creates an account), or ``"last_admin"`` (REFUSED:
-    demoting this account would leave no enabled admin — lockout). The invariant check + the write share
-    one write-locked transaction, so concurrent admins can't race past it (see ``_immediate_engine``)."""
+    ``"ok"``, ``"not_found"``, or ``"last_admin"``."""
     engine = _immediate_engine(path)
     try:
         with Session(engine) as session, session.begin():
+            authz.require_supported_policy_phase(session)
             row = session.get(User, username)
             if row is None:
                 return "not_found"
@@ -372,7 +613,10 @@ def set_user_role(username: str, role: str, *, path=None) -> str:
             if row.role == "admin" and role != "admin" and _other_enabled_admins(session, username) == 0:
                 return "last_admin"
             row.role = role
-            _revoke_receipt_devices(session, username)
+            from .budget.device_token import revoke_owner_tokens
+
+            revoke_owner_tokens(session, username)
+            sync_legacy_grants(session)
         return "ok"
     finally:
         engine.dispose()
@@ -380,55 +624,242 @@ def set_user_role(username: str, role: str, *, path=None) -> str:
 
 def set_user_disabled(username: str, disabled: bool, *, path=None) -> str:
     """Enable/disable a user under a write-locked (BEGIN IMMEDIATE) transaction. Returns ``"ok"``,
-    ``"not_found"`` (no such user), or ``"last_admin"`` (REFUSED: disabling this account would leave no
-    enabled admin — lockout). The enabled-admin count + the flip share one write-locked transaction so
-    concurrent admins can't both disable the last two admins (see ``_immediate_engine``)."""
+    ``"not_found"``, or ``"last_admin"``. Disabling revokes credentials and bumps generation in v2."""
     engine = _immediate_engine(path)
     try:
         with Session(engine) as session, session.begin():
+            s_phase = auth_session_phase(session)
+            authz.require_supported_policy_phase(session)
             row = session.get(User, username)
             if row is None:
                 return "not_found"
             if disabled and not row.disabled:
                 if row.role == "admin" and _other_enabled_admins(session, username) == 0:
                     return "last_admin"
-                _revoke_receipt_devices(session, username)
-            row.disabled = disabled
+                row.disabled = True
+                _invalidate_account_credentials(session, row, s_phase=s_phase, include_owner_tokens=True)
+            else:
+                row.disabled = disabled
         return "ok"
     finally:
         engine.dispose()
 
 
-def current_user_role(username) -> "str | None":
-    """The access role of ``username`` in the ACTIVE users backend, for the web authz middleware:
+def load_auth_state(username, *, users_path=None) -> AuthState:
+    """Load the active authentication and session-bridge state for ``username``."""
+    persist = os.environ.get("HESTIA_PERSIST", "json").lower()
+    valid_name = _valid_username(username)
+    if persist != "sqlite":
+        present = valid_name and username in auth.load_users(Path(users_path) if users_path is not None else None)
+        return AuthState(
+            backend="json",
+            session_phase=SESSION_PHASE_LEGACY,
+            policy_phase=authz.POLICY_PHASE_LEGACY,
+            enabled=present,
+            role=LEGACY_ROLE if present else None,
+            generation=0,
+        )
+    engine, _ = init_db()
+    with _read_snapshot(engine) as session:
+        s_phase = auth_session_phase(session)
+        p_phase = authz.require_supported_policy_phase(session)
+        if session.get(AppMeta, _USERS_AUTHORITATIVE) is not None:
+            row = session.get(User, username) if valid_name else None
+            enabled = row is not None and not row.disabled
+            return AuthState(
+                backend="sqlite",
+                session_phase=s_phase,
+                policy_phase=p_phase,
+                enabled=enabled,
+                role=row.role if enabled else None,
+                generation=int(row.credential_generation) if enabled else 0,
+            )
+    present = valid_name and username in auth.load_users(Path(users_path) if users_path is not None else None)
+    return AuthState(
+        backend="sqlite_json",
+        session_phase=SESSION_PHASE_LEGACY,
+        policy_phase=p_phase,
+        enabled=present,
+        role=LEGACY_ROLE if present else None,
+        generation=0,
+    )
 
-    * sqlite + users-authoritative → the stored ``role`` (``None`` if the account no longer exists, so a
-      removed/renamed user is denied at once rather than at cookie expiry);
-    * otherwise (JSON backend, or sqlite before the users cutover) → ``admin`` iff the username still
-      exists in the JSON users map (legacy single-tier, back-compat), else ``None``.
 
-    ``None`` for a non-string / empty / unknown username so the caller fails closed. Uses the CACHED
-    engine WITHOUT disposing it — unlike the per-login helpers, this runs on every authenticated request,
-    so churning the connection pool each call would be wasteful (the cache owns the engine lifecycle)."""
-    if not isinstance(username, str) or not username:
+def load_login_snapshot(username, *, users_path=None) -> LoginSnapshot:
+    """Capture the pre-scrypt credential snapshot for ``username`` without holding a write lock."""
+    persist = os.environ.get("HESTIA_PERSIST", "json").lower()
+    valid_name = _valid_username(username)
+    clean_name = username if valid_name else ""
+    if persist != "sqlite":
+        users = auth.load_users(Path(users_path) if users_path is not None else None)
+        return LoginSnapshot(
+            username=clean_name,
+            backend="json",
+            password_hash=users.get(clean_name) if valid_name else None,
+            generation=0,
+            policy_phase=authz.POLICY_PHASE_LEGACY,
+            session_phase=SESSION_PHASE_LEGACY,
+        )
+    resolved = db_path()
+    engine, _ = init_db()
+    with _read_snapshot(engine) as session:
+        s_phase = auth_session_phase(session)
+        p_phase = authz.require_supported_policy_phase(session)
+        if session.get(AppMeta, _USERS_AUTHORITATIVE) is not None:
+            row = session.get(User, clean_name) if valid_name else None
+            eligible = row is not None and not row.disabled
+            return LoginSnapshot(
+                username=clean_name,
+                backend="sqlite",
+                password_hash=row.password_hash if eligible else None,
+                generation=int(row.credential_generation) if eligible else 0,
+                policy_phase=p_phase,
+                session_phase=s_phase,
+                db_path=resolved,
+            )
+    users = auth.load_users(Path(users_path) if users_path is not None else None)
+    return LoginSnapshot(
+        username=clean_name,
+        backend="sqlite_json",
+        password_hash=users.get(clean_name) if valid_name else None,
+        generation=0,
+        policy_phase=p_phase,
+        session_phase=SESSION_PHASE_LEGACY,
+        db_path=resolved,
+    )
+
+
+def finish_sqlite_login(
+    snapshot: LoginSnapshot,
+    *,
+    native: bool,
+    now: float,
+    secret: bytes,
+) -> "IssuedLogin | None":
+    """Re-verify SQLite user hash, enabled state, backend, and generation under ``BEGIN IMMEDIATE``
+    after scrypt and mint a token using the active session phase."""
+    if snapshot.backend != "sqlite" or os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
         return None
-    if os.environ.get("HESTIA_PERSIST", "json").lower() == "sqlite":
-        engine, _ = init_db()
-        if is_users_db_authoritative(engine):
-            with Session(engine) as session:
-                row = session.get(User, username)
-            return None if row is None or row.disabled else row.role   # gone or disabled → denied at once
-    return LEGACY_ROLE if username in auth.load_users() else None
+    engine = _immediate_engine(snapshot.db_path)
+    try:
+        with Session(engine) as session, session.begin():
+            s_phase = auth_session_phase(session)
+            authz.require_supported_policy_phase(session)
+            if session.get(AppMeta, _USERS_AUTHORITATIVE) is None:
+                return None
+            row = session.get(User, snapshot.username)
+            if (
+                row is None
+                or row.disabled
+                or snapshot.password_hash is None
+                or row.password_hash != snapshot.password_hash
+                or int(row.credential_generation) != snapshot.generation
+            ):
+                return None
+            if s_phase == SESSION_PHASE_V2:
+                purpose = auth.SESSION_PURPOSE_NATIVE if native else auth.SESSION_PURPOSE_BROWSER
+                token = auth.make_session(
+                    snapshot.username,
+                    now=now,
+                    secret=secret,
+                    generation=snapshot.generation,
+                    purpose=purpose,
+                )
+            else:
+                token = auth.make_session(snapshot.username, now=now, secret=secret)
+            return IssuedLogin(token=token, session_phase=s_phase, generation=snapshot.generation)
+    finally:
+        engine.dispose()
+
+
+def activate_sessions_v2(*, path=None) -> str:
+    """Persist ``auth_session_phase=v2`` once under a write lock."""
+    engine = _immediate_engine(path)
+    try:
+        with Session(engine) as session, session.begin():
+            s_phase = auth_session_phase(session)
+            authz.require_supported_policy_phase(session)
+            if session.get(AppMeta, _USERS_AUTHORITATIVE) is None:
+                return "users_not_authoritative"
+            if s_phase == SESSION_PHASE_V2:
+                return "already_active"
+            _upsert(session, AppMeta, "key", _SESSION_PHASE_KEY, {"value": SESSION_PHASE_V2})
+            return "activated"
+    finally:
+        engine.dispose()
+
+
+def provision_budget_owner(username: str, *, path=None) -> str:
+    """Provision an enabled legacy admin as a budget owner and seed direct self grants."""
+    engine = _immediate_engine(path)
+    try:
+        with Session(engine) as session, session.begin():
+            auth_session_phase(session)
+            authz.require_supported_policy_phase(session)
+            if session.get(AppMeta, _USERS_AUTHORITATIVE) is None:
+                return "users_not_authoritative"
+            row = session.get(User, username) if _valid_username(username) else None
+            if row is None:
+                return "not_found"
+            if row.disabled:
+                return "disabled"
+            if row.role != "admin":
+                return "not_admin"
+            if row.budget_owner:
+                return "already_provisioned"
+            other_grant_target = session.execute(
+                select(PermissionGrant.id)
+                .where(
+                    PermissionGrant.username == username,
+                    PermissionGrant.target_owner.is_not(None),
+                    PermissionGrant.target_owner != username,
+                )
+                .limit(1)
+            ).first()
+            dormant_household = session.execute(
+                select(BudgetHouseholdMember.member_username)
+                .where(
+                    BudgetHouseholdMember.member_username == username,
+                    BudgetHouseholdMember.owner != username,
+                )
+                .limit(1)
+            ).first()
+            if other_grant_target is not None or dormant_household is not None:
+                return "conflict"
+            row.budget_owner = True
+            existing_self = set(
+                session.execute(
+                    select(PermissionGrant.permission_id).where(
+                        PermissionGrant.username == username,
+                        PermissionGrant.target_owner == username,
+                    )
+                ).scalars()
+            )
+            for pid in sorted(_LEGACY_SELF_BUDGET_GRANTS - existing_self):
+                session.add(PermissionGrant(username=username, permission_id=pid, target_owner=username))
+            sync_legacy_grants(session)
+            return "ok"
+    finally:
+        engine.dispose()
+
+
+def current_user_role(username) -> "str | None":
+    """The access role of ``username`` in the ACTIVE users backend."""
+    state = load_auth_state(username)
+    return state.role if state.enabled else None
 
 
 def current_users(*, users_path=None) -> dict:
     """The users map from the active backend: the DB when sqlite + users-authoritative, else the JSON
-    file. Used by the login handler (the only place that reads the users store)."""
+    file."""
     if os.environ.get("HESTIA_PERSIST", "json").lower() == "sqlite":
-        engine, _ = init_db()               # idempotent; ensures the schema even on an odd-state boot
+        engine, _ = init_db()
         try:
-            if is_users_db_authoritative(engine):
-                return load_users_db(engine)
+            with Session(engine) as session:
+                auth_session_phase(session)
+                authz.require_supported_policy_phase(session)
+                if session.get(AppMeta, _USERS_AUTHORITATIVE) is not None:
+                    return load_users_db(engine)
         finally:
             engine.dispose()
     return auth.load_users(Path(users_path) if users_path is not None else None)
@@ -451,33 +882,43 @@ def list_users(*, path=None) -> "list[dict]":
 
 
 def add_user(username: str, password_hash: str, role: str, *, path=None) -> str:
-    """Insert a NEW account (admin "add user"). Returns ``"ok"`` or ``"exists"`` — never overwrites an
-    existing user (unlike ``set_user_db``'s upsert), so a duplicate add can't silently reset a password or
-    role. The username PRIMARY KEY is the arbiter (``IntegrityError`` → ``"exists"``), so even a concurrent
-    duplicate add can't both win. The account starts enabled (the ``disabled`` column default)."""
-    engine, _ = init_db(path)
+    """Insert a NEW account under ``BEGIN IMMEDIATE``. Returns ``"ok"`` or ``"exists"``."""
+    engine = _immediate_engine(path)
     try:
         with Session(engine) as session, session.begin():
+            authz.require_supported_policy_phase(session)
+            if session.get(User, username) is not None:
+                return "exists"
             session.add(User(username=username, password_hash=password_hash, role=role))
+            sync_legacy_grants(session)
         return "ok"
-    except IntegrityError:
-        return "exists"
     finally:
         engine.dispose()
 
 
-def set_user_password(username: str, password_hash: str, *, path=None) -> bool:
-    """Replace an existing account's password hash (self change-password + admin reset). Returns
-    ``False`` (changes nothing) when the user doesn't exist — never creates an account. Role + disabled
-    are untouched. The password change and receipts revocation share a write-locked transaction."""
+def set_user_password(
+    username: str,
+    password_hash: str,
+    *,
+    expected_hash: "str | None" = None,
+    expected_generation: "int | None" = None,
+    path=None,
+) -> bool:
+    """Replace an existing account's password hash under ``BEGIN IMMEDIATE`` with optional CAS."""
     engine = _immediate_engine(path)
     try:
         with Session(engine) as session, session.begin():
+            s_phase = auth_session_phase(session)
+            authz.require_supported_policy_phase(session)
             row = session.get(User, username)
             if row is None:
                 return False
+            if expected_hash is not None and (row.disabled or row.password_hash != expected_hash):
+                return False
+            if expected_generation is not None and int(row.credential_generation) != expected_generation:
+                return False
             row.password_hash = password_hash
-            _revoke_receipt_devices(session, username)
+            _invalidate_account_credentials(session, row, s_phase=s_phase, include_owner_tokens=False)
         return True
     finally:
         engine.dispose()

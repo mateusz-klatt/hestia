@@ -11,6 +11,7 @@ from contextlib import contextmanager
 
 from sqlalchemy import func, select, text
 
+from .. import authz, store_sql
 from ..db import BudgetAccount as Account, BudgetConnection as Connection
 from ..db import BudgetTransaction as Transaction, BudgetUnresolved as Unresolved, User
 from ..db import BudgetImportBatch as ImportBatch, BudgetImportUnresolved as ImportUnresolved
@@ -112,12 +113,21 @@ class BudgetStore:
     def transaction(self):
         with self.sessions.begin() as session:
             session.execute(text("BEGIN IMMEDIATE"))
+            store_sql.auth_session_phase(session)
+            authz.require_supported_policy_phase(session)
             yield session
 
     @staticmethod
     def _owner(session, username):
+        store_sql.auth_session_phase(session)
+        phase = authz.require_supported_policy_phase(session)
         user = session.get(User, username)
-        if user is None or user.disabled or user.role != "admin":
+        if (
+            user is None
+            or user.disabled
+            or user.role != "admin"
+            or (phase == authz.POLICY_PHASE_COMPAT and not user.budget_owner)
+        ):
             raise BudgetStoreError("Bank connection requires an existing enabled admin owner")
 
     def configure(self, config):
@@ -754,6 +764,8 @@ class BudgetStore:
         now = self.clock()
         with self.sessions() as session:
             session.execute(text("BEGIN"))
+            store_sql.auth_session_phase(session)
+            authz.require_supported_policy_phase(session)
             return self._status_rows(session, owner, now)
 
     def _status_rows(self, session, owner, now):

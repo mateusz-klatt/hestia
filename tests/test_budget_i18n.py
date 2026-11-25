@@ -78,8 +78,9 @@ class TranslationMigrationTests(unittest.TestCase):
     def test_schema_constraints_cascade_and_downgrade_roundtrip(self):
         cfg = Config()
         cfg.set_main_option("script_location", str(db._MIGRATIONS_DIR))
-        revision = ScriptDirectory.from_config(cfg).get_revision(HEAD)
-        self.assertEqual(revision.down_revision, "0028")
+        script = ScriptDirectory.from_config(cfg)
+        self.assertEqual(script.get_revision("0029").down_revision, "0028")
+        self.assertEqual(script.get_revision(HEAD).down_revision, "0029")
         engine, sessions = db.init_db(self.path)
         with sessions.begin() as session:
             session.add(db.User(username="owner", password_hash="unused", role="admin"))

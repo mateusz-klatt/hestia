@@ -16,6 +16,7 @@ import random
 import threading
 import time
 
+from .. import authz, store_sql
 from .client import EnableBankingClient
 from .config import BudgetConfigError, load_config
 from .consent_runtime import resolve_config
@@ -239,6 +240,8 @@ def build_service(*, auth_enabled, path=None):
     runner = BudgetJobRunner(db_path() if path is None else path, poller=_flag(POLLER_FLAG))
     try:
         runner.check()
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        raise
     except Exception as exc:
         # Never let an optional financial feature abort the home-automation web server's startup.
         log.error("Budget jobs disabled (%s)", type(exc).__name__)

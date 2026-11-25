@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date
+import hmac
 import logging
 import os
 import re
@@ -12,7 +13,7 @@ from urllib.parse import urlsplit
 from aiohttp import web
 from pydantic import ValidationError
 
-from .. import auth, store_sql
+from .. import auth, authz, store_sql
 from ..api_contract import (BudgetBackgroundSelectionRequest, BudgetConnectionStateRequest, BudgetKindRequest,
                             BudgetRefreshRequest, BudgetSelectionRequest)
 from ..db import init_db
@@ -25,6 +26,7 @@ from .views import (BudgetAccessDenied, BudgetControlConflict, BudgetHTTPStore, 
 
 
 PREFIX = "/api/budget"
+_now = time.time
 READS = ("connections", "accounts", "status", "transactions", "balances", "limits", "jobs")
 MUTATIONS = {
     "account-selection": (BudgetSelectionRequest, "set_account_selected", "account", "account_id", "selected"),
@@ -70,12 +72,36 @@ def _secret(session_secret):
     return secret
 
 
-def _browser(request, user, secret, *, allow_same_origin_fetch=False):
+def validate_browser_context(request, *, actor, now):
+    """Verify the validated ingress browser cookie context and return original cookie bytes."""
     if "Authorization" in request.headers:
         raise _Rejected(403, "budget_browser_session_required")
+    ctx = request.get("hestia_session_context")
     token = request.cookies.get("hestia_session", "")
-    if auth.verify_session(token, now=time.time(), secret=secret) != user:
+    if (
+        ctx is None
+        or ctx.carrier != "cookie"
+        or not isinstance(actor, str)
+        or not actor
+        or ctx.username != actor
+        or not token
+        or not hmac.compare_digest(token, ctx.raw_token)
+        or now >= ctx.expiry
+    ):
         raise _Rejected(401, "budget_not_signed_in")
+    if ctx.session_phase == store_sql.SESSION_PHASE_V2:
+        if ctx.version != 2:
+            raise _Rejected(401, "budget_browser_session_upgrade_required")
+        if ctx.purpose != auth.SESSION_PURPOSE_BROWSER:
+            raise _Rejected(401, "budget_not_signed_in")
+    elif ctx.version != 1:
+        raise _Rejected(401, "budget_not_signed_in")
+    return token
+
+
+def _browser(request, user, secret, *, allow_same_origin_fetch=False):
+    del secret
+    validate_browser_context(request, actor=user, now=_now())
     origin = os.environ.get("HESTIA_BUDGET_PUBLIC_ORIGIN", "")
     try:
         parsed = urlsplit(origin)
@@ -125,6 +151,9 @@ def _query(request, operation):
 
 def _store(secret):
     engine, sessions = init_db()
+    with sessions() as session:
+        store_sql.auth_session_phase(session)
+        authz.require_supported_policy_phase(session)
     if not store_sql.is_users_db_authoritative(engine):
         raise BudgetUsersBackendRequired()
     return BudgetHTTPStore(sessions, cursor_secret=secret)
@@ -195,6 +224,8 @@ async def _settled_thread(operation):
 
 
 def _failure(exc, operation):
+    if isinstance(exc, (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported)):
+        return _error(503, "authorization_bridge_incompatible")
     if isinstance(exc, _Rejected):
         return _error(exc.status, exc.code)
     if isinstance(exc, BudgetAccessDenied):

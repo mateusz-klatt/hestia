@@ -444,6 +444,70 @@ class SessionScopeTests(unittest.TestCase):
                 (1.5, "tata", "control", "5", None, "ok"),
             )
 
+    def test_0030_models_defaults_constraints_and_foreign_keys(self):
+        with db.session_scope(self.Session) as s:
+            s.add(db.User(username="owner", password_hash="h", role="admin"))
+            s.add(db.User(username="delegate", password_hash="h", role="viewer"))
+            s.flush()
+            owner = s.get(db.User, "owner")
+            self.assertFalse(owner.budget_owner)
+            self.assertEqual(owner.credential_generation, 0)
+            s.add(db.PermissionGrant(username="delegate", permission_id="ioc.view", target_owner=None))
+            s.add(db.PermissionGrant(username="delegate", permission_id="household.view", target_owner="owner"))
+            s.add(db.NativeLoginCode(
+                id="code-1", username="delegate", code_hmac="a" * 64, generation=0,
+                created_at=10.0, expires_at=20.0, consumed_at=None,
+            ))
+            s.add(db.BudgetReceipt(
+                id="r-1", owner="owner", status="draft", source_kind="live_text",
+                version=1, created_at=1.0, updated_at=1.0,
+            ))
+            s.add(db.BudgetReceiptDeviceToken(
+                id="tok-1", owner="owner", device_name="Vesta", token_hmac="b" * 64,
+                created_at=1.0, expires_at=2.0, hard_expires_at=3.0, sliding_written_at=1.0,
+            ))
+        with db.session_scope(self.Session) as s:
+            receipt = s.get(db.BudgetReceipt, "r-1")
+            token = s.get(db.BudgetReceiptDeviceToken, "tok-1")
+            self.assertIsNone(receipt.submitted_by)
+            self.assertIsNone(token.actor)
+            self.assertIsNone(token.issued_permissions)
+
+        bad_ops = (
+            lambda s: s.add(db.PermissionGrant(username="delegate", permission_id="ioc.view", target_owner=None)),
+            lambda s: s.add(db.PermissionGrant(username="delegate", permission_id="household.view", target_owner="owner")),
+            lambda s: s.add(db.PermissionGrant(username="missing", permission_id="ioc.view", target_owner=None)),
+            lambda s: s.add(db.PermissionGrant(username="delegate", permission_id="household.view", target_owner="missing")),
+            lambda s: s.add(db.NativeLoginCode(
+                id="code-dup", username="delegate", code_hmac="a" * 64, generation=0,
+                created_at=10.0, expires_at=20.0,
+            )),
+            lambda s: s.add(db.NativeLoginCode(
+                id="code-bad-hmac", username="delegate", code_hmac="Z" * 64, generation=0,
+                created_at=10.0, expires_at=20.0,
+            )),
+            lambda s: s.add(db.NativeLoginCode(
+                id="code-neg-gen", username="delegate", code_hmac="c" * 64, generation=-1,
+                created_at=10.0, expires_at=20.0,
+            )),
+            lambda s: s.add(db.NativeLoginCode(
+                id="code-bad-exp", username="delegate", code_hmac="d" * 64, generation=0,
+                created_at=20.0, expires_at=20.0,
+            )),
+            lambda s: s.add(db.BudgetReceipt(
+                id="r-bad-sub", owner="owner", submitted_by="missing", status="draft",
+                source_kind="live_text", version=1, created_at=1.0, updated_at=1.0,
+            )),
+            lambda s: s.add(db.BudgetReceiptDeviceToken(
+                id="tok-bad-actor", owner="owner", actor="missing", device_name="Vesta",
+                token_hmac="e" * 64, created_at=1.0, expires_at=2.0, hard_expires_at=3.0, sliding_written_at=1.0,
+            )),
+        )
+        for index, op in enumerate(bad_ops):
+            with self.subTest(case=index), self.assertRaises(IntegrityError):
+                with db.session_scope(self.Session) as s:
+                    op(s)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

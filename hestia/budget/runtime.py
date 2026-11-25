@@ -212,11 +212,15 @@ def _run_connection(config, connection, store, scheduler, client_factory, clock,
 
 def run_once(config, *, path=None, clock=time.time, client_factory=EnableBankingClient,
              monotonic=time.monotonic, sleeper=time.sleep):
+    from .. import authz, store_sql
     from ..db import db_path, init_db
 
     target = db_path() if path is None else path
     with budget_lock(target):
         _, sessions = init_db(target)
+        with sessions() as session:
+            store_sql.auth_session_phase(session)
+            authz.require_supported_policy_phase(session)
         store = BudgetStore(sessions, clock=clock)
         store.configure(config)
         from .consent_runtime import resolve_config

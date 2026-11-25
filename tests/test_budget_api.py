@@ -17,11 +17,11 @@ from aiohttp.test_utils import TestClient, TestServer
 from multidict import MultiDict
 from sqlalchemy import select
 
-from hestia import api_contract, auth, db, store_sql, web
+from hestia import api_contract, auth, authz, db, store_sql, web
 from hestia.budget import api, config, runtime
 from hestia.budget.config import BudgetConfigError
 from hestia.budget.consent_files import ConsentFilesError
-from hestia.budget.store import BudgetStore
+from hestia.budget.store import BudgetStore, BudgetStoreError
 from hestia.budget.views import BudgetHTTPStore
 from hestia.proxy import EventBus
 from tests.test_budget_store import configuration, prepare_selected, snapshot, transaction
@@ -410,10 +410,17 @@ class BudgetAPITests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cookie_expiry_between_body_read_and_write_does_not_mutate(self):
         account = await self.account()
-        with mock.patch.object(api.auth, "verify_session", side_effect=["alice", "alice", None]):
-            response = await self.post("account-selection", {"account_id": self.alice_id, "selected": False,
-                                                              "expected_version": account["control_version"]})
+        with mock.patch.object(
+            api,
+            "_now",
+            side_effect=[web._now(), web._now() + auth.SESSION_TTL + 10],
+        ):
+            response = await self.post(
+                "account-selection",
+                {"account_id": self.alice_id, "selected": False, "expected_version": account["control_version"]},
+            )
         self.assertEqual(response.status, 401)
+        self.assertEqual((await response.json())["error"], "budget_not_signed_in")
         self.assertTrue((await self.account())["selected"])
 
     async def test_unconfigured_owned_account_cannot_be_selected_and_can_be_deselected(self):
@@ -547,8 +554,166 @@ class BudgetGuardTests(unittest.TestCase):
         self.assertNotIn(b"budget_forecast_config_conflict", plain.body)
         self.assertNotIn(b"PRIVATE", plain.body)
         self.assertNotIn(b"consent_files", consent.body)
+        incompat = api._failure(authz.PolicyPhaseUnsupported("catalog_custom"), "accounts")
+        self.assertEqual((incompat.status, json.loads(incompat.body)), (503, {"ok": False, "error": "authorization_bridge_incompatible"}))
 
     def test_query_parser_rejects_cursor_over_transport_limit_without_expanding_http_framing(self):
         request = SimpleNamespace(query=MultiDict({"account_id": "local", "cursor": "x" * 8193}))
         with self.assertRaises(api.BudgetQueryError):
             api._query(request, "transactions")
+
+    def test_validate_browser_context_rejects_missing_tampered_and_wrong_purpose(self):
+        with self.assertRaises(api._Rejected) as exc:
+            api.validate_browser_context(SimpleNamespace(headers={}, cookies={}, get=lambda _k: None), actor="alice", now=10.0)
+        self.assertEqual((exc.exception.status, exc.exception.code), (401, "budget_not_signed_in"))
+
+        bad_ctx = web.ValidatedSessionContext(
+            username="alice", role="admin", carrier="cookie", version=2, purpose="native",
+            generation=0, expiry=100, session_phase="v2", policy_phase="legacy", raw_token="tok",
+        )
+        req_native = SimpleNamespace(headers={}, cookies={"hestia_session": "tok"}, get=lambda _k: bad_ctx)
+        with self.assertRaises(api._Rejected) as exc2:
+            api.validate_browser_context(req_native, actor="alice", now=10.0)
+        self.assertEqual((exc2.exception.status, exc2.exception.code), (401, "budget_not_signed_in"))
+
+        bad_v2_in_legacy = web.ValidatedSessionContext(
+            username="alice", role="admin", carrier="cookie", version=2, purpose="browser",
+            generation=0, expiry=100, session_phase="legacy", policy_phase="legacy", raw_token="tok",
+        )
+        req_legacy = SimpleNamespace(headers={}, cookies={"hestia_session": "tok"}, get=lambda _k: bad_v2_in_legacy)
+        with self.assertRaises(api._Rejected) as exc3:
+            api.validate_browser_context(req_legacy, actor="alice", now=10.0)
+        self.assertEqual((exc3.exception.status, exc3.exception.code), (401, "budget_not_signed_in"))
+
+        with self.assertRaises(api._Rejected) as exc4:
+            api.validate_browser_context(SimpleNamespace(headers={"Authorization": "Bearer x"}), actor="alice", now=10.0)
+        self.assertEqual((exc4.exception.status, exc4.exception.code), (403, "budget_browser_session_required"))
+
+
+class BudgetAuthorizationBridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.path = Path(temporary.name) / "bridge_budget.db"
+        self.env = mock.patch.dict(
+            os.environ,
+            {
+                "HESTIA_DB": str(self.path),
+                "HESTIA_PERSIST": "sqlite",
+                "HESTIA_BUDGET_HTTP_ENABLED": "1",
+                "HESTIA_BUDGET_ANALYTICS_ENABLED": "1",
+                "HESTIA_BUDGET_RECEIPTS_ENABLED": "1",
+                "HESTIA_BUDGET_PUBLIC_ORIGIN": ORIGIN,
+            },
+        )
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        for patch in (
+            mock.patch.object(web, "_AUTH_ENABLED", True),
+            mock.patch.object(web, "_SESSION_SECRET", SECRET),
+        ):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.addCleanup(db.reset_engine_cache)
+        engine, self.sessions = db.init_db(self.path)
+        store_sql.cutover_users(engine, {"alice": "h", "unprov": "h"})
+        store_sql.provision_budget_owner("alice", path=self.path)
+        store_sql.activate_sessions_v2(path=self.path)
+        self.config = configuration(accounts=(PRIVATE_A,), owner="alice")
+        self.store = BudgetStore(self.sessions)
+        prepare_selected(self.store, self.config)
+        self.alice_acc = self.store.accounts("alice")[0]["id"]
+        self.client = TestClient(TestServer(web.make_app(SimpleNamespace())))
+        await self.client.start_server()
+        self.addAsyncCleanup(self.client.close)
+
+    def _set_phase(self, value: str) -> None:
+        with self.sessions.begin() as s:
+            row = s.get(db.AppMeta, "authz_policy_phase")
+            if row is None:
+                s.add(db.AppMeta(key="authz_policy_phase", value=value))
+            else:
+                row.value = value
+
+    async def test_active_v2_budget_routes_enforce_browser_purpose_and_compat_owner_marker(self):
+        v1 = auth.make_session("alice", now=web._now(), secret=SECRET)
+        v2_browser = auth.make_session("alice", now=web._now(), secret=SECRET, generation=0, purpose="browser")
+        v2_native = auth.make_session("alice", now=web._now(), secret=SECRET, generation=0, purpose="native")
+        unprov_b = auth.make_session("unprov", now=web._now(), secret=SECRET, generation=0, purpose="browser")
+
+        acc = (await (await self.client.get(
+            api.PREFIX + "/accounts", headers={"Cookie": f"hestia_session={v2_browser}"}
+        )).json())["accounts"][0]
+
+        # v1 cookie on protected Budget POST (and analytics POST) -> 401 budget_browser_session_upgrade_required.
+        for url, payload in (
+            (api.PREFIX + "/account-selection", {"account_id": self.alice_acc, "selected": False, "expected_version": acc["control_version"]}),
+            (api.PREFIX + "/analytics/transactions-by-keys", {"keys": []}),
+        ):
+            r_v1 = await self.client.post(url, json=payload, headers={"Cookie": f"hestia_session={v1}", "Origin": ORIGIN})
+            self.assertEqual(r_v1.status, 401)
+            self.assertEqual((await r_v1.json())["error"], "budget_browser_session_upgrade_required")
+            r_nat = await self.client.post(url, json=payload, headers={"Authorization": f"Bearer {v2_native}"})
+            self.assertEqual(r_nat.status, 403)
+            self.assertEqual((await r_nat.json())["error"], "budget_browser_session_required")
+
+        ok = await self.client.post(
+            api.PREFIX + "/account-selection",
+            json={"account_id": self.alice_acc, "selected": False, "expected_version": acc["control_version"]},
+            headers={"Cookie": f"hestia_session={v2_browser}", "Origin": ORIGIN},
+        )
+        self.assertEqual(ok.status, 200)
+
+        # In catalog_compat, an unprovisioned admin is denied owner checks across HTTP & BudgetStore.
+        self._set_phase("catalog_compat")
+        r_unprov = await self.client.get(api.PREFIX + "/accounts", headers={"Cookie": f"hestia_session={unprov_b}"})
+        self.assertEqual(r_unprov.status, 403)
+        with self.assertRaises(BudgetStoreError):
+            self.store.accounts("unprov")
+
+    def test_custom_policy_phase_blocks_stores_jobs_runtime_and_resolve_mode(self):
+        from hestia.__main__ import resolve_mode
+        from hestia.budget import analytics_api, household_api, jobs, job_store, receipt_api
+
+        self._set_phase("catalog_custom")
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            api._store(SECRET)
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            analytics_api._store(SECRET)
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            receipt_api._store(SECRET)
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            receipt_api.retain_expired(self.path)
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            household_api._reader(SECRET)
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            self.store.status()
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            self.store.accounts("alice")
+        jstore = job_store.BudgetJobStore(self.sessions)
+        with self.sessions() as session:
+            with self.assertRaises(authz.PolicyPhaseUnsupported):
+                jstore._owner(session, "alice")
+            with self.assertRaises(authz.PolicyPhaseUnsupported):
+                jstore.users_authoritative(session)
+        from hestia.budget import __main__ as budget_main
+        import io
+        cfg_file = self.path.parent / "budget.json"
+        cfg_file.write_text(json.dumps({
+            "application_id": "app-1",
+            "connections": [{"id": "bank", "owner": "alice", "bank_name": "B", "country": "PL", "accounts": [PRIVATE_A]}],
+        }), encoding="utf-8")
+        with mock.patch.dict(os.environ, {jobs.JOBS_FLAG: "1"}), \
+             mock.patch.object(jobs.BudgetJobRunner, "_config", return_value=self.config):
+            with self.assertRaises(authz.PolicyPhaseUnsupported):
+                jobs.build_service(auth_enabled=lambda: True, path=self.path)
+        with mock.patch("hestia.budget.runtime.credentials", side_effect=AssertionError("loaded credentials")):
+            with self.assertRaises(authz.PolicyPhaseUnsupported):
+                runtime.run_once(self.config, path=self.path)
+        with self.assertRaises(authz.PolicyPhaseUnsupported):
+            resolve_mode(None, self.path.parent / "reg.json")
+        with mock.patch.object(budget_main, "load_config", return_value=self.config), \
+             mock.patch("sys.stderr", new_callable=io.StringIO) as buf:
+            rc = budget_main.main(["--config", str(cfg_file), "--db", str(self.path), "status", "--stored-only"])
+        self.assertEqual(rc, 1)
+        self.assertIn("authorization_bridge_incompatible", buf.getvalue())
