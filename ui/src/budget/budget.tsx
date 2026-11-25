@@ -1,10 +1,10 @@
 // Owner-private budget view (2C). Reads only the stored-data API; the "refresh" action queues a server job
 // under the server's quotas and never talks to a bank from the browser. Data live only in component state.
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { currentLocale, t, tPlural } from "../i18n";
-import { budgetApi } from "./api";
-import type { BudgetApi, BudgetResult } from "./api";
+import { budgetApi, createBudgetApi } from "./api";
+import type { AuthorizationCapabilities, BudgetApi, BudgetResult } from "./api";
 import { ACTIVE_JOB, KINDS, accountLabel, defaultCreditLimitCurrency, effectiveState, formatAmount, freshness,
   hasActiveJob, idempotencyKey, isAccessLoss, isComponentLimit, latestJob, limitState, newer,
   normalizeCreditCurrencyInput, normalizeCreditLimitInput, otherObservedCurrencies, presetRange, OPEN_FLOW, READY_FLOW,
@@ -83,12 +83,18 @@ export interface BudgetProps {
   completeUrl?: string;
 }
 
-export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
+export function Budget({ active, api: providedApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
+  const api = useMemo(
+    () => providedApi ?? (principal === undefined || principal === null ? budgetApi : createBudgetApi(principal)),
+    [providedApi, principal],
+  );
   const locale = currentLocale();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
   const [capabilities, setCapabilities] = useState<BudgetCapabilities | null>(null);
+  const [authorization, setAuthorization] = useState<AuthorizationCapabilities | null>(null);
+  const [deviceAccess, setDeviceAccess] = useState(true);
   const [accounts, setAccounts] = useState<BudgetAccount[]>([]);
   const [jobs, setJobs] = useState<BudgetJob[]>([]);
   const [showLimits, setShowLimits] = useState(false);
@@ -139,13 +145,14 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     epoch.current += 1;
     generation.current += 1;
     setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
+    setAuthorization(null); setDeviceAccess(true);
     setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
     setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined); setView("accounts");
     setDevicesFocus(0);
     setLoad(disabled ? "disabled" : "denied");
   }, []);
   const barrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
-    if (!isAccessLoss(result)) return false;
+    if (!isAccessLoss(result) && !(!result.ok && result.error === "budget_actor_changed")) return false;
     if (alive.current) invalidate(!result.ok && result.error === "budget_disabled");
     return true;
   }, [invalidate]);
@@ -158,20 +165,21 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
       barrier(result);
       return result;
     });
-    // A successful whoami naming someone else, or the owner without the admin role, is also a loss of access
-    // and clears at once, without waiting for the other responses.
-    const identity = principal === undefined ? Promise.resolve(null) : watch(api.whoami()).then((result) => {
-      if (result.ok && (result.data.user !== principal || result.data.role !== "admin")
-          && alive.current) invalidate(false);
+    // Capabilities, not the legacy role projection, decide whether this actor still owns ledger access.
+    const identity = watch(api.capabilities()).then((result) => {
+      if (result.ok && ((principal !== undefined && result.data.user !== principal)
+          || result.data.own_budget?.can_view !== true) && alive.current) invalidate(false);
       return result;
     });
     const [connected, listed, queued, me] = await Promise.all([watch(api.connections()), watch(api.accounts()),
       watch(api.jobs()), identity]);
     if (!alive.current || token !== generation.current) return;
-    if (!connected.ok || !listed.ok || (me !== null && !me.ok)) {
+    if (!connected.ok || !listed.ok || !me.ok) {
       setLoad("error");
       return;
     }
+    setAuthorization(me.data);
+    setDeviceAccess(true);
     setConnections((current) => newer(current, connected.data.connections));
     setCapabilities(connected.data.capabilities);
     setAccounts((current) => newer(current, listed.data.accounts));
@@ -183,6 +191,28 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   useEffect(() => {
     if (active) void reload();
   }, [active, reload]);
+
+  const refreshAuthorization = useCallback(async () => {
+    const result = await api.capabilities();
+    if (!alive.current || barrier(result)) return;
+    if (!result.ok) return;
+    if ((principal !== undefined && result.data.user !== principal)
+        || result.data.own_budget?.can_view !== true) {
+      invalidate(false);
+      return;
+    }
+    setAuthorization(result.data);
+  }, [api, principal, barrier, invalidate]);
+
+  const deviceBarrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
+    if (!result.ok && (result.status === 403 || result.status === 404) && result.error !== "budget_disabled") {
+      setDeviceAccess(false);
+      void refreshAuthorization();
+      return true;
+    }
+    return barrier(result);
+  }, [barrier, refreshAuthorization]);
+  const canManageDevices = deviceAccess && authorization?.own_budget?.can_manage_devices === true;
 
   // Poll only while a job is queued/running and the view is visible; reload stored data once it settles.
   // A failed poll re-arms the timer; an authorization failure goes through reload, which clears data.
@@ -327,7 +357,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
             {showConsentHealth ? t("budget.main.consentHealthHide") : t("budget.main.consentHealth")}
           </button>
         ) : null}
-        {load === "ready" ? (
+        {load === "ready" && canManageDevices ? (
           <button type="button" onClick={() => { setView("accounts"); setDevicesFocus((current) => current + 1); }}>
             {t("budget.main.devices")}
           </button>
@@ -437,8 +467,8 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
           onAccessLoss={barrier} initialRule={focusRule ?? null} />
       ) : (
         <>
-        <ReceiptDevices key={principal ?? ""} api={api} locale={locale} revision={revision} onAccessLoss={barrier}
-          focusRevision={devicesFocus} />
+        {canManageDevices ? <ReceiptDevices key={principal ?? ""} api={api} locale={locale} revision={revision}
+          onAccessLoss={deviceBarrier} focusRevision={devicesFocus} /> : null}
         {connections.length === 0 ? <p className="budget-status">{t("budget.main.empty")}</p> : null}
         {connections.map((connection) => {
           const job = latestJob(jobs, connection.id);

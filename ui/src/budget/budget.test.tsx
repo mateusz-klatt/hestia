@@ -39,6 +39,12 @@ function page(rows: BudgetTransaction[], cursor: string | null = null, accountId
   return { account_id: accountId, transactions: rows, account_total: rows.length, uncertain_total: 0, next_cursor: cursor };
 }
 
+const authorization = {
+  user: "owner", installation_permissions: [],
+  own_budget: { permissions: ["budget.view"], can_view: true, can_use_receipts: true, can_manage_devices: true },
+  delegated_receipts: null, household_available: false,
+};
+
 const balancesData = {
   account_id: "local-a", balances: [] as BudgetBalances["balances"], balances_total: 0, balances_truncated: false,
   freshness: account().components.balances, archived_imports: [] as BudgetBalances["archived_imports"], archived_has_more: false,
@@ -46,7 +52,7 @@ const balancesData = {
 
 function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
   return {
-    whoami: vi.fn<BudgetApi["whoami"]>(() => ok({ user: "owner", role: "admin" })),
+    capabilities: vi.fn<BudgetApi["capabilities"]>(() => ok(authorization)),
     connections: vi.fn<BudgetApi["connections"]>(() => ok({ connections: [connection], capabilities })),
     accounts: vi.fn<BudgetApi["accounts"]>(() => ok({ accounts })),
     jobs: vi.fn<BudgetApi["jobs"]>(() => ok({ jobs: [] })),
@@ -190,6 +196,26 @@ describe("budget view states", () => {
     expect(host.textContent).toContain("Refreshing is disabled on the server.");
     expect(host.textContent).not.toContain("Refresh from bank");
   });
+
+  it("hides only the optional device panel when its request is forbidden", async () => {
+    const api = fakeApi();
+    await render(api, true, "owner");
+    api.receiptDevices.mockImplementation(() => fail(403, "budget_forbidden"));
+    await click(button("Reload"));
+    expect(host.querySelector(".budget-devices")).toBeNull();
+    expect(host.textContent).toContain("Synthetic Current");
+    expect(host.textContent).not.toContain("Only the budget's owner");
+    expect(api.capabilities.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("clears the ledger when an owner request reports an actor change", async () => {
+    const api = fakeApi();
+    await render(api, true, "owner");
+    api.connections.mockImplementation(() => fail(409, "budget_actor_changed"));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("Synthetic Current");
+  });
 });
 
 type Loaded<F extends (...args: never[]) => unknown> = Awaited<ReturnType<F>> extends BudgetResult<infer T> ? T : never;
@@ -301,14 +327,14 @@ describe("async lifecycle guards", () => {
     const api = fakeApi();
     await render(api, true, "owner");
     expect(host.textContent).toContain("Synthetic Current");
-    api.whoami.mockImplementation(() => ok({ user: "someone-else", role: "admin" }));
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "someone-else" }));
     await click(button("Reload"));
     expect(host.textContent).toContain("Only the budget's owner");
     expect(host.textContent).not.toContain("Synthetic Current");
-    api.whoami.mockImplementation(() => fail(401, "budget_http_401"));
+    api.capabilities.mockImplementation(() => fail(401, "budget_http_401"));
     await click(button("Reload"));
     expect(host.textContent).toContain("Only the budget's owner");
-    expect(api.whoami).toHaveBeenCalledTimes(3);
+    expect(api.capabilities).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -351,13 +377,16 @@ describe("access barrier and version-aware reads", () => {
     expect(host.textContent).not.toContain("123.45");
   });
 
-  it.each([["someone-else", "admin"], ["owner", "viewer"]])(
-    "clears at once when whoami names %s as %s while another read still hangs", async (user, role) => {
+  it.each([["someone-else", true], ["owner", false]])(
+    "clears at once for actor %s with can_view=%s while another read still hangs", async (user, canView) => {
       const api = fakeApi();
       await render(api, true, "owner");
       const hanging = deferred<Loaded<BudgetApi["connections"]>>();
       api.connections.mockImplementation(() => hanging.promise);
-      api.whoami.mockImplementation(() => ok({ user, role }));
+      api.capabilities.mockImplementation(() => ok({
+        ...authorization, user,
+        own_budget: canView ? authorization.own_budget : { ...authorization.own_budget, can_view: false },
+      }));
       await click(button("Reload"));
       expect(host.textContent).toContain("Only the budget's owner");
       expect(host.textContent).not.toContain("Synthetic Current");
@@ -366,13 +395,12 @@ describe("access barrier and version-aware reads", () => {
       expect(host.textContent).not.toContain("Synthetic Current");
     });
 
-  it("clears when the same user is no longer an admin", async () => {
+  it("keeps ledger access when the actor still has own-budget view without a legacy role", async () => {
     const api = fakeApi();
     await render(api, true, "owner");
-    api.whoami.mockImplementation(() => ok({ user: "owner", role: "viewer" }));
     await click(button("Reload"));
-    expect(host.textContent).toContain("Only the budget's owner");
-    expect(host.textContent).not.toContain("Synthetic Current");
+    expect(host.textContent).toContain("Synthetic Current");
+    expect(host.textContent).not.toContain("Only the budget's owner");
   });
 
   it("never lets a delayed post-pause read roll back a newer selection", async () => {
@@ -577,7 +605,7 @@ describe("consent lifecycle guards", () => {
     api.consentStart.mockImplementation(() => late.promise);
     await scoped(api, navigate);
     await click(button("Connect bank"));
-    api.whoami.mockImplementation(() => ok({ user: "new-owner", role: "admin" }));
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "new-owner" }));
     await scoped(api, navigate, "new-owner");
     await act(async () => { late.settle(started); await Promise.resolve(); });
     await settle();

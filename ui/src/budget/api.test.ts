@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { forecastOf, monthlyBudgetChartsOf, monthlyBudgetOf } from "./analytics/fixtures";
-import { budgetApi } from "./api";
+import { budgetApi, createBudgetApi } from "./api";
 import { account, connection } from "./fixtures";
 
 function respond(status: number, body: unknown) {
@@ -17,6 +17,18 @@ function sent(fetchMock: ReturnType<typeof respond>, index = 0): { url: URL; ini
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("budget api", () => {
+  it("binds only owner-budget requests to the mounted actor", async () => {
+    const fetchMock = respond(200, {});
+    const scoped = createBudgetApi("owner");
+    await scoped.capabilities();
+    await scoped.accounts();
+    await scoped.receiptDevices();
+    expect(new Headers(sent(fetchMock, 0).init.headers).has("X-Hestia-Expected-Actor")).toBe(false);
+    for (const index of [1, 2]) {
+      expect(new Headers(sent(fetchMock, index).init.headers).get("X-Hestia-Expected-Actor")).toBe("owner");
+    }
+  });
+
   it("reads with the same-origin cookie and builds bounded queries", async () => {
     const fetchMock = respond(200, { account_id: "a", transactions: [], account_total: 0, uncertain_total: 0, next_cursor: null });
     const result = await budgetApi.transactions("local-a", { cursor: "opaque", dateFrom: "2026-11-01", dateTo: "" });
@@ -262,9 +274,13 @@ describe("budget api", () => {
     expect(await budgetApi.refresh(connection)).toMatchObject({ ok: false, status: 409 });
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response("not json", { status: 202 }))));
     expect(await budgetApi.refresh(connection)).toEqual({ ok: false, status: 202, error: "budget_uncertain" });
-    const fetchMock = respond(200, { user: "owner", role: "admin" });
-    expect(await budgetApi.whoami()).toEqual({ ok: true, data: { user: "owner", role: "admin" } });
-    expect(sent(fetchMock).url.pathname).toMatch(/\/api\/whoami$/);
+    const fetchMock = respond(200, {
+      user: "owner", installation_permissions: [], own_budget: {
+        permissions: ["budget.view"], can_view: true, can_use_receipts: true, can_manage_devices: true,
+      }, delegated_receipts: null, household_available: false,
+    });
+    expect((await budgetApi.capabilities()).ok).toBe(true);
+    expect(sent(fetchMock).url.pathname).toMatch(/\/api\/me\/capabilities$/);
   });
 
   it("maps refusals, empty middleware bodies and network loss without throwing", async () => {

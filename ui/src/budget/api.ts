@@ -45,7 +45,7 @@ function url(path: string, query: Query = {}): URL {
   return target;
 }
 
-async function call<T>(target: URL, init: RequestInit = {}): Promise<BudgetResult<T>> {
+async function request<T>(target: URL, init: RequestInit = {}): Promise<BudgetResult<T>> {
   let response: Response;
   try {
     response = await fetch(target, { credentials: "same-origin", cache: "no-store", ...init });
@@ -64,17 +64,33 @@ async function call<T>(target: URL, init: RequestInit = {}): Promise<BudgetResul
   return { ok: false, status: response.status, error, current: record.current };
 }
 
-function post<T>(path: string, body: object, headers: Record<string, string> = {}): Promise<BudgetResult<T>> {
-  return call<T>(url(path), {
-    method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body),
-  });
-}
-
 export interface ConnectionsData { connections: BudgetConnection[]; capabilities: BudgetCapabilities }
 
-export const budgetApi = {
-  /** The cookie's current principal; another tab may have signed out or in as someone else. */
-  whoami: () => call<{ user: string | null; role: string | null }>(apiUrl("whoami")),
+export interface OwnBudgetAuthorization {
+  permissions: string[]; can_view: boolean; can_use_receipts: boolean; can_manage_devices: boolean;
+}
+export interface AuthorizationCapabilities {
+  user: string | null;
+  installation_permissions: string[];
+  own_budget: OwnBudgetAuthorization | null;
+  delegated_receipts: { permissions: string[]; can_use: boolean } | null;
+  household_available: boolean;
+}
+
+export function createBudgetApi(expectedActor: string | null = null) {
+  function call<T>(target: URL, init: RequestInit = {}): Promise<BudgetResult<T>> {
+    if (expectedActor === null || !target.pathname.includes("/api/budget/")) return request<T>(target, init);
+    const headers = new Headers(init.headers);
+    headers.set("X-Hestia-Expected-Actor", expectedActor);
+    return request<T>(target, { ...init, headers });
+  }
+  function post<T>(path: string, body: object, headers: Record<string, string> = {}): Promise<BudgetResult<T>> {
+    return call<T>(url(path), {
+      method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body),
+    });
+  }
+  return {
+  capabilities: () => call<AuthorizationCapabilities>(apiUrl("me/capabilities")),
   connections: () => call<ConnectionsData>(url("connections")),
   accounts: (connectionId?: string) =>
     call<{ accounts: BudgetAccount[] }>(url("accounts", { connection_id: connectionId })),
@@ -195,6 +211,8 @@ export const budgetApi = {
     }
     return { ok: true, data: { job: job as BudgetJob & { created: boolean } } };
   },
-};
+  };
+}
 
-export type BudgetApi = typeof budgetApi;
+export const budgetApi = createBudgetApi();
+export type BudgetApi = ReturnType<typeof createBudgetApi>;

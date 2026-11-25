@@ -24,6 +24,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/features": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public authentication contract and available features
+         * @description Public and Cache-Control: no-store. Only actually registered features are listed.
+         */
+        get: operations["authFeatures"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/automations": {
         parameters: {
             query?: never;
@@ -1944,6 +1964,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Effective installation and own-Budget capabilities
+         * @description Authenticated. Cache-Control: no-store. Delegated responses never identify an owner.
+         */
+        get: operations["meCapabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/me/password": {
         parameters: {
             query?: never;
@@ -2265,6 +2305,15 @@ export interface components {
         AuditFeed: {
             /** Events */
             events: components["schemas"]["AuditEvent"][];
+        };
+        /** AuthFeatures */
+        AuthFeatures: {
+            /** Auth Contract */
+            auth_contract: number;
+            /** Features */
+            features: string[];
+            /** Qr Origin */
+            qr_origin: string | null;
         };
         /**
          * AutomationDeleted
@@ -6939,6 +6988,13 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /** DelegatedReceiptCapabilities */
+        DelegatedReceiptCapabilities: {
+            /** Can Use */
+            can_use: boolean;
+            /** Permissions */
+            permissions: string[];
+        };
         /**
          * DeviceInfo
          * @description One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base
@@ -7202,6 +7258,20 @@ export interface components {
             user: string;
         };
         /**
+         * MeCapabilities
+         * @description Effective permissions for the authenticated actor; delegated responses never name an owner.
+         */
+        MeCapabilities: {
+            delegated_receipts: components["schemas"]["DelegatedReceiptCapabilities"] | null;
+            /** Household Available */
+            household_available: boolean;
+            /** Installation Permissions */
+            installation_permissions: string[];
+            own_budget: components["schemas"]["OwnBudgetCapabilities"] | null;
+            /** User */
+            user: string | null;
+        };
+        /**
          * NameRequest
          * @description POST /api/name — set a device's registry labels. ``node`` is required; at least one of
          *     name/room/type must be present (server-enforced cross-field, not expressible here). name/room
@@ -7231,6 +7301,17 @@ export interface components {
         OkResult: {
             /** Ok */
             ok: boolean;
+        };
+        /** OwnBudgetCapabilities */
+        OwnBudgetCapabilities: {
+            /** Can Manage Devices */
+            can_manage_devices: boolean;
+            /** Can Use Receipts */
+            can_use_receipts: boolean;
+            /** Can View */
+            can_view: boolean;
+            /** Permissions */
+            permissions: string[];
         };
         /**
          * ResetPasswordRequest
@@ -7696,6 +7777,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditFeed"];
+                };
+            };
+        };
+    };
+    authFeatures: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the authentication contract and feature strings */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthFeatures"];
                 };
             };
         };
@@ -16328,6 +16430,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OkResult"];
+                };
+            };
+        };
+    };
+    meCapabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description the current actor's effective capabilities */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeCapabilities"];
                 };
             };
         };
