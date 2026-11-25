@@ -197,6 +197,21 @@ function confirmErrorText(error: string): string {
   }
 }
 
+function settledOutcome(
+  result: { ok: boolean; status?: number; error?: string },
+  successOutcome: "confirmed" | "deleted",
+): ReceiptSettledEvent["outcome"] {
+  if (result.ok) return successOutcome;
+  if (result.status === 404) return "not_found";
+  if (result.status === 409
+    || result.error === "budget_receipt_conflict"
+    || result.error === "budget_receipt_tx_already_linked"
+    || result.error === "budget_receipt_stale_source") {
+    return "conflict";
+  }
+  return "error";
+}
+
 export function ReceiptsView({
   receiptsApi = defaultReceiptsApi,
   pendingStore,
@@ -385,6 +400,7 @@ export function ReceiptsView({
         setBulkProgress({ total: plan.targets.length, done: processed });
         continue;
       }
+      let bulkOutcome: ReceiptSettledEvent["outcome"] | undefined;
       try {
         const detailRes = await receiptsApi.receiptDetail(target.receipt_id);
         if (isAuthAbort(detailRes)) {
@@ -425,6 +441,7 @@ export function ReceiptsView({
           break;
         }
         const confirmRes = await receiptsApi.confirmReceipt(built.request);
+        bulkOutcome = settledOutcome(confirmRes, "confirmed");
         if (isAuthAbort(confirmRes)) {
           if (!confirmRes.ok) {
             recordError(formatBulkErrorBucket(confirmRes.status, confirmRes.error));
@@ -455,7 +472,7 @@ export function ReceiptsView({
           break;
         }
       } finally {
-        store.release(target.receipt_id, lockToken);
+        store.release(target.receipt_id, lockToken, isSessionAlive() ? undefined : bulkOutcome);
       }
     }
 
@@ -483,7 +500,8 @@ export function ReceiptsView({
       if (!mounted.current) return;
       setPendingMap(store.snapshot());
       if (event !== undefined
-        && (event.outcome === "confirmed" || event.outcome === "deleted" || event.outcome === "not_found")) {
+        && (event.outcome === "confirmed" || event.outcome === "deleted"
+          || event.outcome === "not_found" || event.outcome === "conflict")) {
         staleCursorReloadedRef.current = false;
         setListRefresh((current) => current + 1);
         if (openReceiptIdRef.current === event.receiptId && event.outcome === "confirmed") {
@@ -1254,11 +1272,7 @@ function ReceiptDetailDrawer({
     let handledInMountedDrawer = false;
     try {
       const result = await api.confirmReceipt(built.request);
-      if (result.ok) {
-        outcome = "confirmed";
-      } else if (result.status === 404) {
-        outcome = "not_found";
-      }
+      outcome = settledOutcome(result, "confirmed");
       const stillOpen = drawerMountedRef.current && isOpenReceipt(detail.receipt_id);
       if (onAccessLoss(result) || !stillOpen) return;
       handledInMountedDrawer = true;
@@ -1292,11 +1306,7 @@ function ReceiptDetailDrawer({
     let handledInMountedDrawer = false;
     try {
       const result = await api.deleteReceipt({ receipt_id: detail.receipt_id, expected_version: detail.version });
-      if (result.ok) {
-        outcome = "deleted";
-      } else if (result.status === 404) {
-        outcome = "not_found";
-      }
+      outcome = settledOutcome(result, "deleted");
       const stillOpen = drawerMountedRef.current && isOpenReceipt(detail.receipt_id);
       if (onAccessLoss(result) || !stillOpen) return;
       handledInMountedDrawer = true;

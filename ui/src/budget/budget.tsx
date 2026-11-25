@@ -362,7 +362,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       const samePrincipal = () => alive.current && principalRef.current === expectedPrincipal;
       const activeEpoch = () => samePrincipal() && startedEpoch === epoch.current;
       const currentReceiptPanel = () => activeEpoch() && startedReceiptEpoch === receiptEpochRef.current;
-      if (!currentReceiptPanel()) {
+      if (isMutation ? !activeEpoch() : !currentReceiptPanel()) {
         return { ok: false, status: 0, error: "budget_stale_epoch" };
       }
       if (isMutation && (authorizationLocked || api.isAuthorizationLocked() || (effectiveReceiptsApi.isAuthorizationLocked?.() ?? false))) {
@@ -372,7 +372,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       if (!activeEpoch()) {
         return { ok: false, status: 0, error: "budget_stale_epoch" };
       }
-      if (!result.ok && result.status === 403 && result.error !== "budget_disabled"
+      if (!isMutation && !result.ok && result.status === 403 && result.error !== "budget_disabled"
           && startedReceiptEpoch !== receiptEpochRef.current) {
         return { ok: false, status: 0, error: "budget_stale_epoch" };
       }
@@ -380,7 +380,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       if (!activeEpoch()) {
         return { ok: false, status: 0, error: "budget_stale_epoch" };
       }
-      if (startedReceiptEpoch !== receiptEpochRef.current && !(!result.ok && result.status === 403)) {
+      if (!isMutation && startedReceiptEpoch !== receiptEpochRef.current && !(!result.ok && result.status === 403)) {
         return { ok: false, status: 0, error: "budget_stale_epoch" };
       }
       return result;

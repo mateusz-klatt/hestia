@@ -223,7 +223,7 @@ export type ReceiptActionKind = "confirm" | "delete";
 export interface ReceiptSettledEvent {
   receiptId: string;
   kind: ReceiptActionKind;
-  outcome: "confirmed" | "deleted" | "not_found" | "error";
+  outcome: "confirmed" | "deleted" | "not_found" | "conflict" | "error";
 }
 
 export interface PendingReceiptStore {
