@@ -17074,6 +17074,16 @@
             },
             "description": "no eligible live receipt/device target"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            },
+            "description": "Budget or receipt support is disabled"
+          },
           "408": {
             "content": {
               "application/json": {
@@ -17123,6 +17133,16 @@
               }
             },
             "description": "Content-Type must be application/json"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            },
+            "description": "incompatible authorization bridge or unavailable device service"
           }
         },
         "summary": "Exchange a v2 native session for a narrowed receipt/device token",
@@ -17272,7 +17292,7 @@
                 }
               }
             },
-            "description": "HTTPS public origin unavailable"
+            "description": "HTTPS public origin unavailable or incompatible authorization bridge"
           }
         },
         "summary": "Issue an origin-bound, single-use native login QR payload",
@@ -17390,7 +17410,7 @@
                 }
               }
             },
-            "description": "HTTPS public origin unavailable"
+            "description": "HTTPS public origin unavailable or incompatible authorization bridge"
           }
         },
         "summary": "Redeem a single-use QR code for a native session",

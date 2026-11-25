@@ -8143,6 +8143,15 @@ export interface operations {
                     "application/json": components["schemas"]["AuthError"];
                 };
             };
+            /** @description Budget or receipt support is disabled */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
             /** @description request body read timed out */
             408: {
                 headers: {
@@ -8181,6 +8190,15 @@ export interface operations {
             };
             /** @description Content-Type must be application/json */
             415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
+            /** @description incompatible authorization bridge or unavailable device service */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8305,7 +8323,7 @@ export interface operations {
                     "application/json": components["schemas"]["AuthError"];
                 };
             };
-            /** @description HTTPS public origin unavailable */
+            /** @description HTTPS public origin unavailable or incompatible authorization bridge */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -8402,7 +8420,7 @@ export interface operations {
                     "application/json": components["schemas"]["AuthError"];
                 };
             };
-            /** @description HTTPS public origin unavailable */
+            /** @description HTTPS public origin unavailable or incompatible authorization bridge */
             503: {
                 headers: {
                     [name: string]: unknown;

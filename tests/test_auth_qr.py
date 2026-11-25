@@ -326,6 +326,43 @@ class QrLoginWebTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await response.json(), {"error": {"code": "qr_invalid_request"}})
             self.assertEqual(response.headers["Cache-Control"], "no-store")
 
+    async def test_auth_routes_return_private_error_envelopes_before_the_handler(self):
+        origin = "https://hestia.example"
+        now = web._now()
+        expired = auth.make_session("owner", now=now - auth.SESSION_TTL - 1, secret=self.secret)
+        legacy = auth.make_session("owner", now=now, secret=self.secret)
+        native = auth.make_session(
+            "owner", now=now, secret=self.secret, generation=store_sql.load_auth_state("owner").generation,
+            purpose=auth.SESSION_PURPOSE_NATIVE,
+        )
+        browser = self._browser_headers()
+        cases = (
+            ("POST", auth_qr.CODE_PATH, {}, 401, "browser_session_required"),
+            ("POST", auth_qr.CODE_PATH, {"Cookie": f"hestia_session={expired}"}, 401, "browser_session_required"),
+            ("POST", auth_qr.CODE_PATH, {"Cookie": f"hestia_session={legacy}"}, 401, "browser_session_upgrade_required"),
+            ("POST", auth_qr.CODE_PATH, {"Authorization": f"Bearer {native}"}, 403, "browser_session_required"),
+            ("POST", device_token.EXCHANGE_PATH, {}, 401, "native_session_required"),
+            ("POST", device_token.EXCHANGE_PATH, {**browser, "Authorization": "Bearer " + "A" * 43},
+             400, "budget_auth_ambiguous"),
+            ("GET", auth_qr.CODE_PATH, browser, 405, "auth_method_not_allowed"),
+            ("GET", "/api/auth/unregistered", browser, 404, "auth_not_found"),
+        )
+        for method, path, headers, status, code in cases:
+            with self.subTest(method=method, path=path, code=code):
+                response = await self.client.request(method, path, json={"origin": origin}, headers=headers)
+                self.assertEqual(response.status, status, await response.text())
+                self.assertEqual(await response.json(), {"error": {"code": code}})
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+                self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
+                if status == 405:
+                    self.assertEqual(response.headers["Allow"], "POST")
+
+        with mock.patch.object(store_sql, "load_auth_state", side_effect=authz.PolicyPhaseUnsupported("future")):
+            response = await self.client.post(auth_qr.CODE_PATH, json={"origin": origin}, headers=browser)
+        self.assertEqual(response.status, 503)
+        self.assertEqual(await response.json(), {"error": {"code": "authorization_bridge_incompatible"}})
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
     async def test_issue_rejects_a_changed_browser_actor(self):
         origin = "https://hestia.example"
         headers = self._browser_headers()
@@ -369,10 +406,12 @@ class QrLoginWebTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post(auth_qr.CODE_PATH, json={"origin": "https://hestia.example"},
                                               headers=self._browser_headers())
             self.assertEqual(response.status, 503)
+            self.assertEqual(await response.json(), {"error": {"code": "authorization_bridge_incompatible"}})
         with mock.patch.object(auth_qr, "redeem", side_effect=store_sql.SessionPhaseUnsupported("future")):
             response = await self._post_redeem(
                 json={"origin": "https://hestia.example", "code": "A" * 19})
             self.assertEqual(response.status, 503)
+            self.assertEqual(await response.json(), {"error": {"code": "authorization_bridge_incompatible"}})
 
 
 if __name__ == "__main__":

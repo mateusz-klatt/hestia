@@ -194,6 +194,9 @@ _PATH_AUTOMATIONS = "/api/automations"
 _PATH_USERS = "/api/users"
 _PATH_USER_GRANTS = "/api/users/grants"
 _PATH_WHOLE_HOME = "/api/whole-home"
+_AUTH_API_PREFIX = "/api/auth/"
+_BROWSER_SESSION_REQUIRED = "browser_session_required"
+_BROWSER_SESSION_UPGRADE_REQUIRED = "browser_session_upgrade_required"
 _USERNAME_REQUIRED = "username is required"   # shared 400 message across the admin user verbs
 _ROUTE_MIN_ROLE = {
     ("GET", "/api/budget/consent/pending"): _ADMIN,
@@ -540,8 +543,11 @@ def _check_core_origin(request) -> "web.Response | None":
     return None
 
 
-def _incompatible_bridge_response():
-    return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": "authorization_bridge_incompatible"})
+def _incompatible_bridge_response(request=None):
+    code = "authorization_bridge_incompatible"
+    if request is not None and request.path.startswith(_AUTH_API_PREFIX):
+        return _auth_error(HTTPStatus.SERVICE_UNAVAILABLE, code)
+    return _json(HTTPStatus.SERVICE_UNAVAILABLE, {"ok": False, "error": code})
 
 
 def _required_role(method: str, path: str) -> str:
@@ -637,10 +643,18 @@ def _envelope_matches_state(carrier: str, envelope: auth.SessionEnvelope, auth_s
     return envelope.version == 1
 
 
+def _session_policy_error(request, status, code, *, legacy_empty=False):
+    if request.path.startswith(_AUTH_API_PREFIX):
+        return _auth_error(status, code)
+    if legacy_empty:
+        return _empty(status)
+    return _json(status, {"ok": False, "error": code})
+
+
 def _unauthenticated_session(request):
     if (request.method, request.path) == ("POST", device_token.EXCHANGE_PATH):
         return _native_session_required()
-    return _empty(HTTPStatus.UNAUTHORIZED)
+    return _session_policy_error(request, HTTPStatus.UNAUTHORIZED, _BROWSER_SESSION_REQUIRED, legacy_empty=True)
 
 
 @web.middleware
@@ -667,6 +681,8 @@ async def _auth_middleware(request, handler):
             _now(),
         )
         if decision["action"] == "response":
+            if request.path.startswith(_AUTH_API_PREFIX):
+                return _auth_error(decision["status"], decision["code"])
             return device_token.json_error(decision)
         if decision["action"] == "accept":
             request[device_token.REQUEST_KEY] = decision["token_id"]
@@ -694,7 +710,7 @@ async def _auth_middleware(request, handler):
             try:
                 await asyncio.to_thread(store_sql.check_supported_policy_phase)
             except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
-                return _incompatible_bridge_response()
+                return _incompatible_bridge_response(request)
         return await handler(request)
     carrier, raw_token = _request_carrier(request)
     envelope = auth.decode_session(raw_token, now=_now(), secret=_SESSION_SECRET) if raw_token else None
@@ -703,14 +719,14 @@ async def _auth_middleware(request, handler):
             try:
                 await asyncio.to_thread(store_sql.check_supported_policy_phase)
             except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
-                return _incompatible_bridge_response()
+                return _incompatible_bridge_response(request)
         if redeem_cookie:
             return await handler(request)
         return _unauthenticated_session(request)
     try:
         auth_state = await asyncio.to_thread(store_sql.load_auth_state, envelope.username)
     except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
-        return _incompatible_bridge_response()
+        return _incompatible_bridge_response(request)
     if (
         not auth_state.enabled
         or auth_state.role is None
@@ -747,20 +763,20 @@ async def _auth_middleware(request, handler):
                 _catalog_request_allowed, envelope.username, request.method, request.path,
             )
         except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
-            return _incompatible_bridge_response()
+            return _incompatible_bridge_response(request)
     if not allowed:
         if auth_state.policy_phase != authz.POLICY_PHASE_LEGACY and request.path.startswith("/api/budget/"):
             return _json(HTTPStatus.FORBIDDEN, {"error": {"code": "budget_forbidden"}})
-        return _empty(HTTPStatus.FORBIDDEN)
+        return _session_policy_error(request, HTTPStatus.FORBIDDEN, "auth_forbidden", legacy_empty=True)
     route = request.method, request.path
     grant_write = route == ("POST", _PATH_USER_GRANTS)
     if grant_write or (
         auth_state.session_phase == store_sql.SESSION_PHASE_V2 and route in _CORE_BROWSER_ROUTES
     ):
         if carrier != "cookie":
-            return _json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "browser_session_required"})
+            return _session_policy_error(request, HTTPStatus.FORBIDDEN, _BROWSER_SESSION_REQUIRED)
         if envelope.version != 2 or (grant_write and envelope.purpose != auth.SESSION_PURPOSE_BROWSER):
-            return _json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "browser_session_upgrade_required"})
+            return _session_policy_error(request, HTTPStatus.UNAUTHORIZED, _BROWSER_SESSION_UPGRADE_REQUIRED)
         if grant_write or route in _CORE_BROWSER_MUTATION_ROUTES:
             origin_err = _check_core_origin(request)
             if origin_err is not None:
@@ -773,8 +789,15 @@ async def _empty_404_405_middleware(request, handler):
     try:
         return await handler(request)
     except web.HTTPMethodNotAllowed as exc:
-        return _empty(HTTPStatus.METHOD_NOT_ALLOWED, [("Allow", exc.headers.get("Allow", ""))])
+        allow = exc.headers.get("Allow", "")
+        if request.path.startswith(_AUTH_API_PREFIX):
+            response = _auth_error(HTTPStatus.METHOD_NOT_ALLOWED, "auth_method_not_allowed")
+            response.headers["Allow"] = allow
+            return response
+        return _empty(HTTPStatus.METHOD_NOT_ALLOWED, [("Allow", allow)])
     except web.HTTPNotFound:
+        if request.path.startswith(_AUTH_API_PREFIX):
+            return _auth_error(HTTPStatus.NOT_FOUND, "auth_not_found")
         return _empty(HTTPStatus.NOT_FOUND)
 
 
@@ -952,7 +975,7 @@ async def _me_capabilities(request):
     return response
 
 
-def _qr_error(status: int, code: str, *, retry: "int | None" = None):
+def _auth_error(status: int, code: str, *, retry: "int | None" = None):
     response = _json(status, {"error": {"code": code}})
     response.headers.update(budget_api.PRIVATE_HEADERS)
     if retry is not None:
@@ -961,7 +984,7 @@ def _qr_error(status: int, code: str, *, retry: "int | None" = None):
 
 
 def _native_session_required():
-    return _qr_error(HTTPStatus.UNAUTHORIZED, "native_session_required")
+    return _auth_error(HTTPStatus.UNAUTHORIZED, "native_session_required")
 
 
 def _qr_configured_origin() -> "str | None":
@@ -1005,29 +1028,29 @@ def _native_auth_available() -> bool:
 async def _qr_code(request):
     configured = _qr_configured_origin()
     if configured is None:
-        return _qr_error(HTTPStatus.SERVICE_UNAVAILABLE, "auth_origin_unavailable")
+        return _auth_error(HTTPStatus.SERVICE_UNAVAILABLE, "auth_origin_unavailable")
     body, error = await _read_json_body(request, reject_duplicates=True)
     if error:
-        return _qr_error(body.status, "qr_invalid_request")
+        return _auth_error(body.status, "qr_invalid_request")
     supplied = _canonical_https_origin(body.get("origin")) if isinstance(body, dict) and set(body) == {"origin"} else None
     origins = request.headers.getall("Origin", [])
     if supplied != configured or len(origins) != 1 or _canonical_https_origin(origins[0]) != configured:
-        return _qr_error(HTTPStatus.BAD_REQUEST, "qr_origin_mismatch")
+        return _auth_error(HTTPStatus.BAD_REQUEST, "qr_origin_mismatch")
     ctx = request.get(_SESSION_CONTEXT_KEY)
     if ctx is None:
-        return _qr_error(HTTPStatus.UNAUTHORIZED, "browser_session_required")
+        return _auth_error(HTTPStatus.UNAUTHORIZED, _BROWSER_SESSION_REQUIRED)
     if not _session_credential_current(ctx):
-        return _qr_error(HTTPStatus.UNAUTHORIZED, "browser_session_upgrade_required")
+        return _auth_error(HTTPStatus.UNAUTHORIZED, _BROWSER_SESSION_UPGRADE_REQUIRED)
     if not budget_api.expected_actor_matches(request, ctx.username):
-        return _qr_error(HTTPStatus.CONFLICT, "budget_actor_changed")
+        return _auth_error(HTTPStatus.CONFLICT, "budget_actor_changed")
     try:
         payload = await asyncio.to_thread(
             auth_qr.issue, ctx.username, configured, ctx.generation, now=_now(), secret=_SESSION_SECRET,
         )
     except auth_qr.QrLoginError as exc:
-        return _qr_error(exc.status, exc.code)
+        return _auth_error(exc.status, exc.code)
     except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
-        return _incompatible_bridge_response()
+        return _incompatible_bridge_response(request)
     response = _json(HTTPStatus.OK, {"qr_payload": payload})
     response.headers.update(budget_api.PRIVATE_HEADERS)
     return response
@@ -1035,32 +1058,32 @@ async def _qr_code(request):
 
 async def _qr_redeem(request):
     if "Cookie" in request.headers or "Authorization" in request.headers:
-        return _qr_error(HTTPStatus.BAD_REQUEST, "qr_auth_ambiguous")
+        return _auth_error(HTTPStatus.BAD_REQUEST, "qr_auth_ambiguous")
     configured = _qr_configured_origin()
     if configured is None:
-        return _qr_error(HTTPStatus.SERVICE_UNAVAILABLE, "auth_origin_unavailable")
+        return _auth_error(HTTPStatus.SERVICE_UNAVAILABLE, "auth_origin_unavailable")
     retry = auth_qr.redeem_limited(device_token.client_ip(request), time.monotonic())
     if retry is not None:
-        return _qr_error(HTTPStatus.TOO_MANY_REQUESTS, "qr_rate_limited", retry=retry)
+        return _auth_error(HTTPStatus.TOO_MANY_REQUESTS, "qr_rate_limited", retry=retry)
     body, error = await _read_json_body(request, reject_duplicates=True)
     if error:
-        return _qr_error(body.status, "qr_invalid_request")
+        return _auth_error(body.status, "qr_invalid_request")
     if not isinstance(body, dict) or set(body) != {"origin", "code"}:
-        return _qr_error(HTTPStatus.UNAUTHORIZED, "qr_code_invalid")
+        return _auth_error(HTTPStatus.UNAUTHORIZED, "qr_code_invalid")
     if body["origin"] != configured or not _qr_public_transport(request, configured):
-        return _qr_error(HTTPStatus.BAD_REQUEST, "qr_origin_mismatch")
+        return _auth_error(HTTPStatus.BAD_REQUEST, "qr_origin_mismatch")
     code = auth_qr.normalize_code(body["code"])
     if code is None:
-        return _qr_error(HTTPStatus.UNAUTHORIZED, "qr_code_invalid")
+        return _auth_error(HTTPStatus.UNAUTHORIZED, "qr_code_invalid")
     retry = auth_qr.redeem_global_limited(time.monotonic())
     if retry is not None:
-        return _qr_error(HTTPStatus.TOO_MANY_REQUESTS, "qr_rate_limited", retry=retry)
+        return _auth_error(HTTPStatus.TOO_MANY_REQUESTS, "qr_rate_limited", retry=retry)
     try:
         result = await asyncio.to_thread(auth_qr.redeem, configured, code, now=_now(), secret=_SESSION_SECRET)
     except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
-        return _incompatible_bridge_response()
+        return _incompatible_bridge_response(request)
     if result is None:
-        return _qr_error(HTTPStatus.UNAUTHORIZED, "qr_code_invalid")
+        return _auth_error(HTTPStatus.UNAUTHORIZED, "qr_code_invalid")
     response = _json(HTTPStatus.OK, result)
     response.headers.update(budget_api.PRIVATE_HEADERS)
     return response
@@ -1075,20 +1098,20 @@ async def _device_exchange(request):
     ):
         return _native_session_required()
     if not device_token.budget_http_enabled():
-        return _qr_error(HTTPStatus.NOT_FOUND, "budget_disabled")
+        return _auth_error(HTTPStatus.NOT_FOUND, "budget_disabled")
     if not device_token.receipts_enabled():
-        return _qr_error(HTTPStatus.NOT_FOUND, "budget_receipts_disabled")
+        return _auth_error(HTTPStatus.NOT_FOUND, "budget_receipts_disabled")
     invalid_request = "budget_invalid_request"
     body, error = await _read_json_body(request, 4096, reject_duplicates=True)
     if error:
-        return _qr_error(body.status, invalid_request)
+        return _auth_error(body.status, invalid_request)
     if not _session_credential_current(ctx):
         return _native_session_required()
     if not isinstance(body, dict) or not set(body) <= {"device_name", "prior_token"} or "device_name" not in body:
-        return _qr_error(HTTPStatus.BAD_REQUEST, invalid_request)
+        return _auth_error(HTTPStatus.BAD_REQUEST, invalid_request)
     prior = body.get("prior_token")
     if prior is not None and (not isinstance(prior, str) or not prior):
-        return _qr_error(HTTPStatus.BAD_REQUEST, invalid_request)
+        return _auth_error(HTTPStatus.BAD_REQUEST, invalid_request)
     try:
         result = await asyncio.to_thread(
             lambda: device_token.open_store(session_secret=_SESSION_SECRET).exchange(
@@ -1096,11 +1119,11 @@ async def _device_exchange(request):
             ),
         )
     except device_token.DeviceTokenError as exc:
-        return _qr_error(exc.status, exc.code)
+        return _auth_error(exc.status, exc.code)
     except BudgetUsersBackendRequired:
-        return _qr_error(HTTPStatus.FORBIDDEN, "budget_forbidden")
+        return _auth_error(HTTPStatus.FORBIDDEN, "budget_forbidden")
     except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
-        return _incompatible_bridge_response()
+        return _incompatible_bridge_response(request)
     response = _json(HTTPStatus.OK, result)
     response.headers.update(budget_api.PRIVATE_HEADERS)
     return response
