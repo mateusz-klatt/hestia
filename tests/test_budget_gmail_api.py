@@ -1,6 +1,7 @@
 """Synthetic HTTP integration for the default-off Gmail receipt routes."""
 import asyncio
 import base64
+import hashlib
 import json
 import os
 from email.message import EmailMessage
@@ -25,6 +26,7 @@ _ORIGIN = "https://hestia.example.test"
 _SESSION = b"synthetic-session-material-for-http-tests"
 _GMAIL_ROUTES = {"gmail-status": "GET", "gmail-grant": "POST", "gmail-sync": "POST", "gmail-revoke": "POST"}
 _RECEIPT_ID = "5e7e0ddd-8374-4f87-8b25-6f0360330a4a"
+_GATEWAY_RECEIPT_ID = "e88b036b-4560-4568-bda3-d1d6d9c10c05"
 
 
 class GmailHTTPTests(IsolatedAsyncioTestCase):
@@ -278,6 +280,80 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
                     self.assertEqual(receipt["source_kind"], "email" if native else "live_text")
                     self.assertEqual(receipt.get("invoice_number"), "FV/123" if native else None)
                     self.assertEqual(receipt.get("due_date"), "2026-11-25" if native else None)
+
+    async def test_gateway_evidence_is_only_on_the_current_receipt_contract(self):
+        shared = dict(owner="alice", status="imported", source_kind="email", version=1,
+                      created_at=self.clock.now, updated_at=self.clock.now, receipt_date="2026-11-02",
+                      currency="PLN", import_expires_at=self.clock.now + 60)
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(id=_RECEIPT_ID, document_kind="invoice", total_amount="85", **shared))
+            session.flush()
+            session.add(db.BudgetReceipt(
+                id=_GATEWAY_RECEIPT_ID, document_kind="payment_confirmation", total_amount="86",
+                gateway="Example Pay", gateway_status="paid", fee_amount="1", payee_host="shop.example.test",
+                evidence_for_receipt_id=_RECEIPT_ID, **shared,
+            ))
+        gateway_fields = {
+            "gateway": "Example Pay", "gateway_status": "paid", "fee_amount": "1",
+            "payee_host": "shop.example.test", "evidence_for_receipt_id": _RECEIPT_ID, "has_document": True,
+        }
+        for version in (None, "0.40.0", "0.51.0", api_contract.CONTRACT_VERSION):
+            with self.subTest(version=version):
+                headers = self.headers()
+                if version is not None:
+                    headers["X-Hestia-Contract-Version"] = version
+                listing = await self.client.post(
+                    receipt_api.PREFIX + "/list", json={"evidence": "only"}, headers=headers)
+                self.assertEqual(listing.status, 200, await listing.text())
+                (payment_summary,) = (await listing.json())["receipts"]
+                details = []
+                for receipt_id in (_GATEWAY_RECEIPT_ID, _RECEIPT_ID):
+                    response = await self.client.get(receipt_api.PREFIX + "/detail",
+                                                     params={"receipt_id": receipt_id}, headers=headers)
+                    self.assertEqual(response.status, 200, await response.text())
+                    details.append((await response.json())["receipt"])
+                payment, document = details
+                if version == api_contract.CONTRACT_VERSION:
+                    for receipt in (payment_summary, payment):
+                        self.assertEqual({key: receipt[key] for key in gateway_fields}, gateway_fields)
+                    self.assertNotIn("payment_evidence", payment_summary)
+                    self.assertEqual(payment["payment_evidence"], [])
+                    self.assertEqual(document["payment_evidence"], [{
+                        "receipt_id": _GATEWAY_RECEIPT_ID, "gateway": "Example Pay", "gateway_status": "paid",
+                        "total_amount": "86", "fee_amount": "1", "receipt_date": "2026-11-02",
+                    }])
+                else:
+                    for receipt in (payment_summary, payment, document):
+                        self.assertTrue(receipt.keys().isdisjoint(gateway_fields))
+                        self.assertNotIn("payment_evidence", receipt)
+
+    async def test_default_list_accepts_a_pre_evidence_cursor(self):
+        shared = dict(owner="alice", status="imported", source_kind="email", document_kind="invoice", version=1,
+                      created_at=self.clock.now, updated_at=self.clock.now, currency="PLN", total_amount="85",
+                      import_expires_at=self.clock.now + 60)
+        store = receipt_api._store(_SESSION)
+        filters = {"month": "2026-11", "status": "imported", "linked": False, "document_kind": "invoice"}
+        legacy_context = hashlib.sha256(
+            json.dumps(filters, sort_keys=True, separators=(",", ":")).encode("ascii")).hexdigest()
+        with self.sessions.begin() as session:
+            newest = db.BudgetReceipt(id=_RECEIPT_ID, receipt_date="2026-11-03", **shared)
+            older = db.BudgetReceipt(id=_GATEWAY_RECEIPT_ID, receipt_date="2026-11-02", **shared)
+            session.add_all((newest, older))
+            cursor = store._encode_cursor("alice", legacy_context, newest)
+
+        headers = self.headers() | {"X-Hestia-Contract-Version": api_contract.CONTRACT_VERSION}
+        path = receipt_api.PREFIX + "/list"
+        first = await self.client.post(path, json={**filters, "limit": 1}, headers=headers)
+        self.assertEqual(first.status, 200, await first.text())
+        self.assertEqual((await first.json())["next_cursor"], cursor)
+        second = await self.client.post(path, json={**filters, "cursor": cursor}, headers=headers)
+        self.assertEqual(second.status, 200, await second.text())
+        self.assertEqual([row["receipt_id"] for row in (await second.json())["receipts"]], [_GATEWAY_RECEIPT_ID])
+        for evidence in ("only", "include"):
+            with self.subTest(evidence=evidence):
+                wrong_scope = await self.client.post(
+                    path, json={**filters, "evidence": evidence, "cursor": cursor}, headers=headers)
+                self.assertEqual(wrong_scope.status, 400)
 
     async def test_manual_forward_review_metadata_never_exposes_the_inner_address(self):
         with self.sessions.begin() as session:

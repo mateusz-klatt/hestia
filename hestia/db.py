@@ -923,6 +923,8 @@ class BudgetReceipt(Base):
                              name="fk_budget_receipts_account_owner"),
         UniqueConstraint("id", "owner", name="uq_budget_receipts_id_owner"),
         Index("ix_budget_receipts_owner_date", "owner", "receipt_date", "id"),
+        Index("uq_budget_receipts_gateway_ref", "owner", "gateway", "gateway_ref_hmac", unique=True,
+              sqlite_where=text("gateway_ref_hmac IS NOT NULL")),
         Index("uq_budget_receipts_tx_link", "linked_account_id", "linked_entry_ref", unique=True,
               sqlite_where=text("status IN ('confirmed', 'needs_review') AND linked_account_id IS NOT NULL "
                                 "AND linked_entry_ref IS NOT NULL")),
@@ -975,6 +977,17 @@ class BudgetReceipt(Base):
         CheckConstraint("version >= 1", name="ck_budget_receipts_version"),
         CheckConstraint("document_kind IN ('receipt', 'invoice', 'payment_confirmation')",
                         name="ck_budget_receipts_document_kind"),
+        CheckConstraint("gateway IS NULL OR length(gateway) BETWEEN 1 AND 64", name="ck_budget_receipts_gateway"),
+        CheckConstraint("gateway_status IS NULL OR (gateway IS NOT NULL "
+                        "AND gateway_status IN ('registered', 'paid'))", name="ck_budget_receipts_gateway_status"),
+        CheckConstraint("gateway_ref_hmac IS NULL OR (length(gateway_ref_hmac) = 64 "
+                        "AND gateway_ref_hmac NOT GLOB '*[^0-9a-f]*')", name="ck_budget_receipts_gateway_ref_hmac"),
+        CheckConstraint("fee_amount IS NULL OR (length(fee_amount) BETWEEN 1 AND 80 "
+                        "AND fee_amount NOT GLOB '-*')", name="ck_budget_receipts_fee_amount"),
+        CheckConstraint("payee_host IS NULL OR (length(payee_host) BETWEEN 1 AND 253 "
+                        "AND instr(payee_host, '@') = 0 AND payee_host GLOB '*.*' "
+                        "AND payee_host NOT GLOB '*[A-Z]*' AND payee_host NOT GLOB '*[^a-z0-9.-]*')",
+                        name="ck_budget_receipts_payee_host"),
         CheckConstraint("import_expires_at IS NULL OR import_expires_at >= 0", name="ck_budget_receipts_import_expiry"),
         CheckConstraint("invoice_number IS NULL OR length(invoice_number) BETWEEN 1 AND 128",
                         name="ck_budget_receipts_invoice_number"),
@@ -995,6 +1008,15 @@ class BudgetReceipt(Base):
     status: Mapped[str]
     source_kind: Mapped[str]
     document_kind: Mapped[str] = mapped_column(server_default=text("'receipt'"))
+    gateway: Mapped[str | None]
+    gateway_status: Mapped[str | None]
+    gateway_ref_hmac: Mapped[str | None]
+    fee_amount: Mapped[str | None]
+    payee_host: Mapped[str | None]
+    # Migration 0031 enforces same-owner evidence with triggers and clears the
+    # pointer via ON DELETE SET NULL. SQLite's dialect omits inline FK actions
+    # when reflecting the schema, so the model omits the action too.
+    evidence_for_receipt_id: Mapped[str | None] = mapped_column(ForeignKey("budget_receipts.id"))
     import_expires_at: Mapped[float | None]
     invoice_number: Mapped[str | None]
     due_date: Mapped[str | None]

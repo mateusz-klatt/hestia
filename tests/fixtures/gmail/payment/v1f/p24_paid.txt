@@ -1,0 +1,15 @@
+Dzień dobry,
+
+dziękujemy za płatność. Potwierdzamy potwierdzeniu realizacji płatności.
+
+Szczegóły transakcji
+Odbiorca wpłaty: SKLEP PRZYKŁADOWY SP. Z O.O. 4500000000
+Tytuł: Zamówienie 700100200
+Kwota transakcji: 120,00 PLN
+Dodatkowe opłaty:
+1,50 PLN
+Do zapłaty: 121,50 PLN
+
+Przykładowa Bramka S.A. • 00-001 Poznań, ul. Testowa 8
+Sąd Rejonowy Poznań, KRS 0000000000,
+wysokość kapitału zakładowego: 4 737 100,00 PLN, opłacony w całości

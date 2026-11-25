@@ -64,7 +64,7 @@ class GmailPaymentDedupeTests(TestCase):
     def test_reference_less_shop_payment_binds_first_reference_in_every_import_order(self):
         fields = ImportedPayment("Example Shop", "Example purchase", "50", "PLN", ())
         day = date(2026, 11, 25)
-        no_reference = PendingPayment(fields, day, "a" * 64, ())
+        no_reference = PendingPayment(fields, day, "a" * 64)
         first_hmac = digest(SETTINGS.hmac_secret, ORDER_REFERENCE_DOMAIN, "111111")
         second_hmac = digest(SETTINGS.hmac_secret, ORDER_REFERENCE_DOMAIN, "222222")
         first_order = replace(no_reference, order_reference_hmac=first_hmac)
@@ -80,7 +80,7 @@ class GmailPaymentDedupeTests(TestCase):
     def test_reference_binding_rolls_back_with_the_batch(self):
         owner = "shop-rollback"
         fields = ImportedPayment("Example Shop", "Example purchase", "50", "PLN", ())
-        payment = PendingPayment(fields, date(2026, 11, 25), "a" * 64, ())
+        payment = PendingPayment(fields, date(2026, 11, 25), "a" * 64)
         self._import_payments(owner, (payment,), 1)
         pending = tuple(
             PendingMessage(f"{index:064x}", self.clock.now, "direct_allowlist", "imported",
@@ -102,7 +102,7 @@ class GmailPaymentDedupeTests(TestCase):
             fields = ImportedPayment(merchant, "Example payment", amount, currency, (), payee_from_config=fallback)
             reference_hmac = None if reference is None else digest(SETTINGS.hmac_secret, ORDER_REFERENCE_DOMAIN, reference)
             payee_hmac = None if fallback else digest(SETTINGS.hmac_secret, PAYMENT_PAYEE_DOMAIN, _payee_key(merchant))
-            return PendingPayment(fields, day + timedelta(days=days), "a" * 64, (), reference_hmac, gateway=True,
+            return PendingPayment(fields, day + timedelta(days=days), "a" * 64, reference_hmac, gateway=True,
                                   payee_hmac=payee_hmac)
 
         studio = payment("Example Studio", "20", "USD")
@@ -148,7 +148,7 @@ class GmailPaymentDedupeTests(TestCase):
 
 
 class GmailPipelineTests(TestCase):
-    def test_payment_dedupe_uses_owner_and_current_config_and_prunes_sender_provenance(self):
+    def test_payment_dedupe_uses_owner_and_prunes_sender_provenance(self):
         with TemporaryDirectory() as directory:
             self.addCleanup(db.reset_engine_cache)
             _engine, sessions = db.init_db(Path(directory) / "payment-provenance.db")
@@ -166,8 +166,8 @@ class GmailPipelineTests(TestCase):
             day = date(2026, 11, 25)
             gateway_hmac, shop_hmac = "a" * 64, "b" * 64
             payee_hmac = digest(SETTINGS.hmac_secret, PAYMENT_PAYEE_DOMAIN, _payee_key(fields.merchant))
-            gateway = PendingPayment(fields, day, gateway_hmac, (shop_hmac,), "2" * 64, gateway=True, payee_hmac=payee_hmac)
-            shop = PendingPayment(fields, day, shop_hmac, (gateway_hmac,), "3" * 64)
+            gateway = PendingPayment(fields, day, gateway_hmac, "2" * 64, gateway=True, payee_hmac=payee_hmac)
+            shop = PendingPayment(fields, day, shop_hmac, "3" * 64)
 
             def commit(owner, message_hmac, payment, rfc_hmac=None):
                 pending = PendingMessage(message_hmac, clock.now, "direct_allowlist", "imported",
@@ -178,8 +178,7 @@ class GmailPipelineTests(TestCase):
             self.assertEqual(commit(OWNER, "c" * 64, gateway, rfc_hmac), (1, 0, True))
             self.assertEqual(commit(other, "d" * 64, shop, rfc_hmac), (1, 0, True))
             self.assertEqual(commit(OWNER, "1" * 64, shop, rfc_hmac), (0, 1, True))
-            # The only rule now configured for this owner is for the shop.
-            self.assertEqual(commit(OWNER, "e" * 64, replace(shop, opposite_sender_hmacs=())), (1, 0, True))
+            self.assertEqual(commit(OWNER, "e" * 64, shop), (1, 0, True))
 
             with sessions.begin() as session:
                 self.assertEqual(session.get(db.BudgetGmailMessage, (OWNER, "1" * 64)).outcome, "skipped_duplicate")
@@ -220,10 +219,10 @@ class GmailPipelineTests(TestCase):
             messages = (
                 ("shop-first", shop, "15.00 PLN", 25, "imported"),
                 ("shop-equal", second_shop, "15 PLN", 25, "imported"),
-                ("gateway-match", gateway, "15 PLN", 27, "skipped_non_receipt"),
+                ("gateway-match", gateway, "15 PLN", 27, "imported"),
                 ("gateway-first", gateway, "16 PLN", 25, "imported"),
-                ("shop-match", shop, "16 PLN", 23, "skipped_non_receipt"),
-                ("gateway-outside", gateway, "15 PLN", 28, "imported"),
+                ("shop-match", shop, "16 PLN", 23, "imported"),
+                ("gateway-outside", gateway, "15 PLN", 19, "imported"),
                 ("gateway-equal", gateway, "16 PLN", 30, "imported"),
                 ("gateway-fallback", gateway, "17.25 PLN", 25, "imported"),
                 ("shop-other-currency", shop, "16 USD", 25, "imported"),

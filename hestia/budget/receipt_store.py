@@ -54,6 +54,7 @@ _SUMMARY_FIELDS = (
     "linked_account_id", "linked_entry_ref", "version", "created_at", "updated_at", "image_available",
     "image_expires_at", "raw_text_expires_at", "math_delta", "document_kind", "invoice_number", "due_date",
     "import_expires_at", "forwarded_manually", "forwarded_sender_domain",
+    "gateway", "gateway_status", "fee_amount", "payee_host", "evidence_for_receipt_id", "has_document",
 )
 
 
@@ -228,13 +229,24 @@ class BudgetReceiptStore(BudgetHTTPStore):
             "due_date": row.due_date, "import_expires_at": row.import_expires_at,
             "forwarded_manually": bool(row.forwarded_manually),
             "forwarded_sender_domain": row.forwarded_sender_domain,
+            "gateway": row.gateway, "gateway_status": row.gateway_status, "fee_amount": row.fee_amount,
+            "payee_host": row.payee_host, "evidence_for_receipt_id": row.evidence_for_receipt_id,
+            "has_document": row.gateway is None or row.evidence_for_receipt_id is not None,
         }
         return {key: values[key] for key in _SUMMARY_FIELDS}
 
     def _detail(self, session, row):
         lines = session.scalars(select(Line).where(Line.receipt_id == row.id, Line.owner == row.owner)
                                 .order_by(Line.line_no))
-        return {**self._summary(session, row), "lines": [_line_dict(line) for line in lines]}
+        evidence = session.scalars(select(Receipt).where(
+            Receipt.owner == row.owner, Receipt.evidence_for_receipt_id == row.id,
+        ).order_by(Receipt.receipt_date, Receipt.id))
+        payment_evidence = [{
+            "receipt_id": item.id, "gateway": item.gateway, "gateway_status": item.gateway_status,
+            "total_amount": item.total_amount, "fee_amount": item.fee_amount, "receipt_date": item.receipt_date,
+        } for item in evidence]
+        return {**self._summary(session, row), "lines": [_line_dict(line) for line in lines],
+                "payment_evidence": payment_evidence}
 
     def _purge(self, session, owner, now):
         conditions = [Receipt.status == "draft",
@@ -668,7 +680,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
     @staticmethod
     def _filters(values, *, search):
         allowed = ({"query", "limit", "cursor"} if search
-                   else {"month", "status", "linked", "document_kind", "limit", "cursor"})
+                   else {"month", "status", "linked", "document_kind", "evidence", "limit", "cursor"})
         if not isinstance(values, dict) or set(values) - allowed:
             raise ReceiptError()
         limit = values.get("limit", 50)
@@ -690,6 +702,9 @@ class BudgetReceiptStore(BudgetHTTPStore):
         linked = values.get("linked")
         if linked is not None and type(linked) is not bool:
             raise ReceiptError()
+        evidence = values.get("evidence", "exclude")
+        if evidence not in ("exclude", "only", "include"):
+            raise ReceiptError()
         query = values.get("query")
         if search and (not isinstance(query, str) or not query.strip() or len(query) > 128):
             raise ReceiptError()
@@ -698,12 +713,14 @@ class BudgetReceiptStore(BudgetHTTPStore):
         }
         if kind is not None:
             context_values["document_kind"] = kind
+        if evidence != "exclude":
+            context_values["evidence"] = evidence
         context = hashlib.sha256(json.dumps(context_values, sort_keys=True, ensure_ascii=True,
                                             separators=(",", ":")).encode("ascii")).hexdigest()
-        return limit, month, status, linked, query, kind, context
+        return limit, month, status, linked, query, kind, evidence, context
 
     def _list(self, owner, values, *, search):
-        limit, month, status, linked, query, kind, context = self._filters(values, search=search)
+        limit, month, status, linked, query, kind, evidence, context = self._filters(values, search=search)
         with self.transaction() as session:
             self._owner(session, owner)
             now = self._now()
@@ -716,6 +733,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 query_obj = query_obj.where(Receipt.status == status)
             if kind is not None:
                 query_obj = query_obj.where(Receipt.document_kind == kind)
+            if not search:
+                if evidence == "exclude":
+                    query_obj = query_obj.where(Receipt.evidence_for_receipt_id.is_(None))
+                elif evidence == "only":
+                    query_obj = query_obj.where(Receipt.evidence_for_receipt_id.is_not(None))
             if linked is not None:
                 query_obj = query_obj.where(Receipt.linked_account_id.is_not(None) if linked
                                             else Receipt.linked_account_id.is_(None))

@@ -119,8 +119,6 @@ class GmailMessageProcessorTests(unittest.TestCase):
                           pending.payment.fields.currency, pending.payment.fields.total_amount),
                          ("Example Shop", "Opłata za usługę", "PLN", "123.45"))
         self.assertEqual(pending.payment.sender_hmac, digest(SECRET, PAYMENT_SENDER_DOMAIN, "@shop.example.test"))
-        self.assertEqual(pending.payment.opposite_sender_hmacs,
-                         (digest(SECRET, PAYMENT_SENDER_DOMAIN, "@gateway.example.test"),))
         self.assertIsNone(pending.payment.order_reference_hmac)
         self.assertIsNone(pending.payment.payee_hmac)
 

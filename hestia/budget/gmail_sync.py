@@ -184,6 +184,7 @@ class GmailSync:
         imported, skipped, drained = self.store.commit(
             owner, progress.generation, changes, pending,
             starting_recovery=starting_recovery, starting_incremental=starting_incremental,
+            backfill_days=self.settings.backfill_days,
         )
         progress.imported += imported
         progress.skipped += skipped
@@ -423,3 +424,11 @@ class GmailSync:
         return self.store.schedule_sync(owner, now=self.store.clock(), force_full_resync=force_full_resync,
                                         retry_parse_failed=retry_parse_failed,
                                         backfill_days=self.settings.backfill_days, cooldown=MANUAL_COOLDOWN)
+
+    def reset_unconfirmed_payments(self, owner, *, dry_run):
+        self._require_owner(owner)
+        with _sync_lock(self.database_path):
+            generation = self.store.state(owner).grant_generation
+            return self.store.reset_unconfirmed_payments(
+                owner, generation, backfill_days=self.settings.backfill_days, dry_run=dry_run,
+            )

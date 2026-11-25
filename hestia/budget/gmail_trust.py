@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import getaddresses
 import re
+from typing import Literal, get_args
 
 from .gmail_address import canonical_domain, canonical_mailbox
 
@@ -13,6 +14,15 @@ _PUBLIC_WEBMAIL = frozenset({
 })
 _CONFIG_ERROR = "budget_receipt_gmail_sender_config_invalid"
 _MAX_PAYMENT_SENDERS = 200
+PaymentProvider = Literal["p24", "tpay", "autopay", "payu", "paynow", "stripe"]
+_PAYMENT_PROVIDER_DOMAINS: dict[str, PaymentProvider] = {
+    "przelewy24.pl": "p24",
+    "tpay.com": "tpay",
+    "autopay.pl": "autopay",
+    "payu.com": "payu",
+    "paynow.pl": "paynow",
+    "stripe.com": "stripe",
+}
 
 _QUOTED_VALUE = r'"(?:[^"\\]|\\.)*"'
 _AUTH_TOKEN = re.compile(rf'{_QUOTED_VALUE}|\\.|[();]|[^"\\();]+|["\\]', re.DOTALL)
@@ -38,6 +48,15 @@ class PaymentSender:
     sender: str
     merchant: str
     gateway: bool = False
+    provider: PaymentProvider | None = None
+
+    def __post_init__(self):
+        if self.gateway and self.provider is None:
+            domain = self.sender.rpartition("@")[2]
+            for registered_domain, provider in _PAYMENT_PROVIDER_DOMAINS.items():
+                if domain_matches(domain, registered_domain):
+                    object.__setattr__(self, "provider", provider)
+                    break
 
 
 def _domain_rule(value):
@@ -68,7 +87,7 @@ def _normalize_rules(values, normalize):
 
 def _payment_sender_rule(entry) -> PaymentSender:
     if (not isinstance(entry, dict) or not {"sender", "merchant"} <= entry.keys()
-            or entry.keys() - {"sender", "merchant", "gateway"}):
+            or entry.keys() - {"sender", "merchant", "gateway", "provider"}):
         raise ValueError(_CONFIG_ERROR)
     sender, merchant = entry["sender"], entry["merchant"]
     gateway = entry.get("gateway", False)
@@ -80,7 +99,10 @@ def _payment_sender_rule(entry) -> PaymentSender:
         raise ValueError(_CONFIG_ERROR)
     if type(gateway) is not bool:
         raise ValueError(_CONFIG_ERROR)
-    return PaymentSender(rule, merchant, gateway)
+    provider = entry.get("provider")
+    if "provider" in entry and (not gateway or provider not in get_args(PaymentProvider)):
+        raise ValueError(_CONFIG_ERROR)
+    return PaymentSender(rule, merchant, gateway, provider)
 
 
 def normalize_payment_senders(values) -> tuple[PaymentSender, ...]:

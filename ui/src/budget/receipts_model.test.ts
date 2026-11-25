@@ -70,6 +70,12 @@ function summary(overrides: Partial<ReceiptSummary> = {}): ReceiptSummary {
     import_expires_at: null,
     forwarded_manually: false,
     forwarded_sender_domain: null,
+    gateway: null,
+    gateway_status: null,
+    fee_amount: null,
+    payee_host: null,
+    evidence_for_receipt_id: null,
+    has_document: true,
     created_at: 1_700_000_000,
     updated_at: 1_700_000_000,
     ...overrides,
@@ -79,6 +85,7 @@ function summary(overrides: Partial<ReceiptSummary> = {}): ReceiptSummary {
 function detailOf(overrides: Partial<ReceiptDetail> = {}): ReceiptDetail {
   return {
     ...summary(),
+    payment_evidence: [],
     lines: [
       {
         line_no: 1,

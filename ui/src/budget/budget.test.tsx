@@ -1591,6 +1591,12 @@ describe("receipts tab & capability gate", () => {
           import_expires_at: null,
           forwarded_manually: false,
           forwarded_sender_domain: null,
+          gateway: null,
+          gateway_status: null,
+          fee_amount: null,
+          payee_host: null,
+          evidence_for_receipt_id: null,
+          has_document: true,
           created_at: 1_700_000_000,
           updated_at: 1_700_000_000,
         }],
@@ -1626,8 +1632,15 @@ describe("receipts tab & capability gate", () => {
           import_expires_at: null,
           forwarded_manually: false,
           forwarded_sender_domain: null,
+          gateway: null,
+          gateway_status: null,
+          fee_amount: null,
+          payee_host: null,
+          evidence_for_receipt_id: null,
+          has_document: true,
           created_at: 1_700_000_000,
           updated_at: 1_700_000_000,
+          payment_evidence: [],
           lines: [{
             line_no: 1,
             line_kind: "item",
@@ -1927,6 +1940,12 @@ describe("receipts tab & capability gate", () => {
         import_expires_at: null,
         forwarded_manually: false,
         forwarded_sender_domain: null,
+        gateway: null,
+        gateway_status: null,
+        fee_amount: null,
+        payee_host: null,
+        evidence_for_receipt_id: null,
+        has_document: true,
         created_at: 1_700_000_000,
         updated_at: 1_700_000_000,
       }],
@@ -2031,9 +2050,16 @@ describe("receipts tab & capability gate", () => {
             import_expires_at: null,
             forwarded_manually: false,
             forwarded_sender_domain: null,
+            gateway: null,
+            gateway_status: null,
+            fee_amount: null,
+            payee_host: null,
+            evidence_for_receipt_id: null,
+            has_document: true,
             created_at: 1_700_000_000,
             updated_at: 1_700_000_000,
             lines: [],
+            payment_evidence: [],
           },
         },
       });
@@ -2075,6 +2101,12 @@ describe("receipts tab & capability gate", () => {
       import_expires_at: null,
       forwarded_manually: false,
       forwarded_sender_domain: null,
+      gateway: null,
+      gateway_status: null,
+      fee_amount: null,
+      payee_host: null,
+      evidence_for_receipt_id: null,
+      has_document: true,
       created_at: 1_700_000_000,
       updated_at: 1_700_000_000,
     };
@@ -2111,7 +2143,7 @@ describe("receipts tab & capability gate", () => {
     vi.mocked(rApi.receiptsList).mockImplementation(() => ok({ receipts: [confirmedRow], next_cursor: null }));
     const listCallsBeforeResolve = vi.mocked(rApi.receiptsList).mock.calls.length;
     await act(async () => {
-      pendingConfirm.settle({ ok: true, data: { ok: true, receipt: { ...confirmedRow, lines: [] } } });
+      pendingConfirm.settle({ ok: true, data: { ok: true, receipt: { ...confirmedRow, payment_evidence: [], lines: [] } } });
       await Promise.resolve();
     });
     await settle();
@@ -2154,6 +2186,12 @@ describe("receipts tab & capability gate", () => {
       import_expires_at: null,
       forwarded_manually: false,
       forwarded_sender_domain: null,
+      gateway: null,
+      gateway_status: null,
+      fee_amount: null,
+      payee_host: null,
+      evidence_for_receipt_id: null,
+      has_document: true,
       created_at: 1_700_000_000,
       updated_at: 1_700_000_000,
     };
@@ -2195,7 +2233,7 @@ describe("receipts tab & capability gate", () => {
     expect(host.querySelector(".budget-receipts")?.textContent).not.toContain("Confirming…");
 
     // Same across a lost-response delete (budget_unknown_outcome) after an epoch bump.
-    vi.mocked(rApi.receiptDetail).mockImplementation(() => ok({ receipt: { ...confirmedRow, lines: [] }, candidates: [] }));
+    vi.mocked(rApi.receiptDetail).mockImplementation(() => ok({ receipt: { ...confirmedRow, payment_evidence: [], lines: [] }, candidates: [] }));
     const pendingDelete = deferred<Loaded<ReceiptsApi["deleteReceipt"]>>();
     vi.mocked(rApi.deleteReceipt).mockImplementationOnce(() => pendingDelete.promise);
 
@@ -2263,6 +2301,12 @@ describe("receipts tab & capability gate", () => {
       import_expires_at: null,
       forwarded_manually: false,
       forwarded_sender_domain: null,
+      gateway: null,
+      gateway_status: null,
+      fee_amount: null,
+      payee_host: null,
+      evidence_for_receipt_id: null,
+      has_document: true,
       created_at: 1_700_000_000,
       updated_at: 1_700_000_000,
     };
@@ -2271,6 +2315,7 @@ describe("receipts tab & capability gate", () => {
     vi.mocked(rApi.receiptDetail).mockImplementation((id) => ok({
       receipt: {
         ...(id === item1.receipt_id ? item1 : item2),
+        payment_evidence: [],
         lines: [{
           line_no: 1,
           line_kind: "other",
@@ -2306,7 +2351,7 @@ describe("receipts tab & capability gate", () => {
     await act(async () => {
       pendingFirstConfirm.settle({
         ok: true,
-        data: { ok: true, receipt: { ...item1, status: "confirmed", version: 2, lines: [] } },
+        data: { ok: true, receipt: { ...item1, status: "confirmed", version: 2, payment_evidence: [], lines: [] } },
       });
       await Promise.resolve();
     });
@@ -2339,7 +2384,7 @@ describe("receipts tab & capability gate", () => {
     await act(async () => {
       lockFirstConfirm.settle({
         ok: true,
-        data: { ok: true, receipt: { ...item1, status: "confirmed", version: 2, lines: [] } },
+        data: { ok: true, receipt: { ...item1, status: "confirmed", version: 2, payment_evidence: [], lines: [] } },
       });
       await Promise.resolve();
     });

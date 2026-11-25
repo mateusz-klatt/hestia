@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 import sys
 import time
 
@@ -56,26 +57,40 @@ def execute(args):
 
 
 def _run_gmail(args):
+    from sqlalchemy.orm import sessionmaker
+
     from .. import store_sql
-    from ..db import db_path, init_db
+    from ..db import db_path, init_db, make_engine
     from . import gmail_config
     from .gmail_client import GmailError
     from .gmail_store import GmailStore
     from .gmail_sync import GmailSync
     from .views import BudgetUsersBackendRequired
 
+    resetting = args.action == "reset-unconfirmed-payments"
+    reset_engine = None
     try:
         secret = os.environ.get("HESTIA_SESSION_SECRET", "").encode("utf-8")
         settings = gmail_config.load_settings(session_secret=secret)
         if settings is None:
             raise BudgetConfigError("Set HESTIA_BUDGET_RECEIPTS_GMAIL_CONFIG")
         target = db_path() if args.db is None else args.db
-        engine, sessions = init_db(target)
+        if resetting:
+            # Reset applies to an existing, migrated database in a single write transaction.
+            if not Path(target).is_file():
+                raise BudgetConfigError("Gmail payment reset requires an existing database")
+            reset_engine = engine = make_engine(target)
+            sessions = sessionmaker(bind=engine)
+        else:
+            engine, sessions = init_db(target)
         if not store_sql.is_users_db_authoritative(engine):
             raise BudgetUsersBackendRequired()
         service = GmailSync(settings, GmailStore(sessions, clock=time.time), None, None, target)
-        result = service.schedule(settings.owner, force_full_resync=args.force_full_resync,
-                                  retry_parse_failed=args.retry_parse_failed)
+        if resetting:
+            result = service.reset_unconfirmed_payments(settings.owner, dry_run=args.dry_run)
+        else:
+            result = service.schedule(settings.owner, force_full_resync=args.force_full_resync,
+                                      retry_parse_failed=args.retry_parse_failed)
     except GmailError as exc:
         print(exc.code, file=sys.stderr)
         return 2
@@ -83,8 +98,11 @@ def _run_gmail(args):
         print(str(exc), file=sys.stderr)
         return 2
     except Exception:
-        print("Gmail sync scheduling failed", file=sys.stderr)
+        print("Gmail payment reset failed" if resetting else "Gmail sync scheduling failed", file=sys.stderr)
         return 1
+    finally:
+        if reset_engine is not None:
+            reset_engine.dispose()
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
@@ -128,13 +146,16 @@ def main(argv=None):
     revoke.add_argument("--member", required=True, help="Member username on the grant")
     revoke.add_argument("--owner", required=True, help="Admin username on the grant")
     revoke.add_argument("--grant-id", required=True, help="Current grant id")
-    gmail = commands.add_parser("gmail", help="Queue Gmail receipt sync without a browser session")
+    gmail = commands.add_parser("gmail", help="Manage Gmail receipt imports without a browser session")
     gmail_actions = gmail.add_subparsers(dest="action", required=True)
     gmail_sync = gmail_actions.add_parser("sync", help="Schedule one Gmail receipt sync for the background poller")
     gmail_sync.add_argument("--force-full-resync", action="store_true",
                             help="Scan the recent resync window instead of incremental history")
     gmail_sync.add_argument("--retry-parse-failed", action="store_true",
                             help="Delete parse_failed markers and scan the full backfill window")
+    gmail_reset = gmail_actions.add_parser("reset-unconfirmed-payments",
+                                           help="Delete unconfirmed payment imports and queue a full backfill")
+    gmail_reset.add_argument("--dry-run", action="store_true", help="Show counts and roll back the reset")
     args = parser.parse_args(argv)
     if args.command == "household":
         # Before bank config, the acquisition lock, imports and configure(). No init_db.

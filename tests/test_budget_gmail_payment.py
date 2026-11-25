@@ -11,8 +11,8 @@ _FIXTURES = Path(__file__).parent / "fixtures" / "gmail" / "payment"
 _MERCHANT = "Example Merchant"
 
 
-def _extract(text, subject="Example payment", *, gateway=False):
-    return extract_payment(text, subject=subject, merchant=_MERCHANT, gateway=gateway)
+def _extract(text, subject="Example payment", *, gateway=False, provider=None):
+    return extract_payment(text, subject=subject, merchant=_MERCHANT, gateway=gateway, provider=provider)
 
 
 class PaymentFixtureTests(unittest.TestCase):
@@ -20,12 +20,18 @@ class PaymentFixtureTests(unittest.TestCase):
         cases = (
             ("gateway_p24_style", "Nowa transakcja płatnicza (P24-AAA-BBB-CCC)", True, ImportedPayment(
                 "PRZYKŁADOWY SKLEP SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ", "Zamówienie 100200300", "217", "PLN", (),
-                "100200300",
+                "100200300", fee_amount="0",
             )),
             ("gateway_tpay_style", "Potwierdzenie transakcji TR-AAAA-0000000", True, ImportedPayment(
                 "PRZYKŁADOWA SPÓŁKA AKCYJNA", "Zamówienie 0000000001", "83.84", "PLN", (), "0000000001",
+                fee_amount="0",
             )),
-            ("gateway_started", "Potwierdzenie rozpoczęcia transakcji dla - https://sklep.example.test/", True, None),
+            # v1f: the Autopay registration notice imports as a registered payment.
+            ("gateway_started", "Potwierdzenie rozpoczęcia transakcji dla - https://sklep.example.test/", True,
+             ImportedPayment(
+                 _MERCHANT, "Potwierdzenie rozpoczęcia transakcji dla -", "146.37", "PLN", (),
+                 payee_from_config=True, fee_amount="0", payee_host="sklep.example.test",
+             )),
             ("gateway_unfinished", "Dokończ płatność", True, None),
             ("food_order", "Zamówienie potwierdzone", False, ImportedPayment(
                 _MERCHANT, "Przykładowa Restauracja", "55.52", "PLN", (),
@@ -52,13 +58,13 @@ class PaymentFixtureTests(unittest.TestCase):
                 _MERCHANT, "Przejazd opłacony", "42.35", "PLN", (),
             )),
             ("gateway_fee_inclusive", "Potwierdzenie płatności", True, ImportedPayment(
-                _MERCHANT, "Potwierdzenie płatności", "214.7", "PLN", (), payee_from_config=True,
+                _MERCHANT, "Potwierdzenie płatności", "214.7", "PLN", (), payee_from_config=True, fee_amount="2.36",
             )),
             ("gateway_start_date_field", "Płatność zakończona", True, ImportedPayment(
                 _MERCHANT, "Przykładowy zakup", "38.12", "PLN", (), payee_from_config=True,
             )),
             ("gateway_registered", "Zarejestrowaliśmy Twoje zlecenie płatnicze", True, ImportedPayment(
-                "Example Studio", "Materiały do projektu", "47.25", "PLN", (),
+                "Example Studio", "Materiały do projektu", "47.25", "PLN", (), payee_host="studio.example.test",
             )),
             ("gateway_completed", "Przekazaliśmy Twoje pieniądze", True, ImportedPayment(
                 "Example Studio", "Materiały do projektu", "47.25", "PLN", (),
@@ -76,9 +82,11 @@ class PaymentFixtureTests(unittest.TestCase):
             )),
             ("saas_gateway_charged", "Receipt #1111-2222", True, ImportedPayment(
                 "Example Studio", "Receipt #1111-2222", "96.77", "PLN", (date(2026, 11, 5),),
+                payee_host="invoice.example.test",
             )),
             ("saas_gateway_long_url", "Receipt #3333-4444", True, ImportedPayment(
                 "Example Render Studio", "Receipt #3333-4444", "66.19", "PLN", (date(2026, 12, 8),),
+                payee_host="billing.example.test",
             )),
             ("sports_shop_html_order", "Potwierdzenie zamówienia nr 00000000003", False, ImportedPayment(
                 _MERCHANT, "Potwierdzenie zamówienia nr", "248.36", "PLN", (), "00000000003",
@@ -92,7 +100,8 @@ class PaymentFixtureTests(unittest.TestCase):
         for fixture, subject, gateway, expected in cases:
             with self.subTest(fixture=fixture):
                 body = (_FIXTURES / (fixture + ".txt")).read_text(encoding="utf-8")
-                self.assertEqual(_extract(body, subject, gateway=gateway), expected)
+                provider = "autopay" if fixture == "gateway_started" else None
+                self.assertEqual(_extract(body, subject, gateway=gateway, provider=provider), expected)
 
 
 class PaymentExtractionTests(unittest.TestCase):
@@ -228,13 +237,14 @@ class PaymentExtractionTests(unittest.TestCase):
             ("Odbiorca wpłaty: Example Payee\nOpis zamówienia w Example Payee: Plan", "Example Payee"),
             ("Odbiorca wpłaty: Example PAYEE\nPłatność dla example payee", "Example PAYEE"),
             ("Potwierdzamy płatność dla Example Payee", "Example Payee"),
-            ("Płatność dla - https://SHOP.Example.Test/path?q=a", "shop.example.test"),
-            ("Potwierdzenie dla - shop.example.test", "shop.example.test"),
+            ("Płatność dla - https://SHOP.Example.Test/path?q=a", _MERCHANT),
+            ("Potwierdzenie dla - shop.example.test", _MERCHANT),
             ("Potwierdzenie dla - https://example..test/", _MERCHANT),
             ("Odbiorca wpłaty: A", _MERCHANT),
             ("Odbiorca wpłaty: " + "x" * 129, _MERCHANT),
-            ("Odbiorca wpłaty: Example 0000002", _MERCHANT),
-            ("Odbiorca wpłaty: Example 000002", "Example 000002"),
+            # v1f: one trailing all-digit token of 6+ digits is a gateway id, stripped from the payee.
+            ("Odbiorca wpłaty: Example 0000002", "Example"),
+            ("Odbiorca wpłaty: Example 000002", "Example"),
             ("Odbiorca wpłaty: 000000 person@example.test 000000", _MERCHANT),
         )
         for line, merchant in cases:
@@ -242,19 +252,23 @@ class PaymentExtractionTests(unittest.TestCase):
                 body = f"{line}\nTotal 3 PLN"
                 self.assertEqual(_extract(body, gateway=True).merchant, merchant)
                 self.assertEqual(_extract(body).merchant, _MERCHANT)
-        self.assertIsNone(_extract("Odbiorca wpłaty: Example A\nPłatność dla Example B\nTotal 3 PLN", gateway=True))
-        self.assertIsNone(_extract("Odbiorca wpłaty: Example A Płatność dla Example B\nTotal 3 PLN", gateway=True))
-        self.assertIsNone(_extract("Odbiorca wpłaty: Example A dla - https://shop.example.test\nTotal 3 PLN", gateway=True))
+        for body in (
+            "Odbiorca wpłaty: Example A\nPłatność dla Example B\nTotal 3 PLN",
+            "Odbiorca wpłaty: Example A Płatność dla Example B\nTotal 3 PLN",
+            "Odbiorca wpłaty: Example A dla - https://shop.example.test\nTotal 3 PLN",
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(_extract(body, gateway=True).merchant, "Example A")
         for body, payee in (
             ("Przekazaliśmy Twoje pieniądze\nDo Example Polska S.A.\nOdbiorca: Example Polska SA\nTotal 3 PLN",
-             "Example Polska S.A."),
+             "Example Polska SA"),
             ("Odbiorca: EXAMPLE SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ\nPłatność dla Example sp. z o.o.\nTotal 3 PLN",
              "EXAMPLE SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ"),
             ("Odbiorca: Example Ltd\nPayment to Example Limited : 3 PLN\nTotal 3 PLN", "Example Ltd"),
         ):
             with self.subTest(body=body):
                 self.assertEqual(_extract(body, gateway=True).merchant, payee)
-        self.assertIsNone(_extract("Odbiorca: S.A.\nPłatność dla Example\nTotal 3 PLN", gateway=True))
+        self.assertEqual(_extract("Odbiorca: S.A.\nPłatność dla Example\nTotal 3 PLN", gateway=True).merchant, "Example")
 
     def test_description_selection_redaction_and_cap(self):
         self.assertEqual(_extract(

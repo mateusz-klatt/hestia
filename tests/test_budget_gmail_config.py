@@ -99,6 +99,29 @@ class GmailSettingsTests(TestCase):
         self.settings.write_text(json.dumps(self.data | {"payment_senders": entries}), encoding="utf-8")
         self.assert_invalid()
 
+    def test_payment_provider_is_inferred_or_overridden_for_gateways(self):
+        inferred = {
+            "@przelewy24.pl": "p24",
+            "support@sub.tpay.com": "tpay",
+            "@autopay.pl": "autopay",
+            "@payu.com": "payu",
+            "@paynow.pl": "paynow",
+            "@stripe.com": "stripe",
+            "@notstripe.com": None,
+            "@stripe.com.example.test": None,
+        }
+        entries = [{"sender": sender, "merchant": "Example", "gateway": True} for sender in inferred]
+        entries.extend((
+            {"sender": "billing@stripe.com", "merchant": "Example"},
+            {"sender": "@my-gateway.example.test", "merchant": "Example", "gateway": True, "provider": "autopay"},
+            {"sender": "alternate@autopay.pl", "merchant": "Example", "gateway": True, "provider": "p24"},
+        ))
+        self.assertEqual(
+            {sender.sender: sender.provider for sender in self.load(payment_senders=entries).payment_senders},
+            inferred | {"billing@stripe.com": None, "@my-gateway.example.test": "autopay",
+                        "alternate@autopay.pl": "p24"},
+        )
+
     def test_invalid_payment_rules_fail_with_fixed_config_error(self):
         entry = {"sender": "@shop.example.test", "merchant": "Example Shop"}
         for invalid in (
@@ -112,6 +135,8 @@ class GmailSettingsTests(TestCase):
                 None, "", "X" * 65, "Example\nShop", "Example\u200dShop", "\ud800",
             )),
             *([entry | {"gateway": gateway}] for gateway in (None, 1, "true")),
+            [entry | {"provider": "stripe"}],
+            *([entry | {"gateway": True, "provider": provider}] for provider in (None, 1, [], "unknown", "PayU")),
         ):
             with self.subTest(invalid=invalid):
                 self.settings.write_text(json.dumps(self.data | {"payment_senders": invalid}), encoding="utf-8")

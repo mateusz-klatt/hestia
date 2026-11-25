@@ -1,0 +1,7 @@
+Płatność zakończona sukcesem
+
+Identyfikator transakcji: SYNTH0006FF
+Odbiorca: SKLEP INTERNETOWY PRZYKŁAD
+Kwota transakcji: 66,00 PLN
+Opłata za realizację transakcji: 1,00 PLN
+Do zapłaty: 67,00 PLN

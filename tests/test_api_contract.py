@@ -59,7 +59,17 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.51.0")
+        self.assertEqual(document["info"]["version"], "0.52.0")
+        # 0.52.0 gateway payment evidence.
+        for field in ("gateway", "gateway_status", "fee_amount", "payee_host", "evidence_for_receipt_id",
+                      "has_document"):
+            for name in ("BudgetReceiptSummary", "BudgetReceiptDetail"):
+                schemas[name]["properties"].pop(field)
+                if field in schemas[name].get("required", []):
+                    schemas[name]["required"].remove(field)
+        schemas["BudgetReceiptDetail"]["properties"].pop("payment_evidence")
+        schemas.pop("BudgetReceiptPaymentEvidence")
+        document["info"]["version"] = "0.51.0"
         confirm_schema = schemas["BudgetReceiptConfirmRequest"]
         for field_name, index in (("raw_shop_name", 2), ("raw_nip", 3)):
             self.assertNotIn(field_name, confirm_schema["required"])
