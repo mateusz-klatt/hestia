@@ -17,7 +17,8 @@ _CHUNK = 400
 _MAX_CREDITOR_LEN = 256
 _EVIDENCE_KEYS = (
     "owner", "account_id", "entry_reference", "transaction_date", "booking_date", "value_date",
-    "raw_shop_name", "raw_nip", "creditor_digest", "remittance_digest", "financial_fingerprint",
+    "raw_shop_name", "raw_nip", "creditor_digest", "debtor_digest", "remittance_digest",
+    "financial_fingerprint",
 )
 
 
@@ -108,6 +109,28 @@ def transaction_party_names(session, owner, account_id, entry_reference, fingerp
     return _party_string(data, "creditor_name"), _party_string(data, "debtor_name")
 
 
+def _payload_party_name(payload, party_key):
+    if not isinstance(payload, dict):
+        return None
+    flat = _party_string({"v": payload.get(party_key + "_name")}, "v")
+    if flat is not None:
+        return flat
+    nested = payload.get(party_key)
+    if isinstance(nested, dict):
+        return _party_string(nested, "name")
+    return None
+
+
+def resolved_party_names(session, owner, account_id, entry_reference, payload, fingerprint):
+    """Normalized creditor and debtor names from fingerprint-verified metadata or transaction payload."""
+    meta_creditor, meta_debtor = transaction_party_names(
+        session, owner, account_id, entry_reference, fingerprint,
+    )
+    creditor = meta_creditor if meta_creditor is not None else _payload_party_name(payload, "creditor")
+    debtor = meta_debtor if meta_debtor is not None else _payload_party_name(payload, "debtor")
+    return creditor, debtor
+
+
 def creditor_name(session, owner, account_id, entry_reference, fingerprint):
     """Creditor text is usable only when its metadata row matches this ledger fingerprint."""
     return transaction_party_names(session, owner, account_id, entry_reference, fingerprint)[0]
@@ -125,11 +148,12 @@ def _remittance_digest(payload):
     return hashlib.sha256(raw.encode("ascii")).hexdigest()
 
 
-def _creditor_digest(creditor):
-    """Sha256 of the exact creditor string. Absence stays null so the name is never stored."""
-    if not isinstance(creditor, str):
+def _party_digest(party):
+    """Sha256 of the NFC/whitespace-normalized party name. Absence stays null so raw names never persist."""
+    normalized = normalize_shop_name(party)
+    if not normalized:
         return None
-    return hashlib.sha256(creditor.encode("utf-8")).hexdigest()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def entry_reference_digest(entry_reference):
@@ -139,7 +163,7 @@ def entry_reference_digest(entry_reference):
     return hashlib.sha256(entry_reference.encode("utf-8")).hexdigest()
 
 
-def link_evidence(owner, account_id, entry_reference, payload, shop_name, nip, creditor, fingerprint):
+def link_evidence(owner, account_id, entry_reference, payload, shop_name, nip, creditor, fingerprint, debtor=None):
     payload = payload if isinstance(payload, dict) else {}
     if fingerprint is not None and (
             not isinstance(fingerprint, str) or len(fingerprint) != 64
@@ -150,7 +174,9 @@ def link_evidence(owner, account_id, entry_reference, payload, shop_name, nip, c
         "transaction_date": _bound_date(payload.get("transaction_date")),
         "booking_date": _bound_date(payload.get("booking_date")),
         "value_date": _bound_date(payload.get("value_date")),
-        "raw_shop_name": shop_name, "raw_nip": nip, "creditor_digest": _creditor_digest(creditor),
+        "raw_shop_name": shop_name, "raw_nip": nip,
+        "creditor_digest": _party_digest(creditor),
+        "debtor_digest": _party_digest(debtor),
         "remittance_digest": _remittance_digest(payload), "financial_fingerprint": fingerprint,
     }
     if set(evidence) != set(_EVIDENCE_KEYS):
@@ -213,13 +239,22 @@ def reconcile_receipt_links(session, owner, now):
         shop_forms = (normalized_shop,) if normalized_shop == row.raw_shop_name else (normalized_shop, row.raw_shop_name)
         try:
             payload = {} if transaction is None else _json(transaction.payload_json)
-            creditor = creditor_name(session, owner, row.linked_account_id, row.linked_entry_ref, current)
-            expected_evidence = {
-                evidence_json(link_evidence(
+            creditor, debtor = resolved_party_names(
+                session, owner, row.linked_account_id, row.linked_entry_ref, payload, current,
+            )
+            evidences = [
+                link_evidence(
                     owner, row.linked_account_id, row.linked_entry_ref, payload, candidate_shop, row.raw_nip,
-                    creditor, current))
+                    creditor, current, debtor=debtor)
                 for candidate_shop in shop_forms
-            }
+            ]
+            expected_evidence = {evidence_json(ev) for ev in evidences}
+            if normalize_shop_name(debtor) in (None, ""):
+                # Pre-debtor_digest confirmed rows stay confirmed as long as debtor stays absent.
+                expected_evidence.update(
+                    evidence_json({key: val for key, val in ev.items() if key != "debtor_digest"})
+                    for ev in evidences
+                )
         except (AnalyticsError, ValueError, TypeError, RecursionError):
             expected_evidence = ()
         if current == row.linked_fingerprint and row.linked_evidence in expected_evidence:

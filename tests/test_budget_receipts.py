@@ -1320,6 +1320,7 @@ NR KARTY ****5555
         self.assertNotIn("remittance_information", evidence)
         self.assertNotIn("creditor_name", evidence)
         self.assertIsNone(evidence["creditor_digest"])
+        self.assertIsNone(evidence["debtor_digest"])
         self.assertEqual(len(evidence["financial_fingerprint"]), 64)
         self.assertTrue(saved["linked"])
 
@@ -2089,7 +2090,7 @@ NR KARTY ****5555
         from hestia.budget.gmail_store import _payment_payee_key
         from hestia.budget.receipt_parser import GATEWAY_TOKENS
 
-        # 1. Exact NIP hit -> "nip" when carrying nearby NIP/VAT/TAX ID label; unlabeled NIP is ranking-only (not "nip" strength).
+        # 1. Exact NIP hit -> "nip" only when strictly labeled; excluded prefixes (NR/FAKTURA/FV/INVOICE/NO) are never NIP.
         self.add_transaction(
             "a", "ms-nip", amount="21.00", booking_date="2026-11-15", value_date=None,
             remittance_information=["Faktura VAT PL 526-025-09-95"],
@@ -2103,8 +2104,24 @@ NR KARTY ****5555
             remittance_information=["TAX ID: 5260250995"],
         )
         self.add_transaction(
+            "a", "ms-nip-vatid", amount="21.21", booking_date="2026-11-15", value_date=None,
+            remittance_information=["VAT ID: 5260250995"],
+        )
+        self.add_transaction(
+            "a", "ms-nip-pl-direct", amount="21.22", booking_date="2026-11-15", value_date=None,
+            remittance_information=["SKLEP PL5260250995 ZAKUP"],
+        )
+        self.add_transaction(
             "a", "ms-nip-unlabeled", amount="21.30", booking_date="2026-11-15", value_date=None,
-            remittance_information=["REF PL5260250995 ZAKUP"],
+            remittance_information=["REF 5260250995 ZAKUP"],
+        )
+        self.add_transaction(
+            "a", "ms-nip-bare-vat", amount="21.31", booking_date="2026-11-15", value_date=None,
+            remittance_information=["FAKTURA VAT 5260250995"],
+        )
+        self.add_transaction(
+            "a", "ms-nip-faktura-nr", amount="21.32", booking_date="2026-11-15", value_date=None,
+            remittance_information=["FAKTURA VAT NR 5260250995"],
         )
         self.add_transaction(
             "a", "ms-nip-iban", amount="21.40", booking_date="2026-11-15", value_date=None,
@@ -2114,7 +2131,11 @@ NR KARTY ****5555
             ("21.00", "ms-nip", "nip", True),
             ("21.10", "ms-nip-slash", "nip", True),
             ("21.20", "ms-nip-taxid", "nip", True),
+            ("21.21", "ms-nip-vatid", "nip", True),
+            ("21.22", "ms-nip-pl-direct", "nip", True),
             ("21.30", "ms-nip-unlabeled", "none", True),
+            ("21.31", "ms-nip-bare-vat", "none", True),
+            ("21.32", "ms-nip-faktura-nr", "none", False),
             ("21.40", "ms-nip-iban", "none", False),
         ):
             rec_i = self._seed_imported(
@@ -2174,6 +2195,30 @@ NR KARTY ****5555
         )
         self.assertEqual(self.receipts.detail("owner", rec_all)["candidates"][0]["match_strength"], "distinctive")
 
+        # Legal-form stripping on BOTH receipt and bank sides prevents shared legal suffix false positives
+        # while still matching the core merchant name across differing legal forms.
+        self.add_transaction(
+            "a", "ms-legal-other", amount="22.40", booking_date="2026-11-15", value_date=None,
+            remittance_information=["BETA SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ GMBH LTD"],
+        )
+        rec_legal_mismatch = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="22.40",
+            shop="ALFA Spółka z ograniczoną odpowiedzialnością GmbH Limited", nip=None,
+        )
+        cand_legal_mismatch = self.receipts.detail("owner", rec_legal_mismatch)["candidates"][0]
+        self.assertEqual(cand_legal_mismatch["match_strength"], "none")
+        self.assertFalse(cand_legal_mismatch["merchant_token_hit"])
+
+        self.add_transaction(
+            "a", "ms-legal-same", amount="22.50", booking_date="2026-11-15", value_date=None,
+            remittance_information=["ALFA SP. Z O.O."],
+        )
+        rec_legal_same = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="22.50",
+            shop="ALFA Spółka Komandytowa", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_legal_same)["candidates"][0]["match_strength"], "distinctive")
+
         # 3. Generic-only token match -> "generic" (preserving merchant_token_hit behavior).
         self.add_transaction(
             "a", "ms-gen-part", amount="23.00", booking_date="2026-11-15", value_date=None,
@@ -2215,21 +2260,35 @@ NR KARTY ****5555
         self.assertEqual(cand_none[0]["match_strength"], "none")
         self.assertFalse(cand_none[0]["merchant_token_hit"])
 
-        # 5. Gateway tokens and phrases in remittance, creditor_name, or debtor_name (on refunds) force match_strength="none".
+        # 5. Gateway tokens, legal names, and phrases in remittance, creditor_name, or debtor_name force match_strength="none".
         from hestia.budget.receipt_parser import GATEWAY_PHRASE_TOKENS
         self.assertEqual(
             GATEWAY_TOKENS,
             frozenset({
                 "p24", "przelewy24", "paypro", "payu", "autopay", "tpay", "paynow", "dotpay",
                 "blik", "bluemedia", "stripe", "paypal", "adyen", "klarna",
+                "eservice", "elavon", "fiserv", "polcard", "ecard", "cashbill", "hotpay", "imoje",
             }),
         )
-        self.assertEqual(GATEWAY_PHRASE_TOKENS, frozenset({("blue", "media"), ("revolut", "pay")}))
-        for idx, token in enumerate(sorted(GATEWAY_TOKENS) + ["blue media", "blue-media", "revolut pay"]):
+        self.assertEqual(
+            GATEWAY_PHRASE_TOKENS,
+            frozenset({
+                ("blue", "media"), ("first", "data"), ("krajowy", "integrator", "platnosci"),
+                ("pay", "pro"), ("revolut", "pay"),
+            }),
+        )
+        gateway_inputs = sorted(GATEWAY_TOKENS) + [
+            "Krajowy Integrator Płatności S.A.", "krajowy integrator platnosci",
+            "blue media", "blue-media", "Autopay S.A.", "PayU S.A.", "Pay Pro S.A.",
+            "PayPal (Europe)", "mBank SA PayNow", "eService", "Elavon", "First Data", "Fiserv",
+            "Polcard", "eCard", "CashBill", "HotPay", "imoje", "ING Bank Śląski imoje",
+            "revolut pay",
+        ]
+        for idx, token in enumerate(gateway_inputs):
             amt = f"{110 + idx}.00"
             self.add_transaction(
                 "a", f"ms-gw-{idx}", amount=amt, booking_date="2026-11-15", value_date=None,
-                remittance_information=[f"{token.upper()} BIEDRONKA NIP 7791011327"],
+                remittance_information=[f"{token} BIEDRONKA NIP 7791011327"],
             )
             rec_gw_tx = self._seed_imported(
                 document_kind="invoice", issue_date="2026-11-15", total=amt,
@@ -2241,12 +2300,12 @@ NR KARTY ****5555
             self.assertTrue(cands[0]["merchant_token_hit"], token)
 
         self.add_transaction(
-            "a", "ms-gw-cred-bluemedia", amount="130.00", booking_date="2026-11-15", value_date=None,
+            "a", "ms-gw-cred-bluemedia", amount="180.00", booking_date="2026-11-15", value_date=None,
             remittance_information=["ZAKUP NIP 7791011327"],
         )
-        self.metadata("a", "ms-gw-cred-bluemedia", {"creditor_name": "BLUE MEDIA S.A."})
+        self.metadata("a", "ms-gw-cred-bluemedia", {"creditor_name": "Krajowy Integrator Płatności S.A."})
         rec_gw_cred = self._seed_imported(
-            document_kind="invoice", issue_date="2026-11-15", total="130.00",
+            document_kind="invoice", issue_date="2026-11-15", total="180.00",
             shop="BIEDRONKA", nip="7791011327",
         )
         cand_gw_cred = self.receipts.detail("owner", rec_gw_cred)["candidates"]
@@ -2254,9 +2313,10 @@ NR KARTY ****5555
         self.assertTrue(cand_gw_cred[0]["merchant_token_hit"])
         self.assertNotIn("creditor_name", cand_gw_cred[0])
 
-        # Refund (CRDT) with "PayU" in debtor_name (metadata AND payload debtor) must also give "none".
+        # Refund (CRDT) with "PayU" in debtor_name (metadata AND payload debtor) gives "none",
+        # and changing debtor_name or creditor_name before Confirm invalidates the token with 409 stale_source.
         self.add_transaction(
-            "a", "ms-gw-refund-debtor", amount="131.00", credit_debit_indicator="CRDT",
+            "a", "ms-gw-refund-debtor", amount="181.00", credit_debit_indicator="CRDT",
             booking_date="2026-11-15", value_date=None,
             remittance_information=["ZWROT BIEDRONKA NIP 7791011327"],
         )
@@ -2265,7 +2325,7 @@ NR KARTY ****5555
         with self.sessions.begin() as session:
             session.add(db.BudgetReceipt(
                 id=rec_refund_gw, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
-                receipt_kind="refund", receipt_date="2026-11-15", total_amount="131.00", currency="PLN",
+                receipt_kind="refund", receipt_date="2026-11-15", total_amount="181.00", currency="PLN",
                 payment_method="card", status="draft", source_kind="local_ocr", document_kind="receipt",
                 version=1, created_at=self.now, updated_at=self.now,
             ))
@@ -2273,7 +2333,7 @@ NR KARTY ****5555
         self.assertEqual(cand_refund_gw[0]["match_strength"], "none")
 
         self.add_transaction(
-            "a", "ms-gw-refund-payload", amount="132.00", credit_debit_indicator="CRDT",
+            "a", "ms-gw-refund-payload", amount="182.00", credit_debit_indicator="CRDT",
             booking_date="2026-11-15", value_date=None,
             remittance_information=["ZWROT BIEDRONKA NIP 7791011327"],
             creditor={"name": "OWNER"}, debtor={"name": "PayU"},
@@ -2282,11 +2342,114 @@ NR KARTY ****5555
         with self.sessions.begin() as session:
             session.add(db.BudgetReceipt(
                 id=rec_refund_payload, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
-                receipt_kind="refund", receipt_date="2026-11-15", total_amount="132.00", currency="PLN",
+                receipt_kind="refund", receipt_date="2026-11-15", total_amount="182.00", currency="PLN",
                 payment_method="card", status="draft", source_kind="local_ocr", document_kind="receipt",
                 version=1, created_at=self.now, updated_at=self.now,
             ))
         self.assertEqual(self.receipts.detail("owner", rec_refund_payload)["candidates"][0]["match_strength"], "none")
+
+        # Token binding for debtor_name: refund candidate token must become stale (409) if debtor changes to PayU before Confirm.
+        self.add_transaction(
+            "a", "ms-refund-bind", amount="183.00", credit_debit_indicator="CRDT",
+            booking_date="2026-11-15", value_date=None,
+            remittance_information=["ZWROT BIEDRONKA NIP 7791011327"],
+        )
+        self.metadata("a", "ms-refund-bind", {"creditor_name": "OWNER", "debtor_name": "BIEDRONKA"})
+        rec_refund_bind = str(uuid.uuid4())
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(
+                id=rec_refund_bind, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                receipt_kind="refund", receipt_date="2026-11-15", total_amount="183.00", currency="PLN",
+                payment_method="card", status="draft", source_kind="local_ocr", document_kind="receipt",
+                version=1, created_at=self.now, updated_at=self.now,
+            ))
+            session.add(db.BudgetReceiptLine(
+                receipt_id=rec_refund_bind, owner="owner", line_no=1, line_kind="item",
+                raw_name="Zwrot", raw_name_key="zwrot", quantity="1",
+                gross_line_total="183.00", discount_amount="0", net_line_total="183.00",
+            ))
+        bind_cand = self.receipts.detail("owner", rec_refund_bind)["candidates"][0]
+        self.assertEqual(bind_cand["match_strength"], "nip")
+        with self.sessions.begin() as session:
+            meta_row = session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "ms-refund-bind"))
+            meta_row.payload_json = json.dumps({"creditor_name": "OWNER", "debtor_name": "PayU"})
+        with self.assertRaises(ReceiptError) as debtor_stale:
+            self.receipts.confirm("owner", {
+                "receipt_id": rec_refund_bind, "expected_version": 1, "receipt_kind": "refund",
+                "receipt_date": "2026-11-15", "receipt_time": None, "total_amount": "183.00",
+                "currency": "PLN", "payment_method": "card", "lines": None,
+                "link": {
+                    "account_id": bind_cand["account_id"],
+                    "entry_reference": bind_cand["entry_reference"],
+                    "candidate_token": bind_cand["candidate_token"],
+                },
+            })
+        self.assertEqual((debtor_stale.exception.code, debtor_stale.exception.status),
+                         ("budget_receipt_stale_source", 409))
+
+        # Confirmed legacy evidence without debtor_digest keeps working cleanly in reconcile_receipt_links when debtor stays absent.
+        from hestia.budget.analytics_core import financial_fingerprint
+        from hestia.budget.receipt_reconcile import evidence_json, link_evidence, reconcile_receipt_links
+        legacy_tx_payload = self.add_transaction(
+            "a", "ms-legacy-nodebtor", amount="184.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["BIEDRONKA NIP 7791011327"],
+        )
+        legacy_fp = financial_fingerprint(legacy_tx_payload)
+        legacy_ev = link_evidence(
+            "owner", self.accounts["a"], "ms-legacy-nodebtor", legacy_tx_payload,
+            "BIEDRONKA", "7791011327", None, legacy_fp,
+        )
+        legacy_ev.pop("debtor_digest")
+        legacy_rec_id = str(uuid.uuid4())
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(
+                id=legacy_rec_id, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                receipt_kind="purchase", receipt_date="2026-11-15", total_amount="184.00", currency="PLN",
+                payment_method="card", status="confirmed", source_kind="local_ocr", document_kind="receipt",
+                linked_account_id=self.accounts["a"], linked_entry_ref="ms-legacy-nodebtor",
+                linked_fingerprint=legacy_fp, linked_evidence=evidence_json(legacy_ev),
+                version=1, created_at=self.now, updated_at=self.now,
+            ))
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 10), 0)
+
+        # Confirmed receipt with non-empty debtor_name stays confirmed when debtor unchanged and latches on debtor change.
+        rec_refund_reconcile = str(uuid.uuid4())
+        self.add_transaction(
+            "a", "ms-refund-reconcile", amount="185.00", credit_debit_indicator="CRDT",
+            booking_date="2026-11-15", value_date=None,
+            remittance_information=["ZWROT BIEDRONKA NIP 7791011327"],
+        )
+        self.metadata("a", "ms-refund-reconcile", {"creditor_name": "OWNER", "debtor_name": "BIEDRONKA"})
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(
+                id=rec_refund_reconcile, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                receipt_kind="refund", receipt_date="2026-11-15", total_amount="185.00", currency="PLN",
+                payment_method="card", status="draft", source_kind="local_ocr", document_kind="receipt",
+                version=1, created_at=self.now, updated_at=self.now,
+            ))
+            session.add(db.BudgetReceiptLine(
+                receipt_id=rec_refund_reconcile, owner="owner", line_no=1, line_kind="item",
+                raw_name="Zwrot", raw_name_key="zwrot", quantity="1",
+                gross_line_total="185.00", discount_amount="0", net_line_total="185.00",
+            ))
+        rec_cand = self.receipts.detail("owner", rec_refund_reconcile)["candidates"][0]
+        self.receipts.confirm("owner", {
+            "receipt_id": rec_refund_reconcile, "expected_version": 1, "receipt_kind": "refund",
+            "receipt_date": "2026-11-15", "receipt_time": None, "total_amount": "185.00",
+            "currency": "PLN", "payment_method": "card", "lines": None,
+            "link": {
+                "account_id": rec_cand["account_id"],
+                "entry_reference": rec_cand["entry_reference"],
+                "candidate_token": rec_cand["candidate_token"],
+            },
+        })
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 20), 0)
+            meta_row = session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "ms-refund-reconcile"))
+            meta_row.payload_json = json.dumps({"creditor_name": "OWNER", "debtor_name": "PayU"})
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 30), 1)
+        self.assertEqual(self.receipt_row(rec_refund_reconcile).status, "needs_review")
 
         # 6. Gateway-sourced receipt (AppMeta payee, gateway shop token, or gateway domain) gives "none" on clean bank tx.
         self.add_transaction(

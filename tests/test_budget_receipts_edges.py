@@ -134,9 +134,14 @@ class ParserEdgeTests(unittest.TestCase):
                         "service", "group", "store", "shop", "sklep", "market", "online", "pay", "payment",
                         "oplata", "opłata", "sp", "z", "o", "oo", "sa", "spółka", "zoo", "com", "pl", "www",
                         "net", "eu", "p24", "przelewy24", "paypro", "payu", "autopay", "tpay", "paynow", "dotpay",
-                        "blik", "bluemedia", "stripe", "paypal", "adyen", "klarna",
+                        "blik", "bluemedia", "stripe", "paypal", "adyen", "klarna", "eservice", "elavon",
+                        "fiserv", "polcard", "ecard", "cashbill", "hotpay", "imoje",
                         "krakow", "kraków", "warszawa", "wrocław", "łódź", "poznań", "gdańsk",
-                        "ul", "ulica", "al", "aleja", "plac", "centrum", "galeria", "abc"):
+                        "ul", "ulica", "al", "aleja", "plac", "centrum", "galeria",
+                        "spółka z ograniczoną odpowiedzialnością", "z ograniczoną odpowiedzialnością",
+                        "spółka akcyjna", "spółka komandytowa", "spółka jawna",
+                        "sp. z o.o.", "sp.k.", "s.a.", "s.k.a.", "gmbh", "ltd", "limited", "inc", "llc",
+                        "bv", "b.v.", "sarl", "srl", "ag", "plc", "oy", "ab", "as", "kft", "s.r.o.", "abc"):
             self.assertEqual(merchant_tokens(generic, None), frozenset(), generic)
         self.assertNotIn("polska", merchant_tokens("ab polska market piernik", None))
         self.assertFalse(valid_nip(None))
@@ -591,18 +596,37 @@ class StoreEdgeTests(AnalyticsCase):
             )))
 
     def test_iban_masking_nip_proximity_party_names_and_gateway_phrases_cover_branches(self):
-        from hestia.budget.receipt_parser import contains_gateway_marker
-        from hestia.budget.receipt_reconcile import transaction_party_names
+        from hestia.budget.receipt_parser import contains_gateway_marker, strip_legal_forms
+        from hestia.budget.receipt_reconcile import _payload_party_name, resolved_party_names, transaction_party_names
         from hestia.budget.receipt_store import _mask_iban_sequences, _nip_in_text, _nip_match, _payload_party_texts
+
+        # Legal-form stripping (with/without diacritics, non-string guard, word boundaries).
+        self.assertEqual(strip_legal_forms(None), "")
+        for suffix in (
+            "spółka z ograniczoną odpowiedzialnością", "spolka z ograniczona odpowiedzialnoscia",
+            "z ograniczoną odpowiedzialnością", "z ograniczona odpowiedzialnoscia",
+            "spółka akcyjna", "spolka akcyjna", "spółka komandytowa", "spolka komandytowa",
+            "spółka jawna", "spolka jawna", "sp. z o.o.", "sp.k.", "s.a.", "s.k.a.",
+            "gmbh", "ltd", "limited", "inc", "llc", "bv", "b.v.", "sarl", "srl", "ag",
+            "plc", "oy", "ab", "as", "kft", "s.r.o.",
+        ):
+            self.assertEqual(merchant_tokens(f"Alfa {suffix}", None), frozenset({"alfa"}), suffix)
+            self.assertEqual(merchant_tokens(f"Alfa {suffix.upper()}", None), frozenset({"alfa"}), suffix)
 
         # Gateway marker edge branches: empty, non-gateway pairs vs all phrase/token variants.
         self.assertFalse(contains_gateway_marker(None))
         self.assertFalse(contains_gateway_marker("MEDIA MARKT"))
         self.assertFalse(contains_gateway_marker("REVOLUT TRANSFER"))
-        for marker in ("BLUE MEDIA", "Blue-Media", "BLUEMEDIA", "REVOLUT PAY", "Stripe", "PayPal", "Adyen", "Klarna"):
+        for marker in (
+            "BLUE MEDIA", "Blue-Media", "BLUEMEDIA", "REVOLUT PAY", "Stripe", "PayPal", "Adyen", "Klarna",
+            "Krajowy Integrator Płatności S.A.", "Krajowy Integrator Platnosci", "Autopay S.A.",
+            "PayU S.A.", "Pay Pro S.A.", "PayPal (Europe)", "mBank SA PayNow", "eService",
+            "Elavon", "First Data", "Fiserv", "Polcard", "eCard", "CashBill", "HotPay", "imoje",
+            "ING Bank Śląski imoje",
+        ):
             self.assertTrue(contains_gateway_marker(marker), marker)
 
-        # IBAN masking branches: empty, underscore prefix, >4 alpha non-IBAN word, >34 cap, valid BBAN, short PL+NIP.
+        # IBAN masking + strict NIP/VAT/TAX ID vs excluded NR/FAKTURA/FV/INVOICE/NO branches.
         self.assertEqual(_mask_iban_sequences(""), "")
         self.assertEqual(_mask_iban_sequences("..."), "...")
         self.assertIn("5260 2509 95", _mask_iban_sequences("ref_nl92 abna 5260 2509 95"))
@@ -612,13 +636,29 @@ class StoreEdgeTests(AnalyticsCase):
         self.assertEqual(_nip_match("5260250995", "nl92 abna 5260 2509 95"), (False, False))
         self.assertEqual(_nip_match("5260250995", "nl92abna5260250995"), (False, False))
         self.assertEqual(_nip_match("5260250995", "nl92 abna 5260 2509 95 nip 5260250995"), (True, True))
-        self.assertEqual(_nip_match("5260250995", "vat: pl 526-025-09-95"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "vat pl 526-025-09-95"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "vat id: 5260250995"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "nip pl 5260250995"), (True, True))
         self.assertEqual(_nip_match("5260250995", "/nip/5260250995"), (True, True))
         self.assertEqual(_nip_match("5260250995", "tax id: 5260250995"), (True, True))
-        self.assertEqual(_nip_match("5260250995", "pl5260250995"), (True, False))
+        self.assertEqual(_nip_match("5260250995", "pl5260250995"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "faktura vat 5260250995"), (True, False))
+        self.assertEqual(_nip_match("5260250995", "faktura vat nr 5260250995"), (False, False))
+        self.assertEqual(_nip_match("5260250995", "fv/5260250995"), (False, False))
+        self.assertEqual(_nip_match("5260250995", "invoice 5260250995"), (False, False))
+        self.assertEqual(_nip_match("5260250995", "no. pl5260250995"), (False, False))
         self.assertTrue(_nip_in_text("5260250995", "pl5260250995"))
 
         # Payload party extraction and metadata debtor/creditor branches.
+        self.assertIsNone(_payload_party_name("bad", "creditor"))
+        self.assertIsNone(_payload_party_name({"creditor": "not-dict"}, "creditor"))
+        self.assertEqual(_payload_party_name({"creditor_name": "BLUE MEDIA"}, "creditor"), "BLUE MEDIA")
+        self.assertEqual(_payload_party_name({"debtor": {"name": "PayU"}}, "debtor"), "PayU")
+        with self.sessions.begin() as session:
+            self.assertEqual(
+                resolved_party_names(session, "owner", self.accounts["a"], "missing-tx", {"debtor": {"name": "PayU"}}, None),
+                (None, "PayU"),
+            )
         self.assertEqual(
             _payload_party_texts({
                 "creditor_name": "BLUE MEDIA", "debtor_name": "",

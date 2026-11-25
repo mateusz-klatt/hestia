@@ -30,8 +30,9 @@ from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_
                              ReceiptError, chain_for, contains_gateway_marker, merchant_score_groups,
                              merchant_word_tokens, normalize_shop_name, parse_receipt, redact_digit_field, valid_nip,
                              validate_confirm, validate_confirm_line_totals)
-from .receipt_reconcile import (audit_payload, creditor_name, entry_reference_digest, evidence_json,
-                                erase_receipt_audit, link_evidence, transaction_party_names, write_audit)
+from .receipt_reconcile import (audit_payload, entry_reference_digest, evidence_json,
+                                erase_receipt_audit, link_evidence, resolved_party_names,
+                                transaction_party_names, write_audit)
 from .views import BudgetHTTPStore
 
 MAX_DRAFTS = 20
@@ -108,13 +109,20 @@ def _date_distance(payload, receipt_date, *, document_kind=None, due_date=None):
 _TX_DIGIT_RUN_RE = re.compile(r"[0-9]+(?:[\s/.\-\u2010-\u2015]+[0-9]+)*")
 _TOKEN_SPAN_RE = re.compile(r"[A-Za-z0-9]+")
 _IBAN_PREFIX_RE = re.compile(r"[A-Za-z]{2}[0-9]{2}")
-_NIP_PRE_LABEL_RE = re.compile(
-    r"(?:(?<![a-z0-9])/nip/|(?<![a-z0-9])(?:nip|vat|tax\s+id)(?![a-z]))([^0-9\n]{0,8})\Z",
+_EXCLUDED_NIP_PREFIX_RE = re.compile(
+    r"(?<![a-z0-9])(?:nr|faktura|fv|invoice|no)(?![a-z0-9])[\s:/.\-#\u2010-\u2015]*\Z",
+    re.IGNORECASE | re.ASCII,
+)
+_STRICT_NIP_LABEL_RE = re.compile(
+    r"(?:(?<![a-z0-9])/nip/"
+    r"|(?<![a-z0-9])(?:nip(?:[\s:/.\-]+pl)?|vat(?:[\s:/.\-]+pl|[\s-]+id)|tax\s+id)(?![a-z0-9]))"
+    r"[\s:/.\-\u2010-\u2015]*\Z",
     re.IGNORECASE | re.ASCII,
 )
 _GATEWAY_DOMAINS = frozenset({
     "przelewy24.pl", "p24.pl", "paypro.pl", "autopay.pl", "bluemedia.pl", "tpay.com",
     "paynow.pl", "dotpay.pl", "stripe.com", "paypal.com", "paypal.pl", "adyen.com", "klarna.com",
+    "eservice.com.pl", "polcard.pl", "ecard.pl", "cashbill.pl", "hotpay.pl", "imoje.pl",
 })
 
 
@@ -198,7 +206,7 @@ def _mask_iban_sequences(haystack):
 
 
 def _nip_match(nip, haystack):
-    """Return ``(hit, labeled_nearby)`` after masking IBAN-like sequences."""
+    """Return ``(hit, labeled)`` after masking IBANs and excluding invoice/doc numbers."""
     if not valid_nip(nip):
         return False, False
     masked = _mask_iban_sequences(haystack)
@@ -214,10 +222,14 @@ def _nip_match(nip, haystack):
             continue
         if end < limit and (masked[end].isalnum() or masked[end] == "_"):
             continue
-        if re.sub(r"\D", "", match.group(0)) == nip:
-            hit = True
-            if _NIP_PRE_LABEL_RE.search(masked[:start]) is not None:
-                return True, True
+        if re.sub(r"\D", "", match.group(0)) != nip:
+            continue
+        doc_prefix = masked[:start - 2] if before_pl else masked[:start]
+        if _EXCLUDED_NIP_PREFIX_RE.search(doc_prefix) is not None:
+            continue
+        hit = True
+        if before_pl or _STRICT_NIP_LABEL_RE.search(masked[:start]) is not None:
+            return True, True
     return hit, False
 
 
@@ -542,11 +554,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
             except AnalyticsError:
                 continue
             try:
-                creditor, debtor = transaction_party_names(
-                    session, owner, transaction.account_id, transaction.entry_reference, fingerprint)
+                creditor, debtor = resolved_party_names(
+                    session, owner, transaction.account_id, transaction.entry_reference, payload, fingerprint)
                 evidence = link_evidence(
                     owner, transaction.account_id, transaction.entry_reference, payload,
-                    shop_name, row.raw_nip, creditor, fingerprint)
+                    shop_name, row.raw_nip, creditor, fingerprint, debtor=debtor)
                 token = self._candidate_token(evidence, transaction.account_id, tx_row_id)
             except (AnalyticsError, ValueError, TypeError, RecursionError):
                 continue
@@ -716,10 +728,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
         try:
             payload = _json(transaction.payload_json)
             fingerprint = None if transaction.uncertain else financial_fingerprint(payload)
-            creditor = creditor_name(session, owner, account_id, reference, fingerprint)
+            creditor, debtor = resolved_party_names(session, owner, account_id, reference, payload, fingerprint)
             current = link_evidence(
                 owner, account_id, reference, payload,
-                normalize_shop_name(cleaned["raw_shop_name"]), cleaned["raw_nip"], creditor, fingerprint)
+                normalize_shop_name(cleaned["raw_shop_name"]), cleaned["raw_nip"], creditor, fingerprint,
+                debtor=debtor)
             expected = self._evidence_mac(current)
             stored = evidence_json(current)
         except (AnalyticsError, ValueError, TypeError, KeyError, RecursionError):

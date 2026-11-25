@@ -116,11 +116,34 @@ _CHAIN_WORDS = {chain: frozenset().union(*groups) for chain, groups in _CHAIN_AL
 GATEWAY_TOKENS = frozenset({
     "p24", "przelewy24", "paypro", "payu", "autopay", "tpay", "paynow", "dotpay",
     "blik", "bluemedia", "stripe", "paypal", "adyen", "klarna",
+    "eservice", "elavon", "fiserv", "polcard", "ecard", "cashbill", "hotpay", "imoje",
 })
 GATEWAY_PHRASE_TOKENS = frozenset({
     ("blue", "media"),
+    ("first", "data"),
+    ("krajowy", "integrator", "platnosci"),
+    ("pay", "pro"),
     ("revolut", "pay"),
 })
+_LEGAL_FORMS_RE = re.compile(
+    r"(?<![^\W_])(?:"
+    r"spolka\s+z\s+ograniczona\s+odpowiedzialnoscia"
+    r"|z\s+ograniczona\s+odpowiedzialnoscia"
+    r"|spolka\s+akcyjna"
+    r"|spolka\s+komandytowa"
+    r"|spolka\s+jawna"
+    r"|sp\.?[\s.]*z[\s.]*o\.?[\s.]*o\.?"
+    r"|sp\.?\s*k\.?"
+    r"|s\.?\s*k\.?\s*a\.?"
+    r"|s\.?\s*r\.?\s*o\.?"
+    r"|s\.?\s*a\.?\s*r\.?\s*l\.?"
+    r"|s\.?\s*r\.?\s*l\.?"
+    r"|b\.?\s*v\.?"
+    r"|s\.?\s*a\.?"
+    r"|(?:gmbh|limited|ltd|inc|llc|sarl|srl|ag|plc|oy|ab|as|kft|bv)\b\.?"
+    r")(?![^\W_])",
+    re.UNICODE,
+)
 _NON_MERCHANT_TOKENS = frozenset({
     "sp", "z", "o", "oo", "sa", "spolka", "zoo",
     "com", "pl", "www", "net", "eu",
@@ -539,20 +562,32 @@ def chain_for(shop_name, nip):
                  if any(group.issubset(words) for group in groups)), None)
 
 
+def strip_legal_forms(value):
+    """Strip Polish and foreign legal-form phrases (diacritic-insensitive) before tokenization."""
+    if not isinstance(value, str):
+        return ""
+    return _LEGAL_FORMS_RE.sub(" ", fold_text(value))
+
+
 def merchant_word_tokens(value):
     if not isinstance(value, str):
         return ()
-    return tuple(re.findall(r"[^\W_]+", fold_text(value), re.UNICODE))
+    return tuple(re.findall(r"[^\W_]+", strip_legal_forms(value), re.UNICODE))
 
 
 def contains_gateway_marker(text):
-    """True when text contains any payment gateway token or multi-word gateway phrase."""
+    """True when text contains any payment gateway token, legal institution name, or phrase."""
     words = merchant_word_tokens(text)
     if not words:
         return False
     if GATEWAY_TOKENS.intersection(words):
         return True
-    return any(pair in GATEWAY_PHRASE_TOKENS for pair in zip(words, words[1:]))
+    limit = len(words)
+    for size in (2, 3):
+        for start in range(limit - size + 1):
+            if words[start:start + size] in GATEWAY_PHRASE_TOKENS:
+                return True
+    return False
 
 
 def merchant_match_groups(shop_name, nip):
