@@ -79,8 +79,8 @@ def upgrade():
 
 
 def downgrade():
-    op.execute(f"DROP TRIGGER {_UPDATE_OWNER_TRIGGER}")
-    op.execute(f"DROP TRIGGER {_INSERT_OWNER_TRIGGER}")
+    op.execute(f"DROP TRIGGER IF EXISTS {_UPDATE_OWNER_TRIGGER}")
+    op.execute(f"DROP TRIGGER IF EXISTS {_INSERT_OWNER_TRIGGER}")
     op.drop_index(_REF_INDEX, table_name=_RECEIPTS)
     for column in reversed(_COLUMNS):
         op.drop_column(_RECEIPTS, column)

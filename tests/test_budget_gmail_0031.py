@@ -148,3 +148,11 @@ class GatewayEvidenceMigrationTests(unittest.TestCase):
             with self.subTest(statement=statement), engine.begin() as connection:
                 with self.assertRaisesRegex(IntegrityError, "invalid receipt evidence owner"):
                     connection.exec_driver_sql(statement, values)
+
+    def test_downgrade_accepts_the_earlier_0031_schema_without_triggers(self):
+        engine, _ = db.init_db(self.path)
+        with engine.begin() as connection:
+            connection.exec_driver_sql("DROP TRIGGER budget_receipts_evidence_owner_insert")
+            connection.exec_driver_sql("DROP TRIGGER budget_receipts_evidence_owner_update")
+        db.downgrade_db(self.path, "0030")
+        self._assert_clean(self._open(), "0030")
