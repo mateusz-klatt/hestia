@@ -592,7 +592,7 @@ describe("ReceiptsView", () => {
     await click(linkRadio("unlink", d2));
     expect(button("Confirm receipt", d2).disabled).toBe(false);
 
-    // 3. Editing matching fields on linked needs_review disables Keep BEFORE submit, never sends stale token or implicit unlink.
+    // 3. Linked needs_review never preselects Keep; after user chooses Keep, editing fields disables it and blocks Confirm.
     vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
       receipt: receiptDetail({
         receipt_id: "rec-confirm",
@@ -607,7 +607,11 @@ describe("ReceiptsView", () => {
     await click(button("Close", dialog()));
     await click(button("Details"));
     const d3 = dialog();
-    expect(linkRadio("keep", d3).checked).toBe(true);
+    expect(linkRadio("keep", d3).checked).toBe(false);
+    expect(linkRadio("unlink", d3).checked).toBe(false);
+    expect(button("Confirm receipt", d3).disabled).toBe(true);
+    await click(linkRadio("keep", d3));
+    expect(button("Confirm receipt", d3).disabled).toBe(false);
     await typeInto(inputByName("raw_shop_name", d3), "Edited Store Before Submit");
     expect(d3.textContent).toContain("Editing merchant, NIP, amount, date, currency or type invalidates candidate tokens");
     expect(linkRadio("keep", d3).disabled).toBe(true);
@@ -625,7 +629,7 @@ describe("ReceiptsView", () => {
     expect(button("Confirm receipt", d3).disabled).toBe(true);
     expect(clients.rApi.confirmReceipt).toHaveBeenCalledTimes(1);
 
-    // 4. Unlinked needs_review with candidate: editing NIP disables candidate and sets linkChoice to confirm without link.
+    // 4. Unlinked needs_review with candidate never preselects candidate:0 or unlink; editing NIP clears choice & disables Confirm.
     vi.mocked(clients.rApi.receiptDetail)
       .mockImplementationOnce(() => ok({
         receipt: receiptDetail({ receipt_id: "rec-confirm", status: "needs_review", linked: false, version: 5 }),
@@ -644,18 +648,27 @@ describe("ReceiptsView", () => {
     await click(button("Close", dialog()));
     await click(button("Details"));
     const d4 = dialog();
-    expect(linkRadio("candidate:0", d4).checked).toBe(true);
+    expect(linkRadio("candidate:0", d4).checked).toBe(false);
+    expect(linkRadio("unlink", d4).checked).toBe(false);
+    expect(button("Confirm receipt", d4).disabled).toBe(true);
+    await click(linkRadio("candidate:0", d4));
+    expect(button("Confirm receipt", d4).disabled).toBe(false);
     await typeInto(inputByName("raw_nip", d4), "5261040829");
     expect(linkRadio("candidate:0", d4).disabled).toBe(true);
-    expect(linkRadio("unlink", d4).checked).toBe(true);
+    expect(linkRadio("candidate:0", d4).checked).toBe(false);
+    expect(linkRadio("unlink", d4).checked).toBe(false);
+    expect(button("Confirm receipt", d4).disabled).toBe(true);
     expect(d4.textContent).toContain("Editing merchant, NIP, amount, date, currency or type invalidates candidate tokens");
 
     // 5. Server 409 budget_receipt_stale_source (ledger update while fields untouched) reloads detail and explains.
     await click(button("Close", dialog()));
     await click(button("Details"));
+    await click(linkRadio("candidate:0", dialog()));
     vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => fail(409, "budget_receipt_stale_source"));
     await click(button("Confirm receipt", dialog()));
     expect(dialog().textContent).toContain("The candidate link token is no longer valid");
+    expect(button("Confirm receipt", dialog()).disabled).toBe(true);
+    await click(linkRadio("candidate:0", dialog()));
     await click(button("Confirm receipt", dialog()));
     expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
       link: expect.objectContaining({ candidate_token: "tok-refreshed" }) as unknown,
@@ -1335,15 +1348,18 @@ describe("ReceiptsView", () => {
       .mockImplementationOnce(() => ok({ receipt: impDetail, candidates: [candUnrelated] }))
       .mockImplementationOnce(() => ok({ receipt: impDetail, candidates: [candHit, candUnrelated] }));
 
-    // 1. Pressing Confirm without selecting leaves unrelated debit unlinked (default "unlink" / no link).
+    // 1. Ambiguous (unlinked + candidates present): Confirm disabled until user picks "no link" or a candidate.
     await renderReceipts(clients);
     await click(openDetailButton(0));
     const drawer1 = dialog();
-    expect(linkRadio("unlink", drawer1).checked).toBe(true);
+    expect(linkRadio("unlink", drawer1).checked).toBe(false);
     expect(linkRadio("candidate:0", drawer1).checked).toBe(false);
     expect(linkRadio("candidate:0", drawer1).disabled).toBe(false);
+    expect(button("Confirm receipt", drawer1).disabled).toBe(true);
     expect(drawer1.textContent).not.toContain("Candidates are only checked on review");
 
+    await click(linkRadio("unlink", drawer1));
+    expect(button("Confirm receipt", drawer1).disabled).toBe(false);
     await click(button("Confirm receipt", drawer1));
     expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
       receipt_id: "imp-drawer",
@@ -1354,9 +1370,11 @@ describe("ReceiptsView", () => {
     await click(button("Close", drawer1));
     await click(openDetailButton(0));
     const drawer2 = dialog();
-    expect(linkRadio("unlink", drawer2).checked).toBe(true);
+    expect(linkRadio("unlink", drawer2).checked).toBe(false);
     expect(linkRadio("candidate:0", drawer2).checked).toBe(false);
+    expect(button("Confirm receipt", drawer2).disabled).toBe(true);
     await click(linkRadio("candidate:1", drawer2));
+    expect(button("Confirm receipt", drawer2).disabled).toBe(false);
     await click(button("Confirm receipt", drawer2));
     expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
       receipt_id: "imp-drawer",

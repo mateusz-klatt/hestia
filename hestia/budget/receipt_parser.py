@@ -471,15 +471,15 @@ def merchant_word_tokens(value):
 
 
 def merchant_match_groups(shop_name, nip):
-    distinctive = frozenset(
+    distinctive = sorted({
         token for token in merchant_word_tokens(shop_name)
         if len(token) >= 4 and token not in _STOP_TOKENS
-    )
+    })
     chain = chain_for(shop_name, nip)
     if chain is None:
-        return (distinctive,) if distinctive else ()
-    extra = distinctive - _CHAIN_WORDS[chain]
-    return tuple(group | extra for group in _CHAIN_ALIAS_GROUPS[chain])
+        return tuple(frozenset((token,)) for token in distinctive)
+    extra = [token for token in distinctive if token not in _CHAIN_WORDS[chain]]
+    return _CHAIN_ALIAS_GROUPS[chain] + tuple(frozenset((token,)) for token in extra)
 
 
 def merchant_tokens(shop_name, nip):

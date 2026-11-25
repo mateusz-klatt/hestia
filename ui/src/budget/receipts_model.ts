@@ -360,13 +360,10 @@ export function draftFromDetail(
       : "unknown";
   const options = availableLinkOptions(detail, candidates, paymentMethod, false);
   let linkChoice = "unlink";
-  if (options.canKeep) {
-    linkChoice = "keep";
-  } else if (detail.linked) {
-    // Never default a linked receipt without a keep token to implicit unlink.
+  if (detail.linked || options.canPickCandidates) {
+    // Ambiguous link state (changed/review link, confirmed re-edit, or unlinked row with candidates):
+    // leave linkChoice empty so Confirm stays disabled until the user explicitly chooses.
     linkChoice = "";
-  } else if (detail.status === "needs_review" && options.canPickCandidates) {
-    linkChoice = "candidate:0";
   }
   return {
     rawShopName: detail.raw_shop_name ?? "",
@@ -392,7 +389,7 @@ export function draftFromDetail(
   };
 }
 
-/** Keeps link choices valid after field edits: disables stale tokens without silently unlinking linked receipts. */
+/** Keeps link choices valid after field edits: disables stale tokens without silently picking unlink. */
 export function reconcileLinkChoice(
   detail: ReceiptDetail,
   prevChoice: string,
@@ -403,10 +400,10 @@ export function reconcileLinkChoice(
   const changed = hasMatchingFieldsChanged(detail, nextDraft);
   const nextOptions = availableLinkOptions(detail, candidates, nextDraft.paymentMethod, changed);
   if (prevChoice === "keep") {
-    return nextOptions.canKeep ? "keep" : (detail.linked ? "" : "unlink");
+    return nextOptions.canKeep ? "keep" : "";
   }
   if (prevChoice.startsWith("candidate:")) {
-    return nextOptions.canPickCandidates ? prevChoice : (detail.linked ? "" : "unlink");
+    return nextOptions.canPickCandidates ? prevChoice : "";
   }
   return "";
 }

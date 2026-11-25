@@ -1834,7 +1834,7 @@ function ReceiptDetailDrawer({
                     {tokensDisabledByEdit ? (
                       <p className="budget-warn" role="note">{t("budget.receipts.staleSourceEditHint")}</p>
                     ) : null}
-                    {confirmDraft.linkChoice === "" ? (
+                    {confirmDraft.linkChoice === "" && detail.linked ? (
                       <p className="budget-warn" role="note">{t("budget.receipts.explicitUnlinkRequired")}</p>
                     ) : null}
 

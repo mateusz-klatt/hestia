@@ -1836,6 +1836,8 @@ NR KARTY ****5555
 
         self.add_transaction("a", "partial-tokens", amount="44.00", booking_date="2026-11-10", value_date=None,
                              remittance_information=["GREEN MARKET KRAKOW"])
+        self.add_transaction("a", "no-tokens", amount="44.00", booking_date="2026-11-10", value_date=None,
+                             remittance_information=["UNRELATED MARKET KRAKOW"])
         self.add_transaction("a", "all-tokens", amount="44.00", booking_date="2026-11-11", value_date=None,
                              remittance_information=["GREEN TECH POLAND"])
         multi_id = self._seed_imported(
@@ -1845,7 +1847,11 @@ NR KARTY ****5555
         self.assertEqual(
             {item["entry_reference"]: item["merchant_token_hit"]
              for item in self.receipts.detail("owner", multi_id)["candidates"]},
-            {reference_digest("all-tokens"): True, reference_digest("partial-tokens"): False},
+            {
+                reference_digest("all-tokens"): True,
+                reference_digest("partial-tokens"): True,
+                reference_digest("no-tokens"): False,
+            },
         )
         generic_only_id = self._seed_imported(
             document_kind="invoice", issue_date="2026-11-10", due_date="2026-11-15",
@@ -1902,21 +1908,22 @@ NR KARTY ****5555
             reference_digest("nip-tail-alpha"): False,
         })
 
-        # 4. Ranking happens BEFORE MAX_CANDIDATES (100) truncation so a matching candidate survives 100 same-day decoys.
+        # 4. Ranking puts partial whole-word hit ABOVE date distance over the full set before MAX_CANDIDATES (100) cap:
+        #    77 PLN "ACME GROCERY" receipt + next-day "ACME" debit + 100 same-day 77 PLN decoys.
         for decoy in range(100):
-            self.add_transaction("a", f"aaa-decoy-{decoy:03d}", amount="91.00", booking_date="2026-11-10",
+            self.add_transaction("a", f"aaa-decoy-{decoy:03d}", amount="77.00", booking_date="2026-11-10",
                                  value_date=None, remittance_information=[f"DECOY {decoy}"])
-        self.add_transaction("a", "zzz-winner", amount="91.00", booking_date="2026-11-12", value_date=None,
-                             remittance_information=["ORANGE FV"])
+        self.add_transaction("a", "zzz-acme-winner", amount="77.00", booking_date="2026-11-11", value_date=None,
+                             remittance_information=["ACME"])
         cap_id = self._seed_imported(
-            document_kind="invoice", issue_date="2026-11-10", due_date="2026-11-15",
-            total="91.00", shop="ORANGE POLSKA", nip=None,
+            document_kind="payment_confirmation", issue_date="2026-11-10", due_date=None,
+            total="77.00", shop="ACME GROCERY", nip=None, with_line=True,
         )
         capped = self.receipts.detail("owner", cap_id)["candidates"]
         self.assertEqual(len(capped), 100)
-        self.assertEqual(capped[0]["entry_reference"], reference_digest("zzz-winner"))
+        self.assertEqual(capped[0]["entry_reference"], reference_digest("zzz-acme-winner"))
         self.assertTrue(capped[0]["merchant_token_hit"])
-        self.assertEqual(capped[0]["date_distance"], 2)
+        self.assertEqual(capped[0]["date_distance"], 1)
 
     def test_unedited_double_space_linked_draft_and_raw_transition_survive_reconcile(self):
         from hestia.budget.receipt_reconcile import evidence_json, link_evidence, reconcile_receipt_links

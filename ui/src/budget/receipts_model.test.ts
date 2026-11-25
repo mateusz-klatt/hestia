@@ -235,8 +235,13 @@ describe("receipts_model", () => {
       mustUnlinkToConfirm: false,
       currentCandidate: cand,
     });
-    const draftKeep = draftFromDetail(reviewLinked, [cand]);
-    expect(draftKeep.linkChoice).toBe("keep");
+    const draftReview = draftFromDetail(reviewLinked, [cand]);
+    expect(draftReview.linkChoice).toBe("");
+    expect(buildConfirmRequest(reviewLinked, draftReview, [cand])).toEqual({
+      ok: false,
+      errorKey: "budget.receipts.explicitUnlinkRequired",
+    });
+    const draftKeep = { ...draftReview, linkChoice: "keep" };
     const builtKeep = buildConfirmRequest(reviewLinked, draftKeep, [cand]);
     expect(builtKeep.ok).toBe(true);
     if (builtKeep.ok) {
@@ -294,7 +299,8 @@ describe("receipts_model", () => {
     });
     expect(reconcileLinkChoice(reviewLinked, "keep", { ...draftKeep, rawShopName: "Changed Store" }, [cand])).toBe("");
     const unlinkedReview = detailOf({ status: "needs_review", linked: false });
-    expect(reconcileLinkChoice(unlinkedReview, "candidate:0", { ...draftKeep, rawNip: "" }, [cand])).toBe("unlink");
+    expect(draftFromDetail(unlinkedReview, [cand]).linkChoice).toBe("");
+    expect(reconcileLinkChoice(unlinkedReview, "candidate:0", { ...draftKeep, rawNip: "" }, [cand])).toBe("");
     expect(buildConfirmRequest(reviewLinked, { ...draftKeep, rawShopName: "Changed Store" }, [cand])).toEqual({
       ok: false,
       errorKey: "budget.receipts.invalidForm",
@@ -321,15 +327,19 @@ describe("receipts_model", () => {
     expect(confirmedBuilt.ok).toBe(true);
     if (confirmedBuilt.ok) expect(confirmedBuilt.request.link).toBeNull();
 
-    // 6. unlinked draft & imported -> offer candidates, default to "unlink" ("no link") even with candidates, and allow explicit pick.
+    // 6. unlinked draft & imported -> offer candidates, default to "" until user explicitly picks unlink or a candidate.
     for (const status of ["draft", "imported"] as const) {
       const unlinkedImport = detailOf({ status, linked: false });
       expect(availableLinkOptions(unlinkedImport, [cand], "card").canPickCandidates).toBe(true);
       const draftImport = draftFromDetail(unlinkedImport, [cand]);
-      expect(draftImport.linkChoice).toBe("unlink");
-      const builtDefaultUnlinked = buildConfirmRequest(unlinkedImport, draftImport, [cand]);
-      expect(builtDefaultUnlinked.ok).toBe(true);
-      if (builtDefaultUnlinked.ok) expect(builtDefaultUnlinked.request.link).toBeNull();
+      expect(draftImport.linkChoice).toBe("");
+      expect(buildConfirmRequest(unlinkedImport, draftImport, [cand])).toEqual({
+        ok: false,
+        errorKey: "budget.receipts.explicitUnlinkRequired",
+      });
+      const builtExplicitUnlinked = buildConfirmRequest(unlinkedImport, { ...draftImport, linkChoice: "unlink" }, [cand]);
+      expect(builtExplicitUnlinked.ok).toBe(true);
+      if (builtExplicitUnlinked.ok) expect(builtExplicitUnlinked.request.link).toBeNull();
 
       const builtExplicitLinked = buildConfirmRequest(unlinkedImport, { ...draftImport, linkChoice: "candidate:0" }, [cand]);
       expect(builtExplicitLinked.ok).toBe(true);
@@ -340,7 +350,7 @@ describe("receipts_model", () => {
           candidate_token: cand.candidate_token,
         });
       }
-      expect(reconcileLinkChoice(unlinkedImport, "candidate:0", { ...draftImport, rawShopName: "Changed" }, [cand])).toBe("unlink");
+      expect(reconcileLinkChoice(unlinkedImport, "candidate:0", { ...draftImport, rawShopName: "Changed" }, [cand])).toBe("");
 
       const noCandidatesDraft = draftFromDetail(unlinkedImport, []);
       expect(noCandidatesDraft.linkChoice).toBe("unlink");
