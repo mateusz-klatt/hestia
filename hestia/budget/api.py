@@ -59,8 +59,11 @@ def _principal(request, auth_enabled):
     user = request.get("hestia_user")
     if not auth_enabled() or not isinstance(user, str) or not user:
         raise _Rejected(401, "budget_not_signed_in")
-    if request.get("hestia_role") != "admin":
-        raise _Rejected(403, "budget_forbidden")
+    headers = getattr(request, "headers", {})
+    getall = getattr(headers, "getall", None)
+    expected = [] if getall is None else getall("X-Hestia-Expected-Actor", [])
+    if len(expected) > 1 or (expected and not hmac.compare_digest(expected[0], user)):
+        raise _Rejected(409, "budget_actor_changed")
     if os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
         raise BudgetUsersBackendRequired()
     return user

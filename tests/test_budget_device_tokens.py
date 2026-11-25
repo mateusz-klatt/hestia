@@ -1557,7 +1557,7 @@ class DeviceTokenAuthorizationBridgeTests(unittest.IsolatedAsyncioTestCase):
         )
 
         issued = self.store.login("alice", LOGIN_PASSWORD, "Vesta")
-        self._set_meta("authz_policy_phase", "catalog_custom")
+        self._set_meta("authz_policy_phase", "future_phase")
         decided = device_token.decide(
             "POST", device_token.PARSE_PATH, {"Authorization": f"Bearer {issued['token']}"}, {}, SECRET, self.moment
         )
@@ -1611,36 +1611,31 @@ class DeviceTokenAuthorizationBridgeTests(unittest.IsolatedAsyncioTestCase):
             s.get(db.User, "alice").budget_owner = False
         self.assertEqual(self.store.identify(issued["token"], slide=False)["status"], "revoked")
 
-    def test_custom_phase_blocks_all_device_token_and_household_paths(self):
-        from hestia import authz
-        import io
-        from types import SimpleNamespace
-
+    def test_custom_phase_preserves_full_profile_owner_devices_and_direct_household_grants(self):
         issued = self.store.login("alice", LOGIN_PASSWORD, "Vesta")
         self._set_meta("authz_policy_phase", "catalog_custom")
 
-        with self.assertRaises(authz.PolicyPhaseUnsupported):
-            device_token.open_store()
-        with self.assertRaises(authz.PolicyPhaseUnsupported):
-            self.store.issue_code("alice")
-        with self.assertRaises(authz.PolicyPhaseUnsupported):
-            self.store.cancel_code("alice", "c1")
-        with self.assertRaises(authz.PolicyPhaseUnsupported):
-            self.store.login("alice", LOGIN_PASSWORD, "Vesta2")
-        with self.assertRaises(authz.PolicyPhaseUnsupported):
-            self.store.redeem("AAAAAAAA", "Vesta2")
-        with self.assertRaises(authz.PolicyPhaseUnsupported):
-            self.store.identify(issued["token"], slide=False)
-        with self.assertRaises(authz.PolicyPhaseUnsupported):
-            self.store.list_tokens("alice")
-        with self.assertRaises(authz.PolicyPhaseUnsupported):
-            self.store.revoke("alice", issued["token_id"], actor_token_id=issued["token_id"])
-        with self.assertRaises(authz.PolicyPhaseUnsupported):
-            household.grant_member("viewer", "alice", path=str(self.path))
-        with self.sessions() as s:
-            with self.assertRaises(authz.PolicyPhaseUnsupported):
-                household.authorize_household(s, "viewer", header=None, require_header=False)
-        with mock.patch("sys.stderr", new_callable=io.StringIO) as buf:
-            rc = household.run_household_command(SimpleNamespace(action="grant", member="viewer", owner="alice", db=str(self.path)))
-        self.assertEqual(rc, 1)
-        self.assertIn("authorization_bridge_incompatible", buf.getvalue())
+        self.assertIsNotNone(device_token.open_store())
+        code = self.store.issue_code("alice")
+        self.assertEqual(self.store.cancel_code("alice", code["code_id"]), {"ok": True})
+        self.assertIsNotNone(self.store.login("alice", LOGIN_PASSWORD, "Vesta2"))
+        self.assertIsNone(self.store.redeem("AAAAAAAA", "Vesta2"))
+        self.assertEqual(self.store.identify(issued["token"], slide=False)["status"], "ok")
+        self.assertEqual(len(self.store.list_tokens("alice")), 2)
+
+        granted = household.grant_member("viewer", "alice", path=str(self.path))
+        with self.sessions() as session:
+            self.assertEqual(
+                household.authorize_household(
+                    session, "viewer", header=granted["grant_id"], require_header=True,
+                )[:2],
+                ("viewer", "alice"),
+            )
+        self.assertEqual(
+            household.revoke_grant("viewer", "alice", granted["grant_id"], path=str(self.path))["status"],
+            "revoked",
+        )
+        self.assertEqual(
+            self.store.revoke("alice", issued["token_id"], actor_token_id=issued["token_id"]),
+            {"ok": True},
+        )

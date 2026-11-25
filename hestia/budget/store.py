@@ -210,10 +210,11 @@ class BudgetStore:
         if (
             user is None
             or user.disabled
-            or user.role != "admin"
-            or (phase == authz.POLICY_PHASE_COMPAT and not user.budget_owner)
+            or (phase == authz.POLICY_PHASE_LEGACY and user.role != "admin")
+            or (phase == authz.POLICY_PHASE_COMPAT and (user.role != "admin" or not user.budget_owner))
+            or (phase == authz.POLICY_PHASE_CUSTOM and not user.budget_owner)
         ):
-            raise BudgetStoreError("Bank connection requires an existing enabled admin owner")
+            raise BudgetStoreError("Bank connection requires an existing enabled provisioned owner")
 
     def configure(self, config):
         with self.transaction() as session:

@@ -46,6 +46,7 @@ from .budget import consent_api, consent_context, device_token
 from .budget.config import BudgetConfigError
 from .budget.i18n import validate_languages
 from .classifier import DeviceType
+from .db import AppMeta
 from .automations import rule_vocab
 from .proxy import (INJECT_GAP_SECS, IR_BUTTONS, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _audit,
                     _merged_discovery, _num_env, _truthy_env, globals_snapshot, process_control_op)
@@ -172,7 +173,8 @@ def _is_public_route(method: str, path: str) -> bool:
     if method in ("GET", "HEAD") and path in _PUBLIC_DOCUMENTS:
         return True
     if method == "GET":
-        return path in ("/", "/ui/") or path in consent_api.PUBLIC_GET or path.startswith("/assets/")
+        return (path in ("/", "/ui/", "/api/auth/features")
+                or path in consent_api.PUBLIC_GET or path.startswith("/assets/"))
     return method == "POST" and (path in ("/api/login", "/api/logout", device_token.REDEEM_PATH)
                                  or _ROUTE_MIN_ROLE.get((method, path)) == _PUBLIC)
 
@@ -286,6 +288,7 @@ _ROUTE_MIN_ROLE = {
     ("POST", _PATH_SETTINGS): _VIEWER,            # a user's OWN UI prefs (locale / temp scale / theme)
     ("GET", _PATH_ROOM_ICONS): _VIEWER,
     ("GET", "/api/whoami"): _VIEWER,
+    ("GET", "/api/me/capabilities"): _VIEWER,
     ("POST", "/api/me/password"): _VIEWER,         # any signed-in user changes their OWN password (verifies current)
     # room actions: operator and admin (a viewer is read-only — the UI hides these, the server enforces it)
     ("POST", "/api/control"): _OPERATOR,
@@ -310,6 +313,93 @@ _ROUTE_MIN_ROLE = {
     ("POST", "/api/users/disabled"): _ADMIN,
     ("POST", "/api/users/reset-password"): _ADMIN,
 }
+_AUTHENTICATED = "authenticated"
+_OWNER_ONLY = "owner_only"
+_LEGACY_RECEIPTS = "legacy_receipts"
+_DEVICE_ADMIN = "device_admin"
+_ACCOUNT_READS = frozenset({
+    ("GET", "/api/budget/" + operation)
+    for operation in ("connections", "accounts", "status", "transactions", "balances", "limits")
+})
+_RECEIPT_DATA_ROUTES = frozenset({
+    ("POST", device_token.PARSE_PATH),
+    ("POST", device_token.CONFIRM_PATH),
+    ("POST", device_token.LIST_RECEIPTS_PATH),
+    ("POST", device_token.SEARCH_PATH),
+    ("GET", device_token.DETAIL_PATH),
+    ("GET", device_token.IMAGE_PATH),
+    ("POST", device_token.DELETE_PATH),
+})
+_AUTHENTICATED_ROUTES = frozenset({
+    ("GET", "/api/whoami"),
+    ("GET", "/api/me/capabilities"),
+    ("GET", _PATH_SETTINGS),
+    ("POST", _PATH_SETTINGS),
+    ("POST", "/api/me/password"),
+})
+_USER_ADMIN_ROUTES = frozenset({
+    (method, path) for (method, path) in _ROUTE_MIN_ROLE
+    if path == _PATH_USERS or path.startswith(_PATH_USERS + "/")
+})
+_OWNER_ONLY_ROUTES = frozenset({
+    (method, path) for (method, path) in _ROUTE_MIN_ROLE
+    if path.startswith("/api/budget/consent/")
+    or path in {
+        ("GET", "/api/budget/jobs"),
+        ("POST", "/api/budget/account-selection"),
+        ("POST", "/api/budget/account-kind"),
+        ("POST", "/api/budget/connection-state"),
+        ("POST", "/api/budget/background-selection"),
+        ("POST", "/api/budget/refresh"),
+        ("POST", "/api/budget/receipts/gmail-grant"),
+        ("POST", "/api/budget/receipts/gmail-revoke"),
+        ("POST", "/api/budget/receipts/gmail-sync"),
+        ("GET", "/api/budget/receipts/gmail-status"),
+    }
+})
+
+
+def _operation_requirement(method: str, path: str, floor: str) -> str:
+    route = method, path
+    if route in _AUTHENTICATED_ROUTES:
+        return _AUTHENTICATED
+    if path.startswith("/api/budget/household/"):
+        return "household.view"
+    if route in _RECEIPT_DATA_ROUTES or route == ("POST", device_token.PAIR_PATH):
+        return _LEGACY_RECEIPTS
+    if route in {
+        ("POST", device_token.PAIR_CANCEL_PATH),
+        ("POST", device_token.LIST_PATH), ("POST", device_token.REVOKE_PATH),
+    }:
+        return _DEVICE_ADMIN
+    if route in _OWNER_ONLY_ROUTES:
+        return _OWNER_ONLY
+    if route in _ACCOUNT_READS:
+        return "budget.view"
+    if path.startswith("/api/budget/analytics/"):
+        return "budget.view" if method == "GET" or path.endswith("/transactions-by-keys") else "budget.edit"
+    if route == ("GET", "/api/audit"):
+        return "system.audit.view"
+    if route in _USER_ADMIN_ROUTES:
+        return "system.manage_users"
+    if path == "/api/calendars":
+        return "calendar.view"
+    if path == "/api/calendars/instances":
+        return "calendar.view"
+    if path in ("/api/calendars/events", "/api/calendars/events/delete"):
+        return "calendar.edit"
+    return {_VIEWER: "ioc.view", _OPERATOR: "ioc.control", _ADMIN: "ioc.configure"}[floor]
+
+
+_ROUTE_REQUIREMENTS = {
+    route: _operation_requirement(*route, floor)
+    for route, floor in _ROUTE_MIN_ROLE.items() if floor != _PUBLIC
+}
+assert set(_ROUTE_REQUIREMENTS) == {
+    route for route, floor in _ROUTE_MIN_ROLE.items() if floor != _PUBLIC
+}
+
+
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _CORE_BROWSER_READ_ROUTES = frozenset({
     ("GET", _PATH_USERS),
@@ -442,6 +532,47 @@ def _role_allows(role, floor: str) -> bool:
     return rank is not None and rank >= store_sql.ROLE_RANK[floor]
 
 
+def _required_permission(method: str, path: str) -> str:
+    return _ROUTE_REQUIREMENTS.get((method, path), "system.manage_users")
+
+
+def _catalog_allows(session, actor: str, requirement: str) -> bool:
+    if requirement == _AUTHENTICATED:
+        return True
+    if requirement == "household.view":
+        return True
+    if requirement == _OWNER_ONLY or requirement == _DEVICE_ADMIN:
+        return authz.is_active_budget_owner(session, actor)
+    if requirement == _LEGACY_RECEIPTS:
+        return authz.has_legacy_receipt_profile(session, actor)
+    return authz.authorize(
+        session, actor, requirement,
+        owner=actor if requirement.startswith("budget.") else None,
+    )
+
+
+def _catalog_request_allowed(actor: str, method: str, path: str) -> bool:
+    with store_sql.authorization_snapshot() as session:
+        return _catalog_allows(session, actor, _required_permission(method, path))
+
+
+def _session_context_current(ctx: ValidatedSessionContext) -> bool:
+    envelope = auth.decode_session(ctx.raw_token, now=_now(), secret=_SESSION_SECRET)
+    if envelope is None:
+        return False
+    try:
+        state = store_sql.load_auth_state(ctx.username)
+        if not state.enabled or not _envelope_matches_state(ctx.carrier, envelope, state):
+            return False
+        return (
+            _role_allows(state.role, _required_role("GET", "/api/events"))
+            if state.policy_phase == authz.POLICY_PHASE_LEGACY
+            else _catalog_request_allowed(ctx.username, "GET", "/api/events")
+        )
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return False
+
+
 _BEARER_PREFIX = "Bearer "
 
 
@@ -482,6 +613,7 @@ async def _auth_middleware(request, handler):
             return device_token.json_error(decision)
         if decision["action"] == "accept":
             request[device_token.REQUEST_KEY] = decision["token_id"]
+            request[device_token.ACTOR_REQUEST_KEY] = decision["actor"]
             request[_USER_KEY] = decision["owner"]
             request[_ROLE_KEY] = _ADMIN
             return await handler(request)
@@ -542,7 +674,16 @@ async def _auth_middleware(request, handler):
         policy_phase=auth_state.policy_phase,
         raw_token=raw_token,
     )
-    if not _role_allows(auth_state.role, _required_role(request.method, request.path)):
+    if auth_state.policy_phase == authz.POLICY_PHASE_LEGACY:
+        allowed = _role_allows(auth_state.role, _required_role(request.method, request.path))
+    else:
+        try:
+            allowed = await asyncio.to_thread(
+                _catalog_request_allowed, envelope.username, request.method, request.path,
+            )
+        except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+            return _incompatible_bridge_response()
+    if not allowed:
         return _empty(HTTPStatus.FORBIDDEN)
     if (
         auth_state.session_phase == store_sql.SESSION_PHASE_V2
@@ -653,6 +794,102 @@ async def _whoami(request):  # NOSONAR S7503: aiohttp route handlers must be cor
     # The role is resolved once by the auth middleware (request[_ROLE_KEY]); both are None when auth is
     # off (loopback/dev), which the TS app reads as "fully open, no role gating".
     return _json(HTTPStatus.OK, {"user": request.get(_USER_KEY), "role": request.get(_ROLE_KEY)})
+
+
+def _legacy_role_permissions(role):
+    return {
+        "viewer": store_sql._LEGACY_VIEWER_GRANTS,
+        "operator": store_sql._LEGACY_OPERATOR_GRANTS,
+        "admin": store_sql._LEGACY_ADMIN_GRANTS,
+    }.get(role, frozenset())
+
+
+def _capability_payload(actor: str, state: store_sql.AuthState) -> dict:
+    if state.backend == "json":
+        installation = _legacy_role_permissions(state.role)
+        own = {
+            "permissions": sorted(store_sql._LEGACY_SELF_BUDGET_GRANTS),
+            "can_view": False, "can_use_receipts": False, "can_manage_devices": False,
+        } if state.role == _ADMIN else None
+        return {
+            "user": actor, "installation_permissions": sorted(installation), "own_budget": own,
+            "delegated_receipts": None, "household_available": False,
+        }
+
+    budget_enabled = os.environ.get("HESTIA_BUDGET_HTTP_ENABLED") == "1"
+    receipts_enabled = budget_enabled and device_token.receipts_enabled()
+    household_enabled = budget_enabled and os.environ.get("HESTIA_BUDGET_ANALYTICS_ENABLED") == "1"
+    with store_sql.authorization_snapshot() as session:
+        authoritative = session.get(AppMeta, "users_authoritative") is not None
+        if state.policy_phase == authz.POLICY_PHASE_LEGACY:
+            installation = _legacy_role_permissions(state.role)
+            legacy_owner = authoritative and state.role == _ADMIN
+            own_permissions = store_sql._LEGACY_SELF_BUDGET_GRANTS if legacy_owner else frozenset()
+            own = {
+                "permissions": sorted(own_permissions),
+                "can_view": legacy_owner and budget_enabled,
+                "can_use_receipts": legacy_owner and receipts_enabled,
+                "can_manage_devices": legacy_owner and receipts_enabled,
+            } if legacy_owner else None
+        else:
+            installation = authz.effective_permissions(session, actor)
+            active_owner = authz.is_active_budget_owner(session, actor)
+            own_permissions = (
+                authz.effective_permissions(session, actor, owner=actor)
+                if active_owner else frozenset()
+            )
+            own = {
+                "permissions": sorted(own_permissions),
+                "can_view": budget_enabled and "budget.view" in own_permissions,
+                "can_use_receipts": (
+                    receipts_enabled and authz.LEGACY_RECEIPT_PERMISSIONS <= own_permissions
+                ),
+                "can_manage_devices": receipts_enabled,
+            } if active_owner else None
+        return {
+            "user": actor,
+            "installation_permissions": sorted(installation),
+            "own_budget": own,
+            "delegated_receipts": None,
+            "household_available": household_enabled and authz.household_available(session, actor),
+        }
+
+
+async def _me_capabilities(request):
+    actor = request.get(_USER_KEY)
+    if actor is None:
+        installation = sorted(
+            pid for pid, spec in authz.CATALOG.items()
+            if spec.storage_scope == "installation" and not spec.protected
+        )
+        payload = {
+            "user": None, "installation_permissions": installation, "own_budget": None,
+            "delegated_receipts": None, "household_available": False,
+        }
+    else:
+        try:
+            state = await asyncio.to_thread(store_sql.load_auth_state, actor)
+            if not state.enabled:
+                return _empty(HTTPStatus.UNAUTHORIZED)
+            payload = await asyncio.to_thread(_capability_payload, actor, state)
+        except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+            return _incompatible_bridge_response()
+    response = _json(HTTPStatus.OK, payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+async def _auth_features(request):
+    calendar_instances = any(
+        route.method == "GET" and route.resource.canonical == "/api/calendars/instances"
+        for route in request.app.router.routes()
+    )
+    features = ["capabilities"] + (["calendar_instances"] if calendar_instances else [])
+    response = _json(HTTPStatus.OK, {
+        "auth_contract": 2, "features": features, "qr_origin": None,
+    })
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 async def _audit_feed(request):
@@ -877,6 +1114,8 @@ def _user_outcome(outcome: str):
     if outcome == "last_admin":
         return _json(HTTPStatus.CONFLICT,
                      {"ok": False, "error": "refused: that would leave no enabled admin"})
+    if outcome == "legacy_role_changes_disabled":
+        return _json(HTTPStatus.CONFLICT, {"ok": False, "error": "legacy_role_changes_disabled"})
     return _json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "unexpected error"})
 
 
@@ -1190,8 +1429,15 @@ async def _events(request):
     try:
         await resp.prepare(request)
         deadline = _clock() + SSE_MAX_LIFETIME
+        next_authz_check = _clock() + SSE_IDLE_TIMEOUT
+        session_context = request.get(_SESSION_CONTEXT_KEY)
         while _clock() < deadline:
             event = await _wait_event(sub.queue)
+            if session_context is not None and _clock() >= next_authz_check:
+                current = await asyncio.to_thread(_session_context_current, session_context)
+                if not current:
+                    break
+                next_authz_check = _clock() + SSE_IDLE_TIMEOUT
             if event is _CLOSED_SENTINEL:
                 break                          # graceful shutdown
             payload = (b":keepalive\n\n" if event is None
@@ -1507,7 +1753,9 @@ def make_app(rt):
         app.router.add_get(path, _ui_document)                                  # GET + HEAD for URL validators
     app.router.add_post("/api/login", _login)
     app.router.add_post("/api/logout", _logout)
+    app.router.add_get("/api/auth/features", _auth_features, allow_head=False)
     app.router.add_get("/api/whoami", _whoami, allow_head=False)
+    app.router.add_get("/api/me/capabilities", _me_capabilities, allow_head=False)
     app.router.add_get("/api/discovery", _discovery, allow_head=False)
     app.router.add_get("/api/events", _events, allow_head=False)
     app.router.add_get(_PATH_AUTOMATIONS, _automations_list, allow_head=False)

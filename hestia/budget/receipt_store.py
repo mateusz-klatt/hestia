@@ -19,12 +19,13 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from sqlalchemy import delete, exists, func, literal_column, or_, select
 from sqlalchemy.exc import IntegrityError
 
+from .. import authz
 from ..db import (BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
                   BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line, BudgetShop as Shop,
                   BudgetTransaction as Transaction, BudgetTransferLeg as Leg)
 from .analytics_core import (AnalyticsError, canonical_money, compare_money, financial_fingerprint, negate_money,
                              sum_money)
-from .device_token import DeviceTokenError, write_device_audit
+from .device_token import DeviceTokenError, _legacy_bearer_allowed, write_device_audit
 from .gmail_store import retain_imports, tombstone_receipt
 from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES, ReceiptError,
                              merchant_tokens, normalize_shop_name, parse_receipt, redact_digit_field,
@@ -128,6 +129,14 @@ class BudgetReceiptStore(BudgetHTTPStore):
             if self._now() >= min(token.expires_at, token.hard_expires_at):
                 raise DeviceTokenError(401, "device_token_expired")
         super()._owner(session, owner)
+        if authz.policy_phase(session) != authz.POLICY_PHASE_LEGACY:
+            allowed = (
+                _legacy_bearer_allowed(session, token)
+                if self._device_id is not None
+                else authz.has_legacy_receipt_profile(session, owner)
+            )
+            if not allowed:
+                raise DeviceTokenError(403, "budget_forbidden")
 
     def _now(self):
         now = self.clock()

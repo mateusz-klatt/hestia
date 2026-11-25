@@ -1999,6 +1999,8 @@ class RoleHelpersTests(unittest.TestCase):
 # Owner budget routes stay 403, including the POST that reads transactions by key.
 SPOUSE_ROUTE_STATUS = {
     ("GET", "/"): 404,
+    ("GET", "/api/auth/features"): 200,
+    ("GET", "/api/me/capabilities"): 200,
     ("GET", "/api/audit"): 200,
     ("GET", "/api/automations"): 403,
     ("GET", "/api/budget/accounts"): 403,
@@ -2145,7 +2147,7 @@ class RoutePolicyTests(unittest.TestCase):
             canonical = route.resource.canonical
             path = canonical.replace("{path}", "asset.js") if "{path}" in canonical else canonical
             classified = (web._is_public_route(route.method, path)
-                          or (route.method, path) in web._ROUTE_MIN_ROLE)
+                          or (route.method, path) in web._ROUTE_REQUIREMENTS)
             self.assertTrue(classified, f"unclassified route: {route.method} {path}")
 
 
@@ -2278,7 +2280,7 @@ class HouseholdRouteTests(_WebTestBase):
                         path = route.resource.canonical.replace("{path}", "asset.js")
                         self.assertNotIn("{", path, path)
                         public = web._is_public_route(method, path)
-                        self.assertTrue(public or (method, path) in web._ROUTE_MIN_ROLE,
+                        self.assertTrue(public or (method, path) in web._ROUTE_REQUIREMENTS,
                                         f"unclassified route: {method} {path}")
                         status, body = self._member_status(method, path, token, grant_id)
                         actual[(method, path)] = status
@@ -3072,7 +3074,7 @@ class SessionBridgeWebTests(unittest.IsolatedAsyncioTestCase):
             web._check_core_origin(SimpleNamespace(scheme="http", headers=mock.Mock(getall=lambda k, d=None: ["http://bad host"])))
         )
 
-    async def test_me_password_cas_rejects_concurrent_reset_and_custom_phase_blocks_start_and_http(self):
+    async def test_me_password_cas_rejects_concurrent_reset_and_unknown_phase_blocks_start_and_http(self):
         store_sql.activate_sessions_v2(path=self.db_path)
         login_b = await self.client.post("/api/login", json={"user": "admin2", "password": "admin2pw1234"})
         b_cookie = login_b.cookies["hestia_session"].value
@@ -3095,7 +3097,7 @@ class SessionBridgeWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raced.status, 409)
 
         # Custom policy phase fails start_web before listening and returns 503 on HTTP paths.
-        self._set_meta("authz_policy_phase", "catalog_custom")
+        self._set_meta("authz_policy_phase", "future_phase")
         with mock.patch("aiohttp.web.AppRunner.setup", side_effect=AssertionError("runner started on custom phase")):
             with self.assertRaises(authz.PolicyPhaseUnsupported):
                 await web.start_web(self.rt, host="127.0.0.1", port=0)
@@ -3118,7 +3120,7 @@ class SessionBridgeWebTests(unittest.IsolatedAsyncioTestCase):
 
         def flip_custom_during_scrypt(u, pw, users):
             ok = real_auth2(u, pw, users)
-            self._set_meta("authz_policy_phase", "catalog_custom")
+            self._set_meta("authz_policy_phase", "future_phase")
             return ok
 
         with mock.patch("hestia.auth.authenticate", side_effect=flip_custom_during_scrypt):
