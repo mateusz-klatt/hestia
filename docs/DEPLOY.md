@@ -114,9 +114,9 @@ ProxyAddHeaders On
 
 ## QR login behind Apache and Cloudflare
 
-QR redemption requires the request `Host` to match the configured HTTPS `HESTIA_PUBLIC_ORIGIN` and the JSON `origin` to equal that canonical origin exactly. Direct requests to the application's own `host:port` therefore do not redeem codes. Apache and Cloudflare may still deliver plain HTTP internally; the Host binding, rather than the direct socket scheme, is the baseline check.
+QR redemption requires HTTPS, a request `Host` matching the configured `HESTIA_PUBLIC_ORIGIN`, and a JSON `origin` equal to that canonical origin. The proxy must preserve the public Host.
 
-`X-Forwarded-Proto: https` is accepted only when the immediate peer is covered by `HESTIA_BUDGET_TRUSTED_PROXY_CIDRS` (the loopback Apache proxy is configured above). Strip untrusted forwarded headers at Apache. If no trusted-proxy CIDRs are configured, do not rely on forwarded HTTPS: the Host and exact JSON-origin checks alone authorize redemption. QR issuance remains a browser-session operation with its own Origin check.
+When Apache forwards traffic over HTTP, configure it to replace the incoming `X-Forwarded-Proto` with a single `https` value for client requests whose original scheme was HTTPS. Include the proxy's immediate peer address in `HESTIA_BUDGET_TRUSTED_PROXY_CIDRS` as shown above. If requests reach Hestia directly over TLS, omit the forwarded scheme. QR issuance uses a browser session and verifies the Origin header.
 
 ## Gmail receipt import (receipts v1d-a, v1d-b, and v1e)
 

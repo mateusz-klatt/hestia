@@ -984,8 +984,9 @@ def _qr_public_transport(request, configured: str) -> bool:
     expected = _canonical_origin_tuple(configured)
     if len(hosts) != 1 or expected is None or _canonical_origin_tuple("https://" + hosts[0]) != expected:
         return False
-    forwarded = request.headers.getall("X-Forwarded-Proto", [])
-    return not forwarded or _trusted_forwarded_https(request)
+    if "X-Forwarded-Proto" in request.headers:
+        return _trusted_forwarded_https(request)
+    return request.secure
 
 
 def _native_auth_available() -> bool:

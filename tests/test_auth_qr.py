@@ -168,6 +168,7 @@ class QrLoginWebTests(unittest.IsolatedAsyncioTestCase):
         self.env = mock.patch.dict(os.environ, {
             "HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.path),
             "HESTIA_PUBLIC_ORIGIN": "https://Hestia.Example:443/",
+            consent_context.TRUSTED_PROXY_ENV: "127.0.0.1/32",
         })
         self.env.start()
         self.addCleanup(self.env.stop)
@@ -179,7 +180,10 @@ class QrLoginWebTests(unittest.IsolatedAsyncioTestCase):
         store_sql.cutover_users(engine, {"owner": auth.hash_password("correct horse battery")})
         store_sql.activate_sessions_v2(path=self.path)
         from types import SimpleNamespace
-        self.client = TestClient(TestServer(web.make_app(SimpleNamespace(audit_engine=None))))
+        self.client = TestClient(
+            TestServer(web.make_app(SimpleNamespace(audit_engine=None))),
+            headers={"X-Forwarded-For": "192.0.2.1"},
+        )
         await self.client.start_server()
         self.addAsyncCleanup(self.client.close)
         device_token.reset_limits()
@@ -192,7 +196,9 @@ class QrLoginWebTests(unittest.IsolatedAsyncioTestCase):
         return {"Cookie": f"hestia_session={self.cookie}", "Origin": origin}
 
     def _post_redeem(self, *, headers=None, **kwargs):
-        return self.client.post(auth_qr.REDEEM_PATH, headers={"Host": "hestia.example", **(headers or {})}, **kwargs)
+        return self.client.post(auth_qr.REDEEM_PATH, headers={
+            "Host": "hestia.example", "X-Forwarded-Proto": "https", **(headers or {}),
+        }, **kwargs)
 
     def test_transport_parsers_fail_closed_on_bad_peer_and_duplicate_host(self):
         bad_peer = mock.Mock(
@@ -204,6 +210,9 @@ class QrLoginWebTests(unittest.IsolatedAsyncioTestCase):
             headers=[("Host", "hestia.example"), ("Host", "other.example")])
         self.assertFalse(web._qr_public_transport(duplicate, "https://hestia.example"))
         self.assertFalse(web._qr_public_transport(duplicate, "not-an-origin"))
+        direct_tls = make_mocked_request("POST", auth_qr.REDEEM_PATH,
+            headers={"Host": "hestia.example"}, sslcontext=mock.Mock())
+        self.assertTrue(web._qr_public_transport(direct_tls, "https://hestia.example"))
 
     async def test_issue_redeem_origin_matrix_and_feature_probe(self):
         issue = await self.client.post(auth_qr.CODE_PATH, json={"origin": "https://HESTIA.example:443"},
@@ -234,31 +243,27 @@ class QrLoginWebTests(unittest.IsolatedAsyncioTestCase):
                                        headers=self._browser_headers())
         payload = (await issue.json())["qr_payload"]
         origin, code = payload.removeprefix("hestia-login:").split("#")
-        wrong_host = await self.client.post(auth_qr.REDEEM_PATH, json={"origin": origin, "code": code})
+        wrong_host = await self._post_redeem(json={"origin": origin, "code": code},
+                                            headers={"Host": "other.example"})
         self.assertEqual(wrong_host.status, 400)
         noncanonical = await self._post_redeem(json={"origin": "https://HESTIA.example:443", "code": code})
         self.assertEqual(noncanonical.status, 400)
-        untrusted = await self._post_redeem(json={"origin": origin, "code": code},
-                                            headers={"X-Forwarded-Proto": "https"})
-        self.assertEqual(untrusted.status, 400)
+        direct_http = await self.client.post(
+            auth_qr.REDEEM_PATH, json={"origin": origin, "code": code}, headers={"Host": "hestia.example"},
+        )
+        self.assertEqual(direct_http.status, 400)
+        self.assertEqual(await direct_http.json(), {"error": {"code": "qr_origin_mismatch"}})
+        with mock.patch.dict(os.environ, {consent_context.TRUSTED_PROXY_ENV: ""}):
+            untrusted = await self._post_redeem(json={"origin": origin, "code": code})
+            self.assertEqual(untrusted.status, 400)
+        wrong_scheme = await self._post_redeem(json={"origin": origin, "code": code},
+                                               headers={"X-Forwarded-Proto": "http"})
+        self.assertEqual(wrong_scheme.status, 400)
         accepted = await self._post_redeem(json={"origin": origin, "code": code})
         self.assertEqual(accepted.status, 200, await accepted.text())
         token = (await accepted.json())["token"]
         whoami = await self.client.get("/api/whoami", headers={"Authorization": f"Bearer {token}"})
         self.assertEqual(whoami.status, 200)
-
-        issue = await self.client.post(auth_qr.CODE_PATH, json={"origin": origin}, headers=self._browser_headers())
-        code = (await issue.json())["qr_payload"].split("#")[1]
-        with mock.patch.dict(os.environ, {consent_context.TRUSTED_PROXY_ENV: "127.0.0.1/32"}):
-            accepted = await self._post_redeem(json={"origin": origin, "code": code},
-                                               headers={"X-Forwarded-Proto": "https"})
-            self.assertEqual(accepted.status, 200, await accepted.text())
-            issue = await self.client.post(auth_qr.CODE_PATH, json={"origin": origin}, headers=self._browser_headers())
-            code = (await issue.json())["qr_payload"].split("#")[1]
-            device_token.reset_limits()
-            wrong_scheme = await self._post_redeem(json={"origin": origin, "code": code},
-                                                   headers={"X-Forwarded-Proto": "http"})
-            self.assertEqual(wrong_scheme.status, 400)
 
     async def test_origin_errors_session_purpose_and_rate_limits(self):
         malformed_issue = await self.client.post(auth_qr.CODE_PATH, data="{", headers={
