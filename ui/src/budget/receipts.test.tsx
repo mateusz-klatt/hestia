@@ -4,14 +4,18 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadLocale } from "../i18n";
-import type { BudgetApi, BudgetResult } from "./api";
-import { entriesOf, entry } from "./analytics/fixtures";
+import type { BudgetResult } from "./api";
 import { account, connection } from "./fixtures";
-import type { BudgetTransaction, BudgetTransactions } from "./model";
 import { ReceiptsView } from "./receipts";
 import type { ReceiptsApi } from "./receipts_api";
-import { REDACTED_VALUE, sha256Hex } from "./receipts_model";
-import type { ReceiptCandidate, ReceiptDetail, ReceiptDetailResult, ReceiptListResult, ReceiptSummary } from "./receipts_model";
+import { REDACTED_VALUE } from "./receipts_model";
+import type {
+  ReceiptCandidate,
+  ReceiptDetail,
+  ReceiptDetailResult,
+  ReceiptListResult,
+  ReceiptSummary,
+} from "./receipts_model";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
 function fail<T>(status: number, error: string): Promise<BudgetResult<T>> {
@@ -98,7 +102,7 @@ function receiptDetail(overrides: Partial<ReceiptDetail> = {}): ReceiptDetail {
 function receiptCandidate(overrides: Partial<ReceiptCandidate> = {}): ReceiptCandidate {
   return {
     account_id: "local-a",
-    entry_reference: sha256Hex("tx-entry-001"),
+    entry_reference: "a".repeat(64),
     amount: "42.50",
     currency: "PLN",
     credit_debit_indicator: "DBIT",
@@ -127,11 +131,6 @@ const accounts = [
 ];
 
 function fakeClients(rows: ReceiptSummary[] = [receiptSummary()], detail?: ReceiptDetail, candidates: ReceiptCandidate[] = []) {
-  const analyticsApi = {
-    analyticsTransactions: vi.fn<BudgetApi["analyticsTransactions"]>((period) => ok(entriesOf(period))),
-    transactions: vi.fn<BudgetApi["transactions"]>((accountId) =>
-      ok<BudgetTransactions>({ account_id: accountId, transactions: [], account_total: 0, uncertain_total: 0, next_cursor: null })),
-  };
   const rApi: ReceiptsApi = {
     receiptsList: vi.fn<ReceiptsApi["receiptsList"]>(() => ok<ReceiptListResult>({ receipts: rows, next_cursor: null })),
     receiptsSearch: vi.fn<ReceiptsApi["receiptsSearch"]>(() => ok<ReceiptListResult>({ receipts: [], next_cursor: null })),
@@ -159,7 +158,7 @@ function fakeClients(rows: ReceiptSummary[] = [receiptSummary()], detail?: Recei
       })),
     deleteReceipt: vi.fn<ReceiptsApi["deleteReceipt"]>(() => ok({ ok: true, deleted: true })),
   };
-  return { analyticsApi, rApi };
+  return { rApi };
 }
 
 let host: HTMLElement;
@@ -193,7 +192,7 @@ async function settle(): Promise<void> {
 interface RenderOpts {
   locale?: string;
   revision?: number;
-  analyticsEnabled?: boolean;
+  actorKey?: string;
   onAccessLoss?: (result: { ok: boolean; status?: number; error?: string }) => boolean;
 }
 
@@ -209,11 +208,10 @@ async function renderReceipts(
   await act(async () => {
     root.render(
       <ReceiptsView
-        api={clients.analyticsApi}
         receiptsApi={clients.rApi}
+        actorKey={options.actorKey ?? "owner"}
         accounts={accounts}
         connections={[connection]}
-        analyticsEnabled={options.analyticsEnabled ?? true}
         locale={loc}
         revision={options.revision ?? 0}
         onAccessLoss={onAccessLoss}
@@ -300,7 +298,7 @@ async function submit(form: HTMLFormElement | null): Promise<void> {
 }
 
 describe("ReceiptsView", () => {
-  it("lists receipts and documents with merchant, total, currency, source icon, status and link badge", async () => {
+  it("lists receipts and documents, labels actual searchable fields, and localizes in Polish", async () => {
     const clients = fakeClients([
       receiptSummary({
         receipt_id: "rec-1",
@@ -338,6 +336,7 @@ describe("ReceiptsView", () => {
 
     await renderReceipts(clients);
     expect(clients.rApi.receiptsList).toHaveBeenCalledWith({ limit: 50 });
+    expect(inputByName("query").placeholder).toBe("Merchant, NIP or item");
 
     const renderedRows = [...host.querySelectorAll(".budget-receipt-row")].map((item) => item.textContent);
     expect(renderedRows).toHaveLength(3);
@@ -355,15 +354,16 @@ describe("ReceiptsView", () => {
     expect(host.querySelector('[data-source-kind="attachment"] svg')).not.toBeNull();
     expect(host.querySelector('[data-source-kind="email"] svg')).not.toBeNull();
 
-    // Polish locale renders "Paragony i dowody" cleanly.
+    // Polish locale shows accurate placeholder ("Sklep, NIP lub pozycja") and "Paragony i dowody".
     await renderReceipts(clients, { locale: "pl" });
     expect(host.textContent).toContain("Paragony i dowody");
+    expect(inputByName("query").placeholder).toBe("Sklep, NIP lub pozycja");
     expect(host.textContent).toContain("Do przeglądu");
     expect(host.textContent).toContain("Potwierdzenie płatności");
     expect(host.textContent).toContain("Powiązany");
   });
 
-  it("applies server list filters, client-side source/date filters, search API, and cursor pagination", async () => {
+  it("applies server filters, client-side hints, search API, cursor pagination, and recovers once from expired cursors", async () => {
     const clients = fakeClients([
       receiptSummary({ receipt_id: "p1-a", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-10", linked: true }),
       receiptSummary({ receipt_id: "p1-b", status: "needs_review", document_kind: "invoice", source_kind: "email", receipt_date: "2026-11-10", linked: true }),
@@ -383,8 +383,46 @@ describe("ReceiptsView", () => {
         receipts: [
           receiptSummary({ receipt_id: "p2-a", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-12", raw_shop_name: "Second Page Vendor", linked: true }),
         ],
-        next_cursor: null,
+        next_cursor: "cursor-ttl-expired",
       }))
+      // First stale cursor reload from page 1 returns a new cursor:
+      .mockImplementationOnce(() => ok<ReceiptListResult>({
+        receipts: [
+          receiptSummary({ receipt_id: "reloaded-p1", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-10", raw_shop_name: "Fresh Page 1 Vendor", linked: true }),
+        ],
+        next_cursor: "cursor-still-bad",
+      }))
+      // Second stale cursor stops looping cleanly instead of retrying forever:
+      .mockImplementationOnce(() => fail(400, "budget_receipt_invalid_request"))
+      .mockImplementationOnce(() => ok<ReceiptListResult>({ receipts: [receiptSummary()], next_cursor: null }));
+
+    // Intercept the "cursor-ttl-expired" Load more call as 400 budget_receipt_invalid_request.
+    const rawListMock = vi.mocked(clients.rApi.receiptsList);
+    rawListMock.mockReset();
+    rawListMock
+      .mockImplementationOnce(() => ok<ReceiptListResult>({ receipts: [receiptSummary()], next_cursor: null }))
+      .mockImplementationOnce(() => ok<ReceiptListResult>({
+        receipts: [
+          receiptSummary({ receipt_id: "p1-a", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-10", linked: true }),
+          receiptSummary({ receipt_id: "p1-b", status: "needs_review", document_kind: "invoice", source_kind: "email", receipt_date: "2026-11-10", linked: true }),
+          receiptSummary({ receipt_id: "p1-c", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-28", linked: true }),
+        ],
+        next_cursor: "cursor-page-2",
+      }))
+      .mockImplementationOnce(() => ok<ReceiptListResult>({
+        receipts: [
+          receiptSummary({ receipt_id: "p2-a", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-12", raw_shop_name: "Second Page Vendor", linked: true }),
+        ],
+        next_cursor: "cursor-expired",
+      }))
+      .mockImplementationOnce(() => fail(400, "budget_receipt_invalid_request"))
+      .mockImplementationOnce(() => ok<ReceiptListResult>({
+        receipts: [
+          receiptSummary({ receipt_id: "reloaded-p1", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-10", raw_shop_name: "Fresh Page 1 Vendor", linked: true }),
+        ],
+        next_cursor: "cursor-second-bad",
+      }))
+      .mockImplementationOnce(() => fail(400, "budget_receipt_invalid_request"))
       .mockImplementationOnce(() => ok<ReceiptListResult>({ receipts: [receiptSummary()], next_cursor: null }));
 
     vi.mocked(clients.rApi.receiptsSearch).mockImplementationOnce(() => ok<ReceiptListResult>({
@@ -396,8 +434,8 @@ describe("ReceiptsView", () => {
     }));
 
     await renderReceipts(clients);
+    expect(host.textContent).not.toContain("Filtering loaded pages only");
 
-    // Filter same-month date range -> sends month + status + document_kind + linked.
     await choose(selectByName("status"), "needs_review");
     await choose(selectByName("document_kind"), "invoice");
     await choose(selectByName("source_kind"), "attachment");
@@ -413,9 +451,8 @@ describe("ReceiptsView", () => {
       document_kind: "invoice",
       linked: true,
     });
-    // Only p1-a survives source_kind=attachment + date_to=2026-11-20.
     expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(1);
-    expect(host.textContent).toContain("Load more");
+    expect(host.textContent).toContain("Filtering loaded pages only — load more to check older entries.");
 
     // Load cursor page 2.
     await click(button("Load more"));
@@ -428,52 +465,57 @@ describe("ReceiptsView", () => {
       cursor: "cursor-page-2",
     });
     expect(host.textContent).toContain("Second Page Vendor");
-    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(2);
 
-    // Text search uses receiptsSearch POST JSON and still honors dropdown filters.
+    // Expired cursor triggers one clean page-1 reload with cursorExpiredNotice.
+    await click(button("Load more"));
+    expect(host.textContent).toContain("Page cursor expired — reloaded from page 1.");
+    expect(host.textContent).toContain("Fresh Page 1 Vendor");
+    expect(clients.rApi.receiptsList).toHaveBeenNthCalledWith(5, {
+      limit: 50,
+      month: "2026-11",
+      status: "needs_review",
+      document_kind: "invoice",
+      linked: true,
+    });
+
+    // If stale cursor happens again without an intervening user filter reset, stop and clear nextCursor.
+    await click(button("Load more"));
+    expect(host.textContent).toContain("Receipts could not be loaded.");
+    expect([...host.querySelectorAll("button")].some((b) => b.textContent === "Load more")).toBe(false);
+
+    // Search API (POST JSON) + client-side filtering hint.
     await typeInto(inputByName("query"), "Lidl");
     await submit(host.querySelector(".budget-range"));
     expect(clients.rApi.receiptsSearch).toHaveBeenCalledWith({ query: "Lidl", limit: 50 });
     expect(host.textContent).toContain("Lidl Faktura");
     expect(host.textContent).not.toContain("Lidl Warszawa");
 
-    // Reset filters returns to default list.
     await click(button("Reset filters"));
+    expect(host.textContent).not.toContain("Filtering loaded pages only");
     expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50 });
   });
 
-  it("shows detail header, lines, redacted markers, linked transaction via SHA-256 digest, and gates image fetch strictly on image_available", async () => {
+  it("shows link state without GET lookups, hides image preview cleanly on 404, and revokes valid image blobs", async () => {
     const createUrlSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:synthetic-receipt");
     const revokeUrlSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
 
     const clients = fakeClients([
       receiptSummary({ receipt_id: "rec-no-img", image_available: false, linked: true }),
+      receiptSummary({ receipt_id: "rec-img-404", image_available: true, linked: true, raw_shop_name: "Missing Scan Market" }),
       receiptSummary({ receipt_id: "rec-with-img", image_available: true, linked: true, raw_shop_name: "Image Market" }),
     ]);
-
-    const txRef = "bank-tx-digest-source";
-    const linkedDigest = sha256Hex(txRef);
-    const matchedAnalytics = entry(txRef, {
-      account_id: "local-a",
-      amount: "88.00",
-      currency: "PLN",
-      booking_date: "2026-11-14",
-      metadata: { creditor_name: "Matched Synthetic Store", debtor_name: null, mcc: "5411" },
-    });
-    vi.mocked(clients.analyticsApi.analyticsTransactions).mockImplementation((period) =>
-      ok(entriesOf(period, [matchedAnalytics])));
 
     const storageGetSpy = vi.spyOn(Storage.prototype, "getItem");
     const storageSetSpy = vi.spyOn(Storage.prototype, "setItem");
 
-    // 1. Open receipt with image_available=false -> no receiptImage call.
+    // 1. Open receipt with image_available=false -> no receiptImage call, shows link summary from receipt.
     vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
       receipt: receiptDetail({
         receipt_id: "rec-no-img",
         image_available: false,
         linked: true,
         linked_account_id: "local-a",
-        linked_entry_ref: linkedDigest,
+        linked_entry_ref: "a".repeat(64),
         payment_method: "blik",
         invoice_number: "FV/2026/11",
         due_date: "2026-11-30",
@@ -490,61 +532,53 @@ describe("ReceiptsView", () => {
     expect(drawer.textContent).toContain("FV/2026/11");
     expect(drawer.textContent).toContain("BLIK");
     expect(drawer.textContent).toContain("Oat Milk");
-    expect(drawer.textContent).toContain("Matched Synthetic Store");
-    expect(drawer.textContent).toContain("88.00 PLN");
+    expect(drawer.textContent).toContain("Linked to this account; bank counterparty details stay on the ledger.");
     expect(drawer.querySelector(".budget-redacted")?.textContent).toBe("Removed");
     expect(drawer.textContent).not.toContain(REDACTED_VALUE);
     await click(button("Close", drawer));
 
-    // 2. Open receipt with image_available=true -> fetches WebP blob, renders img, revokes on close.
+    // 2. Receipt advertising image_available=true whose image endpoint returns 404 hides preview & keeps drawer open.
+    vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
+      receipt: receiptDetail({ receipt_id: "rec-img-404", raw_shop_name: "Missing Scan Market", image_available: true }),
+      candidates: [],
+    }));
+    vi.mocked(clients.rApi.receiptImage).mockImplementationOnce(() => fail(404, "budget_receipt_not_found"));
+
+    await click(openDetailButton(1));
+    const drawer404 = dialog();
+    expect(drawer404.textContent).toContain("Missing Scan Market");
+    expect(drawer404.querySelector("img.budget-receipt-image")).toBeNull();
+    expect(drawer404.textContent).not.toContain("Image preview is unavailable.");
+    expect(drawer404.textContent).not.toContain("Receipt image");
+    await click(button("Close", drawer404));
+
+    // 3. Receipt with valid image fetches WebP blob, renders img, revokes on close.
     vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
       receipt: receiptDetail({
         receipt_id: "rec-with-img",
         image_available: true,
         linked: true,
         linked_account_id: "local-a",
-        linked_entry_ref: sha256Hex("raw-tx-ref"),
+        linked_entry_ref: "b".repeat(64),
       }),
       candidates: [],
     }));
-    // Verify fallback to api.transactions when analyticsTransactions misses or is disabled.
-    const fallbackTx: BudgetTransaction = {
-      entry_reference: "raw-tx-ref",
-      amount: "42.50",
-      currency: "PLN",
-      credit_debit_indicator: "DBIT",
-      status: "BOOK",
-      booking_date: "2026-11-14",
-      value_date: null,
-      transaction_date: null,
-      remittance_information: ["Fallback Counterparty"],
-      source: "api",
-      observed_at: 1,
-      api_observed_at: 1,
-    };
-    vi.mocked(clients.analyticsApi.analyticsTransactions).mockImplementation((period) => ok(entriesOf(period, [])));
-    vi.mocked(clients.analyticsApi.transactions).mockImplementation((accountId) =>
-      ok<BudgetTransactions>({ account_id: accountId, transactions: [fallbackTx], account_total: 1, uncertain_total: 0, next_cursor: null }));
 
-    await click(openDetailButton(1));
-
+    await click(openDetailButton(2));
     expect(clients.rApi.receiptImage).toHaveBeenCalledWith("rec-with-img");
     expect(createUrlSpy).toHaveBeenCalledTimes(1);
     const img = host.querySelector<HTMLImageElement>("img.budget-receipt-image");
     expect(img?.getAttribute("src")).toBe("blob:synthetic-receipt");
-    const openDrawer = dialog();
-    expect(openDrawer.textContent).toContain("Fallback Counterparty");
-
-    await click(button("Close", openDrawer));
+    await click(button("Close", dialog()));
     expect(revokeUrlSpy).toHaveBeenCalledWith("blob:synthetic-receipt");
     expect(storageGetSpy).not.toHaveBeenCalled();
     expect(storageSetSpy).not.toHaveBeenCalled();
   });
 
-  it("handles confirm with candidate link, keep vs unlink choices, summary line addition, and CAS errors", async () => {
-    const candKeep = receiptCandidate({ entry_reference: sha256Hex("kept-tx"), candidate_token: "tok-keep" });
+  it("enforces per-status link actions, hints on merchant edits, and reloads detail on 409 stale_source", async () => {
+    const candKeep = receiptCandidate({ entry_reference: "a".repeat(64), candidate_token: "tok-keep" });
     const candAlt = receiptCandidate({
-      entry_reference: sha256Hex("alt-tx"),
+      entry_reference: "b".repeat(64),
       candidate_token: "tok-alt",
       date_distance: 2,
       booking_date: "2026-11-16",
@@ -554,7 +588,7 @@ describe("ReceiptsView", () => {
       receiptSummary({ receipt_id: "rec-confirm", document_kind: "invoice", status: "imported" }),
     ]);
 
-    // Case 1: unlinked imported invoice with 0 lines -> add summary line + pick candidate + confirm.
+    // 1. Imported invoice confirms with link: null and shows draftNoCandidatesNote (no candidate radios).
     vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
       receipt: receiptDetail({
         receipt_id: "rec-confirm",
@@ -571,92 +605,155 @@ describe("ReceiptsView", () => {
 
     await renderReceipts(clients);
     await click(button("Details"));
-    const drawer = dialog();
-    await choose(selectByName("payment_method", drawer), "card");
-    await click(button("Add summary line", drawer));
-    await click(button("Confirm receipt", drawer));
+    const drawer1 = dialog();
+    expect(drawer1.textContent).toContain("Candidates are only checked on review");
+    expect(drawer1.querySelector('input[name="link_choice"][value="candidate:0"]')).toBeNull();
+    await choose(selectByName("payment_method", drawer1), "card");
+    await click(button("Add summary line", drawer1));
+    await click(button("Confirm receipt", drawer1));
 
     expect(clients.rApi.confirmReceipt).toHaveBeenCalledWith(expect.objectContaining({
       receipt_id: "rec-confirm",
       expected_version: 3,
       payment_method: "card",
       total_amount: "42.5",
-      link: {
-        account_id: candAlt.account_id,
-        entry_reference: candAlt.entry_reference,
-        candidate_token: "tok-alt",
-      },
+      link: null,
     }));
     expect(host.textContent).toContain("Receipt confirmed and saved.");
 
-    // Case 2: linked needs_review with matching current candidate allows keep, or switch to unlink (link: null).
+    // 2. Confirmed linked receipt exposes ONLY unlink (no keep radio), emits link: null.
     vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
-      receipt: receiptDetail({
-        receipt_id: "rec-confirm",
-        status: "needs_review",
-        linked: true,
-        linked_account_id: candKeep.account_id,
-        linked_entry_ref: candKeep.entry_reference,
-        version: 4,
-      }),
-      candidates: [candKeep, candAlt],
-    }));
-    await click(button("Details"));
-    const drawer2 = dialog();
-    await click(linkRadio("unlink", drawer2));
-    vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => fail(409, "budget_receipt_conflict"));
-    await click(button("Confirm receipt", drawer2));
-    expect(drawer2.textContent).toContain("This document was modified elsewhere.");
-    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({ link: null }));
-
-    // Case 3: linked confirmed without candidates blocks "keep" submit until "unlink" is chosen.
-    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => ok({
       receipt: receiptDetail({
         receipt_id: "rec-confirm",
         status: "confirmed",
         linked: true,
         linked_account_id: "local-a",
-        linked_entry_ref: sha256Hex("done-tx"),
-        version: 5,
+        linked_entry_ref: candKeep.entry_reference,
+        version: 4,
       }),
       candidates: [],
     }));
-    await click(button("Close", drawer2));
+    await click(button("Close", dialog()));
+    await click(button("Details"));
+    const drawer2 = dialog();
+    expect(drawer2.textContent).toContain("Confirmed receipts cannot keep or choose candidates on edit");
+    expect(drawer2.querySelector('input[name="link_choice"][value="keep"]')).toBeNull();
+    expect(linkRadio("unlink", drawer2).checked).toBe(true);
+    await click(button("Confirm receipt", drawer2));
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({ link: null }));
+
+    // 3. needs_review receipt: editing merchant shows staleSourceEditHint, and 409 stale_source reloads detail & explains why.
+    vi.mocked(clients.rApi.receiptDetail)
+      .mockImplementationOnce(() => ok({
+        receipt: receiptDetail({
+          receipt_id: "rec-confirm",
+          status: "needs_review",
+          linked: false,
+          version: 5,
+        }),
+        candidates: [candAlt],
+      }))
+      .mockImplementationOnce(() => ok({
+        receipt: receiptDetail({
+          receipt_id: "rec-confirm",
+          status: "needs_review",
+          linked: false,
+          version: 5,
+        }),
+        candidates: [receiptCandidate({ entry_reference: "b".repeat(64), candidate_token: "tok-refreshed" })],
+      }));
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => fail(409, "budget_receipt_stale_source"));
+
+    await click(button("Close", dialog()));
     await click(button("Details"));
     const drawer3 = dialog();
-    expect(button("Confirm receipt", drawer3).disabled).toBe(true);
-    expect(drawer3.textContent).toContain("re-linking requires review candidates");
-    await click(linkRadio("unlink", drawer3));
-    expect(button("Confirm receipt", drawer3).disabled).toBe(false);
+    await typeInto(inputByName("raw_shop_name", drawer3), "Edited Grocery");
+    expect(drawer3.textContent).toContain("Changing merchant or NIP invalidates the candidate link token");
+
+    await click(button("Confirm receipt", drawer3));
+    expect(drawer3.textContent).toContain("The candidate link token is no longer valid (ledger updated or merchant/NIP edited). Details reloaded — review link choices and confirm again.");
+    // Reloaded detail fetched refreshed candidate token "tok-refreshed".
+    expect(clients.rApi.receiptDetail).toHaveBeenCalledTimes(4);
+    await click(button("Confirm receipt", dialog()));
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
+      link: expect.objectContaining({ candidate_token: "tok-refreshed" }) as unknown,
+    }));
   });
 
-  it("requires confirmation dialog before deleting a receipt and supports cancellation", async () => {
-    const clients = fakeClients([receiptSummary({ receipt_id: "rec-del", version: 7 })]);
-    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => ok({
-      receipt: receiptDetail({ receipt_id: "rec-del", version: 7 }),
+  it("prevents synchronous double-submit, blocks opening another receipt while pending, and ignores stale close/delete", async () => {
+    const clients = fakeClients([
+      receiptSummary({ receipt_id: "rec-a", raw_shop_name: "Receipt A", version: 7 }),
+      receiptSummary({ receipt_id: "rec-b", raw_shop_name: "Receipt B", version: 2 }),
+    ]);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => ok({
+      receipt: receiptDetail({ receipt_id: id, raw_shop_name: id === "rec-a" ? "Receipt A" : "Receipt B", version: 7 }),
       candidates: [],
     }));
 
+    const pendingConfirm = deferred<{ ok: true; receipt: ReceiptDetail }>();
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => pendingConfirm.promise);
+
     await renderReceipts(clients);
-    await click(button("Details"));
+    await click(openDetailButton(0));
     const drawer = dialog();
 
-    await click(button("Delete document", drawer));
-    expect(clients.rApi.deleteReceipt).not.toHaveBeenCalled();
-    const confirmBox = alertBox(drawer);
-    expect(confirmBox.textContent).toContain("Delete this document?");
+    // Trigger two synchronous submits in the same tick before actionBusy state disables the button.
+    const form = drawer.querySelector<HTMLFormElement>("form.budget-receipt-confirm");
+    await act(async () => {
+      form?.requestSubmit();
+      form?.requestSubmit();
+      await Promise.resolve();
+    });
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledTimes(1);
 
+    // While pending, opening Receipt B is disabled and Escape does not close A.
+    expect(openDetailButton(1).disabled).toBe(true);
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      await Promise.resolve();
+    });
+    expect(dialog().textContent).toContain("Receipt A");
+
+    await act(async () => {
+      pendingConfirm.resolve({
+        ok: true,
+        data: {
+          ok: true,
+          receipt: receiptDetail({ receipt_id: "rec-a", status: "confirmed", version: 8 }),
+        },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(openDetailButton(1).disabled).toBe(false);
+
+    // Delete with confirmation dialog & double-click guard.
+    const pendingDelete = deferred<{ ok: true; deleted: true }>();
+    vi.mocked(clients.rApi.deleteReceipt).mockImplementationOnce(() => pendingDelete.promise);
+
+    await click(button("Delete document", drawer));
+    const confirmBox = alertBox(drawer);
     await click(button("Cancel", confirmBox));
     expect(drawer.querySelector('[role="alertdialog"]')).toBeNull();
-    expect(clients.rApi.deleteReceipt).not.toHaveBeenCalled();
 
     await click(button("Delete document", drawer));
-    await click(button("Confirm deletion", drawer));
-    expect(clients.rApi.deleteReceipt).toHaveBeenCalledWith({ receipt_id: "rec-del", expected_version: 7 });
+    const delConfirmBtn = button("Confirm deletion", drawer);
+    await act(async () => {
+      delConfirmBtn.click();
+      delConfirmBtn.click();
+      await Promise.resolve();
+    });
+    expect(clients.rApi.deleteReceipt).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      pendingDelete.resolve({ ok: true, data: { ok: true, deleted: true } });
+      await Promise.resolve();
+    });
+    await settle();
     expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it("clears all receipts state on 401/403 access loss, 404 disabled flag, and stale epochs", async () => {
+  it("propagates 401/403 even after unmounting, clears search text on 404 disable, and discards stale epochs", async () => {
     const revokeUrlSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:temp-img");
 
@@ -700,10 +797,30 @@ describe("ReceiptsView", () => {
     expect(host.textContent).toContain("Fresh Epoch Store");
     expect(host.textContent).not.toContain("Stale Epoch Store");
 
-    // 404 budget_receipts_disabled clears view cleanly into disabled state.
-    vi.mocked(clients.rApi.receiptsList).mockImplementationOnce(() => fail(404, "budget_receipts_disabled"));
-    await renderReceipts(clients, { revision: 3 });
+    // 404 budget_receipts_disabled clears ALL receipt state including search text (filter & draft).
+    vi.mocked(clients.rApi.receiptsSearch).mockImplementationOnce(() => fail(404, "budget_receipts_disabled"));
+    await typeInto(inputByName("query"), "Sensitive Search");
+    await submit(host.querySelector(".budget-range"));
     expect(host.textContent).toContain("Receipts are disabled on this server");
     expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(0);
+
+    // Re-enabling at next revision shows empty query and calls list (never searching old query).
+    vi.mocked(clients.rApi.receiptsList).mockImplementationOnce(() => ok<ReceiptListResult>({ receipts: [], next_cursor: null }));
+    await renderReceipts(clients, { revision: 3 });
+    expect(inputByName("query").value).toBe("");
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50 });
+
+    // Unmounted 401 on an in-flight read still propagates to onAccessLoss instead of dropping denial.
+    const unmountedRead = deferred<ReceiptListResult>();
+    const accessLossUnmount = vi.fn(() => true);
+    vi.mocked(clients.rApi.receiptsList).mockImplementationOnce(() => unmountedRead.promise);
+    await renderReceipts(clients, { revision: 4, onAccessLoss: accessLossUnmount });
+    await act(async () => {
+      root.unmount();
+      root = createRoot(host);
+      unmountedRead.resolve({ ok: false, status: 401, error: "budget_http_401" });
+      await Promise.resolve();
+    });
+    expect(accessLossUnmount).toHaveBeenCalledWith({ ok: false, status: 401, error: "budget_http_401" });
   });
 });

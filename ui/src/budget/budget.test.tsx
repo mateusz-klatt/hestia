@@ -1589,38 +1589,96 @@ describe("receipts tab & capability gate", () => {
         next_cursor: null,
       })),
       receiptsSearch: vi.fn<ReceiptsApi["receiptsSearch"]>(() => ok({ receipts: [], next_cursor: null })),
-      receiptDetail: vi.fn<ReceiptsApi["receiptDetail"]>(),
+      receiptDetail: vi.fn<ReceiptsApi["receiptDetail"]>(() => ok({
+        receipt: {
+          receipt_id: "11111111-1111-4111-8111-111111111111",
+          status: "needs_review",
+          document_kind: "receipt",
+          source_kind: "local_ocr",
+          receipt_kind: "purchase",
+          receipt_date: "2026-11-14",
+          receipt_time: null,
+          raw_shop_name: "Tab Integration Market",
+          raw_nip: null,
+          shop_id: null,
+          chain_key: null,
+          total_amount: "19.50",
+          currency: "PLN",
+          payment_method: "card",
+          math_delta: "0",
+          linked: false,
+          linked_account_id: null,
+          linked_entry_ref: null,
+          version: 1,
+          image_available: false,
+          image_expires_at: null,
+          raw_text_expires_at: null,
+          invoice_number: null,
+          due_date: null,
+          import_expires_at: null,
+          forwarded_manually: false,
+          forwarded_sender_domain: null,
+          created_at: 1_700_000_000,
+          updated_at: 1_700_000_000,
+          lines: [],
+        },
+        candidates: [],
+      })),
       receiptImage: vi.fn<ReceiptsApi["receiptImage"]>(),
       confirmReceipt: vi.fn<ReceiptsApi["confirmReceipt"]>(),
       deleteReceipt: vi.fn<ReceiptsApi["deleteReceipt"]>(),
     };
   }
 
-  async function renderWithReceipts(api: ReturnType<typeof fakeApi>, rApi: ReceiptsApi): Promise<void> {
+  async function renderWithReceipts(
+    api: ReturnType<typeof fakeApi>,
+    rApi: ReceiptsApi,
+    principal?: string | null,
+  ): Promise<void> {
     await act(async () => {
-      root.render(<Budget active api={api} receiptsApi={rApi} pollMs={5} />);
+      root.render(principal === undefined
+        ? <Budget active api={api} receiptsApi={rApi} pollMs={5} />
+        : <Budget active api={api} receiptsApi={rApi} pollMs={5} principal={principal} />);
       await Promise.resolve();
     });
     await settle();
   }
 
-  it("gates the Receipts and documents tab on analytics and stored_reads", async () => {
+  it("gates Receipts independently of analytics, hiding only on stored_reads=false or receipts=false", async () => {
     const api = fakeApi();
     const rApi = fakeReceiptsApi();
-    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: { ...withAnalytics, stored_reads: false } }));
-    await renderWithReceipts(api, rApi);
-    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
-    expect(rApi.receiptsList).not.toHaveBeenCalled();
 
-    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
-    await click(button("Reload"));
+    // 1. analytics=false, stored_reads=true -> analytics tabs remain absent, but Receipts header toggle works.
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities }));
+    await renderWithReceipts(api, rApi);
+    expect(host.querySelector(".budget-views")).toBeNull();
     expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(true);
     await click(button("Receipts and documents"));
     expect(rApi.receiptsList).toHaveBeenCalledWith({ limit: 50 });
     expect(host.textContent).toContain("Tab Integration Market");
+
+    // 2. receipts=false (or stored_reads=false) hides Receipts even when analytics=true.
+    api.connections.mockImplementation(() => ok({
+      connections: [connection],
+      capabilities: { ...withAnalytics, receipts: false } as never,
+    }));
+    await click(button("Reload"));
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
+    expect(host.textContent).not.toContain("Tab Integration Market");
+
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: { ...withAnalytics, stored_reads: false } }));
+    await click(button("Reload"));
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
+
+    // 3. analytics=true, stored_reads=true restores Receipts inside .budget-views.
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+    await click(button("Reload"));
+    expect(host.querySelector(".budget-views")).not.toBeNull();
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Tab Integration Market");
   });
 
-  it("keeps the rest of Budget intact on 404 budget_receipts_disabled, but clears all Budget on 403", async () => {
+  it("keeps Budget intact on 404 disabled, but clears all Budget on unmounted 401/403 from a receipt read", async () => {
     const api = fakeApi();
     const rApi = fakeReceiptsApi();
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
@@ -1631,11 +1689,54 @@ describe("receipts tab & capability gate", () => {
     expect(host.textContent).toContain("Receipts are disabled on this server");
     expect(host.querySelector(".budget-views")).not.toBeNull();
 
-    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    // Start slow receipt read, switch to Accounts before it returns 401, and verify barrier still clears Budget.
+    const slowRead = deferred<Loaded<ReceiptsApi["receiptsList"]>>();
+    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => slowRead.promise);
     await click(button("Accounts"));
     await click(button("Receipts and documents"));
+    await click(button("Accounts"));
+    expect(host.textContent).toContain("Synthetic Current");
+
+    await act(async () => {
+      slowRead.settle({ ok: false, status: 401, error: "budget_http_401" });
+      await Promise.resolve();
+    });
+    await settle();
     expect(host.textContent).toContain("Only the budget's owner");
-    expect(host.textContent).not.toContain("Tab Integration Market");
+    expect(host.textContent).not.toContain("Synthetic Current");
+    expect(host.querySelector(".budget-views")).toBeNull();
+  });
+
+  it("unmounts the previous actor drawer on principal switch and blocks receipt search via parent whoami guard", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+    api.whoami.mockImplementation(() => ok({ user: "alice", role: "admin" }));
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+
+    await renderWithReceipts(api, rApi, "alice");
+    await click(button("Receipts and documents"));
+    await click(button("Details"));
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+
+    // Switching principal prop unmounts alice's detail drawer cleanly.
+    api.whoami.mockImplementation(() => ok({ user: "bob", role: "admin" }));
+    await renderWithReceipts(api, rApi, "bob");
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+
+    // If cookie changes behind the SPA before search submits, parent whoami precheck blocks search and clears Budget.
+    api.whoami.mockImplementation(() => ok({ user: "mallory", role: "admin" }));
+    const queryInput = host.querySelector<HTMLInputElement>('input[name="query"]');
+    const searchForm = host.querySelector<HTMLFormElement>(".budget-range");
+    if (queryInput === null || searchForm === null) throw new Error("receipt search form missing");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(queryInput, "Secret");
+      queryInput.dispatchEvent(new Event("input", { bubbles: true }));
+      searchForm.requestSubmit();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(rApi.receiptsSearch).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Only the budget's owner");
     expect(host.querySelector(".budget-views")).toBeNull();
   });
 });

@@ -130,13 +130,17 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   const alive = useRef(true);
   const generation = useRef(0);
   const epoch = useRef(0);
+  const [sessionEpoch, setSessionEpoch] = useState(0);
   const [revision, setRevision] = useState(0);
   // Bumped whenever the view is hidden or the principal changes; a pending bank start must not navigate then.
   // A layout effect runs in the same commit as the DOM change, so no promise continuation can slip in between.
   const lifecycle = useRef(0);
   const activeRef = useRef(active);
+  const principalRef = useRef(principal);
   useLayoutEffect(() => {
     activeRef.current = active;
+    if (principalRef.current !== principal) epoch.current += 1;
+    principalRef.current = principal;
     lifecycle.current += 1;
   }, [active, principal]);
   const [pollTick, setPollTick] = useState(0);
@@ -160,6 +164,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   const invalidate = useCallback((disabled: boolean, next?: Load) => {
     epoch.current += 1;
     generation.current += 1;
+    setSessionEpoch((current) => current + 1);
     setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
     api.setAuthorizationLocked(true);
     setAuthorization(null); setAuthorizationLocked(true); setDeviceAccess(true); setDeviceUnavailable(false);
@@ -173,6 +178,38 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     if (alive.current) invalidate(!result.ok && result.error === "budget_disabled");
     return true;
   }, [invalidate]);
+
+  /** Routes every receipt request through master's verified-snapshot gate and parent epoch barrier (never /whoami). */
+  const guardedReceiptsApi = useMemo<ReceiptsApi>(() => {
+    const runWithGate = async <T,>(
+      callFn: () => Promise<BudgetResult<T>>,
+      isMutation: boolean,
+    ): Promise<BudgetResult<T>> => {
+      const startedEpoch = epoch.current;
+      const expectedPrincipal = principal;
+      if (!alive.current || startedEpoch !== epoch.current || principalRef.current !== expectedPrincipal) {
+        return { ok: false, status: 0, error: "budget_stale_epoch" };
+      }
+      if (isMutation && (authorizationLocked || api.isAuthorizationLocked())) {
+        return { ok: false, status: 503, error: "budget_server_changed" };
+      }
+      const result = await callFn();
+      if (alive.current && principalRef.current === expectedPrincipal) barrier(result);
+      if (!alive.current || startedEpoch !== epoch.current || principalRef.current !== expectedPrincipal) {
+        return { ok: false, status: 0, error: "budget_stale_epoch" };
+      }
+      return result;
+    };
+    return {
+      receiptsList: (request) => runWithGate(() => effectiveReceiptsApi.receiptsList(request), false),
+      receiptsSearch: (request) => runWithGate(() => effectiveReceiptsApi.receiptsSearch(request), false),
+      receiptDetail: (receiptId) => runWithGate(() => effectiveReceiptsApi.receiptDetail(receiptId), false),
+      receiptImage: (receiptId) => runWithGate(() => effectiveReceiptsApi.receiptImage(receiptId), false),
+      confirmReceipt: (request) => runWithGate(() => effectiveReceiptsApi.confirmReceipt(request), true),
+      deleteReceipt: (request) => runWithGate(() => effectiveReceiptsApi.deleteReceipt(request), true),
+      isAuthorizationLocked: () => authorizationLocked || api.isAuthorizationLocked(),
+    };
+  }, [effectiveReceiptsApi, principal, barrier, authorizationLocked, api]);
 
   const reload = useCallback(async () => {
     const token = ++generation.current;
@@ -412,6 +449,19 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   if (load === "serverChanged") {
     return <section className="budget-app"><p className="budget-notice" role="alert">{t("budget.main.serverChanged")}</p></section>;
   }
+  const analysis = hasAnalytics(capabilities);
+  const receiptsFlag = capabilities === null
+    ? undefined
+    : Object.entries(capabilities).find(([key]) => key === "receipts")?.[1];
+  const receiptsAllowed = load === "ready"
+    && capabilities !== null
+    && capabilities.stored_reads
+    && receiptsFlag !== false
+    && authorization?.own_budget?.can_use_receipts === true;
+  // Analytics views are available only while the server offers analytics; receipts are gated independently.
+  const shownView: View = view === "receipts"
+    ? (receiptsAllowed ? "receipts" : "accounts")
+    : (!analysis ? "accounts" : view);
   const header = (
     <header className="budget-header">
       <div><h2>{t("budget.main.title")}</h2><p>{t("budget.main.subtitle")}</p></div>
@@ -448,18 +498,6 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     return <section className="budget-app">{header}<p className="budget-status" role="status">{message}</p></section>;
   }
   const opened = accounts.find((account) => account.id === detail) ?? null;
-  const analysis = hasAnalytics(capabilities);
-  const receiptsFlag = capabilities === null
-    ? undefined
-    : Object.entries(capabilities).find(([key]) => key === "receipts")?.[1];
-  const receiptsAllowed = capabilities !== null
-    && capabilities.stored_reads
-    && receiptsFlag !== false
-    && authorization?.own_budget?.can_use_receipts === true;
-  // Analytics views are available only while the server offers analytics; receipts are gated independently.
-  const shownView: View = view === "receipts"
-    ? (receiptsAllowed ? "receipts" : "accounts")
-    : (!analysis ? "accounts" : view);
   return (
     <section className="budget-app">
       {header}
@@ -555,8 +593,9 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
         <CategoriesView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} initialRule={focusRule ?? null} />
       ) : shownView === "receipts" ? (
-        <ReceiptsView api={api} receiptsApi={effectiveReceiptsApi} accounts={accounts} connections={connections}
-          analyticsEnabled={analysis} locale={locale} revision={revision} onAccessLoss={barrier} />
+        <ReceiptsView key={`${principal ?? ""}:${String(sessionEpoch)}`} receiptsApi={guardedReceiptsApi}
+          actorKey={principal ?? ""} accounts={accounts} connections={connections}
+          locale={locale} revision={revision} onAccessLoss={barrier} />
       ) : (
         <>
         {canManageDevices ? <ReceiptDevices key={principal ?? ""} api={api} locale={locale} revision={revision}

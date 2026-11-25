@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { entry } from "./analytics/fixtures";
 import { account, connection } from "./fixtures";
-import type { BudgetTransaction } from "./model";
 import {
   EMPTY_RECEIPT_FILTER,
   REDACTED_VALUE,
   addDecimals,
+  availableLinkOptions,
   buildConfirmRequest,
   buildReceiptListRequest,
   candidateDisplayDate,
@@ -14,18 +13,14 @@ import {
   filterReceiptRows,
   findCurrentLinkedCandidate,
   hasActiveReceiptFilter,
-  indexAccountTransactions,
-  indexAnalyticsTransactions,
+  hasClientSideFilter,
   isRedactedValue,
+  isStaleCursorError,
   listMonthForFilter,
   mergeReceiptRows,
   normalizeDecimalInput,
   receiptAccountLabel,
-  receiptLookupDateRange,
-  receiptLookupMonths,
-  sha256Hex,
   subtractDecimals,
-  txLookupKey,
   validPolishNip,
   validReceiptDateRange,
 } from "./receipts_model";
@@ -104,7 +99,7 @@ function detailOf(overrides: Partial<ReceiptDetail> = {}): ReceiptDetail {
 function candidateOf(overrides: Partial<ReceiptCandidate> = {}): ReceiptCandidate {
   return {
     account_id: "acc-1",
-    entry_reference: sha256Hex("tx-ref-1"),
+    entry_reference: "a".repeat(64),
     amount: "42.50",
     currency: "PLN",
     credit_debit_indicator: "DBIT",
@@ -118,26 +113,7 @@ function candidateOf(overrides: Partial<ReceiptCandidate> = {}): ReceiptCandidat
   };
 }
 
-async function subtleSha256Hex(text: string): Promise<string> {
-  const bytes = new TextEncoder().encode(text);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
-}
-
 describe("receipts_model", () => {
-  it("matches WebCrypto UTF-8 SHA-256 digests including non-ASCII and multi-block strings", async () => {
-    const vectors = [
-      "",
-      "abc",
-      "entry-ref-001",
-      "zażółć gęślą jaźń",
-      "x".repeat(200),
-    ];
-    for (const input of vectors) {
-      expect(sha256Hex(input)).toBe(await subtleSha256Hex(input));
-    }
-  });
-
   it("identifies privacy redaction sentinel strictly", () => {
     expect(isRedactedValue(REDACTED_VALUE)).toBe(true);
     expect(isRedactedValue("Regular Shop")).toBe(false);
@@ -145,8 +121,19 @@ describe("receipts_model", () => {
     expect(isRedactedValue(undefined)).toBe(false);
   });
 
-  it("builds list request parameters, month narrowing, and filters search/list rows cleanly", () => {
+  it("builds list request parameters, detects client-side filters & stale cursors, and filters rows cleanly", () => {
     expect(hasActiveReceiptFilter(EMPTY_RECEIPT_FILTER)).toBe(false);
+    expect(hasClientSideFilter(EMPTY_RECEIPT_FILTER)).toBe(false);
+    expect(hasClientSideFilter({ ...EMPTY_RECEIPT_FILTER, status: "confirmed" })).toBe(false);
+    expect(hasClientSideFilter({ ...EMPTY_RECEIPT_FILTER, query: "Milk", status: "confirmed" })).toBe(true);
+    expect(hasClientSideFilter({ ...EMPTY_RECEIPT_FILTER, sourceKind: "attachment" })).toBe(true);
+    expect(hasClientSideFilter({ ...EMPTY_RECEIPT_FILTER, dateFrom: "2026-11-01" })).toBe(true);
+
+    expect(isStaleCursorError({ ok: false, status: 400, error: "budget_receipt_invalid_request" })).toBe(true);
+    expect(isStaleCursorError({ ok: false, status: 400, error: "budget_http_400" })).toBe(true);
+    expect(isStaleCursorError({ ok: false, status: 404, error: "budget_receipt_invalid_request" })).toBe(false);
+    expect(isStaleCursorError({ ok: true })).toBe(false);
+
     expect(listMonthForFilter({ dateFrom: "2026-11-01", dateTo: "2026-11-30" })).toBe("2026-11");
     expect(listMonthForFilter({ dateFrom: "2026-10-25", dateTo: "2026-11-05" })).toBeUndefined();
     expect(validReceiptDateRange({ dateFrom: "2026-11-20", dateTo: "2026-11-05" })).toBe(false);
@@ -185,63 +172,8 @@ describe("receipts_model", () => {
     if (first === undefined || third === undefined) throw new Error("missing synthetic row");
     const merged = mergeReceiptRows([first], [first, third]);
     expect(merged.map((r) => r.receipt_id)).toEqual(["r1", "r3"]);
-  });
 
-  it("indexes analytics and stored account transactions by account and entry_reference digest", () => {
-    const analyticsRow = entry("bank-entry-alpha", {
-      account_id: "acc-1",
-      amount: "42.50",
-      currency: "PLN",
-      credit_debit_indicator: "DBIT",
-      booking_date: "2026-11-14",
-      metadata: { creditor_name: "Synthetic Grocery", debtor_name: null, mcc: "5411" },
-    });
-    const aMap = indexAnalyticsTransactions([analyticsRow]);
-    const digest = sha256Hex("bank-entry-alpha");
-    expect(aMap.get(txLookupKey("acc-1", digest))).toEqual({
-      accountId: "acc-1",
-      entryRefDigest: digest,
-      date: "2026-11-14",
-      amount: "42.50",
-      currency: "PLN",
-      indicator: "DBIT",
-      counterparty: "Synthetic Grocery",
-    });
-
-    const rawRow: BudgetTransaction = {
-      entry_reference: "bank-entry-beta",
-      amount: "19.99",
-      currency: "PLN",
-      credit_debit_indicator: "CRDT",
-      status: "BOOK",
-      booking_date: null,
-      value_date: "2026-11-02",
-      transaction_date: "2026-11-01",
-      remittance_information: ["Refund Synthetic"],
-      source: "api",
-      observed_at: 1,
-      api_observed_at: 1,
-    };
-    const rawTxOnly: BudgetTransaction = {
-      ...rawRow,
-      entry_reference: "bank-entry-gamma",
-      value_date: null,
-    };
-    const tMap = indexAccountTransactions("acc-2", [rawRow, rawTxOnly]);
-    expect(tMap.get(txLookupKey("acc-2", sha256Hex("bank-entry-beta")))).toMatchObject({
-      date: "2026-11-02",
-      counterparty: "Refund Synthetic",
-      indicator: "CRDT",
-    });
-    expect(tMap.get(txLookupKey("acc-2", sha256Hex("bank-entry-gamma")))).toMatchObject({
-      date: "2026-11-01",
-    });
-
-    expect(receiptLookupMonths("2026-11-03")).toEqual(["2026-10", "2026-11"]);
-    expect(receiptLookupMonths("2026-11-15")).toEqual(["2026-11"]);
-    expect(receiptLookupDateRange("2026-11-03")).toEqual({ dateFrom: "2026-10-27", dateTo: "2026-11-10" });
     expect(candidateDisplayDate(candidateOf({ booking_date: null, value_date: "2026-11-13" }))).toBe("2026-11-13");
-
     const acc = account({
       id: "acc-1",
       connection: connection.id,
@@ -268,19 +200,28 @@ describe("receipts_model", () => {
     expect(computeLinesDelta(detailOf().lines, "40.00")).toBe("2.5");
   });
 
-  it("builds valid confirm requests and rejects mismatched math, invalid fields, and cash links", () => {
-    const linkedDigest = sha256Hex("tx-ref-1");
+  it("enforces backend per-status link transitions for draft, imported, needs_review and confirmed", () => {
+    const linkedDigest = "b".repeat(64);
     const cand = candidateOf({ entry_reference: linkedDigest });
-    const linkedDetail = detailOf({
+
+    // 1. needs_review + linked + matching candidate -> keep, candidate, or unlink.
+    const reviewLinked = detailOf({
+      status: "needs_review",
       linked: true,
       linked_account_id: "acc-1",
       linked_entry_ref: linkedDigest,
     });
-    expect(findCurrentLinkedCandidate(linkedDetail, [cand])).toEqual(cand);
-
-    const draftKeep = draftFromDetail(linkedDetail, [cand]);
+    expect(findCurrentLinkedCandidate(reviewLinked, [cand])).toEqual(cand);
+    expect(availableLinkOptions(reviewLinked, [cand], "card")).toEqual({
+      paymentAllowsLink: true,
+      canKeep: true,
+      canPickCandidates: true,
+      mustUnlinkToConfirm: false,
+      currentCandidate: cand,
+    });
+    const draftKeep = draftFromDetail(reviewLinked, [cand]);
     expect(draftKeep.linkChoice).toBe("keep");
-    const builtKeep = buildConfirmRequest(linkedDetail, draftKeep, [cand]);
+    const builtKeep = buildConfirmRequest(reviewLinked, draftKeep, [cand]);
     expect(builtKeep.ok).toBe(true);
     if (builtKeep.ok) {
       expect(builtKeep.request.link).toEqual({
@@ -290,29 +231,74 @@ describe("receipts_model", () => {
       });
     }
 
-    // Confirmed or linked detail without candidates cannot submit "keep" (must choose unlink or have candidates).
-    const noCandKeep = draftFromDetail(linkedDetail, []);
-    expect(buildConfirmRequest(linkedDetail, noCandKeep, [])).toEqual({
-      ok: false,
-      errorKey: "budget.receipts.invalidForm",
-    });
-
-    // Unlink explicitly emits link: null.
-    const builtUnlink = buildConfirmRequest(linkedDetail, { ...draftKeep, linkChoice: "unlink" }, [cand]);
+    // Switching to unlink emits link: null.
+    const builtUnlink = buildConfirmRequest(reviewLinked, { ...draftKeep, linkChoice: "unlink" }, [cand]);
     expect(builtUnlink.ok).toBe(true);
     if (builtUnlink.ok) expect(builtUnlink.request.link).toBeNull();
 
-    // Cash payment drops link cleanly.
-    const cashBuilt = buildConfirmRequest(linkedDetail, { ...draftKeep, paymentMethod: "cash" }, [cand]);
+    // Cash or mixed payment disables links cleanly.
+    expect(availableLinkOptions(reviewLinked, [cand], "mixed").paymentAllowsLink).toBe(false);
+    const cashBuilt = buildConfirmRequest(reviewLinked, { ...draftKeep, paymentMethod: "cash" }, [cand]);
     expect(cashBuilt.ok).toBe(true);
     if (cashBuilt.ok) expect(cashBuilt.request.link).toBeNull();
 
-    // Total mismatch rejected before network call.
-    const mismatchBuilt = buildConfirmRequest(linkedDetail, { ...draftKeep, totalAmount: "99.99" }, [cand]);
-    expect(mismatchBuilt).toEqual({ ok: false, errorKey: "budget.receipts.totalMismatch" });
+    // 2. confirmed + linked -> only unlink is valid (no candidates/keep).
+    const confirmedLinked = detailOf({
+      status: "confirmed",
+      linked: true,
+      linked_account_id: "acc-1",
+      linked_entry_ref: linkedDigest,
+    });
+    expect(availableLinkOptions(confirmedLinked, [cand], "card")).toEqual({
+      paymentAllowsLink: true,
+      canKeep: false,
+      canPickCandidates: false,
+      mustUnlinkToConfirm: true,
+      currentCandidate: null,
+    });
+    const confirmedDraft = draftFromDetail(confirmedLinked, [cand]);
+    expect(confirmedDraft.linkChoice).toBe("unlink");
+    expect(buildConfirmRequest(confirmedLinked, { ...confirmedDraft, linkChoice: "keep" }, [cand])).toEqual({
+      ok: false,
+      errorKey: "budget.receipts.invalidForm",
+    });
+    expect(buildConfirmRequest(confirmedLinked, { ...confirmedDraft, linkChoice: "candidate:0" }, [cand])).toEqual({
+      ok: false,
+      errorKey: "budget.receipts.invalidForm",
+    });
+    const confirmedBuilt = buildConfirmRequest(confirmedLinked, confirmedDraft, [cand]);
+    expect(confirmedBuilt.ok).toBe(true);
+    if (confirmedBuilt.ok) expect(confirmedBuilt.request.link).toBeNull();
 
-    // Invalid NIP rejected.
-    const badNip = buildConfirmRequest(linkedDetail, { ...draftKeep, rawNip: "5261040829" }, [cand]);
-    expect(badNip).toEqual({ ok: false, errorKey: "budget.receipts.invalidForm" });
+    // 3. draft & imported -> never pick candidates; defaults to link: null.
+    for (const status of ["draft", "imported"] as const) {
+      const unlinkedImport = detailOf({ status, linked: false });
+      expect(availableLinkOptions(unlinkedImport, [cand], "card")).toEqual({
+        paymentAllowsLink: true,
+        canKeep: false,
+        canPickCandidates: false,
+        mustUnlinkToConfirm: false,
+        currentCandidate: null,
+      });
+      const draftImport = draftFromDetail(unlinkedImport, [cand]);
+      expect(draftImport.linkChoice).toBe("unlink");
+      expect(buildConfirmRequest(unlinkedImport, { ...draftImport, linkChoice: "candidate:0" }, [cand])).toEqual({
+        ok: false,
+        errorKey: "budget.receipts.invalidForm",
+      });
+      const builtImport = buildConfirmRequest(unlinkedImport, draftImport, [cand]);
+      expect(builtImport.ok).toBe(true);
+      if (builtImport.ok) expect(builtImport.request.link).toBeNull();
+    }
+
+    // 4. Total mismatch & invalid NIP rejected before network calls.
+    expect(buildConfirmRequest(reviewLinked, { ...draftKeep, totalAmount: "99.99" }, [cand])).toEqual({
+      ok: false,
+      errorKey: "budget.receipts.totalMismatch",
+    });
+    expect(buildConfirmRequest(reviewLinked, { ...draftKeep, rawNip: "5261040829" }, [cand])).toEqual({
+      ok: false,
+      errorKey: "budget.receipts.invalidForm",
+    });
   });
 });

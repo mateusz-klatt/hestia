@@ -1,12 +1,10 @@
 // Pure helpers for owner-private receipts and documents. Exact decimals stay strings end to end
-// (BigInt scaled-integer arithmetic only), and transaction references are matched via UTF-8 SHA-256
-// digests matching hestia/budget/receipt_reconcile.py (`entry_reference_digest`).
+// (BigInt scaled-integer arithmetic only), and bank transaction lookups never emit GET query URLs.
 import type { components } from "../api/openapi";
 import type { MessageKey } from "../i18n/locales/en";
 import { accountName, formatScaledBigInt, parseScaledInt, validIsoDate } from "./analytics/model";
-import type { AnalyticsTransaction } from "./analytics/model";
-import { transactionDate, transactionText, validRange } from "./model";
-import type { BudgetAccount, BudgetConnection, BudgetTransaction } from "./model";
+import { validRange } from "./model";
+import type { BudgetAccount, BudgetConnection } from "./model";
 
 type Schemas = components["schemas"];
 
@@ -127,6 +125,15 @@ export function hasActiveReceiptFilter(filter: ReceiptFilter): boolean {
     || filter.dateTo !== "";
 }
 
+/** True when any active filter criterion evaluates only on already-loaded cursor pages client-side. */
+export function hasClientSideFilter(filter: ReceiptFilter): boolean {
+  if (filter.sourceKind !== "" || filter.dateFrom !== "" || filter.dateTo !== "") return true;
+  if (filter.query.trim() !== "") {
+    return filter.status !== "" || filter.documentKind !== "" || filter.linked !== "";
+  }
+  return false;
+}
+
 export function validReceiptDateRange(filter: Pick<ReceiptFilter, "dateFrom" | "dateTo">): boolean {
   return validRange({ from: filter.dateFrom, to: filter.dateTo });
 }
@@ -149,6 +156,13 @@ export function buildReceiptListRequest(filter: ReceiptFilter, cursor: string | 
   if (filter.linked !== "") request.linked = filter.linked === "linked";
   if (cursor !== null) request.cursor = cursor;
   return request;
+}
+
+/** True when a paginated list/search call rejected the supplied cursor (e.g. after 15-min cursor TTL). */
+export function isStaleCursorError(result: { ok: boolean; status?: number; error?: string }): boolean {
+  return !result.ok
+    && result.status === 400
+    && (result.error === "budget_receipt_invalid_request" || result.error === "budget_http_400");
 }
 
 export function filterReceiptRows(
@@ -186,183 +200,9 @@ export function mergeReceiptRows(
   return merged;
 }
 
-// ---- Pure synchronous SHA-256 (UTF-8) for matching linked_entry_ref digests ----
-
-const SHA256_K = [
-  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
-];
-
-function rotr(value: number, bits: number): number {
-  return (value >>> bits) | (value << (32 - bits));
-}
-
-/** Lowercase hex SHA-256 of UTF-8 text, matching `hestia/budget/receipt_reconcile.py:entry_reference_digest`. */
-export function sha256Hex(text: string): string {
-  const bytes = new TextEncoder().encode(text);
-  const bitLen = bytes.length * 8;
-  const paddedLen = Math.ceil((bytes.length + 9) / 64) * 64;
-  const padded = new Uint8Array(paddedLen);
-  padded.set(bytes);
-  padded[bytes.length] = 0x80;
-  const view = new DataView(padded.buffer);
-  view.setUint32(paddedLen - 8, Math.floor(bitLen / 0x1_0000_0000), false);
-  view.setUint32(paddedLen - 4, bitLen >>> 0, false);
-
-  let h0 = 0x6a09e667;
-  let h1 = 0xbb67ae85;
-  let h2 = 0x3c6ef372;
-  let h3 = 0xa54ff53a;
-  let h4 = 0x510e527f;
-  let h5 = 0x9b05688c;
-  let h6 = 0x1f83d9ab;
-  let h7 = 0x5be0cd19;
-  const w = new Uint32Array(64);
-
-  for (let offset = 0; offset < paddedLen; offset += 64) {
-    for (let i = 0; i < 16; i += 1) {
-      w[i] = view.getUint32(offset + i * 4, false);
-    }
-    for (let i = 16; i < 64; i += 1) {
-      const w15 = w[i - 15] ?? 0;
-      const w2 = w[i - 2] ?? 0;
-      const s0 = rotr(w15, 7) ^ rotr(w15, 18) ^ (w15 >>> 3);
-      const s1 = rotr(w2, 17) ^ rotr(w2, 19) ^ (w2 >>> 10);
-      w[i] = ((w[i - 16] ?? 0) + s0 + (w[i - 7] ?? 0) + s1) >>> 0;
-    }
-
-    let a = h0;
-    let b = h1;
-    let c = h2;
-    let d = h3;
-    let e = h4;
-    let f = h5;
-    let g = h6;
-    let h = h7;
-
-    for (let i = 0; i < 64; i += 1) {
-      const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
-      const ch = (e & f) ^ (~e & g);
-      const temp1 = (h + S1 + ch + (SHA256_K[i] ?? 0) + (w[i] ?? 0)) >>> 0;
-      const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
-      const maj = (a & b) ^ (a & c) ^ (b & c);
-      const temp2 = (S0 + maj) >>> 0;
-      h = g;
-      g = f;
-      f = e;
-      e = (d + temp1) >>> 0;
-      d = c;
-      c = b;
-      b = a;
-      a = (temp1 + temp2) >>> 0;
-    }
-
-    h0 = (h0 + a) >>> 0;
-    h1 = (h1 + b) >>> 0;
-    h2 = (h2 + c) >>> 0;
-    h3 = (h3 + d) >>> 0;
-    h4 = (h4 + e) >>> 0;
-    h5 = (h5 + f) >>> 0;
-    h6 = (h6 + g) >>> 0;
-    h7 = (h7 + h) >>> 0;
-  }
-
-  return [h0, h1, h2, h3, h4, h5, h6, h7]
-    .map((word) => word.toString(16).padStart(8, "0"))
-    .join("");
-}
-
-// ---- Linked transaction & candidate metadata resolution ----
-
-export interface ResolvedTransaction {
-  accountId: string;
-  entryRefDigest: string;
-  date: string | null;
-  amount: string;
-  currency: string;
-  indicator: "DBIT" | "CRDT";
-  counterparty: string;
-}
-
-export function txLookupKey(accountId: string, entryRefDigest: string): string {
-  return `${accountId}\0${entryRefDigest}`;
-}
-
-export function indexAnalyticsTransactions(rows: readonly AnalyticsTransaction[]): Map<string, ResolvedTransaction> {
-  const map = new Map<string, ResolvedTransaction>();
-  for (const row of rows) {
-    const digest = sha256Hex(row.entry_reference);
-    const label = row.metadata === null
-      ? transactionText(row)
-      : ((row.credit_debit_indicator === "DBIT" ? row.metadata.creditor_name : row.metadata.debtor_name)
-        ?? transactionText(row));
-    map.set(txLookupKey(row.account_id, digest), {
-      accountId: row.account_id,
-      entryRefDigest: digest,
-      date: transactionDate(row),
-      amount: row.amount,
-      currency: row.currency,
-      indicator: row.credit_debit_indicator,
-      counterparty: label,
-    });
-  }
-  return map;
-}
-
-export function indexAccountTransactions(
-  accountId: string,
-  rows: readonly BudgetTransaction[],
-): Map<string, ResolvedTransaction> {
-  const map = new Map<string, ResolvedTransaction>();
-  for (const row of rows) {
-    const digest = sha256Hex(row.entry_reference);
-    map.set(txLookupKey(accountId, digest), {
-      accountId,
-      entryRefDigest: digest,
-      date: transactionDate(row),
-      amount: row.amount,
-      currency: row.currency,
-      indicator: row.credit_debit_indicator,
-      counterparty: transactionText(row),
-    });
-  }
-  return map;
-}
-
-/** Ordered YYYY-MM months covering +/-7 days around a valid ISO date. */
-export function receiptLookupMonths(receiptDate: string | null): string[] {
-  if (receiptDate === null || !validIsoDate(receiptDate)) return [];
-  const time = Date.UTC(
-    Number(receiptDate.slice(0, 4)),
-    Number(receiptDate.slice(5, 7)) - 1,
-    Number(receiptDate.slice(8, 10)),
-  );
-  const first = new Date(time - 7 * 86_400_000).toISOString().slice(0, 7);
-  const last = new Date(time + 7 * 86_400_000).toISOString().slice(0, 7);
-  return first === last ? [first] : [first, last];
-}
-
-/** Inclusive ISO date bounds (+/-7 days) for stored account transaction fallback reads. */
-export function receiptLookupDateRange(receiptDate: string | null): { dateFrom?: string; dateTo?: string } {
-  if (receiptDate === null || !validIsoDate(receiptDate)) return {};
-  const time = Date.UTC(
-    Number(receiptDate.slice(0, 4)),
-    Number(receiptDate.slice(5, 7)) - 1,
-    Number(receiptDate.slice(8, 10)),
-  );
-  return {
-    dateFrom: new Date(time - 7 * 86_400_000).toISOString().slice(0, 10),
-    dateTo: new Date(time + 7 * 86_400_000).toISOString().slice(0, 10),
-  };
-}
-
-export function candidateDisplayDate(candidate: Pick<ReceiptCandidate, "booking_date" | "value_date" | "transaction_date">): string | null {
+export function candidateDisplayDate(
+  candidate: Pick<ReceiptCandidate, "booking_date" | "value_date" | "transaction_date">,
+): string | null {
   return candidate.booking_date ?? candidate.value_date ?? candidate.transaction_date ?? null;
 }
 
@@ -376,7 +216,7 @@ export function receiptAccountLabel(
   return accountName(accounts, connections, accountId, fallback);
 }
 
-// ---- Confirm validation & exact decimal arithmetic ----
+// ---- Per-status link actions, confirm validation & exact decimal arithmetic ----
 
 export interface ReceiptConfirmDraft {
   rawShopName: string;
@@ -392,6 +232,63 @@ export interface ReceiptConfirmDraft {
   linkChoice: string;
 }
 
+export interface ReceiptLinkOptions {
+  paymentAllowsLink: boolean;
+  canKeep: boolean;
+  canPickCandidates: boolean;
+  mustUnlinkToConfirm: boolean;
+  currentCandidate: ReceiptCandidate | null;
+}
+
+export function findCurrentLinkedCandidate(
+  detail: Pick<ReceiptDetail, "linked" | "linked_account_id" | "linked_entry_ref">,
+  candidates: readonly ReceiptCandidate[],
+): ReceiptCandidate | null {
+  if (!detail.linked || detail.linked_account_id === null || detail.linked_entry_ref === null) return null;
+  return candidates.find(
+    (item) => item.account_id === detail.linked_account_id && item.entry_reference === detail.linked_entry_ref,
+  ) ?? null;
+}
+
+/** Models the exact link transitions `receipt_store.confirm` and `receipt_store.detail` support per status. */
+export function availableLinkOptions(
+  detail: Pick<ReceiptDetail, "status" | "linked" | "linked_account_id" | "linked_entry_ref">,
+  candidates: readonly ReceiptCandidate[],
+  paymentMethod: ReceiptPaymentMethod,
+): ReceiptLinkOptions {
+  const paymentAllowsLink = paymentMethod !== "cash" && paymentMethod !== "mixed";
+  const currentCandidate = findCurrentLinkedCandidate(detail, candidates);
+
+  if (detail.status === "needs_review") {
+    return {
+      paymentAllowsLink,
+      canKeep: paymentAllowsLink && detail.linked && currentCandidate !== null,
+      canPickCandidates: paymentAllowsLink && candidates.length > 0,
+      mustUnlinkToConfirm: false,
+      currentCandidate,
+    };
+  }
+
+  if (detail.status === "confirmed") {
+    return {
+      paymentAllowsLink,
+      canKeep: false,
+      canPickCandidates: false,
+      mustUnlinkToConfirm: detail.linked,
+      currentCandidate: null,
+    };
+  }
+
+  // draft / imported rows never carry server candidates; only keep if a matching token were ever supplied.
+  return {
+    paymentAllowsLink,
+    canKeep: paymentAllowsLink && detail.linked && currentCandidate !== null,
+    canPickCandidates: false,
+    mustUnlinkToConfirm: false,
+    currentCandidate: detail.linked ? currentCandidate : null,
+  };
+}
+
 export function draftFromDetail(
   detail: ReceiptDetail,
   candidates: readonly ReceiptCandidate[] = [],
@@ -400,10 +297,11 @@ export function draftFromDetail(
     detail.payment_method !== null && (RECEIPT_PAYMENT_METHODS as readonly string[]).includes(detail.payment_method)
       ? (detail.payment_method as ReceiptPaymentMethod)
       : "unknown";
+  const options = availableLinkOptions(detail, candidates, paymentMethod);
   let linkChoice = "unlink";
-  if (detail.linked) {
+  if (options.canKeep) {
     linkChoice = "keep";
-  } else if (candidates.length > 0 && paymentMethod !== "cash" && paymentMethod !== "mixed") {
+  } else if (detail.status === "needs_review" && !detail.linked && options.canPickCandidates) {
     linkChoice = "candidate:0";
   }
   return {
@@ -428,16 +326,6 @@ export function draftFromDetail(
     })),
     linkChoice,
   };
-}
-
-export function findCurrentLinkedCandidate(
-  detail: Pick<ReceiptDetail, "linked" | "linked_account_id" | "linked_entry_ref">,
-  candidates: readonly ReceiptCandidate[],
-): ReceiptCandidate | null {
-  if (!detail.linked || detail.linked_account_id === null || detail.linked_entry_ref === null) return null;
-  return candidates.find(
-    (item) => item.account_id === detail.linked_account_id && item.entry_reference === detail.linked_entry_ref,
-  ) ?? null;
 }
 
 export function validPolishNip(nip: string): boolean {
@@ -583,17 +471,22 @@ export function buildConfirmRequest(
   const netSum = addDecimals(cleanLines.map((line) => line.net_line_total));
   if (netSum !== total) return { ok: false, errorKey: "budget.receipts.totalMismatch" };
 
+  const options = availableLinkOptions(detail, candidates, draft.paymentMethod);
   let link: ReceiptLinkRequest | null = null;
-  if (draft.paymentMethod !== "cash" && draft.paymentMethod !== "mixed") {
+  if (options.paymentAllowsLink) {
     if (draft.linkChoice === "keep") {
-      const kept = findCurrentLinkedCandidate(detail, candidates);
-      if (kept === null) return { ok: false, errorKey: "budget.receipts.invalidForm" };
+      if (!options.canKeep || options.currentCandidate === null) {
+        return { ok: false, errorKey: "budget.receipts.invalidForm" };
+      }
       link = {
-        account_id: kept.account_id,
-        entry_reference: kept.entry_reference,
-        candidate_token: kept.candidate_token,
+        account_id: options.currentCandidate.account_id,
+        entry_reference: options.currentCandidate.entry_reference,
+        candidate_token: options.currentCandidate.candidate_token,
       };
     } else if (draft.linkChoice.startsWith("candidate:")) {
+      if (!options.canPickCandidates) {
+        return { ok: false, errorKey: "budget.receipts.invalidForm" };
+      }
       const idx = Number(draft.linkChoice.slice("candidate:".length));
       const chosen = Number.isInteger(idx) ? candidates[idx] : undefined;
       if (chosen === undefined) return { ok: false, errorKey: "budget.receipts.invalidForm" };
