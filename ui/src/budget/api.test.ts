@@ -331,6 +331,22 @@ describe("budget api", () => {
     });
   });
 
+  it("coalesces concurrent capabilities checks without caching the next one", async () => {
+    let resolveCapabilities!: (response: Response) => void;
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { resolveCapabilities = resolve; }));
+    vi.stubGlobal("fetch", fetchMock);
+    const scoped = createBudgetApi("owner");
+    const first = scoped.capabilities();
+    const second = scoped.capabilities();
+    expect(second).toBe(first);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    resolveCapabilities(new Response(JSON.stringify(capabilitiesFor()), { status: 200 }));
+    expect((await Promise.all([first, second])).every((result) => result.ok)).toBe(true);
+    fetchMock.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(capabilitiesFor()), { status: 200 })));
+    expect((await scoped.capabilities()).ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("works when crypto.subtle is undefined", async () => {
     const fetchMock = respond(200, {});
     vi.stubGlobal("crypto", {});

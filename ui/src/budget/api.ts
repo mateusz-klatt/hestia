@@ -85,7 +85,7 @@ export function createBudgetApi(expectedActor: string | null = null) {
   let authorizationLocked = false;
   let lockGeneration = 0;
   let verificationGeneration = 0;
-  let capabilitiesGeneration = 0;
+  let capabilitiesInFlight: Promise<BudgetResult<AuthorizationCapabilities>> | null = null;
   let verified = false;
   let snapshotUser: string | null | undefined;
   let snapshotTag: string | null | undefined;
@@ -103,27 +103,32 @@ export function createBudgetApi(expectedActor: string | null = null) {
     for (const controller of pendingReads) controller.abort();
   }
 
-  async function capabilities(): Promise<BudgetResult<AuthorizationCapabilities>> {
-    const ticket = ++capabilitiesGeneration;
-    const result = await request<AuthorizationCapabilities>(apiUrl("me/capabilities"));
-    if (ticket !== capabilitiesGeneration) return denial("budget_server_changed");
-    if (!result.ok) {
-      unverify("budget_server_changed");
+  function capabilities(): Promise<BudgetResult<AuthorizationCapabilities>> {
+    if (capabilitiesInFlight !== null) return capabilitiesInFlight;
+    const pending = (async () => {
+      const result = await request<AuthorizationCapabilities>(apiUrl("me/capabilities"));
+      if (!result.ok) {
+        unverify("budget_server_changed");
+        return result;
+      }
+      const { user, actor_tag: tag } = result.data;
+      const validTag = user === null ? tag === null : typeof tag === "string" && /^[A-Za-z0-9_-]{43}$/.test(tag);
+      const expected = expectedActor === null || user === expectedActor;
+      const sameActor = snapshotUser === undefined || (snapshotUser === user && snapshotTag === tag);
+      if (!validTag || !expected || !sameActor) {
+        unverify("budget_actor_changed");
+        return denial();
+      }
+      snapshotUser = user;
+      snapshotTag = tag;
+      verified = true;
+      denialError = "budget_server_changed";
       return result;
-    }
-    const { user, actor_tag: tag } = result.data;
-    const validTag = user === null ? tag === null : typeof tag === "string" && /^[A-Za-z0-9_-]{43}$/.test(tag);
-    const expected = expectedActor === null || user === expectedActor;
-    const sameActor = snapshotUser === undefined || (snapshotUser === user && snapshotTag === tag);
-    if (!validTag || !expected || !sameActor) {
-      unverify("budget_actor_changed");
-      return denial();
-    }
-    snapshotUser = user;
-    snapshotTag = tag;
-    verified = true;
-    denialError = "budget_server_changed";
-    return result;
+    })();
+    capabilitiesInFlight = pending;
+    const clear = () => { if (capabilitiesInFlight === pending) capabilitiesInFlight = null; };
+    void pending.then(clear, clear);
+    return pending;
   }
 
   async function call<T>(target: URL, init: RequestInit = {}, mutation = false): Promise<BudgetResult<T>> {

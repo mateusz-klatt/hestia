@@ -235,6 +235,20 @@ describe("budget view states", () => {
     }
   });
 
+  it.each(["focus", "visibilitychange"])("revalidates and clears private state on %s", async (eventName) => {
+    const api = fakeApi();
+    await render(api, true, "owner");
+    const checks = api.capabilities.mock.calls.length;
+    api.capabilities.mockImplementation(() => fail(404, "budget_http_404"));
+    await act(async () => {
+      (eventName === "focus" ? window : document).dispatchEvent(new Event(eventName));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(api.capabilities).toHaveBeenCalledTimes(checks + 1);
+    expect(host.textContent).toBe("The server has changed — refresh the page");
+  });
+
   it.each([503, 0])("keeps mutations locked after a capability refresh fails with %s", async (status) => {
     const api = fakeApi();
     await render(api, true, "owner");
@@ -1082,6 +1096,22 @@ describe("analytics views", () => {
     expect(host.querySelector(".budget-views")).toBeNull();
     expect(api.overview).not.toHaveBeenCalled();
     expect(api.monthlyBudgetCharts).not.toHaveBeenCalled();
+  });
+
+  it("checks capabilities first when the actor changes and Rules opens after a rollback", async () => {
+    const api = fakeApi();
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "alice" }));
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    await render(api, true, "alice");
+    api.categories.mockClear();
+    api.rules.mockClear();
+    const checks = api.capabilities.mock.calls.length;
+    api.capabilities.mockImplementation(() => fail(404, "budget_http_404"));
+    await click(button("Categories and rules"));
+    expect(api.capabilities).toHaveBeenCalledTimes(checks + 1);
+    expect(api.categories).not.toHaveBeenCalled();
+    expect(api.rules).not.toHaveBeenCalled();
+    expect(host.textContent).toBe("The server has changed — refresh the page");
   });
 
   it("opens Accounts from the header and scrolls to the devices panel", async () => {
