@@ -1,3 +1,5 @@
+import base64
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 import os
@@ -91,8 +93,15 @@ class DelegatedReceiptStoreTests(AnalyticsCase):
         second = self.receipts.parse_text("owner", receipt_text())
         del first, second
         delegate = self.delegated()
-        page = delegate.list("delegate", {"limit": 1})
+        with mock.patch("hestia.budget.receipt_store.os.urandom", return_value=bytes(12)):
+            page = delegate.list("delegate", {"limit": 1})
         self.assertIsNotNone(page["next_cursor"])
+        encoded_cursor = page["next_cursor"].split(".")[0]
+        protected = base64.urlsafe_b64decode(encoded_cursor + "=" * (-len(encoded_cursor) % 4))
+        self.assertEqual(protected[0], 1)
+        self.assertNotIn(b"owner", protected)
+        with self.assertRaises(ValueError):
+            json.loads(protected)
         following = delegate.list("delegate", {"limit": 1, "cursor": page["next_cursor"]})
         self.assertEqual(len(following["receipts"]), 1)
         for actor, store in (("owner", self.receipts), ("delegate2", self.delegated("delegate2"))):
@@ -123,6 +132,12 @@ class DelegatedReceiptStoreTests(AnalyticsCase):
             self.assertEqual(row.submitted_by, "owner")
         reviewed = delegate.detail("delegate", parsed["receipt_id"])
         self.assertNotIn("candidates", reviewed)
+        with self.assertRaises(device_token.DeviceTokenError):
+            delegate.delete("delegate", {
+                "receipt_id": parsed["receipt_id"], "expected_version": changed["receipt"]["version"],
+            })
+        with self.sessions() as session:
+            self.assertEqual(session.get(db.BudgetReceipt, parsed["receipt_id"]).linked_entry_ref, "debit")
         editable = {"receipt_id": parsed["receipt_id"], "draft": changed["receipt"],
                     "version": changed["receipt"]["version"]}
         with self.assertRaises(device_token.DeviceTokenError):
@@ -130,6 +145,52 @@ class DelegatedReceiptStoreTests(AnalyticsCase):
         owner_detail = self.receipts.detail("owner", parsed["receipt_id"])
         self.assertEqual(owner_detail["receipt"]["linked_account_id"], self.accounts["a"])
         self.assertTrue(owner_detail["candidates"])
+
+    def test_match_withdrawal_is_rechecked_inside_parse_candidate_snapshot(self):
+        real_read = BudgetReceiptStore._read
+
+        @contextmanager
+        def withdraw_before_read(store, owner, permission="budget.view"):
+            if permission is None:
+                with store.sessions.begin() as session:
+                    session.execute(db.PermissionGrant.__table__.delete().where(
+                        db.PermissionGrant.username == "owner", db.PermissionGrant.target_owner == "owner",
+                        db.PermissionGrant.permission_id == "budget.receipts.match",
+                    ))
+            with real_read(store, owner, permission=permission) as session:
+                yield session
+
+        with mock.patch.object(BudgetReceiptStore, "_read", withdraw_before_read), \
+             mock.patch.object(BudgetReceiptStore, "_candidates", side_effect=AssertionError("stale bank read")):
+            parsed = self.receipts.parse_text("owner", receipt_text())
+        self.assertEqual(parsed["candidates"], [])
+
+    def test_match_withdrawal_before_detail_redacts_and_skips_candidates(self):
+        parsed = self.receipts.parse_text("owner", receipt_text())
+        link = {"account_id": self.accounts["a"], "entry_reference": "debit"}
+        confirmed = self.receipts.confirm("owner", confirm_values(parsed, link=link))["receipt"]
+        with self.sessions.begin() as session:
+            session.get(db.BudgetReceipt, parsed["receipt_id"]).status = "needs_review"
+        real_read = BudgetReceiptStore._read
+
+        @contextmanager
+        def withdraw_before_read(store, owner, permission="budget.view"):
+            if permission is None:
+                with store.sessions.begin() as session:
+                    session.execute(db.PermissionGrant.__table__.delete().where(
+                        db.PermissionGrant.username == "owner", db.PermissionGrant.target_owner == "owner",
+                        db.PermissionGrant.permission_id == "budget.receipts.match",
+                    ))
+            with real_read(store, owner, permission=permission) as session:
+                yield session
+
+        with mock.patch.object(BudgetReceiptStore, "_read", withdraw_before_read), \
+             mock.patch.object(BudgetReceiptStore, "_candidates", side_effect=AssertionError("stale bank read")):
+            detail = self.receipts.detail("owner", parsed["receipt_id"])
+        self.assertNotIn("candidates", detail)
+        self.assertIsNone(detail["receipt"]["linked_account_id"])
+        self.assertIsNone(detail["receipt"]["linked_entry_ref"])
+        self.assertEqual(confirmed["status"], "confirmed")
 
     def test_delegate_qr_alert_uses_actor_and_redemption_date(self):
         from hestia.budget.analytics_views import BudgetAnalyticsViews

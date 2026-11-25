@@ -360,7 +360,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
             session.flush()
             write_audit(session, owner, row, "create", None, audit_payload(row, "create", self._actor), now)
             detail = self._detail(session, row)
-        return {"receipt_id": identifier, "draft": detail, "candidates": candidates, "version": 1}
+        return {
+            "receipt_id": identifier, "draft": detail,
+            "candidates": candidates if self._match_allowed else [], "version": 1,
+        }
 
     def _read_candidates(self, owner, parsed):
         """Match in a deferred read snapshot so the scan does not hold the writer lock.
@@ -377,6 +380,9 @@ class BudgetReceiptStore(BudgetHTTPStore):
             due_date=parsed.get("due_date"),
         )
         with self._read(owner, permission=None) as session:
+            self._owner(session, owner, "budget.receipts.add")
+            if not self._match_allowed:
+                return []
             return self._candidates(session, owner, preview, parsed)
 
     @staticmethod
@@ -689,8 +695,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
                    "last_date": row.receipt_date, "last_id": row.id, "expires_at": now + CURSOR_TTL_SECONDS}
         raw = json.dumps(payload, sort_keys=True, ensure_ascii=True, allow_nan=False,
                          separators=(",", ":")).encode("ascii")
-        encoded = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-        signature = base64.urlsafe_b64encode(hmac.new(self._receipt_cursor_key, raw, hashlib.sha256).digest())
+        nonce = os.urandom(12)
+        protected = b"\x01" + nonce + AESGCM(self._receipt_cursor_key).encrypt(nonce, raw, _CURSOR_DOMAIN)
+        encoded = base64.urlsafe_b64encode(protected).rstrip(b"=").decode("ascii")
+        signature = base64.urlsafe_b64encode(hmac.new(self._receipt_cursor_key, protected, hashlib.sha256).digest())
         return encoded + "." + signature.rstrip(b"=").decode("ascii")
 
     def _decode_cursor(self, owner, context, cursor):
@@ -700,11 +708,17 @@ class BudgetReceiptStore(BudgetHTTPStore):
             if not isinstance(cursor, str) or not 1 <= len(cursor) <= MAX_CURSOR_CHARS:
                 raise ValueError
             encoded, signature = cursor.split(".")
-            raw = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+            protected = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
             supplied = base64.b64decode(signature + "=" * (-len(signature) % 4), altchars=b"-_", validate=True)
-            expected = hmac.new(self._receipt_cursor_key, raw, hashlib.sha256).digest()
+            expected = hmac.new(self._receipt_cursor_key, protected, hashlib.sha256).digest()
             if not hmac.compare_digest(supplied, expected):
                 raise ValueError
+            if protected.startswith(b"\x01"):
+                raw = AESGCM(self._receipt_cursor_key).decrypt(protected[1:13], protected[13:], _CURSOR_DOMAIN)
+            else:
+                if (self._session_actor or owner) != owner:
+                    raise ValueError
+                raw = protected
             value = _json(raw)
             if (not isinstance(value, dict)
                     or set(value) not in (
@@ -720,7 +734,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                     or (value["last_date"] is not None and not _valid_date(value["last_date"]))):
                 raise ValueError
             return value["last_date"], value["last_id"]
-        except (ValueError, TypeError, KeyError, RecursionError, OverflowError):
+        except (InvalidTag, ValueError, TypeError, KeyError, RecursionError, OverflowError):
             raise ReceiptError() from None
 
     @staticmethod
@@ -856,6 +870,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
         if preview is None:
             return {"receipt": receipt}
         with self._read(owner, permission=None) as session:
+            self._owner(session, owner, "budget.receipts.view")
+            if not self._match_allowed:
+                row = self._owned(session, owner, receipt_id)
+                return {"receipt": self._detail(session, row)}
             candidates = self._candidates(session, owner, preview, {}, include_receipt_id=preview.id)
         return {"receipt": receipt, "candidates": candidates}
 
@@ -880,6 +898,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             )
             if not own_draft:
                 self._owner(session, owner, "budget.receipts.edit")
+            if row.linked_account_id is not None and not self._match_allowed:
+                raise DeviceTokenError(403, "budget_forbidden")
             if row.version != values["expected_version"]:
                 raise ReceiptError("budget_receipt_conflict", 409)
             tombstone_receipt(session, owner, row.id)
