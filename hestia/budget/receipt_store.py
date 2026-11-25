@@ -20,13 +20,13 @@ from sqlalchemy import delete, exists, func, literal_column, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from .. import authz
-from ..db import (BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
+from ..db import (AppMeta, BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
                   BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line, BudgetShop as Shop,
                   BudgetTransaction as Transaction, BudgetTransferLeg as Leg)
 from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint, negate_money, sum_money
 from .device_token import DeviceTokenError, _issued_mask, _legacy_bearer_allowed, write_device_audit
-from .gmail_store import retain_imports, tombstone_receipt
-from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES,
+from .gmail_store import _payment_payee_key, retain_imports, tombstone_receipt
+from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, GATEWAY_TOKENS, MAX_RECEIPT_LINES,
                              ReceiptError, chain_for, merchant_score_groups, merchant_word_tokens,
                              normalize_shop_name, parse_receipt, redact_digit_field, valid_nip, validate_confirm,
                              validate_confirm_line_totals)
@@ -106,6 +106,33 @@ def _date_distance(payload, receipt_date, *, document_kind=None, due_date=None):
 
 
 _TX_DIGIT_RUN_RE = re.compile(r"[0-9]+(?:[\s/.\-\u2010-\u2015]+[0-9]+)*")
+_GATEWAY_DOMAINS = frozenset({
+    "przelewy24.pl", "p24.pl", "paypro.pl", "autopay.pl", "bluemedia.pl", "tpay.com", "paynow.pl", "dotpay.pl",
+})
+
+
+def _is_gateway_domain(domain):
+    if not isinstance(domain, str):
+        return False
+    cleaned = domain.strip().lower().rstrip(".")
+    if "." not in cleaned:
+        return False
+    if any(cleaned == root or cleaned.endswith("." + root) for root in _GATEWAY_DOMAINS):
+        return True
+    labels = cleaned.split(".")
+    return any(label in ("payu", "bluemedia") for label in labels[:-1])
+
+
+def _is_gateway_receipt(session, row):
+    row_id = getattr(row, "id", None)
+    if row_id is not None and session.get(AppMeta, _payment_payee_key(row_id)) is not None:
+        return True
+    if GATEWAY_TOKENS.intersection(merchant_word_tokens(getattr(row, "raw_shop_name", None))):
+        return True
+    return any(
+        _is_gateway_domain(getattr(row, field, None))
+        for field in ("forwarded_sender_domain", "sender_domain")
+    )
 
 
 def _nip_in_text(nip, haystack):
@@ -418,6 +445,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         direction = "CRDT" if row.receipt_kind == "refund" else "DBIT"
         shop_name = normalize_shop_name(row.raw_shop_name)
         groups, generic_tokens = merchant_score_groups(row.raw_shop_name, row.raw_nip)
+        receipt_is_gateway = _is_gateway_receipt(session, row)
         linked_key = (getattr(row, "linked_account_id", None), getattr(row, "linked_entry_ref", None))
         ranked = []
         for transaction, tx_row_id in self._candidate_rows(session, owner, include_receipt_id=include_receipt_id):
@@ -462,6 +490,17 @@ class BudgetReceiptStore(BudgetHTTPStore):
             generic_score = sum(1 for token in generic_tokens if token in haystack_words)
             sole_generic_hit = not groups and len(generic_tokens) == 1 and generic_score > 0
             hit = nip_hit or distinctive_score > 0 or sole_generic_hit
+            bank_has_gateway = bool(GATEWAY_TOKENS & haystack_words)
+            if receipt_is_gateway or bank_has_gateway:
+                strength = "none"
+            elif nip_hit:
+                strength = "nip"
+            elif distinctive_score > 0:
+                strength = "distinctive"
+            elif generic_score > 0:
+                strength = "generic"
+            else:
+                strength = "none"
             is_current_link = (transaction.account_id, transaction.entry_reference) == linked_key
             candidate = {
                 "account_id": transaction.account_id,
@@ -470,7 +509,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 "credit_debit_indicator": direction,
                 "transaction_date": evidence["transaction_date"],
                 "booking_date": evidence["booking_date"], "value_date": evidence["value_date"],
-                "merchant_token_hit": hit, "date_distance": distance,
+                "merchant_token_hit": hit, "match_strength": strength, "date_distance": distance,
                 "candidate_token": token,
             }
             ranked.append((
@@ -865,6 +904,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 payment_method=row.payment_method, receipt_kind=row.receipt_kind,
                 raw_shop_name=row.raw_shop_name, raw_nip=row.raw_nip,
                 document_kind=row.document_kind, due_date=row.due_date, id=row.id,
+                forwarded_sender_domain=row.forwarded_sender_domain,
                 linked_account_id=row.linked_account_id, linked_entry_ref=row.linked_entry_ref,
             )
         if preview is None:

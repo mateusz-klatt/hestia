@@ -5903,6 +5903,11 @@ export interface components {
             date_distance: number;
             /** Entry Reference */
             entry_reference: string;
+            /**
+             * Match Strength
+             * @enum {string}
+             */
+            match_strength: "nip" | "distinctive" | "generic" | "none";
             /** Merchant Token Hit */
             merchant_token_hit: boolean;
             /** Transaction Date */

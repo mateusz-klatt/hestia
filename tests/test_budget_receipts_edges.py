@@ -133,7 +133,8 @@ class ParserEdgeTests(unittest.TestCase):
         for generic in ("grocery", "groceries", "grocer", "energy", "energia", "polska", "poland", "services",
                         "service", "group", "store", "shop", "sklep", "market", "online", "pay", "payment",
                         "oplata", "opłata", "sp", "z", "o", "oo", "sa", "spółka", "zoo", "com", "pl", "www",
-                        "net", "eu", "p24", "przelewy24", "payu", "autopay", "tpay", "paynow", "dotpay", "blik", "abc"):
+                        "net", "eu", "p24", "przelewy24", "paypro", "payu", "autopay", "tpay", "paynow", "dotpay",
+                        "blik", "abc"):
             self.assertEqual(merchant_tokens(generic, None), frozenset(), generic)
         self.assertNotIn("polska", merchant_tokens("ab polska market piernik", None))
         self.assertFalse(valid_nip(None))
@@ -543,6 +544,43 @@ class StoreEdgeTests(AnalyticsCase):
         with self.assertRaises(ReceiptError) as conflict:
             self.receipts.delete("owner", {"receipt_id": identifier, "expected_version": 9})
         self.assertEqual(conflict.exception.code, "budget_receipt_conflict")
+
+    def test_gateway_domain_and_receipt_helpers_cover_all_branches(self):
+        from types import SimpleNamespace
+        from hestia.budget.gmail_store import _payment_payee_key
+        from hestia.budget.receipt_store import _is_gateway_domain, _is_gateway_receipt
+        from hestia.db import AppMeta
+
+        for non_gateway in (None, 123, "", "localhost", "sklep.example.com", "merchant.payu"):
+            self.assertFalse(_is_gateway_domain(non_gateway), repr(non_gateway))
+        for gateway_dom in (
+            "przelewy24.pl", "mail.przelewy24.pl", "p24.pl", "paypro.pl",
+            "autopay.pl", "sub.autopay.pl", "tpay.com", "paynow.pl", "dotpay.pl",
+            "payu.pl", "secure.payu.com", "pay.bluemedia.pl",
+        ):
+            self.assertTrue(_is_gateway_domain(gateway_dom), gateway_dom)
+
+        with self.sessions.begin() as session:
+            self.assertFalse(_is_gateway_receipt(session, SimpleNamespace(
+                id=None, raw_shop_name="Biedronka", forwarded_sender_domain=None, sender_domain="biedronka.pl",
+            )))
+            self.assertTrue(_is_gateway_receipt(session, SimpleNamespace(
+                id=None, raw_shop_name="Sklep PAYPRO", forwarded_sender_domain=None, sender_domain=None,
+            )))
+            self.assertTrue(_is_gateway_receipt(session, SimpleNamespace(
+                id=None, raw_shop_name="Biedronka", forwarded_sender_domain="mail.payu.pl", sender_domain=None,
+            )))
+            self.assertTrue(_is_gateway_receipt(session, SimpleNamespace(
+                id=None, raw_shop_name="Biedronka", forwarded_sender_domain=None, sender_domain="autopay.pl",
+            )))
+            session.add(AppMeta(key=_payment_payee_key("gw-rec-1"), value="hashed-payee"))
+            session.flush()
+            self.assertFalse(_is_gateway_receipt(session, SimpleNamespace(
+                id="other-rec-1", raw_shop_name="Lidl", forwarded_sender_domain=None, sender_domain="lidl.pl",
+            )))
+            self.assertTrue(_is_gateway_receipt(session, SimpleNamespace(
+                id="gw-rec-1", raw_shop_name="Lidl", forwarded_sender_domain=None, sender_domain="lidl.pl",
+            )))
 
 
 class ReceiptApiEdgeTests(unittest.TestCase):

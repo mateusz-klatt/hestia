@@ -113,12 +113,14 @@ _CHAIN_ALIAS_GROUPS = {
     "lidl": (frozenset({"lidl"}),),
 }
 _CHAIN_WORDS = {chain: frozenset().union(*groups) for chain, groups in _CHAIN_ALIAS_GROUPS.items()}
+GATEWAY_TOKENS = frozenset({
+    "p24", "przelewy24", "paypro", "payu", "autopay", "tpay", "paynow", "dotpay", "blik",
+})
 _NON_MERCHANT_TOKENS = frozenset({
     "sp", "z", "o", "oo", "sa", "spolka", "zoo",
     "com", "pl", "www", "net", "eu",
-    "p24", "przelewy24", "payu", "autopay", "tpay", "paynow", "dotpay", "blik",
     "fiskalny", "paragon",
-})
+}) | GATEWAY_TOKENS
 _GENERIC_MERCHANT_TOKENS = frozenset({
     "grocery", "groceries", "grocer", "energy", "energia", "polska", "poland", "services", "service",
     "group", "store", "shop", "sklep", "market", "online", "pay", "payment", "oplata",

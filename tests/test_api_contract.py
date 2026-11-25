@@ -59,7 +59,11 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.54.0")
+        self.assertEqual(document["info"]["version"], "0.55.0")
+        # 0.55.0 additive candidate match_strength.
+        schemas["BudgetReceiptCandidate"]["properties"].pop("match_strength")
+        schemas["BudgetReceiptCandidate"]["required"].remove("match_strength")
+        document["info"]["version"] = "0.54.0"
         for path in ("/api/auth/qr-code", "/api/auth/qr-redeem", "/api/auth/device-token", "/api/users/grants"):
             document["paths"].pop(path)
         for name in (
@@ -69,6 +73,7 @@ class OpenApiArtifactTests(unittest.TestCase):
         ):
             schemas.pop(name)
         document["info"]["version"] = "0.52.0"
+        # 0.52.0 gateway payment evidence.
         for field in ("gateway", "gateway_status", "fee_amount", "payee_host", "evidence_for_receipt_id",
                       "has_document"):
             for name in ("BudgetReceiptSummary", "BudgetReceiptDetail"):
