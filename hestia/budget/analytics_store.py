@@ -27,7 +27,7 @@ from ..db import BudgetTransferDecision as Decision, BudgetTransferLeg as Leg
 from .analytics_core import (AnalyticsError, KINDS, COUNTERPARTY_RULE_PREFIX, clean_one_off_label, compare_money,
                              compatible_kind, compile_rules, counterparty_key_id, counterparty_rule_from_identification, counterparty_rule_parts,
                              counterparty_rule_value, effective_date, financial_fingerprint, first_matching_rule,
-                             match_texts, pair_fingerprint)
+                             match_rule, match_texts, pair_fingerprint)
 from .client import _reject_constant, _unique_error_fields
 from .config import BudgetConfigError, _read_secret
 from .i18n import LANGUAGES
@@ -868,15 +868,12 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 current_id = row.get("base_effective", row["effective"]).get("rule_id")
                 if current_id not in replaced and first_matching_rule(watch_compiled, row["payload"], texts) is None:
                     continue
-            rule = first_matching_rule(compiled, row["payload"], texts)
-            if rule is None:
-                effective = {"kind": "expense" if row["payload"]["credit_debit_indicator"] == "DBIT" else "unclassified_credit",
-                             "category_id": None, "rule_id": None}
-            else:
-                effective = {"kind": "expense" if row["payload"]["credit_debit_indicator"] == "DBIT" else "unclassified_credit",
-                             "category_id": rule["category_id"], "rule_id": rule["id"]}
-                if rule["kind"] != "auto":
-                    effective["kind"] = rule["kind"]
+            rule, kind = match_rule(compiled, row["payload"], texts)
+            effective = {
+                "kind": kind,
+                "category_id": None if rule is None else rule["category_id"],
+                "rule_id": None if rule is None else rule["id"],
+            }
             current = row.get("base_effective", row["effective"])
             if any(current.get(key) != effective[key] for key in effective):
                 affected += 1

@@ -572,7 +572,7 @@ class RuleTests(AnalyticsCase):
         self.store.update_category("owner", category["id"], name=category["name"], archived=True, expected_version=1)
         candidate = self.candidate(rule_id=rule["id"], expected_version=1, category_id=category["id"], enabled=False)
         disabled_preview = self.store.preview_rule("owner", candidate)
-        self.assertEqual(disabled_preview["affected_count"], 2)
+        self.assertEqual(disabled_preview["affected_count"], 4)
         disabled = self.store.save_rule("owner", disabled_preview["preview_id"])
         self.assertEqual((disabled["enabled"], disabled["category_id"], disabled["version"]), (False, category["id"], 2))
         edited_preview = self.store.preview_rule("owner", candidate | {"expected_version": 2, "value": "different literal"})
@@ -620,8 +620,9 @@ class RuleTests(AnalyticsCase):
         self.annotation()
         self.change_transaction(amount="101")  # stale manual still must not be overwritten by a rule.
         preview = self.store.preview_rule("owner", self.candidate(category_id=category["id"]))
-        self.assertEqual((preview["affected_count"], len(preview["examples"])), (1, 1))
-        self.assertEqual(preview["examples"][0], {"account_id": self.accounts["d"], "entry_reference": "debit-2"})
+        self.assertEqual((preview["affected_count"], len(preview["examples"])), (3, 3))
+        self.assertIn({"account_id": self.accounts["d"], "entry_reference": "debit-2"}, preview["examples"])
+        self.assertNotIn({"account_id": self.accounts["a"], "entry_reference": "debit"}, preview["examples"])
         self.assertEqual(self.store.rules("owner"), [])
         saved = self.store.save_rule("owner", preview["preview_id"])
         self.assertEqual((saved["version"], saved["changed"], saved["category_id"]), (1, True, category["id"]))
@@ -742,7 +743,7 @@ class RuleTests(AnalyticsCase):
         for index in range(25):
             self.add_transaction("a", f"more-{index}")
         preview = self.store.preview_rule("owner", self.candidate())
-        self.assertEqual((preview["affected_count"], len(preview["examples"])), (27, 20))
+        self.assertEqual((preview["affected_count"], len(preview["examples"])), (29, 20))
 
     def test_transaction_rollback_does_not_leave_a_rule_or_consume_its_preview(self):
         preview = self.store.preview_rule("owner", self.candidate())
@@ -856,11 +857,13 @@ class RuleBatchTests(AnalyticsCase):
         from hestia.budget.analytics_views import projection_snapshot
 
         expense = self.store.preview_rule("owner", self.candidate(priority=1, kind="expense"))
+        income = self.store.preview_rule("owner", self.candidate(priority=2, kind="income"))
         excluded = self.store.preview_rule("owner", self.candidate(priority=2, kind="excluded"))
         batch = self.store.preview_rules("owner", [self.candidate(priority=1, kind="expense"),
                                                    self.candidate(priority=2, kind="excluded")])
-        self.assertGreater(expense["affected_count"], 0)
-        self.assertGreater(excluded["affected_count"], expense["affected_count"])
+        self.assertEqual(expense["affected_count"], 4)
+        self.assertEqual(income["affected_count"], 2)
+        self.assertGreater(excluded["affected_count"], income["affected_count"])
         self.assertEqual(batch["affected_count"], excluded["affected_count"])
         self.assertLess(batch["affected_count"], expense["affected_count"] + excluded["affected_count"])
         saved = self.store.save_rules("owner", batch["preview_id"])
@@ -872,6 +875,54 @@ class RuleBatchTests(AnalyticsCase):
         for row in matched:
             expected = by_priority[1] if row["payload"]["credit_debit_indicator"] == "DBIT" else by_priority[2]
             self.assertEqual(row["effective"]["rule_id"], expected)
+
+    def test_preview_and_watch_reclassification_stay_consistent_across_expense_fallback_and_income_override(self):
+        from hestia.budget.analytics_views import projection_snapshot
+
+        ai = self.store.create_category("owner", "Subskrypcje AI")
+        other_income = self.store.create_category("owner", "Zwroty inne")
+        # Manual annotation on a CRDT cannot use kind="expense" even though rules can fall back to refund.
+        with self.assertRaises(AnalyticsError):
+            self.annotation(account="b", reference="credit", kind="expense")
+
+        # Manual annotation on c/credit-2 must stay untouched by expense fallback.
+        self.annotation(account="c", reference="credit-2", category_id=other_income["id"], kind="income")
+
+        # 1. Preview & save an expense rule: matches a/debit, d/debit-2 (DBIT->expense) and b/credit (CRDT->refund).
+        exp_preview = self.store.preview_rule("owner", self.candidate(category_id=ai["id"], priority=1, kind="expense"))
+        self.assertEqual(exp_preview["affected_count"], 3)
+        self.assertEqual(
+            {(item["account_id"], item["entry_reference"]) for item in exp_preview["examples"]},
+            {(self.accounts["a"], "debit"), (self.accounts["d"], "debit-2"), (self.accounts["b"], "credit")},
+        )
+        exp_rule = self.store.save_rule("owner", exp_preview["preview_id"])
+        with self.sessions() as session:
+            by_ref = {row["entry_reference"]: row["effective"] for row in projection_snapshot(session, "owner")["transactions"]}
+        self.assertEqual(by_ref["credit"], {"kind": "refund", "category_id": ai["id"], "source": "rule", "rule_id": exp_rule["id"]})
+        self.assertEqual(by_ref["credit-2"]["source"], "manual")
+
+        # 2. Preview & save a lower-priority income rule: beats expense fallback on b/credit only (watch filter).
+        inc_candidate = self.candidate(category_id=other_income["id"], priority=100, kind="income")
+        inc_preview = self.store.preview_rule("owner", inc_candidate)
+        self.assertEqual(inc_preview["affected_count"], 1)
+        self.assertEqual(inc_preview["examples"], [{"account_id": self.accounts["b"], "entry_reference": "credit"}])
+        inc_rule = self.store.save_rule("owner", inc_preview["preview_id"])
+
+        # 3. Previewing a second lower-priority expense rule when income already matches b/credit affects 0 rows.
+        shadowed = self.store.preview_rule("owner", self.candidate(category_id=ai["id"], priority=50, kind="expense"))
+        self.assertEqual(shadowed["affected_count"], 0)
+
+        # 4. Disabling the income rule reverts b/credit back to the expense rule as kind="refund".
+        disable_preview = self.store.preview_rule(
+            "owner",
+            inc_candidate | {"rule_id": inc_rule["id"], "expected_version": inc_rule["version"], "enabled": False},
+        )
+        self.assertEqual(disable_preview["affected_count"], 1)
+        self.assertEqual(disable_preview["examples"], [{"account_id": self.accounts["b"], "entry_reference": "credit"}])
+        self.store.save_rule("owner", disable_preview["preview_id"])
+        with self.sessions() as session:
+            reverted = {row["entry_reference"]: row["effective"] for row in projection_snapshot(session, "owner")["transactions"]}
+        self.assertEqual(reverted["credit"], {"kind": "refund", "category_id": ai["id"], "source": "rule", "rule_id": exp_rule["id"]})
 
     def test_saved_batch_is_visible_through_the_projection_cache(self):
         from hestia.budget.analytics_views import BudgetAnalyticsViews, clear_projection_cache

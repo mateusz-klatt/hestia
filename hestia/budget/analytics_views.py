@@ -164,7 +164,7 @@ def _annotation(row, financial_fp):
 
 def _effective(payload, metadata, annotation, categories, rules, *, texts=None, compiled=None,
                account_secret=None, account_key_id=None, owner=None):
-    default = "expense" if payload["credit_debit_indicator"] == "DBIT" else "unclassified_credit"
+    default = core.default_effective_kind(payload)
     result = {"kind": default, "category_id": None, "source": "default", "rule_id": None}
     if annotation["mode"] == "manual":
         if not annotation["stale"]:
@@ -177,10 +177,9 @@ def _effective(payload, metadata, annotation, categories, rules, *, texts=None, 
         compiled, _ = core.compile_rules(rules)
     if texts is None:
         texts = core.match_texts(payload, metadata, account_secret=account_secret, account_key_id=account_key_id, owner=owner)
-    rule = core.first_matching_rule(compiled, payload, texts)
+    rule, kind = core.match_rule(compiled, payload, texts)
     if rule is not None:
-        result.update(kind=default if rule["kind"] == "auto" else rule["kind"],
-                      category_id=_category(rule["category_id"], categories), source="rule", rule_id=rule["id"])
+        result.update(kind=kind, category_id=_category(rule["category_id"], categories), source="rule", rule_id=rule["id"])
     return result
 
 
