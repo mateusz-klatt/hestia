@@ -23,9 +23,9 @@ import {
   RECEIPT_STATUSES,
   RECEIPT_STATUS_KEYS,
   availableLinkOptions,
-  buildBulkConfirmRequest,
   buildBulkSelectionPlan,
   buildConfirmRequest,
+  buildPlainBulkConfirmRequest,
   buildReceiptListRequest,
   candidateDisplayDate,
   computeLinesDelta,
@@ -244,14 +244,10 @@ export function ReceiptsView({
     excludedNeedsReview: number;
     excludedDrafts: number;
     merchants: string[];
-    autoLink: boolean;
-    confirmUnlinked: boolean;
   } | null>(null);
   const [bulkProgress, setBulkProgress] = useState<{ total: number; done: number } | null>(null);
   const [bulkReport, setBulkReport] = useState<{
-    linked: number;
-    unlinked: number;
-    skipped: number;
+    confirmed: number;
     failed: number;
     remaining: number;
     cancelled: boolean;
@@ -359,8 +355,6 @@ export function ReceiptsView({
     excludedNeedsReview: number;
     excludedDrafts: number;
     merchants: string[];
-    autoLink: boolean;
-    confirmUnlinked: boolean;
   }) => {
     const runToken = ++bulkRunGenRef.current;
     const expectedActor = actorKey;
@@ -374,9 +368,7 @@ export function ReceiptsView({
     setNotice(null);
     setBulkProgress({ total: plan.targets.length, done: 0 });
 
-    let linked = 0;
-    let unlinked = 0;
-    let skipped = 0;
+    let confirmed = 0;
     let failed = 0;
     let processed = 0;
     let cancelled = false;
@@ -440,23 +432,8 @@ export function ReceiptsView({
           setBulkProgress({ total: plan.targets.length, done: processed });
           continue;
         }
-        const built = buildBulkConfirmRequest(
-          detailRes.data.receipt,
-          detailRes.data.candidates ?? [],
-          t("budget.receipts.summaryLineDefault"),
-          { autoLink: plan.autoLink, confirmUnlinked: plan.confirmUnlinked },
-        );
-        if (built.action === "skip") {
-          skipped += 1;
-          processed += 1;
-          setBulkProgress({ total: plan.targets.length, done: processed });
-          if (isBulkCancelled()) {
-            cancelled = true;
-            break;
-          }
-          continue;
-        }
-        if (built.action === "error") {
+        const built = buildPlainBulkConfirmRequest(detailRes.data.receipt, t("budget.receipts.summaryLineDefault"));
+        if (!built.ok) {
           recordError(formatBulkErrorBucket(undefined, built.errorCode));
           processed += 1;
           setBulkProgress({ total: plan.targets.length, done: processed });
@@ -489,11 +466,7 @@ export function ReceiptsView({
           break;
         }
         if (confirmRes.ok) {
-          if (built.linked) {
-            linked += 1;
-          } else {
-            unlinked += 1;
-          }
+          confirmed += 1;
           setSelectedForBulk((current) => {
             if (!current.has(target.receipt_id)) return current;
             const next = new Set(current);
@@ -517,9 +490,7 @@ export function ReceiptsView({
     if (!isSessionAlive()) return;
     setBulkProgress(null);
     setBulkReport({
-      linked,
-      unlinked,
-      skipped,
+      confirmed,
       failed,
       remaining: Math.max(0, plan.targets.length - processed),
       cancelled: cancelled || aborted,
@@ -914,16 +885,12 @@ export function ReceiptsView({
           <p>
             {bulkReport.cancelled
               ? t("budget.receipts.bulkCancelledSummary", {
-                  linked: bulkReport.linked,
-                  unlinked: bulkReport.unlinked,
-                  skipped: bulkReport.skipped,
+                  confirmed: bulkReport.confirmed,
                   remaining: bulkReport.remaining,
                   failed: bulkReport.failed,
                 })
               : t("budget.receipts.bulkDoneSummary", {
-                  linked: bulkReport.linked,
-                  unlinked: bulkReport.unlinked,
-                  skipped: bulkReport.skipped,
+                  confirmed: bulkReport.confirmed,
                   failed: bulkReport.failed,
                 })}
           </p>
@@ -963,32 +930,7 @@ export function ReceiptsView({
               {t("budget.receipts.bulkExcludedDrafts", { count: bulkConfirmPlan.excludedDrafts })}
             </p>
           ) : null}
-          <label className="budget-toggle">
-            <input
-              type="checkbox"
-              name="bulk_auto_link"
-              checked={bulkConfirmPlan.autoLink}
-              disabled={bulkBusy}
-              onChange={(event) => {
-                const checked = event.currentTarget.checked;
-                setBulkConfirmPlan((current) => (current === null ? null : { ...current, autoLink: checked }));
-              }}
-            />
-            <span>{t("budget.receipts.bulkAutoLink")}</span>
-          </label>
-          <label className="budget-toggle">
-            <input
-              type="checkbox"
-              name="bulk_confirm_unlinked"
-              checked={bulkConfirmPlan.confirmUnlinked}
-              disabled={bulkBusy}
-              onChange={(event) => {
-                const checked = event.currentTarget.checked;
-                setBulkConfirmPlan((current) => (current === null ? null : { ...current, confirmUnlinked: checked }));
-              }}
-            />
-            <span>{t("budget.receipts.bulkConfirmUnlinked")}</span>
-          </label>
+          <p className="budget-muted">{t("budget.receipts.linkChoiceNone")}</p>
           <div className="budget-actions">
             <button
               type="button"
@@ -1056,8 +998,6 @@ export function ReceiptsView({
                       excludedNeedsReview: selectionPlan.excludedNeedsReview,
                       excludedDrafts: selectionPlan.excludedDrafts,
                       merchants: selectionPlan.merchants,
-                      autoLink: true,
-                      confirmUnlinked: true,
                     });
                   }}
                 >
@@ -1086,8 +1026,6 @@ export function ReceiptsView({
                         excludedNeedsReview: group.excludedNeedsReview,
                         excludedDrafts: group.excludedDrafts,
                         merchants: [group.merchant],
-                        autoLink: true,
-                        confirmUnlinked: true,
                       });
                     }}
                   >
@@ -1896,8 +1834,12 @@ function ReceiptDetailDrawer({
                     {tokensDisabledByEdit ? (
                       <p className="budget-warn" role="note">{t("budget.receipts.staleSourceEditHint")}</p>
                     ) : null}
-                    {confirmDraft.linkChoice === "" ? (
-                      <p className="budget-warn" role="note">{t("budget.receipts.explicitUnlinkRequired")}</p>
+                    {confirmDraft.linkChoice === "" && detail.linked ? (
+                      <p className="budget-warn" role="note">
+                        {linkOptions.canKeep
+                          ? t("budget.receipts.reviewLinkChoiceRequired")
+                          : t("budget.receipts.explicitUnlinkRequired")}
+                      </p>
                     ) : null}
 
                     {showKeepRadio ? (

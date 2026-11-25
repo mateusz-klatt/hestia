@@ -2346,7 +2346,7 @@ describe("receipts tab & capability gate", () => {
     await settle();
     expect(rApi.receiptDetail).toHaveBeenCalledTimes(1);
     expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
-    expect(host.textContent).toContain("Bulk confirm cancelled: 0 linked, 1 unlinked, 0 skipped (1 remaining, 0 failed).");
+    expect(host.textContent).toContain("Bulk confirm cancelled after 1 confirmed (1 remaining, 0 failed).");
 
     // Actor-changed error on bulk confirm clears Budget immediately and never sends item 2.
     api.capabilities.mockImplementation(() => ok({ ...authorization, user: "bob" }));

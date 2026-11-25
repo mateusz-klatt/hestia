@@ -107,18 +107,23 @@ _CHAIN_NIPS = {
     "9370008168": "carrefour",
     "7811897358": "lidl",
 }
-_CHAIN_TOKENS = {
-    "biedronka": ("biedronka", "jeronimo", "martins"),
-    "carrefour": ("carrefour",),
-    "lidl": ("lidl",),
+_CHAIN_ALIAS_GROUPS = {
+    "biedronka": (frozenset({"biedronka"}), frozenset({"jeronimo", "martins"})),
+    "carrefour": (frozenset({"carrefour"}),),
+    "lidl": (frozenset({"lidl"}),),
 }
-GATEWAY_TOKENS = frozenset({"p24", "przelewy24", "payu", "autopay", "tpay", "paynow", "blik"})
-_STOP_TOKENS = frozenset({
-    "sklep", "shop", "store",
-    "sp", "z", "o", "oo", "sa", "spolka", "zoo", "polska",
-    "pl", "com", "www",
+_CHAIN_WORDS = {chain: frozenset().union(*groups) for chain, groups in _CHAIN_ALIAS_GROUPS.items()}
+_NON_MERCHANT_TOKENS = frozenset({
+    "sp", "z", "o", "oo", "sa", "spolka", "zoo",
+    "com", "pl", "www", "net", "eu",
+    "p24", "przelewy24", "payu", "autopay", "tpay", "paynow", "dotpay", "blik",
     "fiskalny", "paragon",
-}) | GATEWAY_TOKENS
+})
+_GENERIC_MERCHANT_TOKENS = frozenset({
+    "grocery", "groceries", "grocer", "energy", "energia", "polska", "poland", "services", "service",
+    "group", "store", "shop", "sklep", "market", "online", "pay", "payment", "oplata",
+})
+_STOP_TOKENS = _NON_MERCHANT_TOKENS | _GENERIC_MERCHANT_TOKENS
 
 
 class ReceiptError(ValueError):
@@ -457,9 +462,9 @@ def valid_nip(value):
 def chain_for(shop_name, nip):
     if nip in _CHAIN_NIPS:
         return _CHAIN_NIPS[nip]
-    key = fold_text(shop_name or "")
-    return next((chain for chain, tokens in _CHAIN_TOKENS.items()
-                 if any(token in key for token in tokens)), None)
+    words = frozenset(merchant_word_tokens(shop_name))
+    return next((chain for chain, groups in _CHAIN_ALIAS_GROUPS.items()
+                 if any(group.issubset(words) for group in groups)), None)
 
 
 def merchant_word_tokens(value):
@@ -468,13 +473,31 @@ def merchant_word_tokens(value):
     return tuple(re.findall(r"[^\W_]+", fold_text(value), re.UNICODE))
 
 
-def merchant_tokens(shop_name, nip):
+def merchant_match_groups(shop_name, nip):
+    groups, _generic = merchant_score_groups(shop_name, nip)
+    return tuple(alias for group in groups for alias in group)
+
+
+def merchant_score_groups(shop_name, nip):
+    words = [token for token in merchant_word_tokens(shop_name) if len(token) >= 4]
+    distinctive = sorted({token for token in words if token not in _STOP_TOKENS})
+    generic = tuple(sorted({token for token in words if token in _GENERIC_MERCHANT_TOKENS}))
     chain = chain_for(shop_name, nip)
-    tokens = set(_CHAIN_TOKENS.get(chain, ()))
-    for token in merchant_word_tokens(shop_name):
-        if len(token) >= 4 and token not in _STOP_TOKENS:
-            tokens.add(token)
-    return frozenset(tokens)
+    if chain is not None:
+        extra = [token for token in distinctive if token not in _CHAIN_WORDS[chain]]
+        return (_CHAIN_ALIAS_GROUPS[chain],) + tuple((frozenset((token,)),) for token in extra), generic
+    return tuple((frozenset((token,)),) for token in distinctive), generic
+
+
+def merchant_tokens(shop_name, nip):
+    distinctive = {
+        token for token in merchant_word_tokens(shop_name)
+        if len(token) >= 4 and token not in _STOP_TOKENS
+    }
+    chain = chain_for(shop_name, nip)
+    if chain is not None:
+        distinctive.update(_CHAIN_WORDS[chain])
+    return frozenset(distinctive)
 
 
 def _bounded_money(value, *, mismatch=False):

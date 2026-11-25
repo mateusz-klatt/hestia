@@ -20,15 +20,15 @@ from sqlalchemy import delete, exists, func, literal_column, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from .. import authz
-from ..db import (AppMeta, BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
+from ..db import (BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
                   BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line, BudgetShop as Shop,
                   BudgetTransaction as Transaction, BudgetTransferLeg as Leg)
 from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint, negate_money, sum_money
 from .device_token import DeviceTokenError, _legacy_bearer_allowed, write_device_audit
-from .gmail_store import _payment_payee_key, retain_imports, tombstone_receipt
-from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, GATEWAY_TOKENS, MAX_RECEIPT_LINES,
-                             ReceiptError, chain_for, merchant_tokens, merchant_word_tokens, normalize_shop_name,
-                             parse_receipt, redact_digit_field, valid_nip, validate_confirm,
+from .gmail_store import retain_imports, tombstone_receipt
+from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES,
+                             ReceiptError, chain_for, merchant_score_groups, merchant_word_tokens,
+                             normalize_shop_name, parse_receipt, redact_digit_field, valid_nip, validate_confirm,
                              validate_confirm_line_totals)
 from .receipt_reconcile import (audit_payload, creditor_name, entry_reference_digest, evidence_json,
                                 erase_receipt_audit, link_evidence, write_audit)
@@ -102,13 +102,26 @@ def _date_distance(payload, receipt_date, *, document_kind=None, due_date=None):
     return min(distances) if distances else None
 
 
-_TX_NIP_RE = re.compile(r"(?<!\w)(?:pl\s*)?([0-9](?:[ -]?[0-9]){9})(?!\w)")
+_TX_DIGIT_RUN_RE = re.compile(r"[0-9]+(?:[\s/.\-\u2010-\u2015]+[0-9]+)*")
 
 
 def _nip_in_text(nip, haystack):
     if not valid_nip(nip):
         return False
-    return any(match.group(1).replace(" ", "").replace("-", "") == nip for match in _TX_NIP_RE.finditer(haystack))
+    limit = len(haystack)
+    for match in _TX_DIGIT_RUN_RE.finditer(haystack):
+        start, end = match.span()
+        before_pl = (
+            start >= 2 and haystack[start - 2:start] == "pl"
+            and (start == 2 or not (haystack[start - 3].isalnum() or haystack[start - 3] == "_"))
+        )
+        if start > 0 and not before_pl and (haystack[start - 1].isalnum() or haystack[start - 1] == "_"):
+            continue
+        if end < limit and (haystack[end].isalnum() or haystack[end] == "_"):
+            continue
+        if re.sub(r"\D", "", match.group(0)) == nip:
+            return True
+    return False
 
 
 def _subkey(material, info):
@@ -343,12 +356,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             return []
         direction = "CRDT" if row.receipt_kind == "refund" else "DBIT"
         shop_name = normalize_shop_name(row.raw_shop_name)
-        row_id = getattr(row, "id", None)
-        is_gateway = (
-            bool(GATEWAY_TOKENS.intersection(merchant_word_tokens(row.raw_shop_name)))
-            or (row_id is not None and session.get(AppMeta, _payment_payee_key(row_id)) is not None)
-        )
-        tokens = frozenset() if is_gateway else merchant_tokens(row.raw_shop_name, row.raw_nip)
+        groups, generic_tokens = merchant_score_groups(row.raw_shop_name, row.raw_nip)
+        linked_key = (getattr(row, "linked_account_id", None), getattr(row, "linked_entry_ref", None))
         ranked = []
         for transaction, tx_row_id in self._candidate_rows(session, owner, include_receipt_id=include_receipt_id):
             try:
@@ -384,10 +393,15 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 remittance = []
             description = " ".join(value for value in remittance if isinstance(value, str))
             haystack = fold_for_match(description + " " + (creditor or ""))
-            hit = not is_gateway and (
-                _nip_in_text(row.raw_nip, haystack)
-                or bool(tokens.intersection(merchant_word_tokens(haystack)))
+            haystack_words = frozenset(merchant_word_tokens(haystack))
+            nip_hit = _nip_in_text(row.raw_nip, haystack)
+            distinctive_score = sum(
+                1 for group in groups if any(alias.issubset(haystack_words) for alias in group)
             )
+            generic_score = sum(1 for token in generic_tokens if token in haystack_words)
+            sole_generic_hit = not groups and len(generic_tokens) == 1 and generic_score > 0
+            hit = nip_hit or distinctive_score > 0 or sole_generic_hit
+            is_current_link = (transaction.account_id, transaction.entry_reference) == linked_key
             candidate = {
                 "account_id": transaction.account_id,
                 "entry_reference": entry_reference_digest(transaction.entry_reference),
@@ -398,8 +412,12 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 "merchant_token_hit": hit, "date_distance": distance,
                 "candidate_token": token,
             }
-            ranked.append((not hit, distance, transaction.entry_reference, transaction.account_id, candidate))
-        ranked.sort(key=lambda item: item[:4])
+            ranked.append((
+                not is_current_link, not nip_hit, -distinctive_score, -generic_score, distance,
+                transaction.entry_reference, transaction.account_id, candidate,
+            ))
+        # Rank across all matching rows before slicing MAX_CANDIDATES so hits and current link survive the cap.
+        ranked.sort(key=lambda item: item[:7])
         return [item[-1] for item in ranked[:MAX_CANDIDATES]]
 
     @staticmethod
@@ -746,6 +764,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 payment_method=row.payment_method, receipt_kind=row.receipt_kind,
                 raw_shop_name=row.raw_shop_name, raw_nip=row.raw_nip,
                 document_kind=row.document_kind, due_date=row.due_date, id=row.id,
+                linked_account_id=row.linked_account_id, linked_entry_ref=row.linked_entry_ref,
             )
         if preview is None:
             return {"receipt": receipt}

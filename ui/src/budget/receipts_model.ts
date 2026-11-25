@@ -360,13 +360,10 @@ export function draftFromDetail(
       : "unknown";
   const options = availableLinkOptions(detail, candidates, paymentMethod, false);
   let linkChoice = "unlink";
-  if (options.canKeep) {
-    linkChoice = "keep";
-  } else if (detail.linked) {
-    // Never default a linked receipt without a keep token to implicit unlink.
+  if (detail.linked || options.canPickCandidates) {
+    // Ambiguous link state (changed/review link, confirmed re-edit, or unlinked row with candidates):
+    // leave linkChoice empty so Confirm stays disabled until the user explicitly chooses.
     linkChoice = "";
-  } else if (detail.status === "needs_review" && options.canPickCandidates) {
-    linkChoice = "candidate:0";
   }
   return {
     rawShopName: detail.raw_shop_name ?? "",
@@ -392,7 +389,7 @@ export function draftFromDetail(
   };
 }
 
-/** Keeps link choices valid after field edits: disables stale tokens without silently unlinking linked receipts. */
+/** Keeps link choices valid after field edits: disables stale tokens without silently picking unlink. */
 export function reconcileLinkChoice(
   detail: ReceiptDetail,
   prevChoice: string,
@@ -403,10 +400,10 @@ export function reconcileLinkChoice(
   const changed = hasMatchingFieldsChanged(detail, nextDraft);
   const nextOptions = availableLinkOptions(detail, candidates, nextDraft.paymentMethod, changed);
   if (prevChoice === "keep") {
-    return nextOptions.canKeep ? "keep" : (detail.linked ? "" : "unlink");
+    return nextOptions.canKeep ? "keep" : "";
   }
   if (prevChoice.startsWith("candidate:")) {
-    return nextOptions.canPickCandidates ? prevChoice : (detail.linked ? "" : "unlink");
+    return nextOptions.canPickCandidates ? prevChoice : "";
   }
   return "";
 }
@@ -866,52 +863,25 @@ export function buildBulkSelectionPlan(
   return { confirmable, excludedNeedsReview, excludedDrafts, merchants };
 }
 
-export interface BulkConfirmOptions {
-  autoLink?: boolean;
-  confirmUnlinked?: boolean;
-}
-
-export type BulkConfirmBuildResult =
-  | { action: "confirm"; linked: boolean; request: ReceiptConfirmRequest }
-  | { action: "skip" }
-  | { action: "error"; errorCode: string };
-
-/**
- * Builds a confirm request for an unlinked Gmail import in bulk mode.
- * Auto-links when `autoLink` is enabled and there is exactly one candidate with a merchant-token hit;
- * otherwise confirms unlinked (or skips when `confirmUnlinked` is false).
- */
-export function buildBulkConfirmRequest(
+/** Builds a plain confirm (`link: null`) for an unlinked Gmail import; omits existing lines, synthesizing 1 summary line only for 0-line Gmail invoices. */
+export function buildPlainBulkConfirmRequest(
   detail: ReceiptDetail,
-  candidates: readonly ReceiptCandidate[],
   summaryFallbackName: string,
-  options: BulkConfirmOptions = {},
-): BulkConfirmBuildResult {
+): { ok: true; request: ReceiptConfirmRequest } | { ok: false; errorCode: string } {
   if (!isBulkConfirmable(detail)) {
     return {
-      action: "error",
+      ok: false,
       errorCode: detail.status === "needs_review" ? "budget_receipt_conflict" : "budget_receipt_invalid_request",
     };
   }
-  const autoLink = options.autoLink ?? true;
-  const confirmUnlinked = options.confirmUnlinked ?? true;
-  const draft = draftFromDetail(detail, candidates);
-  const linkOptions = availableLinkOptions(detail, candidates, draft.paymentMethod, false);
-  const singleHit = autoLink
-    && linkOptions.canPickCandidates
-    && candidates.length === 1
-    && candidates[0]?.merchant_token_hit === true;
-  if (!singleHit && !confirmUnlinked) {
-    return { action: "skip" };
-  }
-  draft.linkChoice = singleHit ? "candidate:0" : "unlink";
+  const draft = draftFromDetail(detail, []);
   if (detail.lines.length === 0) {
     if (detail.document_kind !== "invoice") {
-      return { action: "error", errorCode: "budget_receipt_total_mismatch" };
+      return { ok: false, errorCode: "budget_receipt_total_mismatch" };
     }
     const normalizedTotal = detail.total_amount === null ? null : normalizeDecimalInput(detail.total_amount);
     if (normalizedTotal === null) {
-      return { action: "error", errorCode: "budget_receipt_invalid_request" };
+      return { ok: false, errorCode: "budget_receipt_invalid_request" };
     }
     const invoiceName = detail.invoice_number !== null && !isRedactedValue(detail.invoice_number)
       ? detail.invoice_number.trim()
@@ -933,34 +903,16 @@ export function buildBulkConfirmRequest(
       net_line_total: normalizedTotal,
     });
   }
-  const built = buildConfirmRequest(detail, draft, candidates);
+  const built = buildConfirmRequest(detail, draft, []);
   if (!built.ok) {
     return {
-      action: "error",
+      ok: false,
       errorCode: built.errorKey === "budget.receipts.totalMismatch"
         ? "budget_receipt_total_mismatch"
         : "budget_receipt_invalid_request",
     };
   }
-  return { action: "confirm", linked: singleHit, request: built.request };
-}
-
-/** Builds a plain confirm (`link: null`) for an unlinked Gmail import; omits existing lines, synthesizing 1 summary line only for 0-line Gmail invoices. */
-export function buildPlainBulkConfirmRequest(
-  detail: ReceiptDetail,
-  summaryFallbackName: string,
-): { ok: true; request: ReceiptConfirmRequest } | { ok: false; errorCode: string } {
-  const built = buildBulkConfirmRequest(detail, [], summaryFallbackName, {
-    autoLink: false,
-    confirmUnlinked: true,
-  });
-  if (built.action === "confirm") {
-    return { ok: true, request: built.request };
-  }
-  return {
-    ok: false,
-    errorCode: built.action === "error" ? built.errorCode : "budget_receipt_invalid_request",
-  };
+  return { ok: true, request: built.request };
 }
 
 export function formatBulkErrorBucket(status: number | undefined, error: string): string {
