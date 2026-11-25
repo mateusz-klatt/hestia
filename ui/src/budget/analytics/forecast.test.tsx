@@ -278,15 +278,70 @@ describe("ForecastView", () => {
     expect(decSection).toContain("Zaplanowane1 234,567 PLN");
     expect(decSection).toContain("Exact Schedule1 234,567 PLN");
 
-    // Mixed total sums the rounded parts (100.00 + 50.00 = 150.00, not 150.01).
+    // Mixed total sums the rounded parts (100.00 + 50.00 = 150.00, not 150.01), including the mixed scheduled subtotal.
     const janSection = normalize(sections[2]?.textContent);
     expect(janSection).toContain("Razem150,00 PLN");
+    expect(janSection).toContain("Zaplanowane100,00 PLN");
     expect(janSection).toContain("Szacowane50,00 PLN");
+    expect(janSection).toContain("Scheduled Part100,004 PLN");
     expect(janSection).toContain("Estimated Part50,00 PLN");
 
     const table = requireElement(host.querySelector("table"), "monthly totals table");
     const rowCells = [...table.querySelectorAll("tbody td")].map((cell) => normalize(cell.textContent));
     expect(rowCells).toEqual(["14 079,76 PLN", "1 234,567 PLN", "150,00 PLN"]);
+  });
+
+  it("scales forecast chart bars from the same rounded totals shown in the table", async () => {
+    const api = fakeApi();
+    const base = forecastOf();
+    const tinyItem = forecastItem({
+      source: "category_baseline", confidence: "estimated", schedule_id: null, label: "Tiny Estimate",
+      amount: "0.004", currency: "PLN", expected_date: "2026-11-28", past_due: false, account_stale: false,
+    });
+    const tinyTotal = forecastCurrencyTotal({
+      currency: "PLN", total: "0.004", scheduled_total: "0", estimated_total: "0.004",
+    });
+    api.forecast.mockResolvedValueOnce(ok({
+      ...base,
+      totals: [tinyTotal],
+      months: [{ month: "2026-11", currencies: [tinyTotal], items: [tinyItem] }],
+    }));
+    await show(api, "en-US");
+
+    const svg = requireElement(host.querySelector('svg[role="img"][aria-label="Monthly forecast totals in PLN"]'), "chart");
+    const accentBars = [...svg.querySelectorAll('rect[fill="var(--accent)"]')];
+    expect(accentBars).toHaveLength(1);
+    expect(accentBars[0]?.getAttribute("width")).toBe("0");
+    expect(host.querySelector("table tbody td")?.textContent).toBe("0.00 PLN");
+
+    // When one month rounds to 0.00 and another has 100.00, only the nonzero rounded month gets bar width.
+    const halfItem = forecastItem({
+      source: "category_baseline", confidence: "estimated", schedule_id: null, label: "Half Estimate",
+      amount: "50.004", currency: "PLN", expected_date: "2026-12-28", past_due: false, account_stale: false,
+    });
+    const halfTotal = forecastCurrencyTotal({
+      currency: "PLN", total: "50.004", scheduled_total: "0", estimated_total: "50.004",
+    });
+    const fullItem = forecastItem({
+      source: "category_baseline", confidence: "estimated", schedule_id: null, label: "Full Estimate",
+      amount: "100.00", currency: "PLN", expected_date: "2027-01-28", past_due: false, account_stale: false,
+    });
+    const fullTotal = forecastCurrencyTotal({
+      currency: "PLN", total: "100.00", scheduled_total: "0", estimated_total: "100.00",
+    });
+    api.forecast.mockResolvedValueOnce(ok({
+      ...base,
+      totals: [fullTotal],
+      months: [
+        { month: "2026-11", currencies: [tinyTotal], items: [tinyItem] },
+        { month: "2026-12", currencies: [halfTotal], items: [halfItem] },
+        { month: "2027-01", currencies: [fullTotal], items: [fullItem] },
+      ],
+    }));
+    await choose(horizon(), "6");
+    const updatedSvg = requireElement(host.querySelector('svg[role="img"][aria-label="Monthly forecast totals in PLN"]'), "chart");
+    const widths = [...updatedSvg.querySelectorAll('rect[fill="var(--accent)"]')].map((bar) => bar.getAttribute("width"));
+    expect(widths).toEqual(["0", "124", "248"]);
   });
 
   it("labels each currency chart and shows exact monthly totals in text tables", async () => {

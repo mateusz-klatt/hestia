@@ -5,7 +5,7 @@ import { CONSENT_STATUS_KEYS, RULE_FIELD_KEYS, accountName, annotationRequest, c
   kindChoicesFor, labelOf, legsMatch, limitCurrencies, manualPairRequest, monthLabel, monthlyBudgetCurrencies, mortgageCurrencies,
   pairCandidates, pairDate, pairPeriods, parseIntInRange, parseScaledInt, parseWarningPercent, pluralPl, ratioPercentFloor,
   recurringCurrencies, ruleCandidate, shiftMonth, transactionRowKey, transferActions, transferDecision, validCandidate,
-  validCurrency, validIsoDate, validLimitAmount, validMortgageLabel } from "./model";
+  isScheduledForecastItem, validCurrency, validIsoDate, validLimitAmount, validMortgageLabel } from "./model";
 import type { AnalyticsRule, AnalyticsTransaction } from "./model";
 import { entry, leg, mortgageSchedule, pair, recurringHint, spendingLimit } from "./fixtures";
 import { account, connection } from "../fixtures";
@@ -405,5 +405,12 @@ describe("analytics decisions", () => {
     } finally {
       await loadLocale("en");
     }
+  });
+
+  it("distinguishes scheduled forecast items from estimates", () => {
+    expect(isScheduledForecastItem({ source: "mortgage", confidence: "scheduled" })).toBe(true);
+    expect(isScheduledForecastItem({ source: "recurring", confidence: "high" })).toBe(false);
+    expect(isScheduledForecastItem({ source: "recurring", confidence: "medium" })).toBe(false);
+    expect(isScheduledForecastItem({ source: "category_baseline", confidence: "estimated" })).toBe(false);
   });
 });

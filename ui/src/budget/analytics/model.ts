@@ -921,3 +921,8 @@ export function monthlyBudgetCurrencies(available: readonly string[], accounts: 
 export function transactionRowKey(row: Pick<AnalyticsTransaction, "account_id" | "entry_reference">): string {
   return `${row.account_id}/${row.entry_reference}`;
 }
+
+/** True when a forecast item represents a scheduled obligation rather than an estimate. */
+export function isScheduledForecastItem(item: Pick<AnalyticsForecastItem, "source" | "confidence">): boolean {
+  return item.source === "mortgage" || item.confidence === "scheduled";
+}
