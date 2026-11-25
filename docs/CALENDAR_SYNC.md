@@ -252,13 +252,15 @@ albo szacowany koszt badania zdarzenia przekracza pozostały wspólny budżet ż
 (`REQUEST_REPLAY_BUDGET`, 600000 jednostek sprawdzeń dni, limit `50000` kandydatów
 wygenerowanych lub skonstruowanych w bibliotece oraz budżet `16 MiB` zdekodowanego JSON
 `REQUEST_PAYLOAD_BYTES` w SQL dla maksymalnie `5000` wydarzeń pobieranych w ustalonej
-kolejności identyfikatorów z `LIMIT 5001` i `length(CAST(payload_json AS BLOB))`),
+kolejności identyfikatorów z `LIMIT 5001` oraz `octet_length(payload_json)` na SQLite `3.43+`,
+a na starszych wersjach SQLite zapasowym `length(CAST(payload_json AS BLOB))`),
 stosowane jest cięcie pracy:
-- wiersze w SQL wybierane są najpierw lekkim zapytaniem o `(id, length(CAST(payload_json AS BLOB)))`
-  z `ORDER BY id` i `LIMIT 5001` (bez wczytywania treści `payload_json`), a pełne ładunki są
-  pobierane porcjami `WHERE id IN (...)` wyłącznie dla zaakceptowanych identyfikatorów; wiersze
-  przekraczające pozostały budżet bajtów albo limit `5000` wydarzeń są pomijane i ustawiają
-  `truncated: true`;
+- oba zapytania SQL wykonują się w jednej jawnej transakcji odczytu `BEGIN` (wspólna migawka WAL),
+  najpierw jako lekkie zapytanie o `(id, octet_length(payload_json))` z `ORDER BY id` i
+  `LIMIT 5001`, a następnie w porcjach `WHERE id IN (...)` wyłącznie dla zaakceptowanych
+  identyfikatorów (na starszym SQLite bez `octet_length` sprawdzenie bajtów nadal czyta
+  kolumnę `payload_json`); wiersze przekraczające pozostały budżet bajtów albo limit `5000`
+  wydarzeń są pomijane i ustawiają `truncated: true`;
 - gdy pozostały budżet nie pokrywa nawet kosztu jawnych dat `RDATE`/`EXDATE` (po 300
   jednostek) i zapisanych wyjątków zdarzenia (po 100 jednostek na wyjątek przed
   zbudowaniem jakichkolwiek map), zdarzenie jest w całości pomijane bez parsowania

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import time
 import uuid
 from collections import defaultdict
@@ -22,6 +23,19 @@ from .events import fingerprint, validate_payload
 
 REQUEST_PAYLOAD_BYTES = 16 * 1024 * 1024  # 16 MiB per-request JSON decode budget.
 _EVENT_ID_CHUNK_SIZE = 500  # Keep SQLite IN (...) batches well below parameter limits.
+
+
+def _supports_octet_length(version: str = sqlite3.sqlite_version) -> bool:
+    return tuple(int(part) for part in version.split(".")[:2]) >= (3, 43)
+
+
+_HAS_OCTET_LENGTH = _supports_octet_length()
+
+
+def _payload_bytes_expr():
+    if _HAS_OCTET_LENGTH:
+        return func.octet_length(Event.payload_json)
+    return func.length(cast(Event.payload_json, LargeBinary))
 
 
 class CalendarConflict(ValueError):
@@ -135,8 +149,11 @@ class SyncStore:
 
     def list_bounded_events(self, group, *, limit, max_payload_bytes=REQUEST_PAYLOAD_BYTES):
         with self.sessions() as s:
+            # SQLite's legacy transaction mode does not begin for SELECT; hold one
+            # WAL read snapshot across group check, metadata scan, and chunked loads.
+            s.execute(text("BEGIN"))
             meta_query = (
-                select(Event.id, func.length(cast(Event.payload_json, LargeBinary)))
+                select(Event.id, _payload_bytes_expr())
                 .where(*self._group_events_where(s, group))
                 .order_by(Event.id)
                 .limit(limit + 1)

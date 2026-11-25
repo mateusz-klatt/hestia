@@ -1046,10 +1046,69 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decoder.call_count, expected_large + 1)
         meta_selects = [stmt.split(" FROM ", 1)[0] for stmt, _ in seen_sql if "length(" in stmt.lower()]
         self.assertEqual(len(meta_selects), 1)
+        self.assertIn("octet_length(", meta_selects[0].lower())
         self.assertEqual(meta_selects[0].count("payload_json"), 1)
         loaded_ids = [val for stmt, params in seen_sql if " IN " in stmt for val in params]
         self.assertEqual(len(loaded_ids), expected_large + 1)
         self.assertNotIn(f"huge-{expected_large:04d}", loaded_ids)
+
+        # Older SQLite (< 3.43) falls back cleanly to length(CAST(payload_json AS BLOB)).
+        self.assertFalse(sync_store._supports_octet_length("3.42.0"))
+        self.assertTrue(sync_store._supports_octet_length("3.43.0"))
+        fallback_sql = []
+
+        def record_fallback(_conn, _cursor, statement, _parameters, _context, _many):
+            fallback_sql.append(statement)
+
+        sa_event.listen(engine, "before_cursor_execute", record_fallback)
+        try:
+            with mock.patch.object(sync_store, "_HAS_OCTET_LENGTH", False):
+                fallback_rows, fallback_truncated = bytes_store.list_bounded_events(
+                    "bytes", limit=100, max_payload_bytes=len(tiny_json.encode("utf-8")) + 100
+                )
+        finally:
+            sa_event.remove(engine, "before_cursor_execute", record_fallback)
+        self.assertTrue(fallback_truncated)
+        self.assertEqual([item["id"] for item in fallback_rows], ["zzzz-tail"])
+        self.assertTrue(any("length(cast(" in stmt.lower() for stmt in fallback_sql))
+
+    async def test_list_bounded_events_concurrent_delete_sees_single_snapshot(self):
+        from sqlalchemy import event as sa_event
+        from hestia.calendar_sync import store as sync_store
+
+        store = api._store()
+        deleted_event = store.save_local("family", content("Deleted mid-read"))
+        edited_event = store.save_local("family", content("Original summary"))
+        engine = store.sessions.kw["bind"]
+        tripped = False
+
+        def mutate_between_selects(_conn, _cursor, statement, _parameters, _context, _many):
+            nonlocal tripped
+            if not tripped and "octet_length(" in statement.lower():
+                tripped = True
+                store.delete_local("family", deleted_event["id"], deleted_event["revision"])
+                store.save_local(
+                    "family", content("Edited mid-read"), edited_event["id"], edited_event["revision"]
+                )
+
+        sa_event.listen(engine, "after_cursor_execute", mutate_between_selects)
+        try:
+            events, truncated = store.list_bounded_events("family", limit=100)
+        finally:
+            sa_event.remove(engine, "after_cursor_execute", mutate_between_selects)
+        self.assertTrue(tripped)
+        self.assertFalse(truncated)
+        by_id = {item["id"]: item for item in events}
+        self.assertEqual(set(by_id), {deleted_event["id"], edited_event["id"]})
+        self.assertFalse(by_id[deleted_event["id"]]["deleted"])
+        self.assertEqual(by_id[deleted_event["id"]]["revision"], 1)
+        self.assertEqual(by_id[edited_event["id"]]["revision"], 1)
+        self.assertEqual(by_id[edited_event["id"]]["payload"]["summary"], "Original summary")
+
+        after_events, after_truncated = store.list_bounded_events("family", limit=100)
+        self.assertFalse(after_truncated)
+        self.assertEqual([(e["id"], e["revision"], e["payload"]["summary"]) for e in after_events],
+                         [(edited_event["id"], 2, "Edited mid-read")])
 
     async def test_instances_expired_until_and_discarded_candidates_respect_instance_budget(self):
         # Item 2(a): 5,000 daily series ending on Jan 1 (UNTIL) queried Jan 2 - Apr 4 finish < 2s without replaying past UNTIL.
