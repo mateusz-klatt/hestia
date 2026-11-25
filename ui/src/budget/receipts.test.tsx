@@ -933,4 +933,166 @@ describe("ReceiptsView", () => {
       }) as unknown],
     }));
   });
+
+  it("bulk confirms imported/draft receipts while excluding needs_review, runs sequentially with CAS, handles partial failures, cancel, and actor aborts", async () => {
+    const rows = [
+      receiptSummary({ receipt_id: "imp-1", status: "imported", document_kind: "invoice", raw_shop_name: "Acme Power", total_amount: "50.00", version: 2 }),
+      receiptSummary({ receipt_id: "imp-2", status: "imported", document_kind: "payment_confirmation", raw_shop_name: "Acme Power", total_amount: "30.00", version: 5 }),
+      receiptSummary({ receipt_id: "rev-1", status: "needs_review", document_kind: "receipt", raw_shop_name: "Acme Power", total_amount: "42.50", version: 4 }),
+      receiptSummary({ receipt_id: "drf-1", status: "draft", document_kind: "receipt", raw_shop_name: "Corner Cafe", total_amount: "15.00", version: 8 }),
+      receiptSummary({ receipt_id: "cnf-1", status: "confirmed", document_kind: "receipt", raw_shop_name: "Corner Cafe", total_amount: "20.00", version: 9 }),
+    ];
+    const clients = fakeClients(rows);
+
+    await renderReceipts(clients);
+
+    // needs_review & confirmed checkboxes stay disabled; Select all loaded selects only the 3 eligible receipts.
+    expect(inputByName("select_receipt_rev-1").disabled).toBe(true);
+    expect(inputByName("select_receipt_cnf-1").disabled).toBe(true);
+    expect(inputByName("select_receipt_imp-1").disabled).toBe(false);
+
+    await click(inputByName("select_all_loaded"));
+    expect(inputByName("select_receipt_imp-1").checked).toBe(true);
+    expect(inputByName("select_receipt_imp-2").checked).toBe(true);
+    expect(inputByName("select_receipt_drf-1").checked).toBe(true);
+    expect(inputByName("select_receipt_rev-1").checked).toBe(false);
+    expect(host.textContent).toContain("Excluded 1 needing review (open individually to pick a bank link).");
+    expect(host.textContent).toContain("Confirm selected (3)");
+    expect(host.textContent).toContain("Confirm all from: Acme Power");
+
+    // Polish localization labels check ("Zaznacz wszystkie załadowane", "Zatwierdź zaznaczone", "Zatwierdź wszystkie od: Acme Power").
+    await renderReceipts(clients, { locale: "pl" });
+    expect(host.textContent).toContain("Zaznacz wszystkie załadowane");
+    expect(host.textContent).toContain("Zatwierdź wszystkie od: Acme Power");
+    expect(host.textContent).toContain("Zatwierdź zaznaczone (3)");
+
+    // Switch back to EN and test sequential confirms with each receipt's CAS version + partial failure counts.
+    await renderReceipts(clients, { locale: "en" });
+    const callOrder: string[] = [];
+    const firstDeferred = deferred<{ ok: true; receipt: ReceiptDetail }>();
+
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      callOrder.push(`detail:${id}`);
+      if (id === "imp-1") {
+        return ok({
+          receipt: receiptDetail({ receipt_id: "imp-1", status: "imported", document_kind: "invoice", invoice_number: "FV/1", payment_method: null, total_amount: "50.00", lines: [], version: 2 }),
+          candidates: [],
+        });
+      }
+      if (id === "imp-2") {
+        return ok({
+          receipt: receiptDetail({ receipt_id: "imp-2", status: "imported", document_kind: "payment_confirmation", payment_method: null, total_amount: "30.00", lines: [{ line_no: 1, line_kind: "other", raw_name: "Power bill", raw_name_key: "power bill", ptu_code: null, quantity: "1", raw_unit: null, unit_price_raw: null, gross_line_total: "30.00", discount_amount: "0", net_line_total: "30.00" }], version: 5 }),
+          candidates: [],
+        });
+      }
+      return ok({
+        receipt: receiptDetail({ receipt_id: "drf-1", status: "draft", total_amount: "15.00", lines: [{ line_no: 1, line_kind: "item", raw_name: "Espresso", raw_name_key: "espresso", ptu_code: "A", quantity: "1", raw_unit: "szt", unit_price_raw: "15.00", gross_line_total: "15.00", discount_amount: "0", net_line_total: "15.00" }], version: 8 }),
+        candidates: [],
+      });
+    });
+
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => {
+      callOrder.push(`confirm:${req.receipt_id}:v${String(req.expected_version)}`);
+      if (req.receipt_id === "imp-1") return firstDeferred.promise;
+      if (req.receipt_id === "imp-2") return fail(409, "budget_receipt_conflict");
+      return ok({ ok: true, receipt: receiptDetail({ receipt_id: req.receipt_id, status: "confirmed", version: req.expected_version + 1 }) });
+    });
+
+    await click(button("Confirm selected (3)"));
+    const confirmBox = alertBox();
+    expect(confirmBox.textContent).toContain("Confirm 3 documents without bank links?");
+    expect(confirmBox.textContent).toContain("Merchants: Acme Power, Corner Cafe");
+    expect(confirmBox.textContent).toContain("Excluded 1 needing review");
+
+    await act(async () => {
+      button("Start bulk confirm", confirmBox).click();
+      await Promise.resolve();
+    });
+    await settle();
+    // Strictly sequential: imp-1 is paused at confirmReceipt, imp-2 detail has NOT even started!
+    expect(callOrder).toEqual(["detail:imp-1", "confirm:imp-1:v2"]);
+    expect(host.textContent).toContain("Confirming 0 / 3…");
+    expect(openDetailButton(0).disabled).toBe(true);
+
+    await act(async () => {
+      firstDeferred.resolve({ ok: true, data: { ok: true, receipt: receiptDetail({ receipt_id: "imp-1", status: "confirmed", version: 3 }) } });
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(callOrder).toEqual([
+      "detail:imp-1",
+      "confirm:imp-1:v2",
+      "detail:imp-2",
+      "confirm:imp-2:v5",
+      "detail:drf-1",
+      "confirm:drf-1:v8",
+    ]);
+    // Invoices with 0 lines synthesized summary line and link: null.
+    expect(clients.rApi.confirmReceipt).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      receipt_id: "imp-1",
+      expected_version: 2,
+      link: null,
+      lines: [expect.objectContaining({ line_kind: "other", raw_name: "FV/1", net_line_total: "50" }) as unknown],
+    }));
+    expect(host.textContent).toContain("Bulk confirm finished: 2 confirmed, 1 failed.");
+    expect(host.textContent).toContain("Failure 409 budget_receipt_conflict: 1");
+    expect(clients.rApi.receiptsList).toHaveBeenCalledTimes(4);
+
+    // Merchant group action + Cancel mid-flight stops before item #2.
+    const cancelDeferred = deferred<{ ok: true; receipt: ReceiptDetail }>();
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => cancelDeferred.promise);
+    await click(button("Confirm all from: Acme Power"));
+    const acmeBox = alertBox();
+    expect(acmeBox.textContent).toContain("Confirm 2 documents without bank links?");
+    expect(acmeBox.textContent).toContain("Merchants: Acme Power");
+    expect(acmeBox.textContent).toContain("Excluded 1 needing review");
+    await act(async () => {
+      button("Start bulk confirm", acmeBox).click();
+      await Promise.resolve();
+    });
+    await settle();
+    await act(async () => {
+      button("Cancel").click();
+      cancelDeferred.resolve({ ok: true, data: { ok: true, receipt: receiptDetail({ receipt_id: "imp-1", status: "confirmed", version: 3 }) } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).toContain("Bulk confirm cancelled after 1 confirmed (1 remaining, 0 failed).");
+
+    // 403 error reports failure count cleanly & aborts rest, and actor switch aborts immediately.
+    const abortCalls: string[] = [];
+    const actorDeferred = deferred<{ ok: true; receipt: ReceiptDetail }>();
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => {
+      abortCalls.push(req.receipt_id);
+      if (req.receipt_id === "imp-1") return actorDeferred.promise;
+      return fail(403, "budget_forbidden");
+    });
+
+    await renderReceipts({ ...clients }, { actorKey: "alice", onAccessLoss: () => false });
+    await click(button("Confirm all from: Acme Power"));
+    await act(async () => {
+      button("Start bulk confirm", alertBox()).click();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(abortCalls).toEqual(["imp-1"]);
+
+    // Switch actor while item #1 is pending -> clears state & prevents item #2 from ever running.
+    await renderReceipts(clients, { actorKey: "bob", onAccessLoss: () => false });
+    await act(async () => {
+      actorDeferred.resolve({ ok: true, data: { ok: true, receipt: receiptDetail({ receipt_id: "imp-1", status: "confirmed", version: 3 }) } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(abortCalls).toEqual(["imp-1"]);
+
+    // Verify 403 error bucket reporting & abort before item #2 when onAccessLoss does not wipe DOM.
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation(() => fail(403, "budget_forbidden"));
+    await renderReceipts(clients, { actorKey: "alice", onAccessLoss: () => false });
+    await click(button("Confirm all from: Acme Power"));
+    await click(button("Start bulk confirm", alertBox()));
+    expect(host.textContent).toContain("Failure 403 budget_forbidden: 1");
+    expect(host.textContent).toContain("1 remaining, 1 failed");
+  });
 });

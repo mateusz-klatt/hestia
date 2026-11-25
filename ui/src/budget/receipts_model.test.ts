@@ -5,7 +5,9 @@ import {
   REDACTED_VALUE,
   addDecimals,
   availableLinkOptions,
+  buildBulkSelectionPlan,
   buildConfirmRequest,
+  buildPlainBulkConfirmRequest,
   buildReceiptListRequest,
   candidateDisplayDate,
   computeLinesDelta,
@@ -14,15 +16,19 @@ import {
   editReceiptLine,
   filterReceiptRows,
   findCurrentLinkedCandidate,
+  formatBulkErrorBucket,
   hasActiveReceiptFilter,
   hasClientSideFilter,
   hasMatchingFieldsChanged,
+  isBulkConfirmable,
   isRedactedValue,
   isStaleCursorError,
   listMonthForFilter,
+  merchantBulkGroups,
   mergeReceiptRows,
   normalizeDecimalInput,
   receiptAccountLabel,
+  receiptMerchantGroupKey,
   reconcileLinkChoice,
   subtractDecimals,
   validPolishNip,
@@ -417,5 +423,67 @@ describe("receipts_model", () => {
     expect(editedOther.gross_line_total).toBe("15");
     expect(editedOther.discount_amount).toBe("0");
     expect(editedOther.net_line_total).toBe("15.00");
+  });
+
+  it("plans bulk selections, excludes needs_review/confirmed/linked rows, and builds plain confirms", () => {
+    const rows = [
+      summary({ receipt_id: "r-imp-inv", status: "imported", document_kind: "invoice", raw_shop_name: "Alpha Ltd", linked: false }),
+      summary({ receipt_id: "r-imp-pay", status: "imported", document_kind: "payment_confirmation", raw_shop_name: "Alpha Ltd", linked: false }),
+      summary({ receipt_id: "r-rev", status: "needs_review", raw_shop_name: "Alpha Ltd", linked: false }),
+      summary({ receipt_id: "r-draft", status: "draft", raw_shop_name: REDACTED_VALUE, forwarded_sender_domain: "billing.example", linked: false }),
+      summary({ receipt_id: "r-conf", status: "confirmed", raw_shop_name: "Alpha Ltd", linked: true }),
+    ];
+
+    expect(rows.map((r) => isBulkConfirmable(r))).toEqual([true, true, false, true, false]);
+    expect(receiptMerchantGroupKey(rows[3] ?? summary())).toBe("billing.example");
+    expect(receiptMerchantGroupKey(summary({ raw_shop_name: REDACTED_VALUE, forwarded_sender_domain: null }))).toBeNull();
+
+    expect(merchantBulkGroups(rows)).toEqual([
+      { merchant: "Alpha Ltd", confirmableIds: ["r-imp-inv", "r-imp-pay"], excludedNeedsReview: 1 },
+      { merchant: "billing.example", confirmableIds: ["r-draft"], excludedNeedsReview: 0 },
+    ]);
+
+    const plan = buildBulkSelectionPlan(rows, new Set(["r-imp-inv", "r-rev", "r-draft", "r-conf"]), "Unknown");
+    expect(plan.confirmable.map((r) => r.receipt_id)).toEqual(["r-imp-inv", "r-draft"]);
+    expect(plan.excludedNeedsReview).toBe(1);
+    expect(plan.merchants).toEqual(["Alpha Ltd", "billing.example"]);
+    expect(formatBulkErrorBucket(409, "budget_receipt_conflict")).toBe("409 budget_receipt_conflict");
+
+    // Invoice with 0 lines gets a single matching summary line and link: null.
+    const invoiceDetail = detailOf({
+      receipt_id: "r-imp-inv",
+      status: "imported",
+      document_kind: "invoice",
+      invoice_number: "FV/2026/05",
+      payment_method: null,
+      total_amount: "99.50",
+      lines: [],
+      linked: false,
+      version: 4,
+    });
+    const builtInv = buildPlainBulkConfirmRequest(invoiceDetail, "Summary");
+    expect(builtInv).toEqual({
+      ok: true,
+      request: expect.objectContaining({
+        receipt_id: "r-imp-inv",
+        expected_version: 4,
+        payment_method: "unknown",
+        total_amount: "99.5",
+        link: null,
+        lines: [expect.objectContaining({
+          line_kind: "other",
+          raw_name: "FV/2026/05",
+          gross_line_total: "99.5",
+          discount_amount: "0",
+          net_line_total: "99.5",
+        }) as unknown],
+      }) as unknown,
+    });
+
+    // Rejects needs_review cleanly.
+    expect(buildPlainBulkConfirmRequest(detailOf({ status: "needs_review" }), "Summary")).toEqual({
+      ok: false,
+      errorCode: "budget_receipt_conflict",
+    });
   });
 });

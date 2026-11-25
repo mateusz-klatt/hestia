@@ -23,7 +23,9 @@ import {
   RECEIPT_STATUSES,
   RECEIPT_STATUS_KEYS,
   availableLinkOptions,
+  buildBulkSelectionPlan,
   buildConfirmRequest,
+  buildPlainBulkConfirmRequest,
   buildReceiptListRequest,
   candidateDisplayDate,
   computeLinesDelta,
@@ -32,14 +34,18 @@ import {
   editReceiptLine,
   filterReceiptRows,
   findCurrentLinkedCandidate,
+  formatBulkErrorBucket,
   hasActiveReceiptFilter,
   hasClientSideFilter,
   hasMatchingFieldsChanged,
+  isBulkConfirmable,
   isRedactedValue,
   isStaleCursorError,
+  merchantBulkGroups,
   mergeReceiptRows,
   normalizeDecimalInput,
   receiptAccountLabel,
+  receiptMerchantGroupKey,
   reconcileLinkChoice,
   validReceiptDateRange,
 } from "./receipts_model";
@@ -213,6 +219,21 @@ export function ReceiptsView({
   const [detailRefresh, setDetailRefresh] = useState(0);
   const [imageState, setImageState] = useState<ImageState>({ kind: "none" });
   const [pendingMap, setPendingMap] = useState<ReadonlyMap<string, ReceiptActionKind>>(() => store.snapshot());
+  const [selectedForBulk, setSelectedForBulk] = useState<ReadonlySet<string>>(() => new Set());
+  const [bulkConfirmPlan, setBulkConfirmPlan] = useState<{
+    targets: ReceiptSummary[];
+    excludedNeedsReview: number;
+    merchants: string[];
+  } | null>(null);
+  const [bulkProgress, setBulkProgress] = useState<{ total: number; done: number } | null>(null);
+  const [bulkReport, setBulkReport] = useState<{
+    confirmed: number;
+    failed: number;
+    remaining: number;
+    cancelled: boolean;
+    excludedNeedsReview: number;
+    errors: [string, number][];
+  } | null>(null);
 
   const mounted = useRef(true);
   const listGeneration = useRef(0);
@@ -223,6 +244,9 @@ export function ReceiptsView({
   const loadedReceiptIdRef = useRef<string | null>(null);
   const staleCursorReloadedRef = useRef(false);
   const activeImageUrl = useRef<string | null>(null);
+  const bulkCancelledRef = useRef(false);
+  const bulkRunGenRef = useRef(0);
+  const actorKeyRef = useRef(actorKey);
 
   useLayoutEffect(() => {
     openReceiptIdRef.current = selectedId;
@@ -246,15 +270,28 @@ export function ReceiptsView({
 
   const clearAllReceiptsState = useCallback((disabled: boolean, disabledRevision: number | null = null) => {
     listGeneration.current += 1;
+    bulkCancelledRef.current = true;
+    bulkRunGenRef.current += 1;
     receiptFloorGenRef.current.clear();
     staleCursorReloadedRef.current = false;
     resetDrawer();
+    setSelectedForBulk(new Set());
+    setBulkConfirmPlan(null);
+    setBulkProgress(null);
     setDraft(EMPTY_RECEIPT_FILTER);
     setFilter(EMPTY_RECEIPT_FILTER);
     setNotice(null);
     setDisabledAtRevision(disabled ? disabledRevision : null);
     setListState(disabled ? { kind: "disabled" } : { kind: "error" });
   }, [resetDrawer]);
+
+  useLayoutEffect(() => {
+    if (actorKeyRef.current !== actorKey) {
+      actorKeyRef.current = actorKey;
+      clearAllReceiptsState(false);
+      setBulkReport(null);
+    }
+  }, [actorKey, clearAllReceiptsState]);
 
   const checkBarrier = useCallback((
     result: { ok: boolean; status?: number; error?: string },
@@ -279,11 +316,156 @@ export function ReceiptsView({
       listGeneration.current += 1;
       detailGeneration.current += 1;
       imageGeneration.current += 1;
+      bulkCancelledRef.current = true;
+      bulkRunGenRef.current += 1;
       openReceiptIdRef.current = null;
       revokeObjectUrl(activeImageUrl.current);
       activeImageUrl.current = null;
     };
   }, []);
+
+  const runBulkConfirm = useCallback(async (plan: {
+    targets: ReceiptSummary[];
+    excludedNeedsReview: number;
+    merchants: string[];
+  }) => {
+    const runToken = ++bulkRunGenRef.current;
+    const expectedActor = actorKey;
+    const isBulkCancelled = () => bulkCancelledRef.current;
+    const isSessionAlive = () =>
+      mounted.current && bulkRunGenRef.current === runToken && actorKeyRef.current === expectedActor;
+    bulkCancelledRef.current = false;
+    setBulkConfirmPlan(null);
+    setBulkReport(null);
+    setNotice(null);
+    setBulkProgress({ total: plan.targets.length, done: 0 });
+
+    let confirmed = 0;
+    let failed = 0;
+    let processed = 0;
+    let cancelled = false;
+    let aborted = false;
+    const errors = new Map<string, number>();
+
+    const recordError = (bucket: string) => {
+      failed += 1;
+      errors.set(bucket, (errors.get(bucket) ?? 0) + 1);
+    };
+    const isAuthAbort = (res: { ok: boolean; status?: number; error?: string }): boolean => {
+      if (checkBarrier(res)) return true;
+      return !res.ok && (
+        res.status === 401
+        || res.status === 403
+        || res.error === "budget_forbidden"
+        || res.error === "budget_stale_epoch"
+      );
+    };
+
+    for (const target of plan.targets) {
+      if (!isSessionAlive()) {
+        aborted = true;
+        break;
+      }
+      if (isBulkCancelled()) {
+        cancelled = true;
+        break;
+      }
+      const lockToken = store.tryAcquire(target.receipt_id, "confirm");
+      if (lockToken === null) {
+        recordError(formatBulkErrorBucket(409, "budget_receipt_in_flight"));
+        processed += 1;
+        setBulkProgress({ total: plan.targets.length, done: processed });
+        continue;
+      }
+      try {
+        const detailRes = await receiptsApi.receiptDetail(target.receipt_id);
+        if (isAuthAbort(detailRes)) {
+          if (!detailRes.ok) {
+            recordError(formatBulkErrorBucket(detailRes.status, detailRes.error));
+            processed += 1;
+          }
+          aborted = true;
+          break;
+        }
+        if (!isSessionAlive()) {
+          aborted = true;
+          break;
+        }
+        if (isBulkCancelled()) {
+          cancelled = true;
+          break;
+        }
+        if (!detailRes.ok) {
+          recordError(formatBulkErrorBucket(detailRes.status, detailRes.error));
+          processed += 1;
+          setBulkProgress({ total: plan.targets.length, done: processed });
+          continue;
+        }
+        const built = buildPlainBulkConfirmRequest(detailRes.data.receipt, t("budget.receipts.summaryLineDefault"));
+        if (!built.ok) {
+          recordError(formatBulkErrorBucket(undefined, built.errorCode));
+          processed += 1;
+          setBulkProgress({ total: plan.targets.length, done: processed });
+          continue;
+        }
+        if (!isSessionAlive()) {
+          aborted = true;
+          break;
+        }
+        if (isBulkCancelled()) {
+          cancelled = true;
+          break;
+        }
+        const confirmRes = await receiptsApi.confirmReceipt(built.request);
+        if (isAuthAbort(confirmRes)) {
+          if (!confirmRes.ok) {
+            recordError(formatBulkErrorBucket(confirmRes.status, confirmRes.error));
+            processed += 1;
+          }
+          aborted = true;
+          break;
+        }
+        if (!isSessionAlive()) {
+          aborted = true;
+          break;
+        }
+        if (confirmRes.ok) {
+          confirmed += 1;
+          setSelectedForBulk((current) => {
+            if (!current.has(target.receipt_id)) return current;
+            const next = new Set(current);
+            next.delete(target.receipt_id);
+            return next;
+          });
+        } else {
+          recordError(formatBulkErrorBucket(confirmRes.status, confirmRes.error));
+        }
+        processed += 1;
+        setBulkProgress({ total: plan.targets.length, done: processed });
+        if (isBulkCancelled()) {
+          cancelled = true;
+          break;
+        }
+      } finally {
+        store.release(target.receipt_id, lockToken);
+      }
+    }
+
+    if (!isSessionAlive()) return;
+    setBulkProgress(null);
+    setBulkReport({
+      confirmed,
+      failed,
+      remaining: Math.max(0, plan.targets.length - processed),
+      cancelled: cancelled || aborted,
+      excludedNeedsReview: plan.excludedNeedsReview,
+      errors: [...errors.entries()],
+    });
+    if (!aborted) {
+      staleCursorReloadedRef.current = false;
+      setListRefresh((current) => current + 1);
+    }
+  }, [actorKey, checkBarrier, receiptsApi, store]);
 
   // Subscribe to persistent store so locks survive unmount/remount and late settlements refresh the panel.
   useEffect(() => {
@@ -440,14 +622,15 @@ export function ReceiptsView({
     selectedId === null ? null : (pendingMap.get(selectedId) ?? null);
 
   const openReceipt = useCallback((receiptId: string) => {
-    if ((openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null)
+    if (bulkProgress !== null
+      || (openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null)
       || openReceiptIdRef.current === receiptId) return;
     openReceiptIdRef.current = receiptId;
     loadedReceiptIdRef.current = null;
     setDetailState({ kind: "loading" });
     setNotice(null);
     setSelectedId(receiptId);
-  }, [store]);
+  }, [store, bulkProgress]);
 
   const closeDetail = useCallback(() => {
     if (openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null) return;
@@ -455,13 +638,14 @@ export function ReceiptsView({
   }, [store, resetDrawer]);
 
   const applyFilter = (next: ReceiptFilter) => {
-    if (!validReceiptDateRange(next)) return;
+    if (bulkProgress !== null || !validReceiptDateRange(next)) return;
     staleCursorReloadedRef.current = false;
     setNotice(null);
     setFilter(next);
   };
 
   const clearFilters = () => {
+    if (bulkProgress !== null) return;
     staleCursorReloadedRef.current = false;
     setDraft(EMPTY_RECEIPT_FILTER);
     setFilter(EMPTY_RECEIPT_FILTER);
@@ -481,6 +665,51 @@ export function ReceiptsView({
 
   const shownRows = listState.kind === "ready" ? filterReceiptRows(listState.rows, filter, searchMode) : [];
   const clientFiltered = hasClientSideFilter(filter);
+  const confirmableRows = shownRows.filter(isBulkConfirmable);
+  const shownNeedsReviewCount = shownRows.filter((row) => row.status === "needs_review").length;
+  const allConfirmableSelected = confirmableRows.length > 0
+    && confirmableRows.every((row) => selectedForBulk.has(row.receipt_id));
+  const selectionPlan = buildBulkSelectionPlan(
+    shownRows,
+    selectedForBulk,
+    t("budget.receipts.unknownMerchant"),
+  );
+  const merchantGroups = merchantBulkGroups(shownRows);
+  const visibleMerchantActions = merchantGroups.length === 1
+    ? merchantGroups
+    : merchantGroups.filter((group) => group.confirmableIds.length >= 2 || merchantGroups.length <= 3);
+  const bulkBusy = bulkProgress !== null || drawerActionBusy !== null;
+
+  const formatMerchantsLine = (merchants: readonly string[]): string => {
+    const shown = merchants.slice(0, 5);
+    const rest = merchants.length - shown.length;
+    const base = shown.join(", ");
+    return rest > 0 ? `${base} (${t("budget.receipts.bulkConfirmMoreMerchants", { count: rest })})` : base;
+  };
+
+  const toggleSelectAllLoaded = () => {
+    setSelectedForBulk((current) => {
+      const next = new Set(current);
+      if (allConfirmableSelected) {
+        for (const row of confirmableRows) next.delete(row.receipt_id);
+      } else {
+        for (const row of confirmableRows) next.add(row.receipt_id);
+      }
+      return next;
+    });
+  };
+
+  const toggleRowSelection = (receiptId: string) => {
+    setSelectedForBulk((current) => {
+      const next = new Set(current);
+      if (next.has(receiptId)) {
+        next.delete(receiptId);
+      } else {
+        next.add(receiptId);
+      }
+      return next;
+    });
+  };
 
   return (
     <section className="budget-entries budget-receipts" aria-label={title}>
@@ -589,6 +818,83 @@ export function ReceiptsView({
       {validReceiptDateRange(draft) ? null : <p className="budget-notice" role="alert">{t("budget.main.badRange")}</p>}
       {notice === null ? null : <p className="budget-notice" role="status">{notice}</p>}
 
+      {bulkProgress === null ? null : (
+        <div className="budget-notice budget-entries-action" role="status">
+          <span>{t("budget.receipts.bulkProgress", { done: bulkProgress.done, total: bulkProgress.total })}</span>
+          <button
+            type="button"
+            onClick={() => { bulkCancelledRef.current = true; }}
+          >
+            {t("budget.main.cancel")}
+          </button>
+        </div>
+      )}
+
+      {bulkReport === null ? null : (
+        <div
+          className="budget-notice budget-receipt-bulk-dialog"
+          role={bulkReport.failed > 0 ? "alert" : "status"}
+        >
+          <p>
+            {bulkReport.cancelled
+              ? t("budget.receipts.bulkCancelledSummary", {
+                  confirmed: bulkReport.confirmed,
+                  remaining: bulkReport.remaining,
+                  failed: bulkReport.failed,
+                })
+              : t("budget.receipts.bulkDoneSummary", {
+                  confirmed: bulkReport.confirmed,
+                  failed: bulkReport.failed,
+                })}
+          </p>
+          {bulkReport.excludedNeedsReview > 0 ? (
+            <p className="budget-muted">{t("budget.receipts.bulkExcludedReview", { count: bulkReport.excludedNeedsReview })}</p>
+          ) : null}
+          {bulkReport.errors.length === 0 ? null : (
+            <ul className="budget-entry-facts">
+              {bulkReport.errors.map(([code, count]) => (
+                <li key={code}>{t("budget.receipts.bulkErrorEntry", { code, count })}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {bulkConfirmPlan === null ? null : (
+        <div
+          className="budget-notice budget-receipt-bulk-dialog"
+          role="alertdialog"
+          aria-label={t("budget.receipts.bulkConfirmTitle", { count: bulkConfirmPlan.targets.length })}
+        >
+          <p><strong>{t("budget.receipts.bulkConfirmTitle", { count: bulkConfirmPlan.targets.length })}</strong></p>
+          <p className="budget-muted">
+            {t("budget.receipts.bulkConfirmMerchants", { merchants: formatMerchantsLine(bulkConfirmPlan.merchants) })}
+          </p>
+          {bulkConfirmPlan.excludedNeedsReview > 0 ? (
+            <p className="budget-warn" role="note">
+              {t("budget.receipts.bulkExcludedReview", { count: bulkConfirmPlan.excludedNeedsReview })}
+            </p>
+          ) : null}
+          <p className="budget-muted">{t("budget.receipts.linkChoiceNone")}</p>
+          <div className="budget-actions">
+            <button
+              type="button"
+              className="budget-primary"
+              disabled={bulkBusy}
+              onClick={() => { void runBulkConfirm(bulkConfirmPlan); }}
+            >
+              {t("budget.receipts.bulkConfirmAction")}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setBulkConfirmPlan(null); }}
+            >
+              {t("budget.main.cancel")}
+            </button>
+          </div>
+        </div>
+      )}
+
       {listState.kind === "loading" ? <p className="budget-muted" role="status">{t("budget.receipts.loading")}</p> : null}
 
       {listState.kind === "error" ? (
@@ -616,13 +922,83 @@ export function ReceiptsView({
             </p>
           ) : (
             <>
+              <div className="budget-receipt-bulk-bar" role="group" aria-label={t("budget.receipts.confirmSelectedZero")}>
+                <label className="budget-toggle">
+                  <input
+                    type="checkbox"
+                    name="select_all_loaded"
+                    checked={allConfirmableSelected}
+                    disabled={bulkBusy || confirmableRows.length === 0}
+                    onChange={toggleSelectAllLoaded}
+                  />
+                  <span>{t("budget.receipts.selectAllLoaded")}</span>
+                </label>
+                <button
+                  type="button"
+                  className="budget-primary"
+                  disabled={bulkBusy || selectionPlan.confirmable.length === 0}
+                  onClick={() => {
+                    setBulkConfirmPlan({
+                      targets: selectionPlan.confirmable,
+                      excludedNeedsReview: selectionPlan.excludedNeedsReview,
+                      merchants: selectionPlan.merchants,
+                    });
+                  }}
+                >
+                  {selectionPlan.confirmable.length > 0
+                    ? t("budget.receipts.confirmSelected", { count: selectionPlan.confirmable.length })
+                    : t("budget.receipts.confirmSelectedZero")}
+                </button>
+                {selectedForBulk.size > 0 ? (
+                  <button
+                    type="button"
+                    disabled={bulkBusy}
+                    onClick={() => { setSelectedForBulk(new Set()); }}
+                  >
+                    {t("budget.receipts.clearSelection")}
+                  </button>
+                ) : null}
+                {visibleMerchantActions.map((group) => (
+                  <button
+                    key={group.merchant}
+                    type="button"
+                    disabled={bulkBusy}
+                    onClick={() => {
+                      const groupSet = new Set(group.confirmableIds);
+                      setBulkConfirmPlan({
+                        targets: shownRows.filter((row) => groupSet.has(row.receipt_id)),
+                        excludedNeedsReview: group.excludedNeedsReview,
+                        merchants: [group.merchant],
+                      });
+                    }}
+                  >
+                    {t("budget.receipts.confirmAllMerchant", { merchant: group.merchant })}
+                  </button>
+                ))}
+              </div>
+              {shownNeedsReviewCount > 0 && (selectedForBulk.size > 0 || confirmableRows.length > 0) ? (
+                <p className="budget-muted" role="note">
+                  {t("budget.receipts.bulkExcludedReview", { count: shownNeedsReviewCount })}
+                </p>
+              ) : null}
               <p className="budget-muted">{t("budget.receipts.shownCount", { count: shownRows.length })}</p>
               <ul className="budget-entry-list" aria-label={title}>
                 {shownRows.map((row) => {
                   const rowPending = pendingMap.get(row.receipt_id) ?? null;
+                  const rowConfirmable = isBulkConfirmable(row);
+                  const rowMerchantText = receiptMerchantGroupKey(row) ?? t("budget.receipts.unknownMerchant");
                   return (
                     <li key={row.receipt_id} className="budget-entry budget-receipt-row">
                       <div className="budget-receipt-row-main">
+                        <input
+                          type="checkbox"
+                          className="budget-receipt-row-check"
+                          name={`select_receipt_${row.receipt_id}`}
+                          aria-label={t("budget.receipts.selectRow", { merchant: rowMerchantText })}
+                          checked={rowConfirmable && selectedForBulk.has(row.receipt_id)}
+                          disabled={bulkBusy || !rowConfirmable}
+                          onChange={() => { toggleRowSelection(row.receipt_id); }}
+                        />
                         <span className="budget-muted">
                           {row.receipt_date ?? t("budget.receipts.noDate")}
                           {row.receipt_time !== null && row.receipt_time !== "" ? ` ${row.receipt_time}` : ""}
@@ -659,7 +1035,7 @@ export function ReceiptsView({
                         )}
                         <button
                           type="button"
-                          disabled={drawerActionBusy !== null}
+                          disabled={bulkBusy}
                           onClick={() => { openReceipt(row.receipt_id); }}
                         >
                           {t("budget.receipts.open")}

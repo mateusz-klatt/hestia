@@ -219,7 +219,10 @@
   .budget-month-dashboard .budget-total dd { text-align: start; }
 }
 .budget-receipts input[type="date"], .budget-receipts input[type="text"], .budget-receipts input[type="search"] { font: inherit; min-height: 2.4rem; }
-.budget-receipt-row-main { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .6rem; align-items: baseline; }
+.budget-receipt-row-main { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: .6rem; align-items: baseline; }
+.budget-receipt-row-check { align-self: center; }
+.budget-receipt-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-block: .4rem; }
+.budget-receipt-bulk-dialog { display: grid; gap: .45rem; margin-block: .5rem; }
 .budget-receipt-merchant { overflow-wrap: anywhere; font-weight: 600; }
 .budget-receipt-total { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 1rem; }
 .budget-receipt-source { display: inline-flex; align-items: center; gap: .3rem; }

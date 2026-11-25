@@ -685,3 +685,128 @@ export function buildConfirmRequest(
     },
   };
 }
+
+// ---- Bulk confirm eligibility, merchant grouping, and plain confirm builder ----
+
+/** Only unlinked `imported` or `draft` receipts support a plain confirm without candidate choices. */
+export function isBulkConfirmable(receipt: Pick<ReceiptSummary, "status" | "linked">): boolean {
+  return (receipt.status === "imported" || receipt.status === "draft") && !receipt.linked;
+}
+
+/** Safe display merchant key for grouping; never surfaces privacy redaction sentinels as group names. */
+export function receiptMerchantGroupKey(
+  receipt: Pick<ReceiptSummary, "raw_shop_name" | "forwarded_sender_domain">,
+): string | null {
+  if (receipt.raw_shop_name !== null && !isRedactedValue(receipt.raw_shop_name) && receipt.raw_shop_name.trim() !== "") {
+    return receipt.raw_shop_name.trim();
+  }
+  if (receipt.forwarded_sender_domain !== null && receipt.forwarded_sender_domain.trim() !== "") {
+    return receipt.forwarded_sender_domain.trim();
+  }
+  return null;
+}
+
+export interface MerchantBulkGroup {
+  merchant: string;
+  confirmableIds: string[];
+  excludedNeedsReview: number;
+}
+
+export function merchantBulkGroups(rows: readonly ReceiptSummary[]): MerchantBulkGroup[] {
+  const byMerchant = new Map<string, MerchantBulkGroup>();
+  for (const row of rows) {
+    const merchant = receiptMerchantGroupKey(row);
+    if (merchant === null) continue;
+    let group = byMerchant.get(merchant);
+    if (group === undefined) {
+      group = { merchant, confirmableIds: [], excludedNeedsReview: 0 };
+      byMerchant.set(merchant, group);
+    }
+    if (isBulkConfirmable(row)) {
+      group.confirmableIds.push(row.receipt_id);
+    } else if (row.status === "needs_review") {
+      group.excludedNeedsReview += 1;
+    }
+  }
+  return [...byMerchant.values()].filter((group) => group.confirmableIds.length > 0);
+}
+
+export interface BulkSelectionPlan {
+  confirmable: ReceiptSummary[];
+  excludedNeedsReview: number;
+  merchants: string[];
+}
+
+export function buildBulkSelectionPlan(
+  rows: readonly ReceiptSummary[],
+  selectedIds: ReadonlySet<string>,
+  unknownMerchantLabel: string,
+): BulkSelectionPlan {
+  const confirmable: ReceiptSummary[] = [];
+  const merchants: string[] = [];
+  const seenMerchants = new Set<string>();
+  let excludedNeedsReview = 0;
+
+  for (const row of rows) {
+    if (selectedIds.has(row.receipt_id) && isBulkConfirmable(row)) {
+      confirmable.push(row);
+      const label = receiptMerchantGroupKey(row) ?? unknownMerchantLabel;
+      if (!seenMerchants.has(label)) {
+        seenMerchants.add(label);
+        merchants.push(label);
+      }
+    } else if (row.status === "needs_review") {
+      excludedNeedsReview += 1;
+    }
+  }
+  return { confirmable, excludedNeedsReview, merchants };
+}
+
+/** Builds a plain confirm payload (`link: null`) for an unlinked `imported`/`draft` receipt detail, synthesizing a summary line when none exist. */
+export function buildPlainBulkConfirmRequest(
+  detail: ReceiptDetail,
+  summaryFallbackName: string,
+): { ok: true; request: ReceiptConfirmRequest } | { ok: false; errorCode: string } {
+  if ((detail.status !== "imported" && detail.status !== "draft") || detail.linked) {
+    return { ok: false, errorCode: "budget_receipt_conflict" };
+  }
+  const draft = draftFromDetail(detail, []);
+  if (draft.lines.length === 0) {
+    const normalizedTotal = detail.total_amount === null ? null : normalizeDecimalInput(detail.total_amount);
+    if (normalizedTotal === null) {
+      return { ok: false, errorCode: "budget_receipt_invalid_request" };
+    }
+    const invoiceName = detail.invoice_number !== null && !isRedactedValue(detail.invoice_number)
+      ? detail.invoice_number.trim()
+      : "";
+    const shopName = detail.raw_shop_name !== null && !isRedactedValue(detail.raw_shop_name)
+      ? detail.raw_shop_name.trim()
+      : "";
+    draft.lines.push({
+      line_kind: "other",
+      raw_name: invoiceName || shopName || summaryFallbackName,
+      ptu_code: null,
+      quantity: "1",
+      raw_unit: null,
+      unit_price_raw: null,
+      gross_line_total: normalizedTotal,
+      discount_amount: "0",
+      net_line_total: normalizedTotal,
+    });
+  }
+  const built = buildConfirmRequest(detail, draft, []);
+  if (!built.ok) {
+    return {
+      ok: false,
+      errorCode: built.errorKey === "budget.receipts.totalMismatch"
+        ? "budget_receipt_total_mismatch"
+        : "budget_receipt_invalid_request",
+    };
+  }
+  return { ok: true, request: built.request };
+}
+
+export function formatBulkErrorBucket(status: number | undefined, error: string): string {
+  return status !== undefined && status > 0 ? `${String(status)} ${error}` : error;
+}
+

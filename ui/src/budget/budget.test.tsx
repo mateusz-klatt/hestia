@@ -1954,4 +1954,90 @@ describe("receipts tab & capability gate", () => {
     await settle();
     expect(button("Confirm receipt").disabled).toBe(false);
   });
+
+  it("aborts in-flight bulk confirm immediately when the Budget principal switches", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+    api.whoami.mockImplementation(() => ok({ user: "alice", role: "admin" }));
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+
+    const item1 = {
+      receipt_id: "bbbbbbbb-1111-4111-8111-111111111111",
+      status: "imported" as const,
+      document_kind: "payment_confirmation" as const,
+      source_kind: "email" as const,
+      receipt_kind: "purchase" as const,
+      receipt_date: "2026-11-14",
+      receipt_time: null,
+      raw_shop_name: "Bulk Merchant",
+      raw_nip: null,
+      shop_id: null,
+      chain_key: null,
+      total_amount: "19.50",
+      currency: "PLN",
+      payment_method: null,
+      math_delta: null,
+      linked: false,
+      linked_account_id: null,
+      linked_entry_ref: null,
+      version: 1,
+      image_available: false,
+      image_expires_at: null,
+      raw_text_expires_at: null,
+      invoice_number: null,
+      due_date: null,
+      import_expires_at: null,
+      forwarded_manually: false,
+      forwarded_sender_domain: null,
+      created_at: 1_700_000_000,
+      updated_at: 1_700_000_000,
+    };
+    const item2 = { ...item1, receipt_id: "bbbbbbbb-2222-4222-8222-222222222222", version: 2 };
+    vi.mocked(rApi.receiptsList).mockImplementation(() => ok({ receipts: [item1, item2], next_cursor: null }));
+    vi.mocked(rApi.receiptDetail).mockImplementation((id) => ok({
+      receipt: {
+        ...(id === item1.receipt_id ? item1 : item2),
+        lines: [{
+          line_no: 1,
+          line_kind: "other",
+          raw_name: "Payment",
+          raw_name_key: "payment",
+          ptu_code: null,
+          quantity: "1",
+          raw_unit: null,
+          unit_price_raw: null,
+          gross_line_total: "19.50",
+          discount_amount: "0",
+          net_line_total: "19.50",
+        }],
+      },
+      candidates: [],
+    }));
+    const pendingFirstConfirm = deferred<Loaded<ReceiptsApi["confirmReceipt"]>>();
+    vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => pendingFirstConfirm.promise);
+
+    await renderWithReceipts(api, rApi, "alice");
+    await click(button("Receipts and documents"));
+    await click(button("Confirm all from: Bulk Merchant"));
+    await act(async () => {
+      button("Start bulk confirm").click();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+
+    // Switching principal unmounts alice's ReceiptsView, aborts item2, and settles cleanly under bob.
+    api.whoami.mockImplementation(() => ok({ user: "bob", role: "admin" }));
+    await renderWithReceipts(api, rApi, "bob");
+    await act(async () => {
+      pendingFirstConfirm.settle({
+        ok: true,
+        data: { ok: true, receipt: { ...item1, status: "confirmed", version: 2, lines: [] } },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+    expect(host.textContent).not.toContain("Confirming");
+  });
 });
