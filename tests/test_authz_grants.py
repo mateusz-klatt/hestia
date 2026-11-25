@@ -616,6 +616,16 @@ class GrantEditorHTTPTests(unittest.IsolatedAsyncioTestCase):
         grant_event = next(event for event in events if event["action"] == "user_grants")
         self.assertEqual((grant_event["actor"], grant_event["target"]), ("admin", "viewer"))
 
+    async def test_grant_audit_fails_closed_if_authorization_phase_changes(self):
+        self.client.server.app[web._RT_KEY].audit_engine = self.engine
+        state = store_sql.load_auth_state("admin")
+        with mock.patch.object(store_sql, "load_auth_state", side_effect=[
+            state, store_sql.SessionPhaseUnsupported("future"),
+        ]):
+            response = await self.client.get("/api/audit", headers=self._headers())
+        self.assertEqual(response.status, 503)
+        self.assertEqual(await response.json(), {"ok": False, "error": "authorization_bridge_incompatible"})
+
     async def test_legacy_issuance_cannot_activate_custom_with_v1_bearer_or_cookie(self):
         with self.sessions.begin() as session:
             session.get(db.AppMeta, store_sql._SESSION_PHASE_KEY).value = store_sql.SESSION_PHASE_LEGACY
