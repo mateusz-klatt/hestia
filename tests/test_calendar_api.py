@@ -1023,9 +1023,20 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
                 deleted=False, deleted_at=None, revision=1, modified_at=0.0, source="local",
             ))
         expected_large = sync_store.REQUEST_PAYLOAD_BYTES // len(large_json.encode("utf-8"))
-        with mock.patch.object(sync_store.SyncStore, "_event_dict", wraps=sync_store.SyncStore._event_dict) as decoder:
-            started = time.monotonic()
-            response = await self.instances("from=2026-01-01&to=2026-01-02&group=bytes")
+        from sqlalchemy import event as sa_event
+        seen_sql = []
+
+        def record_sql(_conn, _cursor, statement, parameters, _context, _many):
+            seen_sql.append((statement, parameters))
+
+        engine = bytes_store.sessions.kw["bind"]
+        sa_event.listen(engine, "before_cursor_execute", record_sql)
+        try:
+            with mock.patch.object(sync_store.SyncStore, "_event_dict", wraps=sync_store.SyncStore._event_dict) as decoder:
+                started = time.monotonic()
+                response = await self.instances("from=2026-01-01&to=2026-01-02&group=bytes")
+        finally:
+            sa_event.remove(engine, "before_cursor_execute", record_sql)
         self.assertLess(time.monotonic() - started, 2)
         self.assertEqual(response.status, 200)
         bytes_state = await response.json()
@@ -1033,6 +1044,12 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(bytes_state["instances"]), expected_large + 1)
         self.assertIn("zzzz-tail", [item["event_id"] for item in bytes_state["instances"]])
         self.assertEqual(decoder.call_count, expected_large + 1)
+        meta_selects = [stmt.split(" FROM ", 1)[0] for stmt, _ in seen_sql if "length(" in stmt.lower()]
+        self.assertEqual(len(meta_selects), 1)
+        self.assertEqual(meta_selects[0].count("payload_json"), 1)
+        loaded_ids = [val for stmt, params in seen_sql if " IN " in stmt for val in params]
+        self.assertEqual(len(loaded_ids), expected_large + 1)
+        self.assertNotIn(f"huge-{expected_large:04d}", loaded_ids)
 
     async def test_instances_expired_until_and_discarded_candidates_respect_instance_budget(self):
         # Item 2(a): 5,000 daily series ending on Jan 1 (UNTIL) queried Jan 2 - Apr 4 finish < 2s without replaying past UNTIL.
@@ -1084,6 +1101,50 @@ class CalendarApiTests(unittest.IsolatedAsyncioTestCase):
                 ("9999-12-28T09:00:00+00:00", "9999-12-31T10:00:00+14:00"),
             ],
         )
+
+    async def test_instances_dtstart_after_until_still_emits_dtstart(self):
+        timed = await self.create({
+            "summary": "Timed DTSTART > UNTIL",
+            "start": {"dateTime": "2026-01-10T09:00:00Z", "timeZone": "UTC"},
+            "end": {"dateTime": "2026-01-10T10:00:00Z", "timeZone": "UTC"},
+            "recurrence": ["RRULE:FREQ=DAILY;UNTIL=20260105T090000Z"],
+        })
+        all_day = await self.create({
+            "summary": "All-day DTSTART > UNTIL",
+            "start": {"date": "2026-01-10"},
+            "end": {"date": "2026-01-11"},
+            "recurrence": ["RRULE:FREQ=DAILY;UNTIL=20260105"],
+        })
+        excluded = await self.create({
+            "summary": "Excluded DTSTART > UNTIL",
+            "start": {"dateTime": "2026-01-10T09:00:00Z", "timeZone": "UTC"},
+            "end": {"dateTime": "2026-01-10T10:00:00Z", "timeZone": "UTC"},
+            "recurrence": ["RRULE:FREQ=DAILY;UNTIL=20260105T090000Z", "EXDATE:20260110T090000Z"],
+        })
+        with_rdate = await self.create({
+            "summary": "With RDATE and DTSTART > UNTIL",
+            "start": {"dateTime": "2026-01-10T09:00:00Z", "timeZone": "UTC"},
+            "end": {"dateTime": "2026-01-10T10:00:00Z", "timeZone": "UTC"},
+            "recurrence": ["RRULE:FREQ=DAILY;UNTIL=20260105T090000Z", "RDATE:20260112T090000Z"],
+        })
+        cancelled_override = await self.create({
+            "summary": "Cancelled override DTSTART > UNTIL",
+            "start": {"dateTime": "2026-01-10T09:00:00Z", "timeZone": "UTC"},
+            "end": {"dateTime": "2026-01-10T10:00:00Z", "timeZone": "UTC"},
+            "recurrence": ["RRULE:FREQ=DAILY;UNTIL=20260105T090000Z"],
+            "exceptions": [{"originalStartTime": {"dateTime": "2026-01-10T09:00:00+00:00"}, "status": "cancelled"}],
+        })
+        state = await (await self.instances("from=2026-01-01&to=2026-01-20")).json()
+        self.assertFalse(state["truncated"])
+        by_event = {}
+        for item in state["instances"]:
+            by_event.setdefault(item["event_id"], []).append(item)
+        self.assertNotIn(excluded["id"], by_event)
+        self.assertNotIn(cancelled_override["id"], by_event)
+        self.assertEqual([item["start"]["dateTime"] for item in by_event[timed["id"]]], ["2026-01-10T09:00:00+00:00"])
+        self.assertEqual([item["start"]["date"] for item in by_event[all_day["id"]]], ["2026-01-10"])
+        self.assertEqual([item["start"]["dateTime"] for item in by_event[with_rdate["id"]]],
+                         ["2026-01-10T09:00:00+00:00", "2026-01-12T09:00:00+00:00"])
 
     async def test_instances_92_day_5000_daily_series_hits_constructed_instance_budget_fast(self):
         daily_payload = {"summary": "92d daily",

@@ -4071,7 +4071,21 @@ def build_openapi() -> dict:
                 "get": {
                     "operationId": "getCalendarInstances",
                     "summary": "Concrete calendar occurrences in a half-open date window",
-                    "description": "Requires viewer. Expands RRULE/RDATE, applies moved or modified exceptions, and omits EXDATE and every cancelled occurrence. SECONDLY, MINUTELY and HOURLY rules, replay estimates over 200000 occurrences, and windows estimated to produce over 5000 occurrences return only DTSTART with truncated=true. The window is [from, to) at local midnights in tz (default UTC), from is inclusive, to is exclusive, and its duration cannot exceed 92 days. Instances are sorted by start and capped at 2000. Disabled synchronization returns 200 with enabled=false and empty groups and instances.",
+                    "description": (
+                        "Requires viewer. Expands S1-S7 allowlisted RRULE shapes and RDATEs, applies moved or "
+                        "modified exceptions, and omits EXDATE and every cancelled occurrence. Events outside "
+                        "the S1-S7 allowlist (including SECONDLY/MINUTELY/HOURLY rules, multiple RRULEs, >500 "
+                        "RDATE/EXDATEs, or >31-day recurring durations) or exceeding 5000 occurrences in the "
+                        "padded window return only DTSTART with truncated=true when within budget. Requests "
+                        "also enforce shared SQL and expansion budgets (5000 events, 16 MiB stored JSON, "
+                        "600000 replay day-check units, and 50000 candidates): events over the SQL or "
+                        "pre-parse explicit-date/override budget are omitted without parsing and set "
+                        "truncated=true, and exhausting the candidate budget stops expansion with "
+                        "truncated=true. The window is [from, to) at local midnights in tz (default UTC), "
+                        "from is inclusive, to is exclusive, and its duration cannot exceed 92 days. Instances "
+                        "are sorted by start and capped at 2000. Disabled synchronization returns 200 with "
+                        "enabled=false and empty groups and instances."
+                    ),
                     "parameters": [
                         {"name": "from", "in": "query", "required": True, "schema": {"type": "string", "format": "date"},
                          "description": "Inclusive window start date (YYYY-MM-DD)."},

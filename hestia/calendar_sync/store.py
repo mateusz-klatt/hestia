@@ -21,6 +21,7 @@ from .events import fingerprint, validate_payload
 
 
 REQUEST_PAYLOAD_BYTES = 16 * 1024 * 1024  # 16 MiB per-request JSON decode budget.
+_EVENT_ID_CHUNK_SIZE = 500  # Keep SQLite IN (...) batches well below parameter limits.
 
 
 class CalendarConflict(ValueError):
@@ -118,12 +119,15 @@ class SyncStore:
                 "payload": json.loads(event.payload_json), "revision": event.revision,
                 "deleted": event.deleted, "modified_at": event.modified_at}
 
-    def _group_events_query(self, s, group, include_deleted=False):
+    def _group_events_where(self, s, group, include_deleted=False):
         self._require_group(s, group)
-        query = select(Event).where(Event.group_id == group)
+        filters = [Event.group_id == group]
         if not include_deleted:
-            query = query.where(Event.deleted.is_(False))
-        return query.order_by(Event.id)
+            filters.append(Event.deleted.is_(False))
+        return filters
+
+    def _group_events_query(self, s, group, include_deleted=False):
+        return select(Event).where(*self._group_events_where(s, group, include_deleted)).order_by(Event.id)
 
     def list_events(self, group, include_deleted=False):
         with self.sessions() as s:
@@ -131,23 +135,29 @@ class SyncStore:
 
     def list_bounded_events(self, group, *, limit, max_payload_bytes=REQUEST_PAYLOAD_BYTES):
         with self.sessions() as s:
-            query = (
-                self._group_events_query(s, group)
-                .add_columns(func.length(cast(Event.payload_json, LargeBinary)))
+            meta_query = (
+                select(Event.id, func.length(cast(Event.payload_json, LargeBinary)))
+                .where(*self._group_events_where(s, group))
+                .order_by(Event.id)
                 .limit(limit + 1)
             )
-            events = []
+            accepted_ids = []
             remaining = max_payload_bytes
             truncated = False
-            for row, payload_bytes in s.execute(query):
-                if len(events) >= limit:
+            for event_id, payload_bytes in s.execute(meta_query):
+                if len(accepted_ids) >= limit:
                     truncated = True
                     break
                 if payload_bytes > remaining:
                     truncated = True
                     continue
                 remaining -= payload_bytes
-                events.append(self._event_dict(row))
+                accepted_ids.append(event_id)
+            events = []
+            for start in range(0, len(accepted_ids), _EVENT_ID_CHUNK_SIZE):
+                chunk = accepted_ids[start:start + _EVENT_ID_CHUNK_SIZE]
+                rows = s.scalars(select(Event).where(Event.id.in_(chunk)).order_by(Event.id))
+                events.extend(self._event_dict(row) for row in rows)
             return events, truncated
 
     @staticmethod

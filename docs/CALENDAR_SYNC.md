@@ -254,8 +254,11 @@ wygenerowanych lub skonstruowanych w bibliotece oraz budżet `16 MiB` zdekodowan
 `REQUEST_PAYLOAD_BYTES` w SQL dla maksymalnie `5000` wydarzeń pobieranych w ustalonej
 kolejności identyfikatorów z `LIMIT 5001` i `length(CAST(payload_json AS BLOB))`),
 stosowane jest cięcie pracy:
-- wiersze w SQL przekraczające pozostały budżet bajtów albo limit `5000` wydarzeń są
-  pomijane bez `json.loads` i ustawiają `truncated: true`;
+- wiersze w SQL wybierane są najpierw lekkim zapytaniem o `(id, length(CAST(payload_json AS BLOB)))`
+  z `ORDER BY id` i `LIMIT 5001` (bez wczytywania treści `payload_json`), a pełne ładunki są
+  pobierane porcjami `WHERE id IN (...)` wyłącznie dla zaakceptowanych identyfikatorów; wiersze
+  przekraczające pozostały budżet bajtów albo limit `5000` wydarzeń są pomijane i ustawiają
+  `truncated: true`;
 - gdy pozostały budżet nie pokrywa nawet kosztu jawnych dat `RDATE`/`EXDATE` (po 300
   jednostek) i zapisanych wyjątków zdarzenia (po 100 jednostek na wyjątek przed
   zbudowaniem jakichkolwiek map), zdarzenie jest w całości pomijane bez parsowania
@@ -270,7 +273,9 @@ zachować fazy `COUNT`/`INTERVAL`: `okresy * dni_w_okresie * 1` kandydat dzienni
 `DAILY=1`, `WEEKLY=7`, `MONTHLY=31`, `YEARLY=366`), policzoną przed parsowaniem liczbę
 `RDATE`/`EXDATE` oraz liczbę wyjątków (indeksowanych po wstępnym odfiltrowaniu do
 poszerzonego okna). Wywołanie `RRULE` zachowuje górną granicę `UNTIL + 1 dzień`, więc
-zakończone serie nie generują zbędnych kandydatów po końcu serii, a każdy wygenerowany
+zakończone serie nie generują zbędnych kandydatów po końcu serii, jawne `DTSTART` pozostaje
+emitowane niezależnie od odcięcia `UNTIL` (zgodnie z RFC 5545, o ile nie jest odwołane ani
+wykluczone przez `EXDATE`/`exceptions`), a każdy wygenerowany
 kandydat biblioteki (również odrzucony) obciąża budżet `50000` instancji. Przepełnienie
 daty przy konwersji strefy końca pojedynczego wystąpienia (np. wokół roku `9999` w
 `Pacific/Kiritimati`) pomija tylko to wystąpienie bez odrzucania wcześniejszych.

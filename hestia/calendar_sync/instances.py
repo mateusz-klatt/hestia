@@ -622,7 +622,8 @@ def _expand_event(event: dict, window: _Window, budget: _ReplayBudget | None = N
     rdates = _property_values(payload, "RDATE")
     exdates = set(_property_values(payload, "EXDATE"))
 
-    explicit = {_key(payload["start"], all_day), *rdates}
+    starting = _key(payload["start"], all_day)
+    explicit = {starting, *rdates}
     seen_overrides = set()
     series_slots = set()
     second_fold = _second_fold_start(payload)
@@ -636,15 +637,20 @@ def _expand_event(event: dict, window: _Window, budget: _ReplayBudget | None = N
             identifiers.add(instance["instance_id"])
             matches.append(instance)
 
+    def budget_exhausted():
+        if budget.instances_remaining > 0:
+            return False
+        _LOG.warning("Calendar request exceeded %d constructed instance limit; truncating response",
+                     REQUEST_INSTANCE_BUDGET)
+        return True
+
     def sort_key(instance):
         return _sort_key(instance, window)
 
     calendar, until = _build_calendar(payload, event["uid"], rdates, all_day)
     for series in of(calendar).series:
         for occurrence in series.between(query_start, query_end):
-            if budget.instances_remaining <= 0:
-                _LOG.warning("Calendar request exceeded %d constructed instance limit; truncating response",
-                             REQUEST_INSTANCE_BUDGET)
+            if budget_exhausted():
                 return nsmallest(INSTANCE_LIMIT + 1, matches, key=sort_key), True
             # Charge every candidate yielded by the library (including discarded ones).
             budget.instances_remaining -= 1
@@ -667,25 +673,29 @@ def _expand_event(event: dict, window: _Window, budget: _ReplayBudget | None = N
                 if original != second_fold and candidate_wall == original_wall:
                     continue
             record(instance)
-    if second_fold is not None:
-        fold_instance = _first_instance(event, window)
-        if fold_instance is not None:
-            record(fold_instance)
-            budget.instances_remaining -= 1
+    # RFC 5545 treats DTSTART as an unconditional occurrence even when UNTIL precedes DTSTART or DST fold skips it.
+    extra_instances = []
+    if (
+        starting not in series_slots
+        and starting not in exdates
+        and starting not in exceptions
+        and payload.get("status") != "cancelled"
+        and _overlaps(payload, window)
+    ):
+        extra_instances.append(_instance(event, payload, payload["start"]))
     for original, exception in pending.items():
         if original in seen_overrides or original in exdates:
             continue
-        if budget.instances_remaining <= 0:
-            _LOG.warning("Calendar request exceeded %d constructed instance limit; truncating response",
-                         REQUEST_INSTANCE_BUDGET)
-            return nsmallest(INSTANCE_LIMIT + 1, matches, key=sort_key), True
         if original not in explicit and original not in series_slots:
             near = first <= original <= last if all_day else query_start <= original < query_end
             if near:
                 _LOG.debug("Skipping orphan override for calendar event %s at %s", event["id"], original.isoformat())
                 continue
-        override = _stored_override(event, exception, original)
-        record(override)
+        extra_instances.append(_stored_override(event, exception, original))
+    for item in extra_instances:
+        if budget_exhausted():
+            return nsmallest(INSTANCE_LIMIT + 1, matches, key=sort_key), True
+        record(item)
         budget.instances_remaining -= 1
     return nsmallest(INSTANCE_LIMIT + 1, matches, key=sort_key), False
 
