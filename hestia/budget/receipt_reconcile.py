@@ -200,15 +200,20 @@ def reconcile_receipt_links(session, owner, now):
         key = (row.linked_account_id, row.linked_entry_ref)
         transaction = None if key in reserved else transactions.get(key)
         current = _fingerprint(transaction)
+        normalized_shop = normalize_shop_name(row.raw_shop_name)
+        shop_forms = (normalized_shop,) if normalized_shop == row.raw_shop_name else (normalized_shop, row.raw_shop_name)
         try:
             payload = {} if transaction is None else _json(transaction.payload_json)
             creditor = creditor_name(session, owner, row.linked_account_id, row.linked_entry_ref, current)
-            evidence = evidence_json(link_evidence(
-                owner, row.linked_account_id, row.linked_entry_ref, payload,
-                normalize_shop_name(row.raw_shop_name), row.raw_nip, creditor, current))
+            expected_evidence = {
+                evidence_json(link_evidence(
+                    owner, row.linked_account_id, row.linked_entry_ref, payload, candidate_shop, row.raw_nip,
+                    creditor, current))
+                for candidate_shop in shop_forms
+            }
         except (AnalyticsError, ValueError, TypeError, RecursionError):
-            evidence = None
-        if current == row.linked_fingerprint and evidence == row.linked_evidence:
+            expected_evidence = ()
+        if current == row.linked_fingerprint and row.linked_evidence in expected_evidence:
             continue
         before = audit_payload(row, "source_changed")
         row.status, row.version, row.updated_at = "needs_review", row.version + 1, now

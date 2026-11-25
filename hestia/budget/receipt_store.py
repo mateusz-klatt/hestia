@@ -26,7 +26,7 @@ from ..db import (BudgetAccount as Account, BudgetConnection as Connection, Budg
 from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint, negate_money, sum_money
 from .device_token import DeviceTokenError, _legacy_bearer_allowed, write_device_audit
 from .gmail_store import retain_imports, tombstone_receipt
-from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, GATEWAY_TOKENS, MAX_RECEIPT_LINES,
+from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES,
                              ReceiptError, chain_for, merchant_match_groups, merchant_word_tokens,
                              normalize_shop_name, parse_receipt, redact_digit_field, valid_nip, validate_confirm,
                              validate_confirm_line_totals)
@@ -102,7 +102,7 @@ def _date_distance(payload, receipt_date, *, document_kind=None, due_date=None):
     return min(distances) if distances else None
 
 
-_TX_DIGIT_RUN_RE = re.compile(r"[0-9]+(?:[ .-]+[0-9]+)*")
+_TX_DIGIT_RUN_RE = re.compile(r"[0-9]+(?:[\s/.\-\u2010-\u2015]+[0-9]+)*")
 
 
 def _nip_in_text(nip, haystack):
@@ -119,19 +119,9 @@ def _nip_in_text(nip, haystack):
             continue
         if end < limit and (haystack[end].isalnum() or haystack[end] == "_"):
             continue
-        if match.group(0).replace(" ", "").replace("-", "").replace(".", "") == nip:
+        if re.sub(r"\D", "", match.group(0)) == nip:
             return True
     return False
-
-
-def _gateway_sourced_receipt(row):
-    fields = (
-        row.raw_shop_name,
-        getattr(row, "forwarded_sender_domain", None),
-        getattr(row, "sender_domain", None),
-        getattr(row, "source_kind", None),
-    )
-    return any(GATEWAY_TOKENS.intersection(merchant_word_tokens(field)) for field in fields)
 
 
 def _subkey(material, info):
@@ -366,8 +356,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             return []
         direction = "CRDT" if row.receipt_kind == "refund" else "DBIT"
         shop_name = normalize_shop_name(row.raw_shop_name)
-        receipt_has_gateway = _gateway_sourced_receipt(row)
-        groups = () if receipt_has_gateway else merchant_match_groups(row.raw_shop_name, row.raw_nip)
+        groups = merchant_match_groups(row.raw_shop_name, row.raw_nip)
         ranked = []
         for transaction, tx_row_id in self._candidate_rows(session, owner, include_receipt_id=include_receipt_id):
             try:
@@ -404,12 +393,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             description = " ".join(value for value in remittance if isinstance(value, str))
             haystack = fold_for_match(description + " " + (creditor or ""))
             haystack_words = frozenset(merchant_word_tokens(haystack))
-            tx_has_gateway = bool(GATEWAY_TOKENS.intersection(haystack_words))
-            hit = (
-                not receipt_has_gateway
-                and not tx_has_gateway
-                and (_nip_in_text(row.raw_nip, haystack) or any(group.issubset(haystack_words) for group in groups))
-            )
+            hit = _nip_in_text(row.raw_nip, haystack) or any(group.issubset(haystack_words) for group in groups)
             candidate = {
                 "account_id": transaction.account_id,
                 "entry_reference": entry_reference_digest(transaction.entry_reference),
@@ -421,6 +405,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 "candidate_token": token,
             }
             ranked.append((not hit, distance, transaction.entry_reference, transaction.account_id, candidate))
+        # Rank across all matching rows before slicing MAX_CANDIDATES so hits survive the cap.
         ranked.sort(key=lambda item: item[:4])
         return [item[-1] for item in ranked[:MAX_CANDIDATES]]
 
@@ -767,9 +752,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 total_amount=row.total_amount, currency=row.currency, receipt_date=row.receipt_date,
                 payment_method=row.payment_method, receipt_kind=row.receipt_kind,
                 raw_shop_name=row.raw_shop_name, raw_nip=row.raw_nip,
-                document_kind=row.document_kind, due_date=row.due_date,
-                source_kind=row.source_kind, forwarded_sender_domain=row.forwarded_sender_domain,
-                id=row.id,
+                document_kind=row.document_kind, due_date=row.due_date, id=row.id,
             )
         if preview is None:
             return {"receipt": receipt}

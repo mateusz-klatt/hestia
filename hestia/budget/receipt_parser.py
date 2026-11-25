@@ -107,24 +107,20 @@ _CHAIN_NIPS = {
     "9370008168": "carrefour",
     "7811897358": "lidl",
 }
-_CHAIN_TOKENS = {
-    "biedronka": ("biedronka", "jeronimo", "martins"),
-    "carrefour": ("carrefour",),
-    "lidl": ("lidl",),
-}
 _CHAIN_ALIAS_GROUPS = {
     "biedronka": (frozenset({"biedronka"}), frozenset({"jeronimo", "martins"})),
     "carrefour": (frozenset({"carrefour"}),),
     "lidl": (frozenset({"lidl"}),),
 }
-GATEWAY_TOKENS = frozenset({"p24", "przelewy24", "payu", "autopay", "tpay", "paynow", "dotpay", "blik"})
+_CHAIN_WORDS = {chain: frozenset().union(*groups) for chain, groups in _CHAIN_ALIAS_GROUPS.items()}
 _STOP_TOKENS = frozenset({
     "energy", "energia", "polska", "poland", "services", "service", "group",
     "store", "shop", "sklep", "market", "online", "pay", "payment", "oplata",
     "sp", "z", "o", "oo", "sa", "spolka", "zoo",
     "com", "pl", "www", "net", "eu",
+    "p24", "przelewy24", "payu", "autopay", "tpay", "paynow", "dotpay", "blik",
     "fiskalny", "paragon",
-}) | GATEWAY_TOKENS
+})
 
 
 class ReceiptError(ValueError):
@@ -464,8 +460,8 @@ def chain_for(shop_name, nip):
     if nip in _CHAIN_NIPS:
         return _CHAIN_NIPS[nip]
     words = frozenset(merchant_word_tokens(shop_name))
-    return next((chain for chain, tokens in _CHAIN_TOKENS.items()
-                 if words.intersection(tokens)), None)
+    return next((chain for chain, groups in _CHAIN_ALIAS_GROUPS.items()
+                 if any(group.issubset(words) for group in groups)), None)
 
 
 def merchant_word_tokens(value):
@@ -482,7 +478,7 @@ def merchant_match_groups(shop_name, nip):
     chain = chain_for(shop_name, nip)
     if chain is None:
         return (distinctive,) if distinctive else ()
-    extra = distinctive - frozenset(_CHAIN_TOKENS[chain])
+    extra = distinctive - _CHAIN_WORDS[chain]
     return tuple(group | extra for group in _CHAIN_ALIAS_GROUPS[chain])
 
 
@@ -493,7 +489,7 @@ def merchant_tokens(shop_name, nip):
     }
     chain = chain_for(shop_name, nip)
     if chain is not None:
-        distinctive.update(_CHAIN_TOKENS[chain])
+        distinctive.update(_CHAIN_WORDS[chain])
     return frozenset(distinctive)
 
 

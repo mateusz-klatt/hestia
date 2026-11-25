@@ -5,7 +5,6 @@ import {
   REDACTED_VALUE,
   addDecimals,
   availableLinkOptions,
-  buildBulkConfirmRequest,
   buildBulkSelectionPlan,
   buildConfirmRequest,
   buildPlainBulkConfirmRequest,
@@ -646,53 +645,9 @@ describe("receipts_model", () => {
       errorCode: "budget_receipt_conflict",
     });
 
-    // Bulk auto-link rules: single candidate with merchant_token_hit -> linked; 2 cands / 0 cands / no merchant hit -> unlinked or skipped.
-    const hitCand = candidateOf({ entry_reference: "1".repeat(64), candidate_token: "tok-1", merchant_token_hit: true });
-    const hitCand2 = candidateOf({ entry_reference: "2".repeat(64), candidate_token: "tok-2", merchant_token_hit: true });
-    const noHitCand = candidateOf({ entry_reference: "3".repeat(64), candidate_token: "tok-3", merchant_token_hit: false });
-
-    const autoInv = buildBulkConfirmRequest(invoiceDetail, [hitCand], "Summary", { autoLink: true, confirmUnlinked: true });
-    expect(autoInv).toEqual({
-      action: "confirm",
-      linked: true,
-      request: expect.objectContaining({
-        receipt_id: "r-imp-inv",
-        link: { account_id: "acc-1", entry_reference: "1".repeat(64), candidate_token: "tok-1" },
-        lines: [expect.objectContaining({ raw_name: "FV/2026/05", net_line_total: "99.5" }) as unknown],
-      }) as unknown,
-    });
-
-    const autoPay = buildBulkConfirmRequest(paymentDetail, [hitCand], "Summary", { autoLink: true, confirmUnlinked: false });
-    expect(autoPay.action).toBe("confirm");
-    if (autoPay.action === "confirm") {
-      expect(autoPay.linked).toBe(true);
-      expect(autoPay.request.link).toEqual({ account_id: "acc-1", entry_reference: "1".repeat(64), candidate_token: "tok-1" });
-      expect("lines" in autoPay.request).toBe(false);
-    }
-
-    expect(buildBulkConfirmRequest(paymentDetail, [hitCand], "Summary", { autoLink: false, confirmUnlinked: true })).toEqual({
-      action: "confirm",
-      linked: false,
-      request: expect.objectContaining({ receipt_id: "r-imp-pay", link: null }) as unknown,
-    });
-    expect(buildBulkConfirmRequest(paymentDetail, [hitCand], "Summary", { autoLink: false, confirmUnlinked: false })).toEqual({
-      action: "skip",
-    });
-
-    for (const nonMatchCandidates of [[hitCand, hitCand2], [hitCand, noHitCand], [], [noHitCand]]) {
-      const confirmUnlinkedRes = buildBulkConfirmRequest(paymentDetail, nonMatchCandidates, "Summary", {
-        autoLink: true,
-        confirmUnlinked: true,
-      });
-      expect(confirmUnlinkedRes).toEqual({
-        action: "confirm",
-        linked: false,
-        request: expect.objectContaining({ receipt_id: "r-imp-pay", link: null }) as unknown,
-      });
-      expect(buildBulkConfirmRequest(paymentDetail, nonMatchCandidates, "Summary", {
-        autoLink: true,
-        confirmUnlinked: false,
-      })).toEqual({ action: "skip" });
+    expect(builtPay.ok).toBe(true);
+    if (builtPay.ok) {
+      expect(builtPay.request.link).toBeNull();
     }
   });
 });

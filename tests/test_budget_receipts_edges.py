@@ -109,7 +109,10 @@ class ParserEdgeTests(unittest.TestCase):
         self.assertEqual(merchant_tokens(None, None), frozenset())
         self.assertEqual(merchant_match_groups("LIDLBERG", None), (frozenset({"lidlberg"}),))
         self.assertIsNone(chain_for("LIDLBERG", None))
+        self.assertIsNone(chain_for("MARTINS AUTO", None))
+        self.assertEqual(chain_for("JERONIMO MARTINS POLSKA", None), "biedronka")
         self.assertEqual(merchant_tokens("LIDLBERG", None), frozenset({"lidlberg"}))
+        self.assertEqual(merchant_tokens("MARTINS AUTO", None), frozenset({"martins", "auto"}))
         self.assertEqual(merchant_tokens("BIEDRONKA", None), frozenset({"biedronka", "jeronimo", "martins"}))
         self.assertEqual(merchant_tokens("ab polska market piernik", None), frozenset({"piernik"}))
         for generic in ("energy", "energia", "polska", "poland", "services", "service", "group",
