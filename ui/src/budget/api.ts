@@ -170,6 +170,9 @@ export const budgetApi = {
   setKind: (account: BudgetAccount, kind: BudgetKind) =>
     post<{ account: BudgetAccount }>("account-kind",
       { account_id: account.id, kind, expected_version: account.control_version }),
+  setCreditLimit: (account: BudgetAccount, creditLimit: string | null) =>
+    post<{ account: BudgetAccount }>("account-credit-limit",
+      { account_id: account.id, credit_limit: creditLimit, expected_version: account.control_version }),
   setPaused: (connection: BudgetConnection, paused: boolean) =>
     post<{ connection: BudgetConnection }>("connection-state",
       { connection_id: connection.id, paused, expected_version: connection.control_version }),

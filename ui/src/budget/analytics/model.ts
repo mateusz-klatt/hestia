@@ -318,6 +318,8 @@ export const MONTH_BUDGET_LIMIT_STATUS_KEYS: Readonly<Record<string, MessageKey>
 };
 
 export const MONTH_BUDGET_CARD_STATUS_KEYS: Readonly<Record<string, MessageKey>> = {
+  available: "budget.monthBudget.cardStatuses.available",
+  partial: "budget.monthBudget.cardStatuses.partial",
   unavailable: "budget.monthBudget.cardStatuses.unavailable",
 };
 

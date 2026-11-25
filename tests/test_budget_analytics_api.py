@@ -394,7 +394,8 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
             payload = await unconfigured.json()
             api_contract.BudgetAnalyticsMonthlyBudget.model_validate(payload)
             self.assertEqual(payload["configuration"], {"status": "unconfigured", "source": "none"})
-            self.assertEqual(payload["card_exposure"], {"status": "unavailable", "amount": None, "as_of_date": None})
+            self.assertEqual(payload["card_exposure"],
+                             {"status": "unavailable", "amount": None, "as_of_date": None, "accounts": []})
             self.assertEqual((payload["period"], payload["currency"]), ("2026-11", "PLN"))
 
             with mock.patch.object(analytics_api, "_store",

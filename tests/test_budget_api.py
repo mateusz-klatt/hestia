@@ -310,6 +310,30 @@ class BudgetAPITests(unittest.IsolatedAsyncioTestCase):
             confirmed = await self.post("account-kind", {"account_id": self.alice_id, "kind": "credit_card", "expected_version": version})
             self.assertEqual(confirmed.status, 200)
             self.assertFalse((await confirmed.json())["account"]["selected"])
+            card_version = (await confirmed.json())["account"]["control_version"]
+            for bad_body in (
+                {"account_id": self.alice_id, "credit_limit": "0", "expected_version": card_version},
+                {"account_id": self.alice_id, "credit_limit": "10000000.01", "expected_version": card_version},
+                {"account_id": self.alice_id, "credit_limit": 10000, "expected_version": card_version},
+            ):
+                bad_limit = await self.post("account-credit-limit", bad_body)
+                self.assertEqual(bad_limit.status, 400)
+            missing_ver = await self.post("account-credit-limit", {"account_id": self.alice_id, "credit_limit": "10000"})
+            self.assertEqual(missing_ver.status, 409)
+            api_contract.BudgetConflict.model_validate(await missing_ver.json())
+            saved_limit = await self.post("account-credit-limit",
+                                          {"account_id": self.alice_id, "credit_limit": "10000.00",
+                                           "expected_version": card_version})
+            self.assertEqual(saved_limit.status, 200)
+            limit_payload = await saved_limit.json()
+            api_contract.BudgetAccountSaved.model_validate(limit_payload)
+            self.assertEqual(limit_payload["account"]["credit_limit"], "10000")
+            self.assertEqual((await self.account())["credit_limit"], "10000")
+            cleared_limit = await self.post("account-credit-limit",
+                                            {"account_id": self.alice_id, "credit_limit": None,
+                                             "expected_version": limit_payload["account"]["control_version"]})
+            self.assertEqual(cleared_limit.status, 200)
+            self.assertIsNone((await cleared_limit.json())["account"]["credit_limit"])
             connection = await self.connection()
             paused = await self.post("connection-state", {"connection_id": "bank", "paused": True,
                                                           "expected_version": connection["control_version"]})
@@ -318,7 +342,8 @@ class BudgetAPITests(unittest.IsolatedAsyncioTestCase):
         global_audit.assert_not_called()
         credentials.assert_not_called()
         audits = self.rows(db.BudgetAccountAudit)[before:]
-        self.assertEqual(len(audits), 2)
+        self.assertEqual(len(audits), 4)
+        self.assertNotIn("10000", json.dumps([(row.field, row.old_value_json, row.new_value_json) for row in audits]))
         self.assertEqual({row.owner for row in audits}, {"alice"})
         self.assertEqual({row.actor for row in audits}, {"alice"})
         self.assertEqual({row.origin for row in audits}, {"web"})

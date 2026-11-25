@@ -14,8 +14,8 @@ from aiohttp import web
 from pydantic import ValidationError
 
 from .. import auth, authz, store_sql
-from ..api_contract import (BudgetBackgroundSelectionRequest, BudgetConnectionStateRequest, BudgetKindRequest,
-                            BudgetRefreshRequest, BudgetSelectionRequest)
+from ..api_contract import (BudgetBackgroundSelectionRequest, BudgetConnectionStateRequest,
+                            BudgetCreditLimitRequest, BudgetKindRequest, BudgetRefreshRequest, BudgetSelectionRequest)
 from ..db import init_db
 from . import jobs
 from .config import BudgetConfigError
@@ -31,6 +31,7 @@ READS = ("connections", "accounts", "status", "transactions", "balances", "limit
 MUTATIONS = {
     "account-selection": (BudgetSelectionRequest, "set_account_selected", "account", "account_id", "selected"),
     "account-kind": (BudgetKindRequest, "confirm_account_kind", "account", "account_id", "kind"),
+    "account-credit-limit": (BudgetCreditLimitRequest, "set_account_credit_limit", "account", "account_id", "credit_limit"),
     "connection-state": (BudgetConnectionStateRequest, "set_connection_paused", "connection", "connection_id", "paused"),
     "background-selection": (BudgetBackgroundSelectionRequest, "set_connection_background", "connection",
                              "connection_id", "enabled"),

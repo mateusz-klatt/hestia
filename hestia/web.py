@@ -269,6 +269,7 @@ _ROUTE_MIN_ROLE = {
     ("GET", "/api/budget/limits"): _ADMIN,
     ("POST", "/api/budget/account-selection"): _ADMIN,
     ("POST", "/api/budget/account-kind"): _ADMIN,
+    ("POST", "/api/budget/account-credit-limit"): _ADMIN,
     ("POST", "/api/budget/connection-state"): _ADMIN,
     ("POST", "/api/budget/background-selection"): _ADMIN,
     ("POST", "/api/budget/refresh"): _ADMIN,

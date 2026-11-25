@@ -22,7 +22,7 @@ export function account(changes: Partial<BudgetAccount> = {}): BudgetAccount {
     id: "local-a", connection: "bank", configured: true, selected: true, active: true, paused: false,
     control_version: 1, kind: "unknown", kind_confirmed_at: null, kind_confirmed_by: null,
     kind_confirmation_origin: null, components: { transactions: component, balances: component },
-    display: null, observed_balance_currencies: [], ...changes,
+    display: null, observed_balance_currencies: [], credit_limit: null, ...changes,
   };
 }
 

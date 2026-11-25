@@ -413,7 +413,7 @@ export function monthlyBudgetOf(changes: Partial<AnalyticsMonthlyBudget> = {}): 
     pace: monthlyBudgetPace(),
     category_spend: [monthlyBudgetCategorySpend()],
     pass_through: null,
-    card_exposure: { status: "unavailable", amount: null, as_of_date: null },
+    card_exposure: { status: "unavailable", amount: null, as_of_date: null, accounts: [] },
     ...changes,
   };
 }

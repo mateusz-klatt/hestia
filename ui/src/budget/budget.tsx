@@ -6,8 +6,9 @@ import { currentLocale, t, tPlural } from "../i18n";
 import { budgetApi } from "./api";
 import type { BudgetApi, BudgetResult } from "./api";
 import { ACTIVE_JOB, KINDS, accountLabel, effectiveState, formatAmount, freshness, hasActiveJob, idempotencyKey,
-  isAccessLoss, isComponentLimit, latestJob, limitState, newer, otherObservedCurrencies, presetRange,
-  OPEN_FLOW, READY_FLOW, consentIntent, safeAuthorizationUrl, transactionDate, transactionText, validRange, when } from "./model";
+  isAccessLoss, isComponentLimit, latestJob, limitState, newer, normalizeCreditLimitInput, otherObservedCurrencies,
+  presetRange, OPEN_FLOW, READY_FLOW, consentIntent, safeAuthorizationUrl, transactionDate, transactionText, validRange,
+  when } from "./model";
 import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnection, BudgetJob, BudgetKind,
   BudgetConsent, BudgetConsentFlow, BudgetLimit, BudgetSharedLimit, BudgetTransaction, DateRange,
   LimitState } from "./model";
@@ -490,7 +491,8 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
                   <AccountRow key={account.id} account={account} index={index} busy={busy}
                     onOpen={() => { setDetail(account.id); }}
                     onSelect={(selected) => { void saveAccount(`select:${account.id}`, () => api.setSelected(account, selected)); }}
-                    onKind={(kind) => { void saveAccount(`kind:${account.id}`, () => api.setKind(account, kind)); }} />
+                    onKind={(kind) => { void saveAccount(`kind:${account.id}`, () => api.setKind(account, kind)); }}
+                    onCreditLimit={(limit) => { void saveAccount(`credit-limit:${account.id}`, () => api.setCreditLimit(account, limit)); }} />
                 ))}
               </ul>
               {showLimits ? (
@@ -599,11 +601,43 @@ function LimitsPanel({ connectionId, accounts, limits, locale }: LimitsProps) {
 interface RowProps {
   account: BudgetAccount; index: number; busy: ReadonlySet<string>;
   onOpen: () => void; onSelect: (selected: boolean) => void; onKind: (kind: BudgetKind) => void;
+  onCreditLimit: (limit: string | null) => void;
 }
 
-function AccountRow({ account, index, busy, onOpen, onSelect, onKind }: RowProps) {
+function AccountRow({ account, index, busy, onOpen, onSelect, onKind, onCreditLimit }: RowProps) {
   const kind = account.kind_confirmed_at === null ? "" : account.kind;
+  const serverLimit = account.credit_limit ?? "";
+  const [limitDraft, setLimitDraft] = useState(serverLimit);
+  const [limitError, setLimitError] = useState(false);
+  useEffect(() => {
+    setLimitDraft(serverLimit);
+    setLimitError(false);
+  }, [serverLimit]);
   const state = (name: "transactions" | "balances") => labelOf(MAIN_FRESHNESS_KEYS, freshness(account.components[name]));
+  const isConfirmedCard = account.kind_confirmed_at !== null && account.kind === "credit_card";
+  const limitCurrency = account.observed_balance_currencies?.[0] ?? account.display?.currency ?? null;
+  const limitBusy = busy.has(`credit-limit:${account.id}`);
+
+  function submitCreditLimit() {
+    const trimmed = limitDraft.trim();
+    if (trimmed === "") {
+      if (account.credit_limit === null || account.credit_limit === undefined) {
+        setLimitError(true);
+        return;
+      }
+      setLimitError(false);
+      onCreditLimit(null);
+      return;
+    }
+    const parsed = normalizeCreditLimitInput(trimmed);
+    if (parsed === null) {
+      setLimitError(true);
+      return;
+    }
+    setLimitError(false);
+    onCreditLimit(parsed);
+  }
+
   return (
     <li className={account.selected ? "budget-account" : "budget-account is-excluded"}>
       <button type="button" className="budget-account-name" onClick={onOpen}>
@@ -626,6 +660,23 @@ function AccountRow({ account, index, busy, onOpen, onSelect, onKind }: RowProps
           {KINDS.map((item) => <option key={item} value={item}>{labelOf(MAIN_KIND_KEYS, item)}</option>)}
         </select>
       </label>
+      {isConfirmedCard ? (
+        <div className="budget-account-limit">
+          <label className="budget-kind">
+            <span>{t("budget.main.creditLimit")}</span>
+            <input name="credit_limit" type="text" inputMode="decimal" value={limitDraft} disabled={limitBusy}
+              onChange={(event) => { setLimitDraft(event.currentTarget.value); setLimitError(false); }} />
+            {limitCurrency ? <span className="budget-muted">{limitCurrency}</span> : null}
+          </label>
+          <button type="button" disabled={limitBusy} onClick={submitCreditLimit}>{t("budget.main.creditLimitSave")}</button>
+          {account.credit_limit ? (
+            <button type="button" disabled={limitBusy} onClick={() => { setLimitError(false); onCreditLimit(null); }}>
+              {t("budget.main.creditLimitClear")}
+            </button>
+          ) : null}
+          {limitError ? <span className="budget-warn" role="alert">{t("budget.main.creditLimitInvalid")}</span> : null}
+        </div>
+      ) : null}
     </li>
   );
 }

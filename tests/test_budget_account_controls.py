@@ -172,6 +172,58 @@ class BudgetAccountControlTests(AdvancingTime, unittest.TestCase):
         self.assertEqual(account["kind"], "unknown")
         self.assertEqual(self.rows(db.BudgetAccountAudit), [])
 
+    def test_credit_limit_lifecycle_validation_zero_amount_audit_and_cli_omission(self):
+        from hestia.budget.store import load_credit_limits, parse_credit_limit
+
+        self.store.configure(fixtures.configuration())
+        account_id = self.store.accounts("owner")[0]["id"]
+        self.assertEqual(load_credit_limits(None, ()), {})
+        with self.assertRaises(BudgetStoreError):
+            self.store.set_account_credit_limit("owner", account_id, "10000", actor="operator")
+        self.store.confirm_account_kind("owner", account_id, "credit_card", actor="operator")
+
+        for bad in (None, "", "0", "0.00", "-10", "+10", "10000000.01", "1e5", 10000, True, "1" * 81):
+            with self.subTest(bad=bad), self.assertRaises(BudgetStoreError):
+                parse_credit_limit(bad)
+
+        created = self.store.set_account_credit_limit("owner", account_id, "10000.00", actor="operator")
+        self.assertEqual(created["credit_limit"], "10000")
+        self.assertTrue(created["changed"])
+        self.assertNotIn("credit_limit", self.store.accounts("owner")[0])
+
+        repeated = self.store.set_account_credit_limit("owner", account_id, "10000", actor="operator")
+        self.assertFalse(repeated["changed"])
+
+        updated = self.store.set_account_credit_limit("owner", account_id, "12500.50", actor="operator")
+        self.assertTrue(updated["changed"])
+        self.assertEqual(updated["credit_limit"], "12500.5")
+
+        cleared = self.store.set_account_credit_limit("owner", account_id, None, actor="operator")
+        self.assertTrue(cleared["changed"])
+        self.assertIsNone(cleared["credit_limit"])
+        self.assertFalse(self.store.set_account_credit_limit("owner", account_id, None, actor="operator")["changed"])
+
+        audits = [row for row in self.rows(db.BudgetAccountAudit) if row.field == "credit_limit"]
+        self.assertEqual(len(audits), 3)
+        for row in audits:
+            self.assertNotIn("10000", row.old_value_json + row.new_value_json)
+            self.assertNotIn("12500", row.old_value_json + row.new_value_json)
+            self.assertEqual(set(json.loads(row.old_value_json)), {"configured"})
+            self.assertEqual(set(json.loads(row.new_value_json)), {"configured"})
+
+        # Corrupted AppMeta value fails closed.
+        key = f"budget_account_credit_limit:{account_id}"
+        for raw_bad in ("{bad", json.dumps({"other": "100"}), json.dumps({"amount": "0"})):
+            with self.sessions.begin() as session:
+                row = session.get(db.AppMeta, key)
+                if row is None:
+                    session.add(db.AppMeta(key=key, value=raw_bad))
+                else:
+                    row.value = raw_bad
+            with self.assertRaises(BudgetStoreError):
+                with self.sessions.begin() as session:
+                    load_credit_limits(session, [account_id])
+
 
 if __name__ == "__main__":
     unittest.main()

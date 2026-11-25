@@ -242,6 +242,17 @@
             "title": "Control Version",
             "type": "integer"
           },
+          "credit_limit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credit Limit"
+          },
           "display": {
             "anyOf": [
               {
@@ -353,6 +364,17 @@
           "control_version": {
             "title": "Control Version",
             "type": "integer"
+          },
+          "credit_limit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credit Limit"
           },
           "display": {
             "anyOf": [
@@ -2998,9 +3020,24 @@
       },
       "BudgetAnalyticsMonthlyBudgetCardExposure": {
         "properties": {
+          "accounts": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetCardExposureAccount"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accounts"
+          },
           "amount": {
             "anyOf": [
               {
+                "maxLength": 192,
                 "type": "string"
               },
               {
@@ -3021,7 +3058,11 @@
             "title": "As Of Date"
           },
           "status": {
-            "const": "unavailable",
+            "enum": [
+              "available",
+              "partial",
+              "unavailable"
+            ],
             "title": "Status",
             "type": "string"
           }
@@ -3032,6 +3073,49 @@
           "as_of_date"
         ],
         "title": "BudgetAnalyticsMonthlyBudgetCardExposure",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudgetCardExposureAccount": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "available": {
+            "maxLength": 192,
+            "title": "Available",
+            "type": "string"
+          },
+          "debt": {
+            "maxLength": 192,
+            "title": "Debt",
+            "type": "string"
+          },
+          "limit": {
+            "maxLength": 192,
+            "title": "Limit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "debt",
+          "limit",
+          "available",
+          "as_of"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudgetCardExposureAccount",
         "type": "object"
       },
       "BudgetAnalyticsMonthlyBudgetCategoryLabel": {
@@ -8239,6 +8323,44 @@
           "consents"
         ],
         "title": "BudgetConsents",
+        "type": "object"
+      },
+      "BudgetCreditLimitRequest": {
+        "additionalProperties": false,
+        "description": "Set or clear an owner-configured credit limit (> 0, <= 10,000,000) for card debt calculation.",
+        "properties": {
+          "account_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "credit_limit": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "minLength": 1,
+                "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credit Limit"
+          },
+          "expected_version": {
+            "minimum": 1,
+            "title": "Expected Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "credit_limit",
+          "expected_version"
+        ],
+        "title": "BudgetCreditLimitRequest",
         "type": "object"
       },
       "BudgetError": {
@@ -15986,7 +16108,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.48.0"
+    "version": "0.49.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16134,6 +16256,113 @@
           }
         },
         "summary": "Delete a rule by id (deleted=false, still 200, for an absent id)",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/account-credit-limit": {
+      "post": {
+        "description": "Requires the exact admin owner and a same-origin browser session; bearer-only mutations are rejected. expected_version is required. Missing versions or stale conflicting changes return 409 with current safe state after owner validation; an already-applied desired state returns 200 with changed=false even after a stale retry. No bank request is made.",
+        "operationId": "setBudgetAccountCreditLimit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetCreditLimitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetAccountSaved"
+                }
+              }
+            },
+            "description": "local control saved; changed=false is a no-op"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/BudgetError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/BudgetConflict"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "missing version, stale conflicting change or SQLite session users required"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Set or clear one owned card account's credit limit",
         "x-required-role": "admin"
       }
     },
@@ -17770,7 +17999,7 @@
     },
     "/api/budget/analytics/monthly-budget": {
       "get": {
-        "description": "Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates (including cross-account salary matching), and spending pace. Card exposure is reported as unavailable in P1. Makes no bank requests and no database writes.",
+        "description": "Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates (including cross-account salary matching), and spending pace. Card exposure computes total credit card debt as max(0, credit_limit - ITAV) in the budget currency from owner-set limits and stored ITAV balances. Makes no bank requests and no database writes.",
         "operationId": "getBudgetAnalyticsMonthlyBudget",
         "parameters": [
           {

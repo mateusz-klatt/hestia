@@ -53,6 +53,21 @@ export type BudgetOperation = "transactions" | "balances";
 export const KINDS: readonly BudgetKind[] = ["current", "savings", "credit_card", "other"];
 export const ACTIVE_JOB = new Set(["queued", "running"]);
 
+/** Validate and canonicalize a decimal credit-limit input (> 0 and <= 10,000,000), or return null. */
+export function normalizeCreditLimitInput(raw: string): string | null {
+  const trimmed = raw.trim();
+  const normalized = trimmed.includes(".") ? trimmed : trimmed.replace(",", ".");
+  if (normalized.length === 0 || normalized.length > 80 || !/^\d+(?:\.\d+)?$/.test(normalized)) return null;
+  const [wholeRaw = "0", fracRaw = ""] = normalized.split(".");
+  const frac = fracRaw.replace(/0+$/, "");
+  const whole = wholeRaw.replace(/^0+/, "") || "0";
+  const canonical = frac === "" ? whole : `${whole}.${frac}`;
+  const intVal = BigInt(whole);
+  if (intVal === 0n && frac === "") return null;
+  if (intVal > 10_000_000n || (intVal === 10_000_000n && frac !== "")) return null;
+  return canonical;
+}
+
 const DECIMAL = /^(-?)(\d+)(?:\.(\d+))?$/;
 
 function separators(locale: string): { group: string; decimal: string } {

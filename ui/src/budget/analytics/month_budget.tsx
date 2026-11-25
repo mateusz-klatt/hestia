@@ -657,9 +657,33 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, l
               <h4>{cardExposureTitle}</h4>
               <dl>
                 <dt>{cardExposureTitle}</dt>
-                <dd><strong>{labelOf(MONTH_BUDGET_CARD_STATUS_KEYS, data.card_exposure.status)}</strong></dd>
+                <dd>
+                  <strong>
+                    {data.card_exposure.amount === null
+                      ? labelOf(MONTH_BUDGET_CARD_STATUS_KEYS, data.card_exposure.status)
+                      : money(data.card_exposure.amount)}
+                  </strong>
+                  {data.card_exposure.amount !== null && data.card_exposure.status === "partial" ? (
+                    <span className="budget-muted">
+                      {" · "}
+                      {labelOf(MONTH_BUDGET_CARD_STATUS_KEYS, data.card_exposure.status)}
+                    </span>
+                  ) : null}
+                </dd>
+                {data.card_exposure.as_of_date !== null ? (
+                  <>
+                    <dt>{t("budget.monthBudget.cardExposureAsOfLabel")}</dt>
+                    <dd>{data.card_exposure.as_of_date}</dd>
+                  </>
+                ) : null}
               </dl>
-              <p className="budget-muted">{t("budget.monthBudget.cardExposureNote")}</p>
+              <p className="budget-muted">
+                {data.card_exposure.status === "available"
+                  ? t("budget.monthBudget.cardExposureCalculatedNote")
+                  : data.card_exposure.status === "partial"
+                    ? t("budget.monthBudget.cardExposurePartialNote")
+                    : t("budget.monthBudget.cardExposureNote")}
+              </p>
             </article>
           </div>
 

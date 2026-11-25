@@ -1272,6 +1272,61 @@ class MonthlyBudgetProjectionTests(ProjectionCase):
             with self.assertRaises(BudgetConfigError):
                 self.store.monthly_budget("owner")
 
+    def test_monthly_budget_card_exposure_conventions_cache_and_corrupt_errors(self):
+        salary = self.store.create_category("owner", "Wynagrodzenie")
+        cfg = json.dumps({"owner": {"income_category_ids": [salary["id"]]}})
+        self.store.overview("owner", "2026-11")
+        with self.sessions.begin() as session:
+            acct_a = session.get(db.BudgetAccount, self.accounts["a"])
+            acct_a.kind, acct_a.kind_confirmed_at = "credit_card", self.now
+            acct_a.balances_json = json.dumps([
+                {"name": "Limit", "balance_type": "ITBD", "balance_amount": {"amount": "10000", "currency": "PLN"}, "reference_date": None},
+                {"name": "Avail", "balance_type": "ITAV", "balance_amount": {"amount": "9900", "currency": "PLN"}, "reference_date": None},
+            ])
+            acct_b = session.get(db.BudgetAccount, self.accounts["b"])
+            acct_b.kind, acct_b.kind_confirmed_at = "credit_card", self.now
+            acct_b.balances_json = json.dumps([
+                {"name": "Booked", "balance_type": "ITBD", "balance_amount": {"amount": "450", "currency": "PLN"}, "reference_date": None},
+                {"name": "Avail", "balance_type": "ITAV", "balance_amount": {"amount": "4200", "currency": "PLN"}, "reference_date": None},
+            ])
+            for account_id, stamp in (
+                (self.accounts["a"], datetime(2026, 11, 21, 10, 0, tzinfo=timezone.utc).timestamp()),
+                (self.accounts["b"], datetime(2026, 11, 20, 10, 0, tzinfo=timezone.utc).timestamp()),
+            ):
+                comp = session.get(db.BudgetComponent, (account_id, "balances"))
+                if comp is None:
+                    session.add(db.BudgetComponent(account_id=account_id, operation="balances", last_success=stamp))
+                else:
+                    comp.last_success = stamp
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            partial = self.store.monthly_budget("owner")
+            self.assertEqual(partial["card_exposure"]["status"], "partial")
+            self.assertIsNone(partial["card_exposure"]["amount"])
+            self.store.set_account_credit_limit("owner", self.accounts["a"], "10000", actor="owner")
+            self.store.set_account_credit_limit("owner", self.accounts["b"], "5000", actor="owner")
+            full = self.store.monthly_budget("owner")
+            api_contract.BudgetAnalyticsMonthlyBudget.model_validate(full)
+            self.assertEqual(full["card_exposure"]["status"], "available")
+            self.assertEqual(full["card_exposure"]["amount"], "900")
+            self.assertEqual(full["card_exposure"]["as_of_date"], "2026-11-20")
+            self.assertEqual(len(full["card_exposure"]["accounts"]), 2)
+            # Updating balances_json works even without changing transactions (projection cache hit).
+            with self.sessions.begin() as session:
+                session.get(db.BudgetAccount, self.accounts["a"]).balances_json = json.dumps([
+                    {"name": "Avail", "balance_type": "ITAV", "balance_amount": {"amount": "9800", "currency": "PLN"}, "reference_date": None},
+                ])
+            updated = self.store.monthly_budget("owner")
+            self.assertEqual(updated["card_exposure"]["amount"], "1000")
+            # Corrupted balances_json or corrupted AppMeta credit limit -> 500 budget_analytics_data_error.
+            for bad_balances in ("{bad-json", json.dumps({"not": "a-list"})):
+                with self.sessions.begin() as session:
+                    session.get(db.BudgetAccount, self.accounts["a"]).balances_json = bad_balances
+                self.assert_invalid(lambda: self.store.monthly_budget("owner"), code="budget_analytics_data_error", status=500)
+            with self.sessions.begin() as session:
+                session.get(db.BudgetAccount, self.accounts["a"]).balances_json = "[]"
+                session.get(db.AppMeta, f"budget_account_credit_limit:{self.accounts['a']}").value = json.dumps({"amount": "0"})
+            self.assert_invalid(lambda: self.store.monthly_budget("owner"), code="budget_analytics_data_error", status=500)
+
     def test_monthly_budget_charts_single_snapshot_cache_identity_and_income_window(self):
         salary = self.store.create_category("owner", "Wynagrodzenie")
         rent = self.store.create_category("owner", "Najem")

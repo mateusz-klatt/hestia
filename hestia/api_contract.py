@@ -113,7 +113,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.46.0: additive 409 device_token_limit_reached response for new password-login device names at the active cap.
 # 0.47.0: additive parse_failed_reasons on BudgetReceiptGmailStatus and retry_parse_failed on BudgetReceiptGmailSyncRequest (zero migration).
 # 0.48.0: read-only bounded expansion of recurring calendar events into concrete instances.
-CONTRACT_VERSION = "0.48.0"
+# 0.49.0: per-card credit_limit control (POST /api/budget/account-credit-limit, BudgetAccount.credit_limit) and real monthly budget card_exposure calculation.
+CONTRACT_VERSION = "0.49.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -137,6 +138,7 @@ _P_BUDGET_BALANCES = _P_BUDGET + "balances"
 _P_BUDGET_LIMITS = _P_BUDGET + "limits"
 _P_BUDGET_SELECTION = _P_BUDGET + "account-selection"
 _P_BUDGET_KIND = _P_BUDGET + "account-kind"
+_P_BUDGET_CREDIT_LIMIT = _P_BUDGET + "account-credit-limit"
 _P_BUDGET_CONNECTION_STATE = _P_BUDGET + "connection-state"
 _P_BUDGET_BACKGROUND = _P_BUDGET + "background-selection"
 _P_BUDGET_REFRESH = _P_BUDGET + "refresh"
@@ -1103,6 +1105,28 @@ class BudgetKindRequest(BaseModel):
     expected_version: BudgetVersion
 
 
+def _check_credit_limit(value: str) -> str:
+    from .budget.store import parse_credit_limit
+    parse_credit_limit(value)
+    return value
+
+
+BudgetCreditLimit = Annotated[
+    str,
+    Field(min_length=1, max_length=80, pattern=r"^[0-9]+(?:\.[0-9]+)?$"),
+    AfterValidator(_check_credit_limit),
+]
+
+
+class BudgetCreditLimitRequest(BaseModel):
+    """Set or clear an owner-configured credit limit (> 0, <= 10,000,000) for card debt calculation."""
+
+    model_config = _STRICT
+    account_id: BudgetId
+    credit_limit: BudgetCreditLimit | None
+    expected_version: BudgetVersion
+
+
 class BudgetConnectionStateRequest(BaseModel):
     """Pause or resume a local connection; no provider session is created or closed."""
 
@@ -1338,6 +1362,7 @@ class BudgetAccount(BaseModel):
     display: BudgetAccountDisplay | None = None
     observed_balance_currencies: list[str] = Field(default_factory=list,
         description="Sorted unique currencies from current stored API balances only; independent of declared display currency.")
+    credit_limit: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 BudgetAttention = Literal["authorization", "invalid_session", "expired_session", "session_mismatch", "configuration"]
@@ -2772,11 +2797,24 @@ class BudgetAnalyticsMonthlyBudgetPassThrough(BaseModel):
     uncovered_mortgage: BudgetAnalyticsMonthlyBudgetMoney
 
 
+class BudgetAnalyticsMonthlyBudgetCardExposureAccount(BaseModel):
+    model_config = _READ
+    account_id: str
+    debt: BudgetAnalyticsMonthlyBudgetMoney
+    limit: BudgetAnalyticsMonthlyBudgetMoney
+    available: BudgetAnalyticsMonthlyBudgetMoney
+    as_of: str | None
+
+
 class BudgetAnalyticsMonthlyBudgetCardExposure(BaseModel):
     model_config = _READ
-    status: Literal["unavailable"]
-    amount: str | None
+    status: Literal["available", "partial", "unavailable"]
+    amount: BudgetAnalyticsMonthlyBudgetMoney | None
     as_of_date: str | None
+    accounts: Annotated[
+        list[BudgetAnalyticsMonthlyBudgetCardExposureAccount] | None,
+        Field(default=None, json_schema_extra=_OMIT),
+    ] = None
 
 
 class BudgetAnalyticsMonthlyBudget(BaseModel):
@@ -3480,7 +3518,7 @@ _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCatego
                      BudgetAnalyticsMonthlyBudgetCharts)
 
 
-_BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetConnectionStateRequest,
+_BUDGET_MODELS = (BudgetSelectionRequest, BudgetKindRequest, BudgetCreditLimitRequest, BudgetConnectionStateRequest,
                   BudgetBackgroundSelectionRequest, BudgetRefreshRequest,
                   BudgetConsentStartRequest, BudgetConsentFlowRequest, BudgetConsentPending,
                   BudgetConsents, BudgetConsentRenewalReminders, BudgetConsentReconcile,
@@ -3610,6 +3648,7 @@ _PATH_ROLES = {
     ("GET", _P_BUDGET_LIMITS): "admin",
     ("POST", _P_BUDGET_SELECTION): "admin",
     ("POST", _P_BUDGET_KIND): "admin",
+    ("POST", _P_BUDGET_CREDIT_LIMIT): "admin",
     ("POST", _P_BUDGET_CONNECTION_STATE): "admin",
     ("POST", _P_BUDGET_BACKGROUND): "admin",
     ("POST", _P_BUDGET_REFRESH): "admin",
@@ -4192,6 +4231,7 @@ def _budget_paths():
     writes = (
         (_P_BUDGET_SELECTION, "setBudgetAccountSelection", "Select or deselect one owned account", "BudgetSelectionRequest", "BudgetAccountSaved"),
         (_P_BUDGET_KIND, "setBudgetAccountKind", "Explicitly confirm one owned account's kind", "BudgetKindRequest", "BudgetAccountSaved"),
+        (_P_BUDGET_CREDIT_LIMIT, "setBudgetAccountCreditLimit", "Set or clear one owned card account's credit limit", "BudgetCreditLimitRequest", "BudgetAccountSaved"),
         (_P_BUDGET_CONNECTION_STATE, "setBudgetConnectionState", "Pause or resume one owned connection locally", "BudgetConnectionStateRequest", "BudgetConnectionSaved"),
         (_P_BUDGET_BACKGROUND, "setBudgetBackgroundSelection", "Opt one owned connection in or out of unattended acquisition", "BudgetBackgroundSelectionRequest", "BudgetConnectionSaved"),
     )
@@ -4650,7 +4690,8 @@ def _analytics_paths():
             "Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. "
             "Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, "
             "unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates "
-            "(including cross-account salary matching), and spending pace. Card exposure is reported as unavailable in P1. "
+            "(including cross-account salary matching), and spending pace. Card exposure computes total credit card debt as "
+            "max(0, credit_limit - ITAV) in the budget currency from owner-set limits and stored ITAV balances. "
             "Makes no bank requests and no database writes."
         )),
         "monthly-budget/charts": ("Read the owner-private monthly budget dashboard and chart series", (
