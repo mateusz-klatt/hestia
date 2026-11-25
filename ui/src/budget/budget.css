@@ -218,3 +218,46 @@
   .budget-month-dashboard .budget-total dl { grid-template-columns: minmax(0, 1fr); gap: .15rem; }
   .budget-month-dashboard .budget-total dd { text-align: start; }
 }
+.budget-receipts input[type="date"], .budget-receipts input[type="text"], .budget-receipts input[type="search"] { font: inherit; min-height: 2.4rem; }
+.budget-receipt-row-main { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: .6rem; align-items: baseline; }
+.budget-receipt-row-check { align-self: center; }
+.budget-receipt-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-block: .4rem; }
+.budget-receipt-bulk-dialog { display: grid; gap: .45rem; margin-block: .5rem; }
+.budget-receipt-merchant { overflow-wrap: anywhere; font-weight: 600; }
+.budget-receipt-total { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 1rem; }
+.budget-receipt-source { display: inline-flex; align-items: center; gap: .3rem; }
+.budget-receipt-icon { flex: 0 0 auto; color: var(--fg-soft); }
+.budget-receipt-status[data-status="needs_review"], .budget-receipt-status[data-status="imported"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.budget-receipt-link-badge[data-linked="true"] { border-color: var(--ok, #2e7d32); color: var(--ok, #2e7d32); }
+.budget-redacted { display: inline-block; border: 1px dashed var(--border); border-radius: .35rem; padding: .02rem .4rem; font-size: .8rem; color: var(--fg-soft); font-style: italic; cursor: help; }
+.budget-receipt-overlay { justify-content: flex-end; align-items: stretch; padding: 0; }
+.budget-receipt-drawer { max-width: min(100%, 40rem); width: 100%; height: 100%; max-height: 100vh; border-radius: 0; overflow-y: auto; display: grid; align-content: start; gap: .8rem; padding: 1rem 1.2rem 2rem; }
+.budget-receipt-drawer-head { display: flex; justify-content: space-between; align-items: center; gap: .75rem; border-bottom: 1px solid var(--border); padding-bottom: .5rem; }
+.budget-receipt-drawer-head h3 { margin: 0; }
+.budget-receipt-drawer-body { display: grid; gap: .9rem; }
+.budget-receipt-hero { display: flex; justify-content: space-between; align-items: flex-start; gap: .75rem; flex-wrap: wrap; }
+.budget-receipt-hero-merchant { margin: 0 0 .25rem; font-size: 1.15rem; }
+.budget-receipt-hero-total { font-size: 1.25rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.budget-receipt-meta { display: grid; grid-template-columns: minmax(8rem, auto) minmax(0, 1fr); gap: .25rem .8rem; margin: 0; font-size: .85rem; }
+.budget-receipt-meta dt { color: var(--fg-soft); }
+.budget-receipt-meta dd { margin: 0; overflow-wrap: anywhere; }
+.budget-receipt-section { border-top: 1px solid var(--border); padding-top: .7rem; display: grid; gap: .5rem; }
+.budget-receipt-section h5 { margin: 0; font-size: .95rem; }
+.budget-receipt-lines .budget-receipt-line-desc { color: var(--fg-soft); font-size: .85rem; }
+.budget-receipt-line-main { display: flex; justify-content: space-between; gap: .6rem; align-items: baseline; }
+.budget-receipt-line-amount { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: .85rem; }
+.budget-receipt-image { max-width: 100%; max-height: 24rem; object-fit: contain; border: 1px solid var(--border); border-radius: .4rem; background: #fff; }
+.budget-receipt-linked-tx { display: grid; gap: .35rem; }
+.budget-receipt-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .5rem .7rem; }
+.budget-receipt-form-grid label, .budget-receipt-edit-line label { display: grid; gap: .2rem; font-size: .8rem; color: var(--fg-soft); }
+.budget-receipt-edit-lines { display: grid; gap: .4rem; }
+.budget-receipt-edit-line { display: grid; grid-template-columns: minmax(0, 1fr) minmax(6rem, 8rem) auto; gap: .4rem; align-items: end; }
+.budget-receipt-link-choices { border: 1px solid var(--border); border-radius: .5rem; padding: .6rem .75rem; margin: 0; display: grid; gap: .4rem; }
+.budget-receipt-link-choices legend { font-size: .85rem; font-weight: 600; padding-inline: .3rem; }
+.budget-receipt-candidate { align-items: flex-start; }
+.budget-receipt-delete-dialog { display: grid; gap: .45rem; }
+@media (max-width: 640px) {
+  .budget-receipt-row-main { grid-template-columns: minmax(0, 1fr) auto; }
+  .budget-receipt-row-main > span:first-child { grid-column: 1 / -1; }
+  .budget-receipt-edit-line { grid-template-columns: 1fr; }
+}

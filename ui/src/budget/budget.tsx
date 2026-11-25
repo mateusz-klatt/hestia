@@ -27,6 +27,9 @@ import { MAIN_BALANCE_TYPE_KEYS, MAIN_FRESHNESS_KEYS, MAIN_JOB_STATUS_KEYS, MAIN
   MAIN_VIEW_KEYS, hasAnalytics, labelOf } from "./analytics/model";
 import type { RuleCandidate } from "./analytics/model";
 import { ReceiptDevices } from "./devices";
+import { ReceiptsView } from "./receipts";
+import type { ReceiptsApi } from "./receipts_api";
+import { createPendingReceiptStore } from "./receipts_model";
 import "./budget.css";
 
 const PRESET_KEYS = {
@@ -36,7 +39,7 @@ const PRESET_KEYS = {
   all: "budget.main.presets.all",
 } as const;
 
-type View = "monthly_budget" | "accounts" | "inbox" | "month" | "year" | "limits" | "recurring" | "mortgages" | "forecast" | "quarantine" | "rules";
+type View = "monthly_budget" | "accounts" | "inbox" | "month" | "year" | "limits" | "recurring" | "mortgages" | "forecast" | "quarantine" | "rules" | "receipts";
 
 function serverMonthToToday(month: string): (() => Date) | undefined {
   const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(month);
@@ -74,7 +77,7 @@ function jobText(job: BudgetJob, locale: string): string {
 }
 
 export interface BudgetProps {
-  active: boolean; api?: BudgetApi; pollMs?: number;
+  active: boolean; api?: BudgetApi; receiptsApi?: ReceiptsApi; pollMs?: number;
   /** The user this page signed in as; budget data are shown only while the cookie still names them. */
   principal?: string | null;
   /** Leaves the page for the bank's authorization screen (tests inject a recorder). */
@@ -83,12 +86,13 @@ export interface BudgetProps {
   completeUrl?: string;
 }
 
-export function Budget({ active, api: providedApi, pollMs = 2000, principal,
+export function Budget({ active, api: providedApi, receiptsApi: providedReceiptsApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
   const api = useMemo<BudgetApi>(
     () => providedApi ?? (principal === undefined || principal === null ? budgetApi : createBudgetApi(principal)),
     [providedApi, principal],
   );
+  const effectiveReceiptsApi = providedReceiptsApi ?? api;
   const locale = currentLocale();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
@@ -98,6 +102,12 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
   const [deviceAccess, setDeviceAccess] = useState(true);
   const [deviceUnavailable, setDeviceUnavailable] = useState(false);
   const deviceCapabilityKey = useRef("");
+  const [receiptAccess, setReceiptAccess] = useState(true);
+  const [receiptUnavailable, setReceiptUnavailable] = useState(false);
+  const [receiptEpoch, setReceiptEpoch] = useState(0);
+  const receiptAccessRef = useRef(true);
+  const receiptUnavailableRef = useRef(false);
+  const receiptEpochRef = useRef(0);
   const [accounts, setAccounts] = useState<BudgetAccount[]>([]);
   const [jobs, setJobs] = useState<BudgetJob[]>([]);
   const [showLimits, setShowLimits] = useState(false);
@@ -127,15 +137,45 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
   const alive = useRef(true);
   const generation = useRef(0);
   const epoch = useRef(0);
+  const [sessionEpoch, setSessionEpoch] = useState(0);
   const [revision, setRevision] = useState(0);
   // Bumped whenever the view is hidden or the principal changes; a pending bank start must not navigate then.
   // A layout effect runs in the same commit as the DOM change, so no promise continuation can slip in between.
   const lifecycle = useRef(0);
   const activeRef = useRef(active);
+  const principalRef = useRef(principal);
+  const [committedPrincipal, setCommittedPrincipal] = useState(principal);
+  const pendingReceiptActions = useMemo(() => createPendingReceiptStore(), [principal]);
+
+  const bumpReceiptEpoch = useCallback(() => {
+    receiptEpochRef.current += 1;
+    setReceiptEpoch(receiptEpochRef.current);
+  }, []);
+
   useLayoutEffect(() => {
     activeRef.current = active;
+    if (principalRef.current !== principal) {
+      principalRef.current = principal;
+      epoch.current += 1;
+      generation.current += 1;
+      receiptEpochRef.current += 1;
+      receiptAccessRef.current = true;
+      receiptUnavailableRef.current = false;
+      setSessionEpoch((current) => current + 1);
+      setReceiptEpoch(receiptEpochRef.current);
+      setCommittedPrincipal(principal);
+      setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
+      api.setAuthorizationLocked(true);
+      setAuthorization(null); setAuthorizationLocked(true);
+      setReceiptAccess(true); setReceiptUnavailable(false);
+      setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
+      setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined);
+      setView("accounts");
+      setDevicesFocus(0);
+      setLoad("loading");
+    }
     lifecycle.current += 1;
-  }, [active, principal]);
+  }, [active, principal, api]);
   const [pollTick, setPollTick] = useState(0);
   useEffect(() => {
     alive.current = true;
@@ -157,9 +197,14 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
   const invalidate = useCallback((disabled: boolean, next?: Load) => {
     epoch.current += 1;
     generation.current += 1;
+    bumpReceiptEpoch();
+    receiptAccessRef.current = true;
+    receiptUnavailableRef.current = false;
+    setSessionEpoch((current) => current + 1);
     setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
     api.setAuthorizationLocked(true);
     setAuthorization(null); setAuthorizationLocked(true); setDeviceAccess(true); setDeviceUnavailable(false);
+    setReceiptAccess(true); setReceiptUnavailable(false);
     setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
     setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined); setView("accounts");
     setDevicesFocus(0);
@@ -198,6 +243,14 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
     api.setAuthorizationLocked(false);
     setAuthorizationLocked(false);
     setDeviceAccess(me.data.own_budget.can_manage_devices);
+    const nextReceiptAccess = me.data.own_budget.can_use_receipts;
+    if (nextReceiptAccess) {
+      if (receiptUnavailableRef.current || !receiptAccessRef.current) bumpReceiptEpoch();
+      receiptUnavailableRef.current = false;
+      setReceiptUnavailable(false);
+    }
+    receiptAccessRef.current = nextReceiptAccess;
+    setReceiptAccess(nextReceiptAccess);
     const [connected, listed, queued] = await Promise.all([
       watch(api.connections()), watch(api.accounts()), watch(api.jobs()),
     ]);
@@ -212,13 +265,13 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
     if (queued.ok) setJobs(queued.data.jobs);
     setLoad("ready");
     setRevision((current) => current + 1);
-  }, [api, principal, barrier, invalidate]);
+  }, [api, principal, barrier, invalidate, bumpReceiptEpoch]);
 
   useEffect(() => {
     if (active) void reload();
   }, [active, reload]);
 
-  const refreshAuthorization = useCallback(async (): Promise<boolean> => {
+  const refreshAuthorization = useCallback(async (keepUnavailable = false): Promise<boolean> => {
     const result = await api.capabilities();
     if (!alive.current || barrier(result)) return false;
     if (!result.ok) {
@@ -238,8 +291,16 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
     api.setAuthorizationLocked(false);
     setAuthorizationLocked(false);
     setDeviceAccess(result.data.own_budget.can_manage_devices);
+    const nextReceiptAccess = result.data.own_budget.can_use_receipts;
+    if (nextReceiptAccess && !keepUnavailable) {
+      if (receiptUnavailableRef.current || !receiptAccessRef.current) bumpReceiptEpoch();
+      receiptUnavailableRef.current = false;
+      setReceiptUnavailable(false);
+    }
+    receiptAccessRef.current = nextReceiptAccess;
+    setReceiptAccess(nextReceiptAccess);
     return true;
-  }, [api, principal, barrier, invalidate]);
+  }, [api, principal, barrier, invalidate, bumpReceiptEpoch]);
 
   const authorizeView = useCallback((action: () => void) => {
     void refreshAuthorization().then((allowed) => { if (allowed) action(); });
@@ -266,6 +327,74 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
     }
     return barrier(result);
   }, [barrier, refreshAuthorization]);
+  const receiptBarrier = useCallback((
+    result: { ok: boolean; status?: number; error?: string },
+    listing = false,
+    expectedReceiptEpoch = receiptEpochRef.current,
+  ): boolean => {
+    if (!result.ok && result.status === 403 && result.error !== "budget_disabled") {
+      if (expectedReceiptEpoch !== receiptEpochRef.current) return false;
+      if (listing) {
+        receiptUnavailableRef.current = true;
+        setReceiptUnavailable(true);
+      }
+      receiptAccessRef.current = false;
+      setReceiptAccess(false);
+      bumpReceiptEpoch();
+      void refreshAuthorization(listing);
+      return true;
+    }
+    return barrier(result);
+  }, [barrier, refreshAuthorization, bumpReceiptEpoch]);
+  const receiptViewBarrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean =>
+    isAccessLoss(result) || (!result.ok && result.error === "budget_actor_changed"), []);
+
+  /** Routes every receipt request through master's verified-snapshot gate and parent epoch barrier (never /whoami). */
+  const guardedReceiptsApi = useMemo<ReceiptsApi>(() => {
+    const runWithGate = async <T,>(
+      callFn: () => Promise<BudgetResult<T>>,
+      isMutation: boolean,
+      listing = false,
+    ): Promise<BudgetResult<T>> => {
+      const startedEpoch = epoch.current;
+      const startedReceiptEpoch = receiptEpochRef.current;
+      const expectedPrincipal = principal;
+      const samePrincipal = () => alive.current && principalRef.current === expectedPrincipal;
+      const activeEpoch = () => samePrincipal() && startedEpoch === epoch.current;
+      const currentReceiptPanel = () => activeEpoch() && startedReceiptEpoch === receiptEpochRef.current;
+      if (isMutation ? !activeEpoch() : !currentReceiptPanel()) {
+        return { ok: false, status: 0, error: "budget_stale_epoch" };
+      }
+      if (isMutation && (authorizationLocked || api.isAuthorizationLocked() || (effectiveReceiptsApi.isAuthorizationLocked?.() ?? false))) {
+        return { ok: false, status: 503, error: "budget_server_changed" };
+      }
+      const result = await callFn();
+      if (!activeEpoch()) {
+        return { ok: false, status: 0, error: "budget_stale_epoch" };
+      }
+      if (!isMutation && !result.ok && result.status === 403 && result.error !== "budget_disabled"
+          && startedReceiptEpoch !== receiptEpochRef.current) {
+        return { ok: false, status: 0, error: "budget_stale_epoch" };
+      }
+      if (samePrincipal()) receiptBarrier(result, listing, startedReceiptEpoch);
+      if (!activeEpoch()) {
+        return { ok: false, status: 0, error: "budget_stale_epoch" };
+      }
+      if (!isMutation && startedReceiptEpoch !== receiptEpochRef.current && !(!result.ok && result.status === 403)) {
+        return { ok: false, status: 0, error: "budget_stale_epoch" };
+      }
+      return result;
+    };
+    return {
+      receiptsList: (request) => runWithGate(() => effectiveReceiptsApi.receiptsList(request), false, true),
+      receiptsSearch: (request) => runWithGate(() => effectiveReceiptsApi.receiptsSearch(request), false, true),
+      receiptDetail: (receiptId) => runWithGate(() => effectiveReceiptsApi.receiptDetail(receiptId), false, false),
+      receiptImage: (receiptId) => runWithGate(() => effectiveReceiptsApi.receiptImage(receiptId), false, false),
+      confirmReceipt: (request) => runWithGate(() => effectiveReceiptsApi.confirmReceipt(request), true, false),
+      deleteReceipt: (request) => runWithGate(() => effectiveReceiptsApi.deleteReceipt(request), true, false),
+      isAuthorizationLocked: () => authorizationLocked || api.isAuthorizationLocked() || (effectiveReceiptsApi.isAuthorizationLocked?.() ?? false),
+    };
+  }, [effectiveReceiptsApi, principal, receiptBarrier, authorizationLocked, api]);
   const canManageDevices = deviceAccess && !deviceUnavailable && authorization?.own_budget?.can_manage_devices === true;
 
   // Poll only while a job is queued/running and the view is visible; reload stored data once it settles.
@@ -406,25 +535,47 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
   }, [active, showLimits, revision, api, barrier]);
 
   if (!active) return null;
-  if (load === "serverChanged") {
+  const shownLoad: Load = principal === committedPrincipal ? load : "loading";
+  if (shownLoad === "serverChanged") {
     return <section className="budget-app"><p className="budget-notice" role="alert">{t("budget.main.serverChanged")}</p></section>;
   }
+  const analysis = shownLoad === "ready" && hasAnalytics(capabilities);
+  const receiptsFlag = capabilities === null
+    ? undefined
+    : Object.entries(capabilities).find(([key]) => key === "receipts")?.[1];
+  const receiptsAllowed = shownLoad === "ready"
+    && capabilities !== null
+    && capabilities.stored_reads
+    && receiptsFlag !== false
+    && receiptAccess
+    && !receiptUnavailable
+    && authorization?.own_budget?.can_use_receipts === true;
+  // Analytics views are available only while the server offers analytics; receipts are gated independently.
+  const shownView: View = view === "receipts"
+    ? (receiptsAllowed ? "receipts" : "accounts")
+    : (!analysis ? "accounts" : view);
   const header = (
     <header className="budget-header">
       <div><h2>{t("budget.main.title")}</h2><p>{t("budget.main.subtitle")}</p></div>
       <div className="budget-actions">
-        {load === "ready" && consentEnabled ? (
+        {shownLoad === "ready" && consentEnabled ? (
           <button type="button" aria-pressed={showConsentHealth}
             onClick={() => { authorizeView(() => { setShowConsentHealth((current) => !current); }); }}>
             {showConsentHealth ? t("budget.main.consentHealthHide") : t("budget.main.consentHealth")}
           </button>
         ) : null}
-        {load === "ready" && canManageDevices ? (
+        {shownLoad === "ready" && canManageDevices ? (
           <button type="button" onClick={() => { authorizeView(() => { setView("accounts"); setDevicesFocus((current) => current + 1); }); }}>
             {t("budget.main.devices")}
           </button>
         ) : null}
-        {load === "ready" ? (
+        {shownLoad === "ready" && !analysis && receiptsAllowed ? (
+          <button type="button" aria-pressed={shownView === "receipts"}
+            onClick={() => { authorizeView(() => { setView((current) => (current === "receipts" ? "accounts" : "receipts")); }); }}>
+            {t("budget.main.views.receipts")}
+          </button>
+        ) : null}
+        {shownLoad === "ready" ? (
           <button type="button" aria-pressed={showLimits}
             onClick={() => { authorizeView(() => { setShowLimits((current) => !current); }); }}>
             {showLimits ? t("budget.main.limitsHide") : t("budget.main.limits")}
@@ -434,14 +585,11 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
       </div>
     </header>
   );
-  if (load !== "ready") {
-    const message = { loading: t("budget.main.loading"), disabled: t("budget.main.disabled"), denied: t("budget.main.denied"), error: t("budget.main.error") }[load];
+  if (shownLoad !== "ready") {
+    const message = { loading: t("budget.main.loading"), disabled: t("budget.main.disabled"), denied: t("budget.main.denied"), error: t("budget.main.error") }[shownLoad];
     return <section className="budget-app">{header}<p className="budget-status" role="status">{message}</p></section>;
   }
   const opened = accounts.find((account) => account.id === detail) ?? null;
-  const analysis = hasAnalytics(capabilities);
-  // Analytics views are available only while the server offers analytics.
-  const shownView: View = analysis ? view : "accounts";
   return (
     <section className="budget-app">
       {header}
@@ -470,7 +618,7 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
       )}
       {analysis ? (
         <div className="budget-views" role="group" aria-label={t("budget.main.viewsLabel")}>
-          {(["monthly_budget", "accounts", "inbox", "month", "year", "limits", "recurring", "mortgages", "forecast", "quarantine", "rules"] as const).map((item) => (
+          {(["monthly_budget", "accounts", "inbox", "month", "year", "limits", "recurring", "mortgages", "forecast", "quarantine", "rules", ...(receiptsAllowed ? (["receipts"] as const) : [])] as const).map((item) => (
             <button type="button" key={item} aria-pressed={shownView === item}
               onClick={() => { authorizeView(() => { setView(item); if (item === "month") { setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); } if (item === "rules") setFocusRule(undefined); }); }}>{labelOf(MAIN_VIEW_KEYS, item)}</button>
           ))}
@@ -536,6 +684,10 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
       ) : shownView === "rules" ? (
         <CategoriesView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} initialRule={focusRule ?? null} />
+      ) : shownView === "receipts" ? (
+        <ReceiptsView key={`${principal ?? ""}:${String(sessionEpoch)}:${String(receiptEpoch)}`} receiptsApi={guardedReceiptsApi}
+          pendingStore={pendingReceiptActions} actorKey={principal ?? ""} accounts={accounts}
+          connections={connections} locale={locale} revision={revision} onAccessLoss={receiptViewBarrier} />
       ) : (
         <>
         {canManageDevices ? <ReceiptDevices key={principal ?? ""} api={api} locale={locale} revision={revision}

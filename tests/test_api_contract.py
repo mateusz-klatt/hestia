@@ -59,7 +59,17 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.50.0")
+        self.assertEqual(document["info"]["version"], "0.51.0")
+        confirm_schema = schemas["BudgetReceiptConfirmRequest"]
+        for field_name, index in (("raw_shop_name", 2), ("raw_nip", 3)):
+            self.assertNotIn(field_name, confirm_schema["required"])
+            confirm_schema["properties"][field_name].pop("description")
+            confirm_schema["required"].insert(index, field_name)
+        confirm_lines = confirm_schema["properties"]["lines"]
+        self.assertNotIn("lines", confirm_schema["required"])
+        confirm_schema["properties"]["lines"] = {**confirm_lines["anyOf"][0], "title": "Lines"}
+        confirm_schema["required"].insert(len(confirm_schema["required"]) - 1, "lines")
+        document["info"]["version"] = "0.50.0"
         credit_limit_post = document["paths"]["/api/budget/account-credit-limit"]["post"]
         self.assertEqual(credit_limit_post["x-required-permission"], "owner_only")
         instances_get = document["paths"]["/api/calendars/instances"]["get"]
@@ -708,7 +718,9 @@ class RoleAndBindingContractTests(unittest.TestCase):
         self.assertEqual(
             paths["/api/me/capabilities"]["get"]["x-required-permission"], "authenticated",
         )
-        self.assertEqual(api_contract.CONTRACT_VERSION, "0.50.0")
+        self.assertGreaterEqual(
+            tuple(int(part) for part in api_contract.CONTRACT_VERSION.split(".")), (0, 50, 0),
+        )
         capabilities = api_contract.MeCapabilities.model_validate({
             "user": "viewer", "actor_tag": "A" * 43, "installation_permissions": ["ioc.view"], "own_budget": None,
             "delegated_receipts": None, "household_available": True,

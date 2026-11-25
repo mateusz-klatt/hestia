@@ -35,6 +35,7 @@ CONFIRM_FIELDS = frozenset({
     "receipt_id", "expected_version", "raw_shop_name", "raw_nip", "receipt_kind", "receipt_date",
     "receipt_time", "total_amount", "currency", "payment_method", "lines", "link",
 })
+_CONFIRM_REQUIRED = CONFIRM_FIELDS - frozenset({"lines", "raw_shop_name", "raw_nip"})
 LINE_FIELDS = frozenset({
     "line_kind", "raw_name", "ptu_code", "quantity", "raw_unit", "unit_price_raw",
     "gross_line_total", "discount_amount", "net_line_total",
@@ -722,6 +723,26 @@ def _confirm_money(value, *, mismatch=False):
     return _bounded_money(value, mismatch=mismatch)
 
 
+def _validate_line_totals(value):
+    kind = value["line_kind"]
+    gross = _confirm_money(value["gross_line_total"], mismatch=True)
+    discount = _confirm_money(value["discount_amount"], mismatch=True)
+    net = _confirm_money(value["net_line_total"], mismatch=True)
+    expected = sum_money((gross, negate_money(discount)))
+    valid = net == expected
+    if kind == "item":
+        valid = valid and compare_money(gross, "0") >= 0 and compare_money(discount, "0") >= 0 and compare_money(net, "0") >= 0
+    elif kind == "deposit":
+        valid = valid and compare_money(gross, "0") != 0 and discount == "0" and net == gross
+    elif kind == "basket_discount":
+        valid = valid and compare_money(gross, "0") < 0 and discount == "0" and net == gross
+    else:
+        valid = valid and kind == "other" and discount == "0" and net == gross
+    if not valid:
+        raise ReceiptError("budget_receipt_total_mismatch")
+    return gross, discount, net
+
+
 def _validate_line(value, line_no):
     if not isinstance(value, dict) or set(value) != LINE_FIELDS:
         raise ReceiptError()
@@ -742,21 +763,7 @@ def _validate_line(value, line_no):
     if unit_price is not None:
         unit_price = _confirm_money(unit_price)
     quantity = _confirm_money(value["quantity"])
-    gross = _confirm_money(value["gross_line_total"], mismatch=True)
-    discount = _confirm_money(value["discount_amount"], mismatch=True)
-    net = _confirm_money(value["net_line_total"], mismatch=True)
-    expected = sum_money((gross, negate_money(discount)))
-    valid = net == expected
-    if kind == "item":
-        valid = valid and compare_money(gross, "0") >= 0 and compare_money(discount, "0") >= 0 and compare_money(net, "0") >= 0
-    elif kind == "deposit":
-        valid = valid and compare_money(gross, "0") != 0 and discount == "0" and net == gross
-    elif kind == "basket_discount":
-        valid = valid and compare_money(gross, "0") < 0 and discount == "0" and net == gross
-    else:
-        valid = valid and discount == "0" and net == gross
-    if not valid:
-        raise ReceiptError("budget_receipt_total_mismatch")
+    gross, discount, net = _validate_line_totals(value)
     return {
         "line_no": line_no, "line_kind": kind, "raw_name": name, "raw_name_key": name_key, "ptu_code": ptu,
         "quantity": quantity, "raw_unit": unit, "unit_price_raw": unit_price, "gross_line_total": gross,
@@ -764,8 +771,23 @@ def _validate_line(value, line_no):
     }
 
 
+def validate_confirm_line_totals(lines, total):
+    nets = [_validate_line_totals(line)[2] for line in lines]
+    if sum_money(nets) != total:
+        raise ReceiptError("budget_receipt_total_mismatch")
+
+
+def validate_confirm_lines(lines, total):
+    if not isinstance(lines, list) or len(lines) > MAX_RECEIPT_LINES:
+        raise ReceiptError()
+    clean_lines = [_validate_line(line, number) for number, line in enumerate(lines, 1)]
+    if sum_money(line["net_line_total"] for line in clean_lines) != total:
+        raise ReceiptError("budget_receipt_total_mismatch")
+    return clean_lines
+
+
 def validate_confirm(values):
-    if not isinstance(values, dict) or set(values) != CONFIRM_FIELDS:
+    if not isinstance(values, dict) or not _CONFIRM_REQUIRED.issubset(values) or set(values) - CONFIRM_FIELDS:
         raise ReceiptError()
     if (not isinstance(values["receipt_id"], str) or not _UUID.fullmatch(values["receipt_id"])
             or type(values["expected_version"]) is not int or values["expected_version"] < 1):
@@ -775,26 +797,32 @@ def validate_confirm(values):
     currency = values["currency"]
     if kind not in RECEIPT_KINDS or payment not in PAYMENT_METHODS or not isinstance(currency, str) or not _CURRENCY.fullmatch(currency):
         raise ReceiptError()
-    shop = _clean_text(values["raw_shop_name"], limit=MAX_SHOP_NAME_LEN, optional=True)
-    nip = values["raw_nip"]
-    if nip == "":
-        nip = None
-    if nip is not None and not valid_nip(nip):
-        raise ReceiptError()
+    cleaned = {
+        "receipt_kind": kind, "currency": currency, "payment_method": payment,
+    }
+    if "raw_shop_name" in values:
+        cleaned["raw_shop_name"] = _clean_text(values["raw_shop_name"], limit=MAX_SHOP_NAME_LEN, optional=True)
+    if "raw_nip" in values:
+        nip = values["raw_nip"]
+        if nip == "":
+            nip = None
+        if nip is not None and not valid_nip(nip):
+            raise ReceiptError()
+        cleaned["raw_nip"] = nip
+    if "raw_shop_name" in cleaned or "raw_nip" in cleaned:
+        cleaned["chain_key"] = chain_for(cleaned.get("raw_shop_name"), cleaned.get("raw_nip"))
     receipt_time = values["receipt_time"]
     if receipt_time == "":
         receipt_time = None
     if receipt_time is not None and (not isinstance(receipt_time, str) or not _TIME.fullmatch(receipt_time)):
         raise ReceiptError()
+    cleaned["receipt_time"] = receipt_time
     total = _confirm_money(values["total_amount"], mismatch=True)
     if compare_money(total, "0") <= 0:
         raise ReceiptError("budget_receipt_total_mismatch")
-    lines = values["lines"]
-    if not isinstance(lines, list) or len(lines) > MAX_RECEIPT_LINES:
-        raise ReceiptError()
-    clean_lines = [_validate_line(line, number) for number, line in enumerate(lines, 1)]
-    if sum_money(line["net_line_total"] for line in clean_lines) != total:
-        raise ReceiptError("budget_receipt_total_mismatch")
+    cleaned["total_amount"] = total
+    lines = values.get("lines")
+    cleaned["lines"] = None if lines is None else validate_confirm_lines(lines, total)
     link = values["link"]
     if link is not None:
         token = None if not isinstance(link, dict) else link.get("candidate_token")
@@ -804,8 +832,6 @@ def validate_confirm(values):
                 or not isinstance(link["entry_reference"], str) or not 1 <= len(link["entry_reference"]) <= 1024
                 or not isinstance(token, str) or not 1 <= len(token) <= 4096 or "\n" in token or "\r" in token):
             raise ReceiptError()
-    return {
-        "raw_shop_name": shop, "raw_nip": nip, "receipt_kind": kind, "receipt_date": _confirm_date(values["receipt_date"]),
-        "receipt_time": receipt_time, "total_amount": total, "currency": currency, "payment_method": payment,
-        "lines": clean_lines, "link": link, "chain_key": chain_for(shop, nip),
-    }
+    cleaned["link"] = link
+    cleaned["receipt_date"] = _confirm_date(values["receipt_date"])
+    return cleaned

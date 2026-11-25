@@ -368,10 +368,72 @@ describe("budget api", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect((await scoped.receiptDevices()).ok).toBe(true);
     expect((await scoped.analyticsTransactionsByKeys({ row_keys: [], currency: "PLN" })).ok).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((await scoped.receiptsList({ limit: 10 })).ok).toBe(true);
+    expect((await scoped.receiptsSearch({ query: "Lidl", limit: 10 })).ok).toBe(true);
+    expect((await scoped.receiptDetail("rec-1")).ok).toBe(true);
+    expect((await scoped.receiptImage("rec-1")).ok).toBe(true);
+    expect(await scoped.confirmReceipt({
+      receipt_id: "rec-1",
+      expected_version: 1,
+      raw_shop_name: "Shop",
+      raw_nip: null,
+      receipt_date: "2026-11-14",
+      receipt_time: null,
+      total_amount: "10.00",
+      currency: "PLN",
+      receipt_kind: "purchase",
+      payment_method: "card",
+      lines: null,
+      link: null,
+    })).toEqual({ ok: false, status: 503, error: "budget_server_changed" });
+    expect(await scoped.deleteReceipt({ receipt_id: "rec-1", expected_version: 1 })).toEqual({
+      ok: false, status: 503, error: "budget_server_changed",
+    });
+    expect(scoped.isAuthorizationLocked()).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(6);
     scoped.setAuthorizationLocked(false);
+    expect(scoped.isAuthorizationLocked()).toBe(false);
     await scoped.setPaused(connection, true);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(7);
+  });
+
+  it("echoes X-Hestia-Expected-Actor on every receipt endpoint and aborts pending receipt reads on actor change", async () => {
+    const fetchMock = respond(200, {});
+    const scoped = createBudgetApi("owner");
+    await scoped.capabilities();
+
+    await scoped.receiptsList({ limit: 25 });
+    await scoped.receiptsSearch({ query: "Lidl", limit: 10 });
+    await scoped.receiptDetail("rec-42");
+    await scoped.confirmReceipt({
+      receipt_id: "rec-42",
+      expected_version: 1,
+      raw_shop_name: "Sklep",
+      raw_nip: null,
+      receipt_date: "2026-11-14",
+      receipt_time: null,
+      total_amount: "12.00",
+      currency: "PLN",
+      receipt_kind: "purchase",
+      payment_method: "card",
+      lines: null,
+      link: null,
+    });
+    await scoped.deleteReceipt({ receipt_id: "rec-42", expected_version: 2 });
+    for (const index of [1, 2, 3, 4, 5]) {
+      expect(new Headers(sent(fetchMock, index).init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
+    }
+
+    let resolveDetail!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveDetail = resolve; }));
+    const pendingDetail = scoped.receiptDetail("rec-stale");
+    const detailSignal = sent(fetchMock, 6).init.signal;
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve(new Response(JSON.stringify(capabilitiesFor("mallory", "B".repeat(43))), { status: 200 })));
+    expect(await scoped.capabilities()).toEqual({ ok: false, status: 409, error: "budget_actor_changed" });
+    resolveDetail(new Response(JSON.stringify({ receipt: { receipt_id: "rec-stale" }, candidates: [] }), { status: 200 }));
+    expect(await pendingDetail).toEqual({ ok: false, status: 409, error: "budget_actor_changed" });
+    expect(detailSignal?.aborted).toBe(true);
   });
 
   it("aborts and discards a pending read when capabilities return 404", async () => {
@@ -421,6 +483,10 @@ describe("budget api", () => {
       ["monthlyBudgetCharts", () => api.monthlyBudgetCharts()],
       ["inbox", () => api.inbox()],
       ["receiptDevices", () => api.receiptDevices()],
+      ["receiptsList", () => api.receiptsList()],
+      ["receiptsSearch", () => api.receiptsSearch({ query: "Lidl", limit: 10 })],
+      ["receiptDetail", () => api.receiptDetail("rec-1")],
+      ["receiptImage", () => api.receiptImage("rec-1")],
     ];
     for (const [name, read] of reads) {
       expect(await read(), name).toEqual({ ok: false, status: 503, error: "budget_server_changed" });

@@ -789,6 +789,37 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertEqual(set(display["properties"]), {"product", "currency", "masked_suffix", "source", "observed_at", "imported_at"})
         self.assertNotIn("enum", display["properties"]["source"])
 
+    def test_receipt_confirm_allows_omitted_or_null_lines_while_preserving_legacy_lines_input(self):
+        document = contract.build_openapi()
+        confirm_schema = document["components"]["schemas"]["BudgetReceiptConfirmRequest"]
+        for optional_field in ("lines", "raw_shop_name", "raw_nip"):
+            self.assertNotIn(optional_field, confirm_schema["required"])
+            self.assertNotIn("default", confirm_schema["properties"][optional_field])
+        line = {
+            "line_kind": "item", "raw_name": "Milk", "ptu_code": "A", "quantity": "1",
+            "raw_unit": None, "unit_price_raw": "5.00", "gross_line_total": "5.00",
+            "discount_amount": "0", "net_line_total": "5.00",
+        }
+        base = {
+            "receipt_id": "11111111-1111-4111-8111-111111111111", "expected_version": 1,
+            "receipt_kind": "purchase",
+            "receipt_date": "2026-11-14", "receipt_time": None, "total_amount": "5.00",
+            "currency": "PLN", "payment_method": "card", "link": None,
+        }
+        validated_omitted = contract.BudgetReceiptConfirmRequest.model_validate(base)
+        self.assertEqual(validated_omitted.model_dump(exclude_unset=True), base)
+        self.assertIsNone(validated_omitted.lines)
+        self.assertIsNone(contract.BudgetReceiptConfirmRequest.model_validate({**base, "lines": None}).lines)
+        self.assertEqual(len(contract.BudgetReceiptConfirmRequest.model_validate({**base, "lines": [line]}).lines), 1)
+        for bad_lines in ("bad", 123, True, [line] * 301):
+            with self.subTest(bad_lines=type(bad_lines).__name__), self.assertRaises(ValueError):
+                contract.BudgetReceiptConfirmRequest.model_validate({**base, "lines": bad_lines})
+        ts_path = Path(__file__).resolve().parent.parent / "ui" / "src" / "api" / "openapi.ts"
+        confirm_ts = ts_path.read_text(encoding="utf-8").split("BudgetReceiptConfirmRequest: {", 1)[1].split("\n        };", 1)[0]
+        self.assertIn("lines?: components[\"schemas\"][\"BudgetReceiptLineInput\"][] | null;", confirm_ts)
+        self.assertIn("raw_shop_name?: string | null;", confirm_ts)
+        self.assertIn("raw_nip?: string | null;", confirm_ts)
+
 
 class BudgetProviderBindingTests(unittest.TestCase):
     """Validate actual owner-private SQLite views, including nested response drift."""

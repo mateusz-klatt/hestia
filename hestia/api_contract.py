@@ -115,7 +115,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.48.0: read-only bounded expansion of recurring calendar events into concrete instances.
 # 0.49.0: per-card credit_limit ({amount, currency}) control on accounts + additive card_debt on monthly budget (legacy card_exposure kept at 0.47.0 shape for Vesta).
 # 0.50.0: additive authorization capabilities, public feature detection, and per-operation catalog requirements.
-CONTRACT_VERSION = "0.50.0"
+# 0.51.0: optional/nullable lines and optional raw_shop_name/raw_nip on BudgetReceiptConfirmRequest to keep stored values unchanged.
+CONTRACT_VERSION = "0.51.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2947,12 +2948,29 @@ class BudgetReceiptLinkRequest(BaseModel):
         description="HMAC bound to the owner, transaction, three dates and merchant evidence shown at preview.")]
 
 
+_ConfirmReceiptLines = Annotated[list[BudgetReceiptLineInput], Field(max_length=300)]
+
+
 class BudgetReceiptConfirmRequest(BaseModel):
     model_config = _STRICT
     receipt_id: BudgetReceiptId
     expected_version: BudgetVersion
-    raw_shop_name: Annotated[str, Field(max_length=128)] | None
-    raw_nip: Annotated[str, Field(pattern=r"^(?:|[0-9]{10})$")] | None
+    raw_shop_name: Annotated[
+        Annotated[str, Field(max_length=128)] | None,
+        Field(
+            default=None,
+            description="Omit to keep the stored shop name unchanged; send null to clear.",
+            json_schema_extra=_OMIT,
+        ),
+    ] = None
+    raw_nip: Annotated[
+        Annotated[str, Field(pattern=r"^(?:|[0-9]{10})$")] | None,
+        Field(
+            default=None,
+            description="Omit to keep the stored NIP unchanged; send null to clear.",
+            json_schema_extra=_OMIT,
+        ),
+    ] = None
     receipt_kind: Literal["purchase", "refund"]
     receipt_date: Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
                                        json_schema_extra={"format": "date"})]
@@ -2960,7 +2978,14 @@ class BudgetReceiptConfirmRequest(BaseModel):
     total_amount: BudgetReceiptMoney
     currency: Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
     payment_method: Literal["card", "blik", "cash", "mixed", "unknown"]
-    lines: Annotated[list[BudgetReceiptLineInput], Field(max_length=300)]
+    lines: Annotated[
+        _ConfirmReceiptLines | None,
+        Field(
+            default=None,
+            description="Omit or send null to keep stored lines unchanged and re-validate totals against them.",
+            json_schema_extra=_OMIT,
+        ),
+    ] = None
     link: BudgetReceiptLinkRequest | None
 
 

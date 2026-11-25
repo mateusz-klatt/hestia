@@ -178,6 +178,18 @@ class ParserEdgeTests(unittest.TestCase):
         check(line={"line_kind": "fee"})
         check(line={"ptu_code": "Z"})
         check(line={"raw_name": 1})
+        check(extra_field="unexpected")
+        for missing_key in ("expected_version", "receipt_id", "link"):
+            with self.subTest(missing_key=missing_key), self.assertRaises(ReceiptError):
+                validate_confirm({key: value for key, value in base.items() if key != missing_key})
+        for omitted in ({key: value for key, value in base.items() if key != "lines"}, {**base, "lines": None}):
+            cleaned = validate_confirm(omitted)
+            self.assertIsNone(cleaned["lines"])
+        omitted_headers = validate_confirm(
+            {key: value for key, value in base.items() if key not in ("raw_shop_name", "raw_nip")},
+        )
+        self.assertNotIn("raw_shop_name", omitted_headers)
+        self.assertNotIn("raw_nip", omitted_headers)
         for bad in ({}, [], None):
             with self.subTest(bad=type(bad).__name__), self.assertRaises(ReceiptError):
                 validate_confirm(bad)
@@ -186,6 +198,15 @@ class ParserEdgeTests(unittest.TestCase):
         self.assertIsNone(other["lines"][0]["unit_price_raw"])
         blank = validate_confirm({**base, "raw_shop_name": "", "raw_nip": "", "receipt_time": ""})
         self.assertEqual((blank["raw_shop_name"], blank["raw_nip"], blank["receipt_time"]), (None, None, None))
+        # Legacy error precedence: impossible date + total mismatch still raises total_mismatch first.
+        with self.assertRaises(ReceiptError) as precedence:
+            validate_confirm({**base, "receipt_date": "2026-02-30", "total_amount": "99.00"})
+        self.assertEqual((precedence.exception.code, precedence.exception.status),
+                         ("budget_receipt_total_mismatch", 400))
+        with self.assertRaises(ReceiptError) as date_only:
+            validate_confirm({**base, "receipt_date": "2026-02-30"})
+        self.assertEqual((date_only.exception.code, date_only.exception.status),
+                         ("budget_receipt_invalid_request", 400))
 
 
 class ReconcileEdgeTests(AnalyticsCase):

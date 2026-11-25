@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadLocale } from "../i18n";
 import type { BudgetApi, BudgetResult } from "./api";
 import { Budget } from "./budget";
+import type { ReceiptsApi } from "./receipts_api";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
 import { entriesOf, entry, forecastCurrencyTotal, forecastItem, forecastOf, inboxConsentItem, inboxMarkSaved, inboxOf,
@@ -51,8 +52,10 @@ const balancesData = {
 };
 
 function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
+  let locked = false;
   return {
-    setAuthorizationLocked: vi.fn(),
+    setAuthorizationLocked: vi.fn((value: boolean) => { locked = value; }),
+    isAuthorizationLocked: vi.fn(() => locked),
     capabilities: vi.fn<BudgetApi["capabilities"]>(() => ok(authorization)),
     connections: vi.fn<BudgetApi["connections"]>(() => ok({ connections: [connection], capabilities })),
     accounts: vi.fn<BudgetApi["accounts"]>(() => ok({ accounts })),
@@ -107,6 +110,12 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     pairReceiptDevice: vi.fn<BudgetApi["pairReceiptDevice"]>(),
     cancelReceiptPairCode: vi.fn<BudgetApi["cancelReceiptPairCode"]>(),
     revokeReceiptDevice: vi.fn<BudgetApi["revokeReceiptDevice"]>(),
+    receiptsList: vi.fn<BudgetApi["receiptsList"]>(() => ok({ receipts: [], next_cursor: null })),
+    receiptsSearch: vi.fn<BudgetApi["receiptsSearch"]>(() => ok({ receipts: [], next_cursor: null })),
+    receiptDetail: vi.fn<BudgetApi["receiptDetail"]>(),
+    receiptImage: vi.fn<BudgetApi["receiptImage"]>(),
+    confirmReceipt: vi.fn<BudgetApi["confirmReceipt"]>(),
+    deleteReceipt: vi.fn<BudgetApi["deleteReceipt"]>(),
   } satisfies BudgetApi;
 }
 
@@ -1536,7 +1545,7 @@ describe("analytics views", () => {
     expect(button("Month").getAttribute("aria-pressed")).toBe("true");
   });
 
-    it("falls back to accounts when a reload withdraws the capability", async () => {
+  it("falls back to accounts when a reload withdraws the capability", async () => {
     const api = fakeApi();
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
     await render(api);
@@ -1545,5 +1554,812 @@ describe("analytics views", () => {
     await click(button("Reload"));
     expect(host.querySelector(".budget-views")).toBeNull();
     expect(host.textContent).toContain("Synthetic Current ••0001");
+  });
+});
+
+describe("receipts tab & capability gate", () => {
+  const withAnalytics = { ...capabilities, analytics: true };
+
+  function fakeReceiptsApi(): ReceiptsApi {
+    return {
+      receiptsList: vi.fn<ReceiptsApi["receiptsList"]>(() => ok({
+        receipts: [{
+          receipt_id: "11111111-1111-4111-8111-111111111111",
+          status: "needs_review",
+          document_kind: "receipt",
+          source_kind: "local_ocr",
+          receipt_kind: "purchase",
+          receipt_date: "2026-11-14",
+          receipt_time: null,
+          raw_shop_name: "Tab Integration Market",
+          raw_nip: null,
+          shop_id: null,
+          chain_key: null,
+          total_amount: "19.50",
+          currency: "PLN",
+          payment_method: "card",
+          math_delta: "0",
+          linked: false,
+          linked_account_id: null,
+          linked_entry_ref: null,
+          version: 1,
+          image_available: false,
+          image_expires_at: null,
+          raw_text_expires_at: null,
+          invoice_number: null,
+          due_date: null,
+          import_expires_at: null,
+          forwarded_manually: false,
+          forwarded_sender_domain: null,
+          created_at: 1_700_000_000,
+          updated_at: 1_700_000_000,
+        }],
+        next_cursor: null,
+      })),
+      receiptsSearch: vi.fn<ReceiptsApi["receiptsSearch"]>(() => ok({ receipts: [], next_cursor: null })),
+      receiptDetail: vi.fn<ReceiptsApi["receiptDetail"]>(() => ok({
+        receipt: {
+          receipt_id: "11111111-1111-4111-8111-111111111111",
+          status: "needs_review",
+          document_kind: "receipt",
+          source_kind: "local_ocr",
+          receipt_kind: "purchase",
+          receipt_date: "2026-11-14",
+          receipt_time: null,
+          raw_shop_name: "Tab Integration Market",
+          raw_nip: null,
+          shop_id: null,
+          chain_key: null,
+          total_amount: "19.50",
+          currency: "PLN",
+          payment_method: "card",
+          math_delta: "0",
+          linked: false,
+          linked_account_id: null,
+          linked_entry_ref: null,
+          version: 1,
+          image_available: false,
+          image_expires_at: null,
+          raw_text_expires_at: null,
+          invoice_number: null,
+          due_date: null,
+          import_expires_at: null,
+          forwarded_manually: false,
+          forwarded_sender_domain: null,
+          created_at: 1_700_000_000,
+          updated_at: 1_700_000_000,
+          lines: [{
+            line_no: 1,
+            line_kind: "item",
+            raw_name: "Synthetic Grocery",
+            raw_name_key: "synthetic grocery",
+            ptu_code: "A",
+            quantity: "1",
+            raw_unit: "szt",
+            unit_price_raw: "19.50",
+            gross_line_total: "19.50",
+            discount_amount: "0",
+            net_line_total: "19.50",
+          }],
+        },
+        candidates: [],
+      })),
+      receiptImage: vi.fn<ReceiptsApi["receiptImage"]>(),
+      confirmReceipt: vi.fn<ReceiptsApi["confirmReceipt"]>(),
+      deleteReceipt: vi.fn<ReceiptsApi["deleteReceipt"]>(),
+    };
+  }
+
+  async function renderWithReceipts(
+    api: ReturnType<typeof fakeApi>,
+    rApi: ReceiptsApi,
+    principal?: string | null,
+  ): Promise<void> {
+    await act(async () => {
+      root.render(principal === undefined
+        ? <Budget active api={api} receiptsApi={rApi} pollMs={5} />
+        : <Budget active api={api} receiptsApi={rApi} pollMs={5} principal={principal} />);
+      await Promise.resolve();
+    });
+    await settle();
+  }
+
+  it("gates Receipts independently of analytics, hiding only on stored_reads=false or receipts=false", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+
+    // 1. analytics=false, stored_reads=true -> analytics tabs remain absent, but Receipts header toggle works.
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities }));
+    await renderWithReceipts(api, rApi);
+    expect(host.querySelector(".budget-views")).toBeNull();
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(true);
+    await click(button("Receipts and documents"));
+    expect(rApi.receiptsList).toHaveBeenCalledWith({ limit: 50 });
+    expect(host.textContent).toContain("Tab Integration Market");
+
+    // 2. receipts=false (or stored_reads=false) hides Receipts even when analytics=true.
+    api.connections.mockImplementation(() => ok({
+      connections: [connection],
+      capabilities: { ...withAnalytics, receipts: false } as never,
+    }));
+    await click(button("Reload"));
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
+    expect(host.textContent).not.toContain("Tab Integration Market");
+
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: { ...withAnalytics, stored_reads: false } }));
+    await click(button("Reload"));
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
+
+    // 3. own_budget.can_use_receipts=false hides Receipts even when analytics=true and stored_reads=true.
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+    api.capabilities.mockImplementation(() => ok({
+      ...authorization,
+      own_budget: { ...authorization.own_budget, can_use_receipts: false },
+    }));
+    await click(button("Reload"));
+    expect(host.querySelector(".budget-views")).not.toBeNull();
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
+
+    // 4. analytics=true, stored_reads=true, can_use_receipts=true restores Receipts inside .budget-views.
+    api.capabilities.mockImplementation(() => ok(authorization));
+    await click(button("Reload"));
+    expect(host.querySelector(".budget-views")).not.toBeNull();
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Tab Integration Market");
+  });
+
+  it("keeps Budget intact on 404 disabled, but clears all Budget on unmounted 401/403 from a receipt read", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => fail(404, "budget_receipts_disabled"));
+
+    await renderWithReceipts(api, rApi);
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Receipts are disabled on this server");
+    expect(host.querySelector(".budget-views")).not.toBeNull();
+
+    // Start slow receipt read, switch to Accounts before it returns 401, and verify barrier still clears Budget.
+    const slowRead = deferred<Loaded<ReceiptsApi["receiptsList"]>>();
+    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => slowRead.promise);
+    await click(button("Accounts"));
+    await click(button("Receipts and documents"));
+    await click(button("Accounts"));
+    expect(host.textContent).toContain("Synthetic Current");
+
+    await act(async () => {
+      slowRead.settle({ ok: false, status: 401, error: "budget_http_401" });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("Synthetic Current");
+    expect(host.querySelector(".budget-views")).toBeNull();
+  });
+
+  it("hides only Receipts and refreshes capabilities on receipt 403 while keeping ledger intact for budget.view, and restores when capabilities recover", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+    await renderWithReceipts(api, rApi, "owner");
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Tab Integration Market");
+
+    // 1. Listing 403 when capability refresh now revokes can_use_receipts hides only Receipts; ledger stays intact.
+    await click(button("Accounts"));
+    const listCallsBefore403 = vi.mocked(rApi.receiptsList).mock.calls.length;
+    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    api.capabilities
+      .mockImplementationOnce(() => ok(authorization))
+      .mockImplementation(() => ok({
+        ...authorization,
+        own_budget: { ...authorization.own_budget, can_use_receipts: false },
+      }));
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Synthetic Current");
+    expect(host.textContent).not.toContain("Tab Integration Market");
+    expect(host.textContent).not.toContain("Only the budget's owner");
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
+    expect(vi.mocked(rApi.receiptsList).mock.calls).toHaveLength(listCallsBefore403 + 1);
+
+    // 2. Subsequent capability refresh on focus restores Receipts based on new capabilities.
+    api.capabilities.mockImplementation(() => ok(authorization));
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+    await settle();
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(true);
+    expect(host.textContent).toContain("Tab Integration Market");
+
+    // 3. Transient listing 403 when capabilities still report can_use_receipts=true marks receipts unavailable without looping,
+    //    then Reload (confirming can_use_receipts=true even with unchanged capabilities) clears receiptUnavailable & remounts panel.
+    await click(button("Accounts"));
+    const callsBeforeForbiddenLoop = vi.mocked(rApi.receiptsList).mock.calls.length;
+    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => fail(403, "budget_origin_required"));
+    await click(button("Receipts and documents"));
+    await settle(20);
+    expect(vi.mocked(rApi.receiptsList).mock.calls).toHaveLength(callsBeforeForbiddenLoop + 1);
+    expect(host.textContent).toContain("Synthetic Current");
+    expect(host.textContent).not.toContain("Tab Integration Market");
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
+
+    // Reload with unchanged can_use_receipts=true clears receiptUnavailable and remounts Receipts panel immediately.
+    await click(button("Reload"));
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(true);
+    expect(host.textContent).toContain("Tab Integration Market");
+
+    // Search 403 is recovered by focus capability refresh with unchanged can_use_receipts=true too.
+    const setSearchInput = (text: string) => {
+      const searchQuery = host.querySelector<HTMLInputElement>('input[name="query"]');
+      if (searchQuery === null) throw new Error("receipt search input missing");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(searchQuery, text);
+      searchQuery.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    vi.mocked(rApi.receiptsSearch).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    await act(async () => {
+      setSearchInput("Tab");
+      await Promise.resolve();
+    });
+    await click(button("Apply filters"));
+    expect(rApi.receiptsSearch).toHaveBeenCalledTimes(1);
+    expect(host.textContent).not.toContain("Tab Integration Market");
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).toContain("Tab Integration Market");
+
+    // 4. Delayed 403 from an earlier receipt panel epoch is ignored after the panel recovers.
+    const delayedOldRead = deferred<Loaded<ReceiptsApi["receiptDetail"]>>();
+    vi.mocked(rApi.receiptDetail).mockImplementationOnce(() => delayedOldRead.promise);
+    await click(button("Details"));
+    // Trigger search 403 -> focus recovery while delayedOldRead is still in flight.
+    vi.mocked(rApi.receiptsSearch).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    await act(async () => {
+      setSearchInput("Tab");
+      await Promise.resolve();
+    });
+    await click(button("Apply filters"));
+    expect(rApi.receiptsSearch).toHaveBeenCalledTimes(2);
+    expect(host.textContent).not.toContain("Tab Integration Market");
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).toContain("Tab Integration Market");
+    await act(async () => {
+      delayedOldRead.settle({ ok: false, status: 403, error: "budget_forbidden" });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).toContain("Tab Integration Market");
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(true);
+
+    // 5. Non-listing receipt 403 (confirm) keeps Receipts accessible if refreshed capabilities still allow can_use_receipts=true,
+    //    and clears the entire ledger if refreshed capabilities now deny can_view / return 401.
+    await click(button("Details"));
+    vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    await click(button("Confirm receipt"));
+    expect(host.textContent).toContain("Tab Integration Market");
+    expect(host.textContent).not.toContain("Only the budget's owner");
+
+    vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    api.capabilities.mockImplementationOnce(() => fail(401, "budget_http_401"));
+    await click(button("Details"));
+    await click(button("Confirm receipt"));
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.querySelector(".budget-views")).toBeNull();
+  });
+
+  it("unmounts previous actor drawer on principal switch, re-authorizes view opening via capabilities, and clears receipt state on focus/visibilitychange", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "alice" }));
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+
+    await renderWithReceipts(api, rApi, "alice");
+    const capCallsBeforeOpen = api.capabilities.mock.calls.length;
+    await click(button("Receipts and documents"));
+    expect(api.capabilities.mock.calls.length).toBeGreaterThan(capCallsBeforeOpen);
+    await click(button("Details"));
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+
+    // Switching principal prop unmounts alice's drawer and resets cleanly to bob before issuing receipt requests.
+    const listCallsBeforeBob = vi.mocked(rApi.receiptsList).mock.calls.length;
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "bob" }));
+    await renderWithReceipts(api, rApi, "bob");
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.textContent).toContain("Synthetic Current");
+    expect(vi.mocked(rApi.receiptsList).mock.calls).toHaveLength(listCallsBeforeBob);
+
+    // If authorizeView sees revoked can_use_receipts on clicking Receipts, Receipts never opens or fetches.
+    api.capabilities.mockImplementationOnce(() => ok({
+      ...authorization,
+      user: "bob",
+      own_budget: { ...authorization.own_budget, can_use_receipts: false },
+    }));
+    await click(button("Receipts and documents"));
+    expect(vi.mocked(rApi.receiptsList).mock.calls).toHaveLength(listCallsBeforeBob);
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
+
+    // Restore capability; if authorizeView sees actor change on opening Receipts, Budget clears and never fetches receipts.
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "owner" }));
+    await renderWithReceipts(api, rApi, "owner");
+    const listCallsBeforeDenied = vi.mocked(rApi.receiptsList).mock.calls.length;
+    api.capabilities.mockImplementationOnce(() => fail(409, "budget_actor_changed"));
+    await click(button("Receipts and documents"));
+    expect(vi.mocked(rApi.receiptsList).mock.calls).toHaveLength(listCallsBeforeDenied);
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.querySelector(".budget-views")).toBeNull();
+
+    // Focus and visibilitychange revalidate capabilities and clear receipt state at once if actor changed.
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "owner" }));
+    await click(button("Reload"));
+    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => ok({
+      receipts: [{
+        receipt_id: "33333333-3333-4333-8333-333333333333",
+        status: "needs_review",
+        document_kind: "receipt",
+        source_kind: "local_ocr",
+        receipt_kind: "purchase",
+        receipt_date: "2026-11-14",
+        receipt_time: null,
+        raw_shop_name: "Focus Check Store",
+        raw_nip: null,
+        shop_id: null,
+        chain_key: null,
+        total_amount: "11.00",
+        currency: "PLN",
+        payment_method: "card",
+        math_delta: "0",
+        linked: false,
+        linked_account_id: null,
+        linked_entry_ref: null,
+        version: 1,
+        image_available: false,
+        image_expires_at: null,
+        raw_text_expires_at: null,
+        invoice_number: null,
+        due_date: null,
+        import_expires_at: null,
+        forwarded_manually: false,
+        forwarded_sender_domain: null,
+        created_at: 1_700_000_000,
+        updated_at: 1_700_000_000,
+      }],
+      next_cursor: "owner-cur-focus",
+    }));
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Focus Check Store");
+
+    api.capabilities.mockImplementationOnce(() => fail(409, "budget_actor_changed"));
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).not.toContain("Focus Check Store");
+    expect(host.textContent).toContain("Only the budget's owner");
+
+    // visibilitychange clears when becoming visible with denied actor, ignores hidden transitions.
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "owner" }));
+    await click(button("Reload"));
+    await click(button("Receipts and documents"));
+    const capCallsBeforeHidden = api.capabilities.mock.calls.length;
+    const visSpy = vi.spyOn(document, "visibilityState", "get");
+    try {
+      visSpy.mockReturnValue("hidden");
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+      expect(api.capabilities.mock.calls).toHaveLength(capCallsBeforeHidden);
+
+      visSpy.mockReturnValue("visible");
+      api.capabilities.mockImplementationOnce(() => fail(401, "budget_http_401"));
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+      await settle();
+      expect(host.textContent).toContain("Only the budget's owner");
+      expect(host.querySelector(".budget-views")).toBeNull();
+    } finally {
+      visSpy.mockRestore();
+    }
+  });
+
+  it("keeps receipt mutation locks across Accounts <-> Receipts switches until settled", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+    const pendingConfirm = deferred<Loaded<ReceiptsApi["confirmReceipt"]>>();
+    vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => pendingConfirm.promise);
+
+    await renderWithReceipts(api, rApi);
+    await click(button("Receipts and documents"));
+    await click(button("Details"));
+    await click(button("Confirm receipt"));
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+
+    // Leave Receipts to Accounts, then return -> lock survives unmount and still blocks re-submit.
+    await click(button("Accounts"));
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Confirming…");
+    await click(button("Details"));
+    expect(button("Confirming…").disabled).toBe(true);
+    const form = host.querySelector<HTMLFormElement>("form.budget-receipt-confirm");
+    await act(async () => {
+      form?.requestSubmit();
+      await Promise.resolve();
+    });
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      pendingConfirm.settle({
+        ok: true,
+        data: {
+          ok: true,
+          receipt: {
+            receipt_id: "11111111-1111-4111-8111-111111111111",
+            status: "confirmed",
+            document_kind: "receipt",
+            source_kind: "local_ocr",
+            receipt_kind: "purchase",
+            receipt_date: "2026-11-14",
+            receipt_time: null,
+            raw_shop_name: "Tab Integration Market",
+            raw_nip: null,
+            shop_id: null,
+            chain_key: null,
+            total_amount: "19.50",
+            currency: "PLN",
+            payment_method: "card",
+            math_delta: "0",
+            linked: false,
+            linked_account_id: null,
+            linked_entry_ref: null,
+            version: 2,
+            image_available: false,
+            image_expires_at: null,
+            raw_text_expires_at: null,
+            invoice_number: null,
+            due_date: null,
+            import_expires_at: null,
+            forwarded_manually: false,
+            forwarded_sender_domain: null,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_000,
+            lines: [],
+          },
+        },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(button("Confirm receipt").disabled).toBe(false);
+  });
+
+  it("delivers in-flight confirm settlement and reloads list on recovered panel when a concurrent read 403 bumps receiptEpoch", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+    const baseRow = {
+      receipt_id: "11111111-1111-4111-8111-111111111111",
+      status: "needs_review" as const,
+      document_kind: "receipt" as const,
+      source_kind: "local_ocr" as const,
+      receipt_kind: "purchase" as const,
+      receipt_date: "2026-11-14",
+      receipt_time: null,
+      raw_shop_name: "Tab Integration Market",
+      raw_nip: null,
+      shop_id: null,
+      chain_key: null,
+      total_amount: "19.50",
+      currency: "PLN",
+      payment_method: "card",
+      math_delta: "0",
+      linked: false,
+      linked_account_id: null,
+      linked_entry_ref: null,
+      version: 1,
+      image_available: false,
+      image_expires_at: null,
+      raw_text_expires_at: null,
+      invoice_number: null,
+      due_date: null,
+      import_expires_at: null,
+      forwarded_manually: false,
+      forwarded_sender_domain: null,
+      created_at: 1_700_000_000,
+      updated_at: 1_700_000_000,
+    };
+
+    const pendingConfirm = deferred<Loaded<ReceiptsApi["confirmReceipt"]>>();
+    vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => pendingConfirm.promise);
+
+    await renderWithReceipts(api, rApi);
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Needs review");
+    await click(button("Details"));
+    await click(button("Confirm receipt"));
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+
+    // Concurrent read returns 403 -> bumps receiptEpoch and temporarily hides panel while capabilities refresh.
+    vi.mocked(rApi.receiptsSearch).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    await act(async () => {
+      const searchQuery = host.querySelector<HTMLInputElement>('input[name="query"]');
+      if (searchQuery === null) throw new Error("receipt search input missing");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(searchQuery, "Tab");
+      searchQuery.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await click(button("Apply filters"));
+    expect(host.textContent).not.toContain("Tab Integration Market");
+
+    // Panel recovers in the new epoch (Reload confirms can_use_receipts=true) before confirm resolves.
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Tab Integration Market");
+    expect(host.textContent).toContain("Confirming…");
+
+    // Server list now reflects confirmed status; settling the original confirm triggers a reload on the recovered panel.
+    const confirmedRow = { ...baseRow, status: "confirmed" as const, version: 2 };
+    vi.mocked(rApi.receiptsList).mockImplementation(() => ok({ receipts: [confirmedRow], next_cursor: null }));
+    const listCallsBeforeResolve = vi.mocked(rApi.receiptsList).mock.calls.length;
+    await act(async () => {
+      pendingConfirm.settle({ ok: true, data: { ok: true, receipt: { ...confirmedRow, lines: [] } } });
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(vi.mocked(rApi.receiptsList).mock.calls.length).toBeGreaterThan(listCallsBeforeResolve);
+    const listSection = host.querySelector(".budget-receipts");
+    expect(listSection?.textContent).toContain("Confirmed");
+    expect(listSection?.textContent).not.toContain("Confirming…");
+  });
+
+  it("reloads receipts list on recovered panel when in-flight confirm or delete settles with network or unknown error", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+    const baseRow = {
+      receipt_id: "11111111-1111-4111-8111-111111111111",
+      status: "needs_review" as const,
+      document_kind: "receipt" as const,
+      source_kind: "local_ocr" as const,
+      receipt_kind: "purchase" as const,
+      receipt_date: "2026-11-14",
+      receipt_time: null,
+      raw_shop_name: "Tab Integration Market",
+      raw_nip: null,
+      shop_id: null,
+      chain_key: null,
+      total_amount: "19.50",
+      currency: "PLN",
+      payment_method: "card",
+      math_delta: "0",
+      linked: false,
+      linked_account_id: null,
+      linked_entry_ref: null,
+      version: 1,
+      image_available: false,
+      image_expires_at: null,
+      raw_text_expires_at: null,
+      invoice_number: null,
+      due_date: null,
+      import_expires_at: null,
+      forwarded_manually: false,
+      forwarded_sender_domain: null,
+      created_at: 1_700_000_000,
+      updated_at: 1_700_000_000,
+    };
+
+    const pendingConfirm = deferred<Loaded<ReceiptsApi["confirmReceipt"]>>();
+    vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => pendingConfirm.promise);
+
+    await renderWithReceipts(api, rApi);
+    await click(button("Receipts and documents"));
+    await click(button("Details"));
+    await click(button("Confirm receipt"));
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+
+    // Concurrent read 403 bumps receiptEpoch and temporarily hides panel while capabilities refresh.
+    vi.mocked(rApi.receiptsSearch).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    await act(async () => {
+      const searchQuery = host.querySelector<HTMLInputElement>('input[name="query"]');
+      if (searchQuery === null) throw new Error("receipt search input missing");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(searchQuery, "Tab");
+      searchQuery.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await click(button("Apply filters"));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Confirming…");
+
+    // Server committed the confirm even though the HTTP response was lost; recovered list must reload on error settlement.
+    const confirmedRow = { ...baseRow, status: "confirmed" as const, version: 2 };
+    vi.mocked(rApi.receiptsList).mockImplementation(() => ok({ receipts: [confirmedRow], next_cursor: null }));
+    const listCallsBeforeConfirmError = vi.mocked(rApi.receiptsList).mock.calls.length;
+    await act(async () => {
+      pendingConfirm.settle({ ok: false, status: 0, error: "budget_network_error" });
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(vi.mocked(rApi.receiptsList).mock.calls.length).toBeGreaterThan(listCallsBeforeConfirmError);
+    expect(host.querySelector(".budget-receipts")?.textContent).toContain("Confirmed");
+    expect(host.querySelector(".budget-receipts")?.textContent).not.toContain("Confirming…");
+
+    // Same across a lost-response delete (budget_unknown_outcome) after an epoch bump.
+    vi.mocked(rApi.receiptDetail).mockImplementation(() => ok({ receipt: { ...confirmedRow, lines: [] }, candidates: [] }));
+    const pendingDelete = deferred<Loaded<ReceiptsApi["deleteReceipt"]>>();
+    vi.mocked(rApi.deleteReceipt).mockImplementationOnce(() => pendingDelete.promise);
+
+    await click(button("Details"));
+    await click(button("Delete document"));
+    await click(button("Confirm deletion"));
+    expect(rApi.deleteReceipt).toHaveBeenCalledTimes(1);
+
+    vi.mocked(rApi.receiptsSearch).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    await act(async () => {
+      const searchQuery = host.querySelector<HTMLInputElement>('input[name="query"]');
+      if (searchQuery === null) throw new Error("receipt search input missing");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(searchQuery, "Tab");
+      searchQuery.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await click(button("Apply filters"));
+    await click(button("Reload"));
+    expect(host.textContent).toContain("Deleting…");
+
+    vi.mocked(rApi.receiptsList).mockImplementation(() => ok({ receipts: [], next_cursor: null }));
+    const listCallsBeforeDeleteError = vi.mocked(rApi.receiptsList).mock.calls.length;
+    await act(async () => {
+      pendingDelete.settle({ ok: false, status: 200, error: "budget_unknown_outcome" });
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(vi.mocked(rApi.receiptsList).mock.calls.length).toBeGreaterThan(listCallsBeforeDeleteError);
+    expect(host.querySelector(".budget-receipts")?.textContent).not.toContain("Tab Integration Market");
+    expect(host.querySelector(".budget-receipts")?.textContent).not.toContain("Deleting…");
+  });
+
+  it("aborts in-flight bulk confirm on principal switch, authorization lock, or actor change", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "alice" }));
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+
+    const item1 = {
+      receipt_id: "bbbbbbbb-1111-4111-8111-111111111111",
+      status: "imported" as const,
+      document_kind: "payment_confirmation" as const,
+      source_kind: "email" as const,
+      receipt_kind: "purchase" as const,
+      receipt_date: "2026-11-14",
+      receipt_time: null,
+      raw_shop_name: "Bulk Merchant",
+      raw_nip: null,
+      shop_id: null,
+      chain_key: null,
+      total_amount: "19.50",
+      currency: "PLN",
+      payment_method: null,
+      math_delta: null,
+      linked: false,
+      linked_account_id: null,
+      linked_entry_ref: null,
+      version: 1,
+      image_available: false,
+      image_expires_at: null,
+      raw_text_expires_at: null,
+      invoice_number: null,
+      due_date: null,
+      import_expires_at: null,
+      forwarded_manually: false,
+      forwarded_sender_domain: null,
+      created_at: 1_700_000_000,
+      updated_at: 1_700_000_000,
+    };
+    const item2 = { ...item1, receipt_id: "bbbbbbbb-2222-4222-8222-222222222222", version: 2 };
+    vi.mocked(rApi.receiptsList).mockImplementation(() => ok({ receipts: [item1, item2], next_cursor: null }));
+    vi.mocked(rApi.receiptDetail).mockImplementation((id) => ok({
+      receipt: {
+        ...(id === item1.receipt_id ? item1 : item2),
+        lines: [{
+          line_no: 1,
+          line_kind: "other",
+          raw_name: "Payment",
+          raw_name_key: "payment",
+          ptu_code: null,
+          quantity: "1",
+          raw_unit: null,
+          unit_price_raw: null,
+          gross_line_total: "19.50",
+          discount_amount: "0",
+          net_line_total: "19.50",
+        }],
+      },
+      candidates: [],
+    }));
+    const pendingFirstConfirm = deferred<Loaded<ReceiptsApi["confirmReceipt"]>>();
+    vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => pendingFirstConfirm.promise);
+
+    await renderWithReceipts(api, rApi, "alice");
+    await click(button("Receipts and documents"));
+    await click(button("Confirm all from: Bulk Merchant"));
+    await act(async () => {
+      button("Start bulk confirm").click();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+
+    // Switching principal unmounts alice's ReceiptsView, aborts item2, and settles cleanly under bob.
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "bob" }));
+    await renderWithReceipts(api, rApi, "bob");
+    await act(async () => {
+      pendingFirstConfirm.settle({
+        ok: true,
+        data: { ok: true, receipt: { ...item1, status: "confirmed", version: 2, lines: [] } },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+    expect(host.textContent).not.toContain("Confirming");
+
+    // Locking authorization via focus capability failure before item 2 stops bulk confirm before item 2 detail/confirm.
+    vi.mocked(rApi.receiptDetail).mockClear();
+    vi.mocked(rApi.confirmReceipt).mockClear();
+    const lockFirstConfirm = deferred<Loaded<ReceiptsApi["confirmReceipt"]>>();
+    vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => lockFirstConfirm.promise);
+    await click(button("Receipts and documents"));
+    await click(button("Confirm all from: Bulk Merchant"));
+    await act(async () => {
+      button("Start bulk confirm").click();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(rApi.receiptDetail).toHaveBeenCalledTimes(1);
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+
+    api.capabilities.mockImplementationOnce(() => fail(503, "budget_unavailable"));
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(api.isAuthorizationLocked()).toBe(true);
+    await act(async () => {
+      lockFirstConfirm.settle({
+        ok: true,
+        data: { ok: true, receipt: { ...item1, status: "confirmed", version: 2, lines: [] } },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(rApi.receiptDetail).toHaveBeenCalledTimes(1);
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("Bulk confirm cancelled after 1 confirmed (1 remaining, 0 failed).");
+
+    // Actor-changed error on bulk confirm clears Budget immediately and never sends item 2.
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "bob" }));
+    await click(button("Reload"));
+    await click(button("Receipts and documents"));
+    vi.mocked(rApi.receiptDetail).mockClear();
+    vi.mocked(rApi.confirmReceipt).mockClear();
+    vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => fail(409, "budget_actor_changed"));
+    await click(button("Confirm all from: Bulk Merchant"));
+    await click(button("Start bulk confirm"));
+    expect(rApi.receiptDetail).toHaveBeenCalledTimes(1);
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.querySelector(".budget-views")).toBeNull();
   });
 });

@@ -10782,12 +10782,20 @@
             "type": "integer"
           },
           "lines": {
-            "items": {
-              "$ref": "#/components/schemas/BudgetReceiptLineInput"
-            },
-            "maxItems": 300,
-            "title": "Lines",
-            "type": "array"
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BudgetReceiptLineInput"
+                },
+                "maxItems": 300,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Omit or send null to keep stored lines unchanged and re-validate totals against them.",
+            "title": "Lines"
           },
           "link": {
             "anyOf": [
@@ -10820,6 +10828,7 @@
                 "type": "null"
               }
             ],
+            "description": "Omit to keep the stored NIP unchanged; send null to clear.",
             "title": "Raw Nip"
           },
           "raw_shop_name": {
@@ -10832,6 +10841,7 @@
                 "type": "null"
               }
             ],
+            "description": "Omit to keep the stored shop name unchanged; send null to clear.",
             "title": "Raw Shop Name"
           },
           "receipt_date": {
@@ -10876,15 +10886,12 @@
         "required": [
           "receipt_id",
           "expected_version",
-          "raw_shop_name",
-          "raw_nip",
           "receipt_kind",
           "receipt_date",
           "receipt_time",
           "total_amount",
           "currency",
           "payment_method",
-          "lines",
           "link"
         ],
         "title": "BudgetReceiptConfirmRequest",
@@ -16364,7 +16371,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.50.0"
+    "version": "0.51.0"
   },
   "openapi": "3.1.0",
   "paths": {
