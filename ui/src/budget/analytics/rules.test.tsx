@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createBudgetApi } from "../api";
 import type { BudgetApi, BudgetResult } from "../api";
 import { buildCategoryColors, contrastRatio, parseHexColor } from "./category_colors";
 import { categoryList } from "./fixtures";
@@ -45,6 +46,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  vi.unstubAllGlobals();
   await loadLocale("en");
 });
 
@@ -458,5 +460,62 @@ describe("rules", () => {
     // The reload discarded the preview the save belonged to; the form is usable again and nothing was reloaded twice.
     expect(host.querySelector('[role="region"]')).toBeNull();
     expect(button("Preview").disabled).toBe(false);
+  });
+
+  it("aborts pending reads and discards another actor's late categories and rules", async () => {
+    const tags = { alice: "A".repeat(43), bob: "B".repeat(43) };
+    let actor: "alice" | "bob" = "alice";
+    const pending = new Map<string, { resolve: (response: Response) => void; signal: AbortSignal }>();
+    const fetchMock = vi.fn((input: unknown, init?: RequestInit) => {
+      const path = (input as URL).pathname;
+      if (path.endsWith("/api/me/capabilities")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          user: actor, actor_tag: tags[actor], installation_permissions: [], own_budget: {
+            permissions: ["budget.view"], can_view: true, can_use_receipts: true, can_manage_devices: true,
+          }, delegated_receipts: null, household_available: false,
+        }), { status: 200 }));
+      }
+      if (actor === "bob") {
+        return new Promise<Response>((resolve) => {
+          pending.set(path, { resolve, signal: init?.signal as AbortSignal });
+        });
+      }
+      if (path.endsWith("/categories")) return Promise.resolve(new Response(JSON.stringify({ categories: categoryList }), { status: 200 }));
+      if (path.endsWith("/rules")) return Promise.resolve(new Response(JSON.stringify({ rules: [rule] }), { status: 200 }));
+      throw new Error(`unexpected request ${path}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createBudgetApi("alice");
+    expect((await api.capabilities()).ok).toBe(true);
+    const onAccessLoss = vi.fn((result: { ok: boolean }) => !result.ok);
+    const render = async (revision: number) => {
+      await act(async () => {
+        root.render(<CategoriesView api={api} accounts={accounts} revision={revision} onAccessLoss={onAccessLoss} />);
+        await Promise.resolve();
+      });
+    };
+    await render(0);
+    await settle();
+    expect(host.textContent).toContain("Synthetic Food");
+    expect(host.textContent).toContain("Synthetic Grocer");
+
+    actor = "bob";
+    await render(1);
+    await settle();
+    expect(pending.size).toBe(2);
+    expect(await api.capabilities()).toEqual({ ok: false, status: 409, error: "budget_actor_changed" });
+    for (const [path, request] of pending) {
+      const body = path.endsWith("/categories")
+        ? { categories: [{ ...category, id: "cat-bob", name: "Bob Private Category" }] }
+        : { rules: [{ ...rule, id: "rule-bob", value: "Bob Private Rule" }] };
+      request.resolve(new Response(JSON.stringify(body), { status: 200 }));
+    }
+    await settle();
+    expect([...pending.values()].every(({ signal }) => signal.aborted)).toBe(true);
+    expect(host.textContent).not.toContain("Bob Private");
+    expect(host.textContent).not.toContain("Synthetic Food");
+    const calls = fetchMock.mock.calls.length;
+    expect(await api.rules()).toEqual({ ok: false, status: 409, error: "budget_actor_changed" });
+    expect(fetchMock).toHaveBeenCalledTimes(calls);
   });
 });

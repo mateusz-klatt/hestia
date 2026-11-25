@@ -357,6 +357,24 @@ describe("budget api", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("aborts and discards a pending read when capabilities return 404", async () => {
+    const fetchMock = respond(200, {});
+    const scoped = createBudgetApi("owner");
+    await scoped.capabilities();
+    let resolveRules!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveRules = resolve; }));
+    const pending = scoped.rules();
+    const signal = sent(fetchMock, 1).init.signal;
+    fetchMock.mockImplementationOnce(() => Promise.resolve(new Response("", { status: 404 })));
+    expect(await scoped.capabilities()).toMatchObject({ ok: false, status: 404 });
+    resolveRules(new Response(JSON.stringify({ rules: [{ value: "other actor" }] }), { status: 200 }));
+    expect(await pending).toEqual({ ok: false, status: 503, error: "budget_server_changed" });
+    expect(signal?.aborted).toBe(true);
+    const calls = fetchMock.mock.calls.length;
+    expect(await scoped.rules()).toEqual({ ok: false, status: 503, error: "budget_server_changed" });
+    expect(fetchMock).toHaveBeenCalledTimes(calls);
+  });
+
   it("refuses every exported Budget read while unverified", async () => {
     const fetchMock = respond(200, {});
     const api = createBudgetApi("owner");
