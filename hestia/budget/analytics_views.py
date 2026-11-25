@@ -164,7 +164,7 @@ def _annotation(row, financial_fp):
 
 def _effective(payload, metadata, annotation, categories, rules, *, texts=None, compiled=None,
                account_secret=None, account_key_id=None, owner=None):
-    default = "expense" if payload["credit_debit_indicator"] == "DBIT" else "unclassified_credit"
+    default = core.default_effective_kind(payload)
     result = {"kind": default, "category_id": None, "source": "default", "rule_id": None}
     if annotation["mode"] == "manual":
         if not annotation["stale"]:
@@ -177,10 +177,9 @@ def _effective(payload, metadata, annotation, categories, rules, *, texts=None, 
         compiled, _ = core.compile_rules(rules)
     if texts is None:
         texts = core.match_texts(payload, metadata, account_secret=account_secret, account_key_id=account_key_id, owner=owner)
-    rule = core.first_matching_rule(compiled, payload, texts)
+    rule, kind = core.match_rule(compiled, payload, texts)
     if rule is not None:
-        result.update(kind=default if rule["kind"] == "auto" else rule["kind"],
-                      category_id=_category(rule["category_id"], categories), source="rule", rule_id=rule["id"])
+        result.update(kind=kind, category_id=_category(rule["category_id"], categories), source="rule", rule_id=rule["id"])
     return result
 
 
@@ -265,7 +264,8 @@ def projection_snapshot(session, owner, *, classify=True, account_secret=None, a
     snapshot = {"owner": owner, "accounts": account_state, "categories": categories, "rules": rules,
                 "decisions": decisions, "identities": identities, "transactions": [row for row in records if row["eligible"]],
                 "counts": _scope_counts(session, owner, accounts), "_records": records, "_accounts": accounts}
-    semantic = {"version": 1, "owner": owner, "counterparty_rule_key_id": account_key_id,
+    semantic = {"version": 1, "classification_version": core.CLASSIFICATION_VERSION, "owner": owner,
+                "counterparty_rule_key_id": account_key_id,
                 "accounts": [{"id": row.id, "enabled": row.enabled} for row in accounts], "identities": identity_state,
                 "ledger": [[row.account_id, row.entry_reference, record["payload"], row.uncertain, row.source]
                            for row, record in zip(ledger, records, strict=True)],
@@ -727,6 +727,7 @@ def _source_digest(session, owner, *, account_key_id=None):
         digest.update(len(data).to_bytes(8, "big"))
         digest.update(data)
 
+    put(core.CLASSIFICATION_VERSION)
     put(account_key_id)
     for model, conditions, joined in sources:
         table = model.__table__

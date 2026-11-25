@@ -10,7 +10,7 @@ from hestia import api_contract, db
 from hestia.budget import analytics_views
 from hestia.budget.analytics_core import (AnalyticsError, canonical_counterparty_account, compile_rules, counterparty_account_evidence,
     counterparty_account_key, counterparty_key_id, counterparty_rule_from_identification, counterparty_rule_parts,
-    counterparty_rule_value, first_matching_rule, mask_counterparty_account, match_texts,
+    counterparty_rule_value, first_matching_rule, mask_counterparty_account, match_rule, match_texts,
     normalize_counterparty_account, rule_matches)
 from hestia.budget.bank_metadata import _aliases
 from tests.test_budget_analytics_core import identity, payload
@@ -159,6 +159,27 @@ class CounterpartyAccountCoreTests(unittest.TestCase):
         with self.assertRaises(AnalyticsError):
             first_matching_rule(compiled, payload(), match_texts(payload(), metadata, account_secret=SECRET, owner="owner"))
 
+    def test_expense_counterparty_account_rule_matches_crdt_debtor_side_as_refund(self):
+        exp_rule = account_rule(kind="expense", id="acct-exp", priority=1)
+        disabled_exp = account_rule(kind="expense", id="acct-disabled", enabled=False, priority=0)
+        credit = payload(credit_debit_indicator="CRDT", remittance_information=["Refund"])
+        credit_debtor = {"debtor_accounts": [identity(SYNTHETIC_IBAN.lower())], "creditor_accounts": [identity(OTHER_IBAN)]}
+        credit_wrong_side = {"creditor_accounts": [identity(SYNTHETIC_IBAN)], "debtor_accounts": [identity(OTHER_IBAN)]}
+        self.assertTrue(rule_matches(exp_rule, credit, credit_debtor, account_secret=SECRET, owner="owner"))
+        self.assertFalse(rule_matches(exp_rule, credit, credit_wrong_side, account_secret=SECRET, owner="owner"))
+        self.assertFalse(rule_matches(disabled_exp, credit, credit_debtor, account_secret=SECRET, owner="owner"))
+
+        compiled, safe = compile_rules([disabled_exp, exp_rule])
+        self.assertTrue(safe)
+        texts = match_texts(credit, credit_debtor, account_secret=SECRET, owner="owner")
+        self.assertEqual(match_rule(compiled, credit, texts), (exp_rule, "refund"))
+
+        # Income rule in Pass 1 beats expense counterparty_account rule in Pass 2.
+        inc_rule = {"id": "desc-inc", "enabled": True, "kind": "income", "field": "description",
+                    "operator": "contains", "value": "refund", "priority": 100}
+        both, _ = compile_rules([exp_rule, inc_rule])
+        self.assertEqual(match_rule(both, credit, texts), (inc_rule, "income"))
+
 
 class CounterpartyAccountProjectionTests(ProjectionCase):
     def metadata_for(self, account, reference, field, value):
@@ -259,6 +280,33 @@ class CounterpartyAccountProjectionTests(ProjectionCase):
         row = self.store.transactions("owner", "2026")["transactions"][0]
         self.assertIsNone(row["counterparty_account_key"])
         self.assertIsNone(row["counterparty_account"])
+
+    def test_expense_account_rule_preview_and_save_matches_crdt_debtor_as_refund(self):
+        self.add_transaction("a", "debit-merchant", amount="100", booking_date="2026-11-10")
+        self.add_transaction("b", "credit-merchant-refund", amount="40", credit_debit_indicator="CRDT",
+                             booking_date="2026-11-10")
+        self.add_transaction("c", "credit-wrong-side", amount="20", credit_debit_indicator="CRDT",
+                             booking_date="2026-11-10")
+        self.metadata_for("a", "debit-merchant", "creditor_accounts", SYNTHETIC_IBAN)
+        self.metadata_for("b", "credit-merchant-refund", "debtor_accounts", spaced(SYNTHETIC_IBAN))
+        self.metadata_for("c", "credit-wrong-side", "creditor_accounts", SYNTHETIC_IBAN)
+
+        category = self.store.create_category("owner", "Hardware")
+        candidate = self.candidate(field="counterparty_account", operator="equals", value=spaced(SYNTHETIC_IBAN),
+                                   category_id=category["id"], kind="expense", priority=10)
+        preview = self.store.preview_rule("owner", candidate)
+        self.assertEqual(preview["affected_count"], 2)
+        self.assertEqual({row["entry_reference"] for row in preview["examples"]},
+                         {"debit-merchant", "credit-merchant-refund"})
+        saved = self.store.save_rule("owner", preview["preview_id"])
+        by_ref = {row["entry_reference"]: row["effective"]
+                  for row in self.store.transactions("owner", "2026-11")["transactions"]}
+        self.assertEqual(by_ref["debit-merchant"],
+                         {"kind": "expense", "category_id": category["id"], "source": "rule", "rule_id": saved["id"]})
+        self.assertEqual(by_ref["credit-merchant-refund"],
+                         {"kind": "refund", "category_id": category["id"], "source": "rule", "rule_id": saved["id"]})
+        self.assertEqual(by_ref["credit-wrong-side"],
+                         {"kind": "unclassified_credit", "category_id": None, "source": "default", "rule_id": None})
 
     def test_dedicated_key_is_required_and_rotation_fences_previews(self):
         self.add_transaction("a", "debit")

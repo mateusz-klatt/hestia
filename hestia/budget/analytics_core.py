@@ -9,6 +9,9 @@ import re
 import unicodedata
 
 MAX_ROWS = 100_000
+# Bump whenever rule matching or effective classification semantics change so stale
+# previews, cursors and cached projections invalidate across deploys.
+CLASSIFICATION_VERSION = 2
 KINDS = frozenset({"auto", "expense", "income", "refund", "excluded"})
 _FIELDS = frozenset({"description", "counterparty_name", "counterparty_account", "mcc"})
 _MONEY = re.compile(r"-?[0-9]+(?:\.[0-9]+)?\Z", re.ASCII)
@@ -373,9 +376,30 @@ def _value(row, key):
     return row.get(key) if isinstance(row, dict) else getattr(row, key)
 
 
-def compatible_kind(kind, payload):
-    return (kind in ("auto", "excluded") or (kind == "expense" and payload.get("credit_debit_indicator") == "DBIT")
-            or (kind in ("income", "refund") and payload.get("credit_debit_indicator") == "CRDT"))
+def default_effective_kind(payload):
+    """Default effective kind when no manual annotation or matching rule sets one."""
+    return "expense" if payload.get("credit_debit_indicator") == "DBIT" else "unclassified_credit"
+
+
+def _resolved_kind(kind, payload, *, for_rule=False, expense_fallback=False):
+    indicator = payload.get("credit_debit_indicator")
+    if expense_fallback:
+        return "refund" if kind == "expense" and indicator == "CRDT" else None
+    if kind == "auto":
+        return "expense" if indicator == "DBIT" else "unclassified_credit"
+    if kind == "excluded":
+        return "excluded"
+    if kind == "expense":
+        if indicator == "DBIT":
+            return "expense"
+        return "refund" if for_rule and indicator == "CRDT" else None
+    if kind in ("income", "refund"):
+        return kind if indicator == "CRDT" else None
+    return None
+
+
+def compatible_kind(kind, payload, *, for_rule=False):
+    return _resolved_kind(kind, payload, for_rule=for_rule) is not None
 
 
 def fold_text(text):
@@ -437,38 +461,42 @@ def _rule_value_matches(field, operator, needle, text):
     return needle == text if operator == "equals" else needle in text
 
 
-def first_matching_rule(compiled, payload, texts):
-    """First enabled, kind-compatible rule whose folded needle matches, in list order."""
-    indicator = payload.get("credit_debit_indicator")
+def _match_pass(compiled, payload, texts, *, expense_fallback=False):
     for enabled, kind, field, operator, needle, rule in compiled:
         if not enabled:
             continue
-        if kind == "expense":
-            if indicator != "DBIT":
-                continue
-        elif kind in ("income", "refund"):
-            if indicator != "CRDT":
-                continue
-        elif kind not in ("auto", "excluded"):
+        effective_kind = _resolved_kind(kind, payload, expense_fallback=expense_fallback)
+        if effective_kind is None:
             continue
         if field not in _FIELDS or operator not in ("equals", "contains"):
             raise AnalyticsError()
         if _rule_value_matches(field, operator, needle, texts[field]):
-            return rule
-    return None
+            return rule, effective_kind
+    return None, None
+
+
+def match_rule(compiled, payload, texts):
+    """First matching enabled rule and its effective kind.
+
+    For ``CRDT`` rows, primary rules (``income``, ``refund``, ``auto``, ``excluded``) run in list order
+    first; if none match, enabled ``expense`` rules run in the same order as a fallback yielding ``refund``.
+    """
+    rule, effective_kind = _match_pass(compiled, payload, texts)
+    if rule is None and payload.get("credit_debit_indicator") == "CRDT":
+        rule, effective_kind = _match_pass(compiled, payload, texts, expense_fallback=True)
+    if rule is None:
+        return None, default_effective_kind(payload)
+    return rule, effective_kind
+
+
+def first_matching_rule(compiled, payload, texts):
+    """First enabled, kind-compatible rule whose folded needle matches, in list order."""
+    return match_rule(compiled, payload, texts)[0]
 
 
 def rule_matches(rule, payload, metadata=None, *, account_secret=None, owner=None):
-    if not _value(rule, "enabled") or not compatible_kind(_value(rule, "kind"), payload):
+    if not _value(rule, "enabled") or not compatible_kind(_value(rule, "kind"), payload, for_rule=True):
         return False
-    field, operator = _value(rule, "field"), _value(rule, "operator")
-    if field not in _FIELDS or operator not in ("equals", "contains"):
-        raise AnalyticsError()
-    if field == "counterparty_account":
-        if operator != "equals":
-            raise AnalyticsError()
-        needle = counterparty_rule_parts(_value(rule, "value"))[:2]
-    else:
-        needle = fold_text(_value(rule, "value"))
+    compiled, _ = compile_rules([rule])
     texts = match_texts(payload, metadata, account_secret=account_secret, owner=owner)
-    return _rule_value_matches(field, operator, needle, texts[field])
+    return match_rule(compiled, payload, texts)[0] is not None

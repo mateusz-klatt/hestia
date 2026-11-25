@@ -240,6 +240,115 @@ class ClassificationTests(ProjectionCase):
         miss = views._effective({"credit_debit_indicator": "DBIT", "remittance_information": ["Other"]},
                                 None, annotation, categories, rules)
         self.assertEqual(miss, {"kind": "expense", "category_id": None, "source": "default", "rule_id": None})
+        refund = views._effective({"credit_debit_indicator": "CRDT", "remittance_information": ["Synthetic SHOP refund"]},
+                                  None, annotation, categories, rules)
+        self.assertEqual(refund, {"kind": "refund", "category_id": category["id"], "source": "rule", "rule_id": "r1"})
+
+    def test_moonshot_refund_inherits_expense_rule_nets_monthly_budget_and_preserves_recurring_forecast(self):
+        self.now = datetime(2026, 11, 22, 12, 0, tzinfo=timezone.utc).timestamp()
+        salary = self.store.create_category("owner", "Wynagrodzenie")
+        ai = self.store.create_category("owner", "Subskrypcje AI")
+        other_inc = self.store.create_category("owner", "Zwroty inne")
+        rule_id = self.rule(category=ai["id"], field="counterparty_name", operator="contains",
+                            value="moonshot", kind="expense", priority=10)
+        # Disabled higher-priority expense rule must never match.
+        self.rule(category=other_inc["id"], field="counterparty_name", operator="contains",
+                  value="moonshot", kind="expense", priority=1, enabled=False)
+
+        with self.sessions.begin() as session:
+            acct = session.get(db.BudgetAccount, self.accounts["a"])
+            acct.kind, acct.kind_confirmed_at = "credit_card", self.now
+
+        # 3 historical monthly subscriptions (Aug, Sep, Oct) + Nov charge & same-day partial refund.
+        for month in ("08", "09", "10"):
+            ref = f"moonshot-{month}"
+            self.add_transaction("a", ref, amount="100.00", currency="PLN",
+                                 booking_date=f"2026-{month}-10", transaction_date=f"2026-{month}-10",
+                                 remittance_information=[f"Moonshot {month}"])
+            self.metadata("a", ref, {"creditor_name": "MOONSHOT AI"})
+        self.add_transaction("a", "moonshot-nov-debit", amount="100.00", currency="PLN",
+                             booking_date="2026-11-10", transaction_date="2026-11-10",
+                             remittance_information=["Moonshot upgrade"])
+        self.metadata("a", "moonshot-nov-debit", {"creditor_name": "MOONSHOT AI"})
+        self.add_transaction("a", "moonshot-nov-refund", amount="40.00", currency="PLN",
+                             credit_debit_indicator="CRDT", booking_date="2026-11-10",
+                             remittance_information=["Moonshot partial refund"])
+        self.metadata("a", "moonshot-nov-refund", {"debtor_name": "MOONSHOT AI"})
+        # Also a refund from a disabled-rule merchant only -> stays unclassified_credit.
+        self.add_transaction("a", "other-crdt", amount="15.00", currency="PLN",
+                             credit_debit_indicator="CRDT", booking_date="2026-11-11",
+                             remittance_information=["Other merchant"])
+        self.metadata("a", "other-crdt", {"debtor_name": "OTHER MERCHANT"})
+        # Income in November to verify budget start/spent/remaining.
+        self.add_transaction("a", "sal-nov", amount="5000", currency="PLN",
+                             credit_debit_indicator="CRDT", booking_date="2026-11-01")
+        self.annotation(account="a", reference="sal-nov", category_id=salary["id"], kind="income")
+
+        self.store.save_spending_limit("owner", category_id=ai["id"], currency="PLN",
+                                       monthly_limit="100", warning_percent=80, enabled=True, expected_version=0)
+
+        tx_debit = self.output("moonshot-nov-debit", period="2026-11")
+        tx_refund = self.output("moonshot-nov-refund", period="2026-11")
+        tx_other = self.output("other-crdt", period="2026-11")
+        self.assertEqual(tx_debit["effective"],
+                         {"kind": "expense", "category_id": ai["id"], "source": "rule", "rule_id": rule_id})
+        self.assertEqual(tx_refund["effective"],
+                         {"kind": "refund", "category_id": ai["id"], "source": "rule", "rule_id": rule_id})
+        self.assertEqual(tx_other["effective"],
+                         {"kind": "unclassified_credit", "category_id": None, "source": "default", "rule_id": None})
+
+        overview = self.store.overview("owner", "2026-11")
+        self.assertEqual((overview["currencies"][0]["expenses"], overview["currencies"][0]["refunds"],
+                          overview["currencies"][0]["net_spending"], overview["currencies"][0]["unclassified_credit"]),
+                         ("100", "40", "60", "15"))
+        ai_cat = next(row for row in overview["categories"] if row["category_id"] == ai["id"])
+        self.assertEqual((ai_cat["expenses"], ai_cat["refunds"], ai_cat["net_spending"]), ("100", "40", "60"))
+
+        limits = self.store.spending_limits("owner", "2026-11")
+        self.assertEqual((limits["statuses"][0]["net_spending"], limits["statuses"][0]["remaining"],
+                          limits["statuses"][0]["status"]), ("60", "40", "within"))
+
+        cfg = json.dumps({"owner": {"income_category_ids": [salary["id"]]}})
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            budget = self.store.monthly_budget("owner", period="2026-11", currency="PLN")
+            charts = self.store.monthly_budget_charts("owner", period="2026-11", currency="PLN")
+        api_contract.BudgetAnalyticsMonthlyBudget.model_validate(budget)
+        self.assertEqual(budget["summary"], {"start_budget": "5000", "spent": "60", "remaining": "4940"})
+        self.assertEqual(budget["coverage"]["pending_transfer_rows"], 0)
+        ai_spend = next(row for row in budget["category_spend"] if row["category_id"] == ai["id"])
+        self.assertEqual((ai_spend["expenses"], ai_spend["refunds"], ai_spend["net_spending"]), ("100", "40", "60"))
+        self.assertEqual(charts["budget"], budget)
+
+        # Recurring detects only the DBIT monthly charges (not the CRDT refund).
+        recurring = self.store.recurring("owner", currency="PLN")
+        self.assertEqual(recurring["total_hints"], 1)
+        self.assertEqual((recurring["hints"][0]["label"], recurring["hints"][0]["amount"],
+                          recurring["hints"][0]["occurrence_count"]), ("MOONSHOT AI", "100", 4))
+
+        # Forecast stays consistent: recurring hint projects normally, and category baseline nets the refund.
+        fc = self.store.forecast("owner", months="2", currency="PLN")
+        self.assertEqual([(item["source"], item["label"], item["amount"]) for item in fc["months"][1]["items"]],
+                         [("recurring", "MOONSHOT AI", "100")])
+        # Also verify baselines_for_snapshot nets the rule-derived refund when a category uses baselines.
+        self.add_transaction("a", "other-exp-09", amount="50", booking_date="2026-09-15",
+                             remittance_information=["Tooling"])
+        self.add_transaction("a", "other-exp-10", amount="70", booking_date="2026-10-15",
+                             remittance_information=["Tooling"])
+        self.add_transaction("a", "other-ref-10", amount="20", credit_debit_indicator="CRDT",
+                             booking_date="2026-10-16", remittance_information=["Tooling refund"])
+        self.rule(category=other_inc["id"], field="description", operator="contains", value="tooling", kind="expense")
+        fc_cfg = json.dumps({"owner": {"category_ids": [other_inc["id"]], "history_months": 3, "estimator": "median"}})
+        with mock.patch.dict(os.environ, {forecast.FORECAST_CONFIG_ENV: fc_cfg}):
+            fc_base = self.store.forecast("owner", months="1", currency="PLN")
+        baseline_item = next(item for item in fc_base["months"][0]["items"] if item["source"] == "category_baseline")
+        self.assertEqual(baseline_item["amount"], "50")  # sorted([0, 50, 70 - 20])[1] = 50
+
+        # Adding a lower-priority income rule for the same merchant overrides expense fallback on CRDT only.
+        inc_rule_id = self.rule(category=other_inc["id"], field="counterparty_name", operator="contains",
+                                value="moonshot", kind="income", priority=100)
+        self.assertEqual(self.output("moonshot-nov-debit", period="2026-11")["effective"]["rule_id"], rule_id)
+        self.assertEqual(self.output("moonshot-nov-refund", period="2026-11")["effective"],
+                         {"kind": "income", "category_id": other_inc["id"], "source": "rule", "rule_id": inc_rule_id})
 
 
 class TransferProjectionTests(ProjectionCase):

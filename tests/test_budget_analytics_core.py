@@ -4,9 +4,10 @@ from types import SimpleNamespace
 import unicodedata
 import unittest
 
-from hestia.budget.analytics_core import (AnalyticsError, canonical_money, compare_money, compatible_kind,
-    compile_rules, effective_date, financial_fingerprint, first_matching_rule, match_texts, negate_money,
-    owned_identities, pair_fingerprint, parse_period, projection_digest, rule_matches, sum_money)
+from hestia.budget.analytics_core import (AnalyticsError, CLASSIFICATION_VERSION, canonical_money, compare_money,
+    compatible_kind, compile_rules, default_effective_kind, effective_date, financial_fingerprint,
+    first_matching_rule, match_rule, match_texts, negate_money, owned_identities, pair_fingerprint, parse_period,
+    projection_digest, rule_matches, sum_money)
 
 
 def payload(**changes):
@@ -140,6 +141,10 @@ class PeriodAndRuleTests(unittest.TestCase):
                      ("expense", "DBIT", True), ("income", "CRDT", True), ("refund", "CRDT", True),
                      ("income", "DBIT", False), ("expense", "CRDT", False), ("bad", "DBIT", False)):
             self.assertEqual(compatible_kind(kind, payload(credit_debit_indicator=direction)), expected)
+        self.assertTrue(compatible_kind("expense", payload(credit_debit_indicator="CRDT"), for_rule=True))
+        self.assertFalse(compatible_kind("income", payload(credit_debit_indicator="DBIT"), for_rule=True))
+        self.assertEqual(default_effective_kind(payload()), "expense")
+        self.assertEqual(default_effective_kind(payload(credit_debit_indicator="CRDT")), "unclassified_credit")
 
     def test_compiled_rules_match_the_same_first_rule_without_refolding(self):
         rules = [
@@ -218,3 +223,39 @@ class PeriodAndRuleTests(unittest.TestCase):
                 if name == "disabled isolation":
                     self.assertIsNone(found)
                     self.assertFalse(rule_matches(ordered[0], body, metadata))
+
+    def test_crdt_expense_rule_fallback_returns_refund_and_yields_to_primary_rules(self):
+        crdt = payload(credit_debit_indicator="CRDT", remittance_information=["MOONSHOT AI refund"])
+        dbit = payload(credit_debit_indicator="DBIT", remittance_information=["MOONSHOT AI charge"])
+        exp_high = {"id": "exp-1", "enabled": True, "kind": "expense", "field": "description",
+                    "operator": "contains", "value": "moonshot", "category_id": "cat-ai", "priority": 1}
+        exp_disabled = {**exp_high, "id": "exp-0", "enabled": False, "priority": 0}
+        exp_low = {**exp_high, "id": "exp-2", "category_id": "cat-other", "priority": 20}
+        inc_low = {"id": "inc-1", "enabled": True, "kind": "income", "field": "description",
+                   "operator": "contains", "value": "refund", "category_id": "cat-inc", "priority": 100}
+        ref_low = {**inc_low, "id": "ref-1", "kind": "refund", "category_id": "cat-ref"}
+        auto_low = {**inc_low, "id": "auto-1", "kind": "auto", "category_id": "cat-auto"}
+        excl_low = {**inc_low, "id": "excl-1", "kind": "excluded", "category_id": None}
+
+        # Expense fallback applies on CRDT in priority order when enabled, skipping disabled rules.
+        compiled, safe = compile_rules([exp_disabled, exp_high, exp_low])
+        self.assertTrue(safe)
+        self.assertEqual(match_rule(compiled, crdt, match_texts(crdt)), (exp_high, "refund"))
+        self.assertEqual(match_rule(compiled, dbit, match_texts(dbit)), (exp_high, "expense"))
+        self.assertTrue(rule_matches(exp_high, crdt))
+        self.assertFalse(rule_matches(exp_disabled, crdt))
+
+        # Disabled-only expense rule does not match CRDT.
+        disabled_only, _ = compile_rules([exp_disabled])
+        self.assertEqual(match_rule(disabled_only, crdt, match_texts(crdt)), (None, "unclassified_credit"))
+        self.assertEqual(match_rule(disabled_only, dbit, match_texts(dbit)), (None, "expense"))
+
+        self.assertEqual(CLASSIFICATION_VERSION, 2)
+        # Any primary CRDT rule (income/refund/auto/excluded) beats expense fallback regardless of priority.
+        for primary, expected_kind in ((inc_low, "income"), (ref_low, "refund"),
+                                       (auto_low, "unclassified_credit"), (excl_low, "excluded")):
+            with self.subTest(primary=primary["id"]):
+                mixed, mixed_safe = compile_rules([exp_high, primary])
+                self.assertTrue(mixed_safe)
+                self.assertEqual(match_rule(mixed, crdt, match_texts(crdt)), (primary, expected_kind))
+                self.assertEqual(match_rule(mixed, dbit, match_texts(dbit)), (exp_high, "expense"))
