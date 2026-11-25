@@ -18,7 +18,7 @@ export type ReceiptsApi = Pick<
 
 export function createReceiptsApi(api: ReceiptsApi = budgetApi): ReceiptsApi {
   return {
-    receiptsList: (request: ReceiptListRequest = {}) => api.receiptsList(request),
+    receiptsList: (request?: ReceiptListRequest) => api.receiptsList(request),
     receiptsSearch: (request: ReceiptSearchRequest) => api.receiptsSearch(request),
     receiptDetail: (receiptId: string) => api.receiptDetail(receiptId),
     receiptImage: (receiptId: string) => api.receiptImage(receiptId),

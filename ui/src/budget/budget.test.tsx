@@ -52,8 +52,10 @@ const balancesData = {
 };
 
 function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
+  let locked = false;
   return {
-    setAuthorizationLocked: vi.fn(),
+    setAuthorizationLocked: vi.fn((value: boolean) => { locked = value; }),
+    isAuthorizationLocked: vi.fn(() => locked),
     capabilities: vi.fn<BudgetApi["capabilities"]>(() => ok(authorization)),
     connections: vi.fn<BudgetApi["connections"]>(() => ok({ connections: [connection], capabilities })),
     accounts: vi.fn<BudgetApi["accounts"]>(() => ok({ accounts })),
@@ -108,6 +110,12 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     pairReceiptDevice: vi.fn<BudgetApi["pairReceiptDevice"]>(),
     cancelReceiptPairCode: vi.fn<BudgetApi["cancelReceiptPairCode"]>(),
     revokeReceiptDevice: vi.fn<BudgetApi["revokeReceiptDevice"]>(),
+    receiptsList: vi.fn<BudgetApi["receiptsList"]>(() => ok({ receipts: [], next_cursor: null })),
+    receiptsSearch: vi.fn<BudgetApi["receiptsSearch"]>(() => ok({ receipts: [], next_cursor: null })),
+    receiptDetail: vi.fn<BudgetApi["receiptDetail"]>(),
+    receiptImage: vi.fn<BudgetApi["receiptImage"]>(),
+    confirmReceipt: vi.fn<BudgetApi["confirmReceipt"]>(),
+    deleteReceipt: vi.fn<BudgetApi["deleteReceipt"]>(),
   } satisfies BudgetApi;
 }
 
@@ -1682,8 +1690,18 @@ describe("receipts tab & capability gate", () => {
     await click(button("Reload"));
     expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
 
-    // 3. analytics=true, stored_reads=true restores Receipts inside .budget-views.
+    // 3. own_budget.can_use_receipts=false hides Receipts even when analytics=true and stored_reads=true.
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+    api.capabilities.mockImplementation(() => ok({
+      ...authorization,
+      own_budget: { ...authorization.own_budget, can_use_receipts: false },
+    }));
+    await click(button("Reload"));
+    expect(host.querySelector(".budget-views")).not.toBeNull();
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
+
+    // 4. analytics=true, stored_reads=true, can_use_receipts=true restores Receipts inside .budget-views.
+    api.capabilities.mockImplementation(() => ok(authorization));
     await click(button("Reload"));
     expect(host.querySelector(".budget-views")).not.toBeNull();
     await click(button("Receipts and documents"));
@@ -1719,96 +1737,49 @@ describe("receipts tab & capability gate", () => {
     expect(host.querySelector(".budget-views")).toBeNull();
   });
 
-  it("unmounts previous actor drawer on principal switch, blocks Search/Load more under cookie switch, and clears at once on 401 even if whoami stalls", async () => {
+  it("unmounts previous actor drawer on principal switch, re-authorizes view opening via capabilities, and clears receipt state on focus/visibilitychange", async () => {
     const api = fakeApi();
     const rApi = fakeReceiptsApi();
-    api.whoami.mockImplementation(() => ok({ user: "alice", role: "admin" }));
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "alice" }));
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
 
     await renderWithReceipts(api, rApi, "alice");
+    const capCallsBeforeOpen = api.capabilities.mock.calls.length;
     await click(button("Receipts and documents"));
+    expect(api.capabilities.mock.calls.length).toBeGreaterThan(capCallsBeforeOpen);
     await click(button("Details"));
     expect(host.querySelector('[role="dialog"]')).not.toBeNull();
 
     // Switching principal prop unmounts alice's drawer and resets cleanly to bob before issuing receipt requests.
-    api.whoami.mockImplementation(() => ok({ user: "bob", role: "admin" }));
+    const listCallsBeforeBob = vi.mocked(rApi.receiptsList).mock.calls.length;
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "bob" }));
     await renderWithReceipts(api, rApi, "bob");
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     expect(host.textContent).toContain("Synthetic Current");
+    expect(vi.mocked(rApi.receiptsList).mock.calls).toHaveLength(listCallsBeforeBob);
 
-    // Open Receipts as bob with a cursor; simulate cookie switch before Load more -> old cursor never sent.
-    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => ok({
-      receipts: [{
-        receipt_id: "22222222-2222-4222-8222-222222222222",
-        status: "needs_review",
-        document_kind: "receipt",
-        source_kind: "local_ocr",
-        receipt_kind: "purchase",
-        receipt_date: "2026-11-14",
-        receipt_time: null,
-        raw_shop_name: "Bob Market",
-        raw_nip: null,
-        shop_id: null,
-        chain_key: null,
-        total_amount: "10.00",
-        currency: "PLN",
-        payment_method: "card",
-        math_delta: "0",
-        linked: false,
-        linked_account_id: null,
-        linked_entry_ref: null,
-        version: 1,
-        image_available: false,
-        image_expires_at: null,
-        raw_text_expires_at: null,
-        invoice_number: null,
-        due_date: null,
-        import_expires_at: null,
-        forwarded_manually: false,
-        forwarded_sender_domain: null,
-        created_at: 1_700_000_000,
-        updated_at: 1_700_000_000,
-      }],
-      next_cursor: "bob-cursor-1",
+    // If authorizeView sees revoked can_use_receipts on clicking Receipts, Receipts never opens or fetches.
+    api.capabilities.mockImplementationOnce(() => ok({
+      ...authorization,
+      user: "bob",
+      own_budget: { ...authorization.own_budget, can_use_receipts: false },
     }));
     await click(button("Receipts and documents"));
-    api.whoami.mockImplementation(() => ok({ user: "mallory", role: "admin" }));
-    const callsBeforeLoadMore = vi.mocked(rApi.receiptsList).mock.calls.length;
-    await click(button("Load more"));
-    expect(vi.mocked(rApi.receiptsList).mock.calls).toHaveLength(callsBeforeLoadMore);
-    expect(host.textContent).toContain("Only the budget's owner");
-    expect(host.querySelector(".budget-views")).toBeNull();
+    expect(vi.mocked(rApi.receiptsList).mock.calls).toHaveLength(listCallsBeforeBob);
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
 
-    // Recover via Reload as owner, search triggers cookie change -> synchronous clear before Search even fires.
-    api.whoami.mockImplementation(() => ok({ user: "owner", role: "admin" }));
+    // Restore capability; if authorizeView sees actor change on opening Receipts, Budget clears and never fetches receipts.
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "owner" }));
     await renderWithReceipts(api, rApi, "owner");
+    const listCallsBeforeDenied = vi.mocked(rApi.receiptsList).mock.calls.length;
+    api.capabilities.mockImplementationOnce(() => fail(409, "budget_actor_changed"));
     await click(button("Receipts and documents"));
-    const queryInput = host.querySelector<HTMLInputElement>('input[name="query"]');
-    const searchForm = host.querySelector<HTMLFormElement>(".budget-range");
-    if (queryInput === null || searchForm === null) throw new Error("receipt search form missing");
-    api.whoami.mockImplementation(() => ok({ user: "mallory", role: "admin" }));
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(queryInput, "Secret");
-      queryInput.dispatchEvent(new Event("input", { bubbles: true }));
-      searchForm.requestSubmit();
-      await Promise.resolve();
-    });
-    await settle();
-    expect(rApi.receiptsSearch).not.toHaveBeenCalled();
-    expect(host.textContent).toContain("Only the budget's owner");
-
-    // 401 on receipt read clears Budget immediately even if /whoami stalls.
-    api.whoami.mockImplementation(() => ok({ user: "owner", role: "admin" }));
-    await click(button("Reload"));
-    const stalledWhoami = deferred<Loaded<BudgetApi["whoami"]>>();
-    api.whoami.mockImplementation(() => stalledWhoami.promise);
-    vi.mocked(rApi.receiptsList).mockImplementationOnce(() => fail(401, "budget_http_401"));
-    await click(button("Receipts and documents"));
+    expect(vi.mocked(rApi.receiptsList).mock.calls).toHaveLength(listCallsBeforeDenied);
     expect(host.textContent).toContain("Only the budget's owner");
     expect(host.querySelector(".budget-views")).toBeNull();
 
-    // Focus and visibilitychange re-check /whoami and clear receipt state at once if the HttpOnly actor changed.
-    api.whoami.mockImplementation(() => ok({ user: "owner", role: "admin" }));
+    // Focus and visibilitychange revalidate capabilities and clear receipt state at once if actor changed.
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "owner" }));
     await click(button("Reload"));
     vi.mocked(rApi.receiptsList).mockImplementationOnce(() => ok({
       receipts: [{
@@ -1847,7 +1818,7 @@ describe("receipts tab & capability gate", () => {
     await click(button("Receipts and documents"));
     expect(host.textContent).toContain("Focus Check Store");
 
-    api.whoami.mockImplementation(() => ok({ user: "mallory", role: "admin" }));
+    api.capabilities.mockImplementationOnce(() => fail(409, "budget_actor_changed"));
     await act(async () => {
       window.dispatchEvent(new Event("focus"));
       await Promise.resolve();
@@ -1856,11 +1827,11 @@ describe("receipts tab & capability gate", () => {
     expect(host.textContent).not.toContain("Focus Check Store");
     expect(host.textContent).toContain("Only the budget's owner");
 
-    // visibilitychange clears when becoming visible with switched/denied actor, ignores hidden transitions.
-    api.whoami.mockImplementation(() => ok({ user: "owner", role: "admin" }));
+    // visibilitychange clears when becoming visible with denied actor, ignores hidden transitions.
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "owner" }));
     await click(button("Reload"));
     await click(button("Receipts and documents"));
-    const whoamiCallsBeforeHidden = api.whoami.mock.calls.length;
+    const capCallsBeforeHidden = api.capabilities.mock.calls.length;
     const visSpy = vi.spyOn(document, "visibilityState", "get");
     try {
       visSpy.mockReturnValue("hidden");
@@ -1868,10 +1839,10 @@ describe("receipts tab & capability gate", () => {
         document.dispatchEvent(new Event("visibilitychange"));
         await Promise.resolve();
       });
-      expect(api.whoami.mock.calls).toHaveLength(whoamiCallsBeforeHidden);
+      expect(api.capabilities.mock.calls).toHaveLength(capCallsBeforeHidden);
 
       visSpy.mockReturnValue("visible");
-      api.whoami.mockImplementation(() => fail(401, "budget_http_401"));
+      api.capabilities.mockImplementationOnce(() => fail(401, "budget_http_401"));
       await act(async () => {
         document.dispatchEvent(new Event("visibilitychange"));
         await Promise.resolve();
@@ -1955,10 +1926,10 @@ describe("receipts tab & capability gate", () => {
     expect(button("Confirm receipt").disabled).toBe(false);
   });
 
-  it("aborts in-flight bulk confirm immediately when the Budget principal switches", async () => {
+  it("aborts in-flight bulk confirm on principal switch, authorization lock, or actor change", async () => {
     const api = fakeApi();
     const rApi = fakeReceiptsApi();
-    api.whoami.mockImplementation(() => ok({ user: "alice", role: "admin" }));
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "alice" }));
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
 
     const item1 = {
@@ -2027,7 +1998,7 @@ describe("receipts tab & capability gate", () => {
     expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
 
     // Switching principal unmounts alice's ReceiptsView, aborts item2, and settles cleanly under bob.
-    api.whoami.mockImplementation(() => ok({ user: "bob", role: "admin" }));
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "bob" }));
     await renderWithReceipts(api, rApi, "bob");
     await act(async () => {
       pendingFirstConfirm.settle({
@@ -2039,5 +2010,53 @@ describe("receipts tab & capability gate", () => {
     await settle();
     expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
     expect(host.textContent).not.toContain("Confirming");
+
+    // Locking authorization via focus capability failure before item 2 stops bulk confirm before item 2 detail/confirm.
+    vi.mocked(rApi.receiptDetail).mockClear();
+    vi.mocked(rApi.confirmReceipt).mockClear();
+    const lockFirstConfirm = deferred<Loaded<ReceiptsApi["confirmReceipt"]>>();
+    vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => lockFirstConfirm.promise);
+    await click(button("Receipts and documents"));
+    await click(button("Confirm all from: Bulk Merchant"));
+    await act(async () => {
+      button("Start bulk confirm").click();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(rApi.receiptDetail).toHaveBeenCalledTimes(1);
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+
+    api.capabilities.mockImplementationOnce(() => fail(503, "budget_unavailable"));
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(api.isAuthorizationLocked()).toBe(true);
+    await act(async () => {
+      lockFirstConfirm.settle({
+        ok: true,
+        data: { ok: true, receipt: { ...item1, status: "confirmed", version: 2, lines: [] } },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(rApi.receiptDetail).toHaveBeenCalledTimes(1);
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("Bulk confirm cancelled after 1 confirmed (1 remaining, 0 failed).");
+
+    // Actor-changed error on bulk confirm clears Budget immediately and never sends item 2.
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "bob" }));
+    await click(button("Reload"));
+    await click(button("Receipts and documents"));
+    vi.mocked(rApi.receiptDetail).mockClear();
+    vi.mocked(rApi.confirmReceipt).mockClear();
+    vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => fail(409, "budget_actor_changed"));
+    await click(button("Confirm all from: Bulk Merchant"));
+    await click(button("Start bulk confirm"));
+    expect(rApi.receiptDetail).toHaveBeenCalledTimes(1);
+    expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.querySelector(".budget-views")).toBeNull();
   });
 });

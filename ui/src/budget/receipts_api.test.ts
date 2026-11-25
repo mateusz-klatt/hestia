@@ -1,11 +1,32 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RECEIPT_CONTRACT_HEADERS, createReceiptsApi, receiptsApi, withActorHeader } from "./receipts_api";
+import { createBudgetApi } from "./api";
+import { RECEIPT_CONTRACT_HEADERS, createReceiptsApi, receiptsApi } from "./receipts_api";
+
+const OWNER_TAG = "ZYtoux-yHqo-dVxLUe_uXkgvKgk2LWgJCV6VODecrlo";
+
+function capabilitiesFor(user: string | null = "owner", tag = OWNER_TAG) {
+  return {
+    user,
+    actor_tag: user === null ? null : tag,
+    installation_permissions: [],
+    own_budget: {
+      permissions: ["budget.view"],
+      can_view: true,
+      can_use_receipts: true,
+      can_manage_devices: true,
+    },
+    delegated_receipts: null,
+    household_available: false,
+  };
+}
 
 function respond(status: number, body: unknown, headers: HeadersInit = {}) {
-  const fetchMock = vi.fn(() => Promise.resolve(new Response(
-    body === undefined ? "" : JSON.stringify(body),
-    { status, headers },
-  )));
+  const fetchMock = vi.fn((input: unknown) => {
+    if ((input as URL).pathname.endsWith("/api/me/capabilities")) {
+      return Promise.resolve(new Response(JSON.stringify(capabilitiesFor()), { status: 200 }));
+    }
+    return Promise.resolve(new Response(body === undefined ? "" : JSON.stringify(body), { status, headers }));
+  });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -18,20 +39,23 @@ function sent(fetchMock: ReturnType<typeof respond>, index = 0): { url: URL; ini
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("receipts api", () => {
-  it("lists receipts via POST JSON with browser cookie and v0.40+ contract header", async () => {
+  it("lists receipts via POST JSON through the verified gate with X-Hestia-Expected-Actor and contract header", async () => {
     const fetchMock = respond(200, { receipts: [], next_cursor: null });
-    const result = await receiptsApi.receiptsList({ status: "needs_review", document_kind: "invoice", limit: 25 });
+    const gate = createBudgetApi("owner");
+    await gate.capabilities();
+    const client = createReceiptsApi(gate);
+
+    const result = await client.receiptsList({ status: "needs_review", document_kind: "invoice", limit: 25 });
     expect(result.ok).toBe(true);
-    const { url, init } = sent(fetchMock);
+    const { url, init } = sent(fetchMock, 1);
     expect(url.pathname).toMatch(/\/api\/budget\/receipts\/list$/);
     expect(url.search).toBe("");
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("same-origin");
     expect(init.cache).toBe("no-store");
-    expect(init.headers).toEqual({
-      "Content-Type": "application/json",
-      ...RECEIPT_CONTRACT_HEADERS,
-    });
+    expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+    expect(new Headers(init.headers).get("X-Hestia-Contract-Version")).toBe(RECEIPT_CONTRACT_HEADERS["X-Hestia-Contract-Version"]);
+    expect(new Headers(init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
     expect(JSON.parse(init.body as string)).toEqual({
       status: "needs_review",
       document_kind: "invoice",
@@ -41,22 +65,28 @@ describe("receipts api", () => {
 
   it("searches receipts via POST JSON rather than query strings", async () => {
     const fetchMock = respond(200, { receipts: [], next_cursor: "cursor-2" });
-    const result = await receiptsApi.receiptsSearch({ query: "Lidl", limit: 50, cursor: "cursor-1" });
+    const gate = createBudgetApi("owner");
+    await gate.capabilities();
+    const client = createReceiptsApi(gate);
+
+    const result = await client.receiptsSearch({ query: "Lidl", limit: 50, cursor: "cursor-1" });
     expect(result).toEqual({ ok: true, data: { receipts: [], next_cursor: "cursor-2" } });
-    const { url, init } = sent(fetchMock);
+    const { url, init } = sent(fetchMock, 1);
     expect(url.pathname).toMatch(/\/api\/budget\/receipts\/search$/);
     expect(url.search).toBe("");
-    expect(init.headers).toEqual({
-      "Content-Type": "application/json",
-      ...RECEIPT_CONTRACT_HEADERS,
-    });
+    expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+    expect(new Headers(init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
     expect(JSON.parse(init.body as string)).toEqual({ query: "Lidl", limit: 50, cursor: "cursor-1" });
   });
 
-  it("reads receipt details and sends confirm/delete CAS mutations with contract header where needed", async () => {
+  it("reads receipt details and sends confirm/delete CAS mutations with expected-actor and lock enforcement", async () => {
     const fetchMock = respond(200, { ok: true });
-    await receiptsApi.receiptDetail("rec-42");
-    await receiptsApi.confirmReceipt({
+    const gate = createBudgetApi("owner");
+    await gate.capabilities();
+    const client = createReceiptsApi(gate);
+
+    await client.receiptDetail("rec-42");
+    await client.confirmReceipt({
       receipt_id: "rec-42",
       expected_version: 2,
       raw_shop_name: "Sklep ABC",
@@ -80,32 +110,47 @@ describe("receipts api", () => {
       }],
       link: null,
     });
-    await receiptsApi.deleteReceipt({ receipt_id: "rec-42", expected_version: 3 });
+    await client.deleteReceipt({ receipt_id: "rec-42", expected_version: 3 });
 
-    const detail = sent(fetchMock, 0);
+    const detail = sent(fetchMock, 1);
     expect(detail.url.pathname).toMatch(/\/api\/budget\/receipts\/detail$/);
     expect(Object.fromEntries(detail.url.searchParams)).toEqual({ receipt_id: "rec-42" });
-    expect(detail.init.headers).toEqual(RECEIPT_CONTRACT_HEADERS);
+    expect(new Headers(detail.init.headers).get("X-Hestia-Contract-Version")).toBe(RECEIPT_CONTRACT_HEADERS["X-Hestia-Contract-Version"]);
+    expect(new Headers(detail.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
     expect(detail.init.credentials).toBe("same-origin");
 
-    const confirm = sent(fetchMock, 1);
+    const confirm = sent(fetchMock, 2);
     expect(confirm.url.pathname).toMatch(/\/api\/budget\/receipts\/confirm$/);
-    expect(confirm.init.headers).toEqual({ "Content-Type": "application/json", ...RECEIPT_CONTRACT_HEADERS });
+    expect(new Headers(confirm.init.headers).get("Content-Type")).toBe("application/json");
+    expect(new Headers(confirm.init.headers).get("X-Hestia-Contract-Version")).toBe(RECEIPT_CONTRACT_HEADERS["X-Hestia-Contract-Version"]);
+    expect(new Headers(confirm.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
     expect(JSON.parse(confirm.init.body as string)).toMatchObject({
       receipt_id: "rec-42",
       expected_version: 2,
       link: null,
     });
 
-    const del = sent(fetchMock, 2);
+    const del = sent(fetchMock, 3);
     expect(del.url.pathname).toMatch(/\/api\/budget\/receipts\/delete$/);
-    expect(del.init.headers).toEqual({ "Content-Type": "application/json" });
+    expect(new Headers(del.init.headers).get("Content-Type")).toBe("application/json");
+    expect(new Headers(del.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
     expect(JSON.parse(del.init.body as string)).toEqual({ receipt_id: "rec-42", expected_version: 3 });
+
+    expect(client.isAuthorizationLocked?.()).toBe(false);
+    gate.setAuthorizationLocked(true);
+    expect(client.isAuthorizationLocked?.()).toBe(true);
+    expect(await client.deleteReceipt({ receipt_id: "rec-42", expected_version: 4 })).toEqual({
+      ok: false,
+      status: 503,
+      error: "budget_server_changed",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("loads WebP receipt images as Blob without Blob.stream and parses structured errors cleanly", async () => {
     const webpBytes = new TextEncoder().encode("webp-bytes");
     const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(capabilitiesFor()), { status: 200 }))
       .mockResolvedValueOnce(new Response(webpBytes, {
         status: 200,
         headers: { "Content-Type": "image/webp" },
@@ -114,34 +159,44 @@ describe("receipts api", () => {
       .mockRejectedValueOnce(new TypeError("offline"));
     vi.stubGlobal("fetch", fetchMock);
 
-    const okRes = await receiptsApi.receiptImage("rec-img");
+    const gate = createBudgetApi("owner");
+    await gate.capabilities();
+    const client = createReceiptsApi(gate);
+
+    const okRes = await client.receiptImage("rec-img");
     expect(okRes.ok).toBe(true);
     if (okRes.ok) {
       expect(okRes.data).toBeInstanceOf(Blob);
       expect(okRes.data.size).toBe(webpBytes.byteLength);
       expect(okRes.data.type).toBe("image/webp");
     }
-    const [imgUrl, imgInit] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
+    const [imgUrl, imgInit] = fetchMock.mock.calls[1] as unknown as [URL, RequestInit];
     expect(imgUrl.pathname).toMatch(/\/api\/budget\/receipts\/image$/);
     expect(Object.fromEntries(imgUrl.searchParams)).toEqual({ receipt_id: "rec-img" });
-    expect(imgInit).toEqual({ credentials: "same-origin", cache: "no-store" });
+    expect(imgInit.credentials).toBe("same-origin");
+    expect(imgInit.cache).toBe("no-store");
+    expect(new Headers(imgInit.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
 
-    expect(await receiptsApi.receiptImage("rec-off")).toEqual({
+    expect(await client.receiptImage("rec-off")).toEqual({
       ok: false,
       status: 404,
       error: "budget_receipts_disabled",
       current: undefined,
     });
-    expect(await receiptsApi.receiptImage("rec-net")).toEqual({
+    expect(await client.receiptImage("rec-net")).toEqual({
       ok: false,
       status: 0,
       error: "budget_network",
     });
   });
 
-  it("exposes withActorHeader and createReceiptsApi without mutating default request headers", () => {
-    expect(withActorHeader({ ...RECEIPT_CONTRACT_HEADERS }, "owner")).toEqual(RECEIPT_CONTRACT_HEADERS);
-    const scoped = createReceiptsApi("owner");
-    expect(typeof scoped.receiptsSearch).toBe("function");
+  it("refuses unverified calls on the default receiptsApi gate", async () => {
+    const fetchMock = respond(200, {});
+    expect(await receiptsApi.receiptsList({ limit: 10 })).toEqual({
+      ok: false,
+      status: 503,
+      error: "budget_server_changed",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

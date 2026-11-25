@@ -1142,5 +1142,60 @@ describe("ReceiptsView", () => {
     await click(button("Start bulk confirm", alertBox()));
     expect(host.textContent).toContain("Failure 403 budget_forbidden: 1");
     expect(host.textContent).toContain("1 remaining, 1 failed");
+
+    // Gate lock flips true after item 1 -> aborts before item 2 detail/confirm even start.
+    const imp1Detail = receiptDetail({ receipt_id: "imp-1", status: "imported", source_kind: "attachment", document_kind: "invoice", invoice_number: "FV/1", raw_shop_name: "Acme Power", raw_nip: "7791011327", payment_method: null, total_amount: "50.00", lines: [], version: 2 });
+    const imp2Detail = receiptDetail({ receipt_id: "imp-2", status: "imported", source_kind: "email", document_kind: "payment_confirmation", raw_shop_name: "Acme Power", raw_nip: "7791011327", payment_method: null, total_amount: "30.00", lines: [], version: 5 });
+
+    let gateLocked = false;
+    const lockedClients = fakeClients(rows.slice(0, 2));
+    lockedClients.rApi.isAuthorizationLocked = () => gateLocked;
+    vi.mocked(lockedClients.rApi.receiptDetail).mockImplementation((id) =>
+      ok({ receipt: id === "imp-1" ? imp1Detail : imp2Detail, candidates: [] }));
+    vi.mocked(lockedClients.rApi.confirmReceipt).mockImplementation((req) => {
+      gateLocked = true;
+      return ok({ ok: true, receipt: receiptDetail({ receipt_id: req.receipt_id, status: "confirmed", version: 3 }) });
+    });
+    await renderReceipts(lockedClients, { actorKey: "owner", onAccessLoss: () => false });
+    await click(button("Confirm all from: Acme Power (NIP 7791011327)"));
+    await click(button("Start bulk confirm", alertBox()));
+    expect(lockedClients.rApi.receiptDetail).toHaveBeenCalledTimes(1);
+    expect(lockedClients.rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("Bulk confirm cancelled after 1 confirmed (1 remaining, 0 failed).");
+
+    // Gate lock flips true while item 1 detail is pending -> aborts before item 1 confirmReceipt.
+    let midLocked = false;
+    const midDetailDeferred = deferred<ReceiptDetailResult>();
+    const midClients = fakeClients(rows.slice(0, 2));
+    midClients.rApi.isAuthorizationLocked = () => midLocked;
+    vi.mocked(midClients.rApi.receiptDetail).mockImplementationOnce(() => midDetailDeferred.promise);
+    await renderReceipts(midClients, { actorKey: "owner", onAccessLoss: () => false });
+    await click(button("Confirm all from: Acme Power (NIP 7791011327)"));
+    await act(async () => {
+      button("Start bulk confirm", alertBox()).click();
+      await Promise.resolve();
+    });
+    await settle();
+    midLocked = true;
+    await act(async () => {
+      midDetailDeferred.resolve({ ok: true, data: { receipt: imp1Detail, candidates: [] } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(midClients.rApi.confirmReceipt).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Bulk confirm cancelled after 0 confirmed (2 remaining, 0 failed).");
+
+    // 409 budget_actor_changed aborts bulk confirm immediately without attempting remaining items.
+    const changedClients = fakeClients(rows.slice(0, 2));
+    vi.mocked(changedClients.rApi.receiptDetail).mockImplementation((id) =>
+      ok({ receipt: id === "imp-1" ? imp1Detail : imp2Detail, candidates: [] }));
+    vi.mocked(changedClients.rApi.confirmReceipt).mockImplementationOnce(() => fail(409, "budget_actor_changed"));
+    await renderReceipts(changedClients, { actorKey: "owner", onAccessLoss: () => false });
+    await click(button("Confirm all from: Acme Power (NIP 7791011327)"));
+    await click(button("Start bulk confirm", alertBox()));
+    expect(changedClients.rApi.receiptDetail).toHaveBeenCalledTimes(1);
+    expect(changedClients.rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("Failure 409 budget_actor_changed: 1");
+    expect(host.textContent).toContain("1 remaining, 1 failed");
   });
 });

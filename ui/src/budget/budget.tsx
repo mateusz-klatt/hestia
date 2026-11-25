@@ -150,6 +150,8 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       setSessionEpoch((current) => current + 1);
       setCommittedPrincipal(principal);
       setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
+      api.setAuthorizationLocked(true);
+      setAuthorization(null); setAuthorizationLocked(true);
       setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
       setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined);
       setView("accounts");
@@ -157,7 +159,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       setLoad("loading");
     }
     lifecycle.current += 1;
-  }, [active, principal]);
+  }, [active, principal, api]);
   const [pollTick, setPollTick] = useState(0);
   useEffect(() => {
     alive.current = true;
@@ -202,15 +204,17 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     ): Promise<BudgetResult<T>> => {
       const startedEpoch = epoch.current;
       const expectedPrincipal = principal;
-      if (!alive.current || startedEpoch !== epoch.current || principalRef.current !== expectedPrincipal) {
+      const samePrincipal = () => alive.current && principalRef.current === expectedPrincipal;
+      const activeEpoch = () => samePrincipal() && startedEpoch === epoch.current;
+      if (!activeEpoch()) {
         return { ok: false, status: 0, error: "budget_stale_epoch" };
       }
-      if (isMutation && (authorizationLocked || api.isAuthorizationLocked())) {
+      if (isMutation && (authorizationLocked || api.isAuthorizationLocked() || (effectiveReceiptsApi.isAuthorizationLocked?.() ?? false))) {
         return { ok: false, status: 503, error: "budget_server_changed" };
       }
       const result = await callFn();
-      if (alive.current && principalRef.current === expectedPrincipal) barrier(result);
-      if (!alive.current || startedEpoch !== epoch.current || principalRef.current !== expectedPrincipal) {
+      if (samePrincipal()) barrier(result);
+      if (!activeEpoch()) {
         return { ok: false, status: 0, error: "budget_stale_epoch" };
       }
       return result;
@@ -222,7 +226,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       receiptImage: (receiptId) => runWithGate(() => effectiveReceiptsApi.receiptImage(receiptId), false),
       confirmReceipt: (request) => runWithGate(() => effectiveReceiptsApi.confirmReceipt(request), true),
       deleteReceipt: (request) => runWithGate(() => effectiveReceiptsApi.deleteReceipt(request), true),
-      isAuthorizationLocked: () => authorizationLocked || api.isAuthorizationLocked(),
+      isAuthorizationLocked: () => authorizationLocked || api.isAuthorizationLocked() || (effectiveReceiptsApi.isAuthorizationLocked?.() ?? false),
     };
   }, [effectiveReceiptsApi, principal, barrier, authorizationLocked, api]);
 

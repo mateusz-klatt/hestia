@@ -337,6 +337,7 @@ export function ReceiptsView({
     const runToken = ++bulkRunGenRef.current;
     const expectedActor = actorKey;
     const isBulkCancelled = () => bulkCancelledRef.current;
+    const isGateLocked = () => receiptsApi.isAuthorizationLocked?.() === true;
     const isSessionAlive = () =>
       mounted.current && bulkRunGenRef.current === runToken && actorKeyRef.current === expectedActor;
     bulkCancelledRef.current = false;
@@ -363,11 +364,13 @@ export function ReceiptsView({
         || res.status === 403
         || res.error === "budget_forbidden"
         || res.error === "budget_stale_epoch"
+        || res.error === "budget_actor_changed"
+        || res.error === "budget_server_changed"
       );
     };
 
     for (const target of plan.targets) {
-      if (!isSessionAlive()) {
+      if (!isSessionAlive() || isGateLocked()) {
         aborted = true;
         break;
       }
@@ -392,7 +395,7 @@ export function ReceiptsView({
           aborted = true;
           break;
         }
-        if (!isSessionAlive()) {
+        if (!isSessionAlive() || isGateLocked()) {
           aborted = true;
           break;
         }
@@ -413,7 +416,7 @@ export function ReceiptsView({
           setBulkProgress({ total: plan.targets.length, done: processed });
           continue;
         }
-        if (!isSessionAlive()) {
+        if (!isSessionAlive() || isGateLocked()) {
           aborted = true;
           break;
         }
