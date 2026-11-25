@@ -246,6 +246,7 @@ const pl: Partial<Messages> = {
   "budget.main.title": "Budżet",
   "budget.main.subtitle": "Prywatne finanse domowe.",
   "budget.main.reload": "Wczytaj ponownie",
+  "budget.main.serverChanged": "Serwer został zmieniony — odśwież stronę",
   "budget.main.loading": "Wczytywanie budżetu…",
   "budget.main.viewsLabel": "Widok budżetu",
   "budget.main.views.monthly_budget": "Budżet miesiąca",

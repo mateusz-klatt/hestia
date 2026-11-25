@@ -244,6 +244,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Buiséad",
   "budget.main.subtitle": "Airgeadas príobháideach do theaghlaigh.",
   "budget.main.reload": "Athlódáil",
+  "budget.main.serverChanged": "Tá an freastalaí athraithe — athlódáil an leathanach",
   "budget.main.loading": "Buiséad á lódáil…",
   "budget.main.viewsLabel": "Amharc buiséid",
   "budget.main.views.monthly_budget": "Buiséad míosúil",

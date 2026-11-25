@@ -244,6 +244,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "予算",
   "budget.main.subtitle": "個人の家計を管理します。",
   "budget.main.reload": "再読み込み",
+  "budget.main.serverChanged": "サーバーが変更されました — ページを再読み込みしてください",
   "budget.main.loading": "予算を読み込み中…",
   "budget.main.viewsLabel": "予算の表示",
   "budget.main.views.monthly_budget": "月間予算",

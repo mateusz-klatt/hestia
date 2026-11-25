@@ -244,6 +244,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "예산",
   "budget.main.subtitle": "개인 가계 재정을 관리합니다.",
   "budget.main.reload": "다시 불러오기",
+  "budget.main.serverChanged": "서버가 변경되었습니다 — 페이지를 새로고침하세요",
   "budget.main.loading": "예산 불러오는 중…",
   "budget.main.viewsLabel": "예산 보기",
   "budget.main.views.monthly_budget": "월간 예산",

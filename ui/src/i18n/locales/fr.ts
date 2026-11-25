@@ -242,6 +242,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Budget",
   "budget.main.subtitle": "Les finances privées de votre foyer.",
   "budget.main.reload": "Recharger",
+  "budget.main.serverChanged": "Le serveur a changé — actualisez la page",
   "budget.main.loading": "Chargement du budget…",
   "budget.main.viewsLabel": "Vue du budget",
   "budget.main.views.monthly_budget": "Budget mensuel",

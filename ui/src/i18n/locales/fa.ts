@@ -243,6 +243,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "بودجه",
   "budget.main.subtitle": "امور مالی خصوصی خانوادهٔ شما.",
   "budget.main.reload": "بارگیری مجدد",
+  "budget.main.serverChanged": "سرور تغییر کرده است — صفحه را تازه‌سازی کنید",
   "budget.main.loading": "در حال بارگیری بودجه…",
   "budget.main.viewsLabel": "نمای بودجه",
   "budget.main.views.monthly_budget": "بودجهٔ ماهانه",

@@ -243,6 +243,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Budžets",
   "budget.main.subtitle": "Jūsu privātās mājsaimniecības finanses.",
   "budget.main.reload": "Ielādēt atkārtoti",
+  "budget.main.serverChanged": "Serveris ir mainījies — atsvaidziniet lapu",
   "budget.main.loading": "Ielādē budžetu…",
   "budget.main.viewsLabel": "Budžeta skats",
   "budget.main.views.monthly_budget": "Mēneša budžets",

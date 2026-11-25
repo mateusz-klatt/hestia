@@ -244,6 +244,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Ngân sách",
   "budget.main.subtitle": "Tài chính gia đình riêng tư của bạn.",
   "budget.main.reload": "Tải lại",
+  "budget.main.serverChanged": "Máy chủ đã thay đổi — hãy tải lại trang",
   "budget.main.loading": "Đang tải ngân sách…",
   "budget.main.viewsLabel": "Chế độ xem ngân sách",
   "budget.main.views.monthly_budget": "Ngân sách tháng",

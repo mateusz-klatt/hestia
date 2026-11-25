@@ -243,6 +243,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Fjárhagsáætlun",
   "budget.main.subtitle": "Einkafjármál heimilisins.",
   "budget.main.reload": "Endurhlaða",
+  "budget.main.serverChanged": "Þjónninn hefur breyst — endurhlaðið síðuna",
   "budget.main.loading": "Hleð fjárhagsáætlun…",
   "budget.main.viewsLabel": "Fjárhagsyfirlit",
   "budget.main.views.monthly_budget": "Mánaðarleg fjárhagsáætlun",

@@ -244,6 +244,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Buxheti",
   "budget.main.subtitle": "Financat private të familjes suaj.",
   "budget.main.reload": "Ringarko",
+  "budget.main.serverChanged": "Serveri ndryshoi — rifresko faqen",
   "budget.main.loading": "Duke ngarkuar buxhetin…",
   "budget.main.viewsLabel": "Pamja e buxhetit",
   "budget.main.views.monthly_budget": "Buxheti mujor",

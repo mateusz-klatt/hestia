@@ -264,6 +264,7 @@ const en = {
   "budget.main.title": "Budget",
   "budget.main.subtitle": "Your private household finances.",
   "budget.main.reload": "Reload",
+  "budget.main.serverChanged": "The server has changed — refresh the page",
   "budget.main.loading": "Loading budget…",
   "budget.main.viewsLabel": "Budget view",
   "budget.main.views.monthly_budget": "Monthly budget",

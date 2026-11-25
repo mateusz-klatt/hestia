@@ -46,28 +46,7 @@ function serverMonthToToday(month: string): (() => Date) | undefined {
   return () => new Date(year, monthIndex, 15, 12);
 }
 
-type Load = "loading" | "ready" | "disabled" | "denied" | "error";
-type RuntimeAuthorization = AuthorizationCapabilities & { read_only?: boolean };
-type LegacyBudgetApi = BudgetApi & { setLegacyReadOnly?: (value: boolean) => void };
-
-async function loadAuthorization(api: LegacyBudgetApi): Promise<BudgetResult<RuntimeAuthorization>> {
-  const result = await api.capabilities();
-  if (result.ok || result.status !== 404) {
-    api.setLegacyReadOnly(false);
-    return result;
-  }
-  const legacy = await api.whoami();
-  if (!legacy.ok) return { ok: false, status: legacy.status, error: legacy.error };
-  const owner = legacy.data.role === "admin";
-  api.setLegacyReadOnly(true);
-  return { ok: true, data: {
-    user: legacy.data.user, installation_permissions: [],
-    own_budget: owner ? {
-      permissions: [], can_view: true, can_use_receipts: true, can_manage_devices: true,
-    } : null,
-    delegated_receipts: null, household_available: false, read_only: true,
-  } };
-}
+type Load = "loading" | "ready" | "disabled" | "denied" | "error" | "serverChanged";
 
 function failureText(error: string): string {
   switch (error) {
@@ -75,7 +54,6 @@ function failureText(error: string): string {
     case "budget_refresh_in_progress": return t("budget.main.busy");
     case "budget_connection_paused": return t("budget.main.pausedError");
     case "budget_refresh_unavailable": return t("budget.main.unavailable");
-    case "budget_legacy_read_only": return `${t("budget.monthBudget.readOnly")} · ${t("budget.main.reload")}`;
     default: return t("budget.main.saveError");
   }
 }
@@ -107,7 +85,7 @@ export interface BudgetProps {
 
 export function Budget({ active, api: providedApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
-  const api = useMemo<LegacyBudgetApi>(
+  const api = useMemo<BudgetApi>(
     () => providedApi ?? (principal === undefined || principal === null ? budgetApi : createBudgetApi(principal)),
     [providedApi, principal],
   );
@@ -115,7 +93,8 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
   const [capabilities, setCapabilities] = useState<BudgetCapabilities | null>(null);
-  const [authorization, setAuthorization] = useState<RuntimeAuthorization | null>(null);
+  const [authorization, setAuthorization] = useState<AuthorizationCapabilities | null>(null);
+  const [authorizationLocked, setAuthorizationLocked] = useState(true);
   const [deviceAccess, setDeviceAccess] = useState(true);
   const [deviceUnavailable, setDeviceUnavailable] = useState(false);
   const deviceCapabilityKey = useRef("");
@@ -175,15 +154,15 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
 
   /** The single access barrier: any endpoint reporting a lost principal or a disabled feature clears every
    *  private value at once and invalidates all pending loads, polls and saves. */
-  const invalidate = useCallback((disabled: boolean) => {
+  const invalidate = useCallback((disabled: boolean, next?: Load) => {
     epoch.current += 1;
     generation.current += 1;
     setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
-    setAuthorization(null); setDeviceAccess(true); setDeviceUnavailable(false);
+    setAuthorization(null); setAuthorizationLocked(true); setDeviceAccess(true); setDeviceUnavailable(false);
     setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
     setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined); setView("accounts");
     setDevicesFocus(0);
-    setLoad(disabled ? "disabled" : "denied");
+    setLoad(next ?? (disabled ? "disabled" : "denied"));
   }, []);
   const barrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
     if (!isAccessLoss(result) && !(!result.ok && result.error === "budget_actor_changed")) return false;
@@ -199,21 +178,31 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
       barrier(result);
       return result;
     });
-    // Capabilities, not the legacy role projection, decide whether this actor still owns ledger access.
-    const identity = watch(loadAuthorization(api)).then((result) => {
-      if (result.ok && ((principal !== undefined && result.data.user !== principal)
-          || result.data.own_budget?.can_view !== true) && alive.current) invalidate(false);
-      return result;
-    });
-    const [connected, listed, queued, me] = await Promise.all([watch(api.connections()), watch(api.accounts()),
-      watch(api.jobs()), identity]);
+    const me = await watch(api.capabilities());
     if (!alive.current || token !== generation.current) return;
-    if (!connected.ok || !listed.ok || !me.ok) {
-      setLoad("error");
+    if (!me.ok) {
+      if (me.status === 404) invalidate(false, "serverChanged");
+      else {
+        setAuthorizationLocked(true);
+        setLoad("error");
+      }
+      return;
+    }
+    if ((principal !== undefined && me.data.user !== principal) || me.data.own_budget?.can_view !== true) {
+      invalidate(false);
       return;
     }
     setAuthorization(me.data);
-    setDeviceAccess(true);
+    setAuthorizationLocked(false);
+    setDeviceAccess(me.data.own_budget.can_manage_devices);
+    const [connected, listed, queued] = await Promise.all([
+      watch(api.connections()), watch(api.accounts()), watch(api.jobs()),
+    ]);
+    if (token !== generation.current) return;
+    if (!connected.ok || !listed.ok) {
+      setLoad("error");
+      return;
+    }
     setConnections((current) => newer(current, connected.data.connections));
     setCapabilities(connected.data.capabilities);
     setAccounts((current) => newer(current, listed.data.accounts));
@@ -227,21 +216,26 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
   }, [active, reload]);
 
   const refreshAuthorization = useCallback(async () => {
-    const result = await loadAuthorization(api);
+    const result = await api.capabilities();
     if (!alive.current || barrier(result)) return;
-    if (!result.ok) return;
+    if (!result.ok) {
+      if (result.status === 404) invalidate(false, "serverChanged");
+      else setAuthorizationLocked(true);
+      return;
+    }
     if ((principal !== undefined && result.data.user !== principal)
         || result.data.own_budget?.can_view !== true) {
       invalidate(false);
       return;
     }
     setAuthorization(result.data);
+    setAuthorizationLocked(false);
     setDeviceAccess(result.data.own_budget.can_manage_devices);
   }, [api, principal, barrier, invalidate]);
 
-  const deviceBarrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
+  const deviceBarrier = useCallback((result: { ok: boolean; status?: number; error?: string }, listing = false): boolean => {
     if (!result.ok && (result.status === 403 || result.status === 404) && result.error !== "budget_disabled") {
-      if (result.status === 404) setDeviceUnavailable(true);
+      if (result.status === 404 || listing) setDeviceUnavailable(true);
       setDeviceAccess(false);
       void refreshAuthorization();
       return true;
@@ -273,9 +267,9 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
 
   /** Runs one mutation; null when the view was unmounted or its data cleared while it was in flight. */
   const run = useCallback(async <T,>(key: string, action: () => Promise<BudgetResult<T>>): Promise<BudgetResult<T> | null> => {
-    if (authorization?.read_only) {
-      setNotice(failureText("budget_legacy_read_only"));
-      return { ok: false, status: 409, error: "budget_legacy_read_only" };
+    if (authorizationLocked) {
+      setNotice(t("budget.main.serverChanged"));
+      return { ok: false, status: 503, error: "budget_server_changed" };
     }
     const started = epoch.current;
     setBusy((current) => new Set(current).add(key));
@@ -288,7 +282,7 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
       if (result.error === "budget_version_conflict") await reload();
     }
     return result;
-  }, [reload, barrier, authorization]);
+  }, [reload, barrier, authorizationLocked]);
 
   const refresh = useCallback(async (connection: BudgetConnection) => {
     // Reuse the key only to retry a request whose outcome is unknown (network failure).
@@ -388,6 +382,9 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
   }, [active, showLimits, revision, api, barrier]);
 
   if (!active) return null;
+  if (load === "serverChanged") {
+    return <section className="budget-app"><p className="budget-notice" role="alert">{t("budget.main.serverChanged")}</p></section>;
+  }
   const header = (
     <header className="budget-header">
       <div><h2>{t("budget.main.title")}</h2><p>{t("budget.main.subtitle")}</p></div>

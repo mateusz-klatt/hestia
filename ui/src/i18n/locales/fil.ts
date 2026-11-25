@@ -244,6 +244,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Badyet",
   "budget.main.subtitle": "Pribadong pananalapi ng inyong sambahayan.",
   "budget.main.reload": "I-load muli",
+  "budget.main.serverChanged": "Nagbago ang server — i-refresh ang page",
   "budget.main.loading": "Nilo-load ang badyet…",
   "budget.main.viewsLabel": "Mga paraan ng pagtingin sa badyet",
   "budget.main.views.monthly_budget": "Buwanang badyet",

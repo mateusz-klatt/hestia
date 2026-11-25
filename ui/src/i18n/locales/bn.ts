@@ -244,6 +244,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "বাজেট",
   "budget.main.subtitle": "আপনার পরিবারের ব্যক্তিগত অর্থব্যবস্থা।",
   "budget.main.reload": "আবার লোড করুন",
+  "budget.main.serverChanged": "সার্ভার পরিবর্তন হয়েছে — পৃষ্ঠাটি রিফ্রেশ করুন",
   "budget.main.loading": "বাজেট লোড হচ্ছে…",
   "budget.main.viewsLabel": "বাজেটের দৃশ্য",
   "budget.main.views.monthly_budget": "মাসিক বাজেট",

@@ -379,16 +379,14 @@ void (async () => {
     return;
   }
   roomIcons = (await fetchRoomIcons()) ?? {};
-  // Resolve capabilities from the role before the first render. Auth-off (me.user === null) = loopback/dev
+  // Resolve capabilities before the first render. Auth-off (me.user === null) = loopback/dev
   // → full access. The server enforces these for real (#73); this only shapes what the UI offers.
   const authOff = me.user === null;
   currentUsername = me.user;
   isAdmin = authOff || me.role === "admin";
   canControl = authOff || me.role === "operator" || me.role === "admin";
   const discovered = await budgetApi.capabilities();
-  canViewBudget = discovered.ok
-    ? discovered.data.own_budget?.can_view === true
-    : discovered.status === 404 && isAdmin;
+  canViewBudget = discovered.ok ? discovered.data.own_budget?.can_view === true : discovered.status === 404;
   // Always render the user/settings chip; auth-off (me.user === null) shows a settings-only menu
   // (language + temperature scale, no logout — see renderUser).
   const userOpts = {

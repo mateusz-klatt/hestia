@@ -243,6 +243,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Budjetti",
   "budget.main.subtitle": "Kotitaloutesi yksityinen talous.",
   "budget.main.reload": "Lataa uudelleen",
+  "budget.main.serverChanged": "Palvelin on vaihtunut — lataa sivu uudelleen",
   "budget.main.loading": "Ladataan budjettia…",
   "budget.main.viewsLabel": "Budjettinäkymä",
   "budget.main.views.monthly_budget": "Kuukausibudjetti",

@@ -244,6 +244,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Բյուջե",
   "budget.main.subtitle": "Ձեր տնային տնտեսության անձնական ֆինանսները։",
   "budget.main.reload": "Վերաբեռնել",
+  "budget.main.serverChanged": "Սերվերը փոխվել է — թարմացրեք էջը",
   "budget.main.loading": "Բյուջեն բեռնվում է…",
   "budget.main.viewsLabel": "Բյուջեի տեսք",
   "budget.main.views.monthly_budget": "Ամսական բյուջե",

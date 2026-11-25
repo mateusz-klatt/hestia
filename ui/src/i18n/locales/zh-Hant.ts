@@ -243,6 +243,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "預算",
   "budget.main.subtitle": "您的私人家庭財務。",
   "budget.main.reload": "重新載入",
+  "budget.main.serverChanged": "伺服器已變更 — 請重新整理頁面",
   "budget.main.loading": "正在載入預算…",
   "budget.main.viewsLabel": "預算檢視",
   "budget.main.views.monthly_budget": "每月預算",

@@ -243,6 +243,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Buget",
   "budget.main.subtitle": "Finanțele personale ale gospodăriei.",
   "budget.main.reload": "Reîncarcă",
+  "budget.main.serverChanged": "Serverul s-a schimbat — reîncarcă pagina",
   "budget.main.loading": "Se încarcă bugetul…",
   "budget.main.viewsLabel": "Vizualizare buget",
   "budget.main.views.monthly_budget": "Buget lunar",
