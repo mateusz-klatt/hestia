@@ -709,10 +709,12 @@ class BudgetReceiptStore(BudgetHTTPStore):
         if search and (not isinstance(query, str) or not query.strip() or len(query) > 128):
             raise ReceiptError()
         context_values = {"query": fold_for_match(query.strip())} if search else {
-            "month": month, "status": status, "linked": linked, "evidence": evidence,
+            "month": month, "status": status, "linked": linked,
         }
         if kind is not None:
             context_values["document_kind"] = kind
+        if evidence != "exclude":
+            context_values["evidence"] = evidence
         context = hashlib.sha256(json.dumps(context_values, sort_keys=True, ensure_ascii=True,
                                             separators=(",", ":")).encode("ascii")).hexdigest()
         return limit, month, status, linked, query, kind, evidence, context

@@ -30,12 +30,15 @@ WRITES = {
 _CONTRACT_HEADER = "X-Hestia-Contract-Version"
 _CONTRACT_VERSION = re.compile(r"0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\Z")
 _NATIVE_GMAIL_VERSION = (0, 40, 0)
+_GATEWAY_EVIDENCE_VERSION = (0, 52, 0)
 _CURRENT_VERSION = tuple(int(part) for part in api_contract.CONTRACT_VERSION.split("."))
 _RECEIPT_RESULT_KEY = {"parse-text": "draft", "confirm": "receipt", "list": "receipts",
                        "search": "receipts", "detail": "receipt"}
 _LEGACY_SOURCE = {"paste": "live_text", "email": "live_text", "photo": "local_ocr", "attachment": "local_ocr"}
 _GMAIL_FIELDS = ("document_kind", "invoice_number", "due_date", "import_expires_at",
                  "forwarded_manually", "forwarded_sender_domain")
+_GATEWAY_EVIDENCE_FIELDS = ("gateway", "gateway_status", "fee_amount", "payee_host",
+                            "evidence_for_receipt_id", "has_document", "payment_evidence")
 
 
 def enabled():
@@ -96,30 +99,33 @@ _DEVICE_BROWSER_REQUESTS = {
 }
 
 
-def _native_contract(request, operation):
+def _receipt_contract(request, operation):
     if operation not in _RECEIPT_RESULT_KEY:
-        return False
+        return (0, 0, 0)
     values = request.headers.getall(_CONTRACT_HEADER, [])
     if not values:
-        return False
+        return (0, 0, 0)
     if len(values) != 1 or not _CONTRACT_VERSION.fullmatch(values[0]):
         raise api._Rejected(400, "budget_receipt_contract_version_invalid")
     version = tuple(int(part) for part in values[0].split("."))
     if version > _CURRENT_VERSION:
         raise api._Rejected(400, "budget_receipt_contract_version_invalid")
-    return version >= _NATIVE_GMAIL_VERSION
+    return version
 
 
-def _response(operation, result, native):
-    if not native and operation in _RECEIPT_RESULT_KEY:
+def _response(operation, result, version):
+    if version < _GATEWAY_EVIDENCE_VERSION and operation in _RECEIPT_RESULT_KEY:
         key = _RECEIPT_RESULT_KEY[operation]
         receipts = result[key] if key == "receipts" else (result[key],)
         for receipt in receipts:
-            if receipt["status"] == "imported":
-                receipt["status"] = "draft"
-            receipt["source_kind"] = _LEGACY_SOURCE.get(receipt["source_kind"], receipt["source_kind"])
-            for field in _GMAIL_FIELDS:
+            for field in _GATEWAY_EVIDENCE_FIELDS:
                 receipt.pop(field, None)
+            if version < _NATIVE_GMAIL_VERSION:
+                if receipt["status"] == "imported":
+                    receipt["status"] = "draft"
+                receipt["source_kind"] = _LEGACY_SOURCE.get(receipt["source_kind"], receipt["source_kind"])
+                for field in _GMAIL_FIELDS:
+                    receipt.pop(field, None)
     return web.json_response(result, headers=api.PRIVATE_HEADERS)
 
 
@@ -133,17 +139,17 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
             if not enabled():
                 raise api._Rejected(404, "budget_receipts_disabled")
             if request.method == "GET":
-                native = _native_contract(request, operation)
+                version = _receipt_contract(request, operation)
                 receipt_id = _receipt_id(request)
                 result = await api._settled_thread(lambda: _run_read(owner, operation, receipt_id, secret, device_id))
-                return _response(operation, result, native)
+                return _response(operation, result, version)
             if device_id is None:
                 api._browser(request, owner, secret)
             elif operation == "parse-text":
                 retry = device_token.parse_limited(device_id, time.monotonic())
                 if retry is not None:
                     return _device_error(429, "device_token_rate_limited", retry)
-            native = _native_contract(request, operation)
+            version = _receipt_contract(request, operation)
             body, error = await read_json_body(request, WRITES[operation][1], reject_duplicates=True)
             if error:
                 return body
@@ -156,7 +162,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
             if not enabled():
                 raise api._Rejected(404, "budget_receipts_disabled")
             result = await api._settled_thread(lambda: _run(owner, operation, values, secret, device_id))
-            return _response(operation, result, native)
+            return _response(operation, result, version)
         except (ReceiptError, device_token.DeviceTokenError) as exc:
             return api._error(exc.status, exc.code)
         except ValidationError:
