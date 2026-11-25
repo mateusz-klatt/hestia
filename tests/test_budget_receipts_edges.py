@@ -104,7 +104,11 @@ class ParserEdgeTests(unittest.TestCase):
         self.assertFalse(receipt_parser._ascii_word("ł"))
 
     def test_parse_validation_and_defensive_text_checks(self):
+        self.assertEqual(merchant_tokens(None, None), frozenset())
         self.assertIn("market", merchant_tokens("ab polska market", None))
+        for generic in ("sklep", "shop", "store", "sp", "z", "o", "oo", "sa", "spółka", "polska",
+                        "pl", "com", "www", "p24", "przelewy24", "payu", "autopay", "tpay", "paynow", "blik", "abc"):
+            self.assertEqual(merchant_tokens(generic, None), frozenset(), generic)
         self.assertNotIn("polska", merchant_tokens("ab polska market", None))
         self.assertFalse(valid_nip(None))
         self.assertFalse(valid_nip("123"))

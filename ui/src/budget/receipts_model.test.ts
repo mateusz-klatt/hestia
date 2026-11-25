@@ -322,24 +322,25 @@ describe("receipts_model", () => {
     expect(confirmedBuilt.ok).toBe(true);
     if (confirmedBuilt.ok) expect(confirmedBuilt.request.link).toBeNull();
 
-    // 6. unlinked draft & imported -> offer candidates, default to candidate:0 when available, and allow explicit unlink.
+    // 6. unlinked draft & imported -> offer candidates, default to "unlink" ("no link") even with candidates, and allow explicit pick.
     for (const status of ["draft", "imported"] as const) {
       const unlinkedImport = detailOf({ status, linked: false });
       expect(availableLinkOptions(unlinkedImport, [cand], "card").canPickCandidates).toBe(true);
       const draftImport = draftFromDetail(unlinkedImport, [cand]);
-      expect(draftImport.linkChoice).toBe("candidate:0");
-      const builtLinked = buildConfirmRequest(unlinkedImport, draftImport, [cand]);
-      expect(builtLinked.ok).toBe(true);
-      if (builtLinked.ok) {
-        expect(builtLinked.request.link).toEqual({
+      expect(draftImport.linkChoice).toBe("unlink");
+      const builtDefaultUnlinked = buildConfirmRequest(unlinkedImport, draftImport, [cand]);
+      expect(builtDefaultUnlinked.ok).toBe(true);
+      if (builtDefaultUnlinked.ok) expect(builtDefaultUnlinked.request.link).toBeNull();
+
+      const builtExplicitLinked = buildConfirmRequest(unlinkedImport, { ...draftImport, linkChoice: "candidate:0" }, [cand]);
+      expect(builtExplicitLinked.ok).toBe(true);
+      if (builtExplicitLinked.ok) {
+        expect(builtExplicitLinked.request.link).toEqual({
           account_id: cand.account_id,
           entry_reference: cand.entry_reference,
           candidate_token: cand.candidate_token,
         });
       }
-      const builtUnlinked = buildConfirmRequest(unlinkedImport, { ...draftImport, linkChoice: "unlink" }, [cand]);
-      expect(builtUnlinked.ok).toBe(true);
-      if (builtUnlinked.ok) expect(builtUnlinked.request.link).toBeNull();
       expect(reconcileLinkChoice(unlinkedImport, "candidate:0", { ...draftImport, rawShopName: "Changed" }, [cand])).toBe("unlink");
 
       const noCandidatesDraft = draftFromDetail(unlinkedImport, []);

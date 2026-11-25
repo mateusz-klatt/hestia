@@ -365,7 +365,7 @@ export function draftFromDetail(
   } else if (detail.linked) {
     // Never default a linked receipt without a keep token to implicit unlink.
     linkChoice = "";
-  } else if (options.canPickCandidates) {
+  } else if (detail.status === "needs_review" && options.canPickCandidates) {
     linkChoice = "candidate:0";
   }
   return {

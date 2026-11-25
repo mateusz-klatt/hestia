@@ -1776,6 +1776,136 @@ NR KARTY ****5555
                          ("confirmed", True, "PRZYKLADOWY SKLEP"))
         self.assertEqual(saved["linked_entry_ref"], reference_digest("pc-plus-4"))
 
+    def test_merchant_hit_specificity_nip_whole_word_and_gateway(self):
+        from hestia.budget.gmail_store import _payment_payee_key
+
+        # 1. Generic words / gateway tokens / short words never match across unrelated shops ("sklep", "p24", "pl").
+        self.add_transaction("a", "p24-other-shop", amount="61.00", booking_date="2026-11-10", value_date=None,
+                             remittance_information=["P24 inny-sklep.pl"])
+        self.add_transaction("a", "p24-same-shop", amount="61.00", booking_date="2026-11-11", value_date=None,
+                             remittance_information=["P24 PRZYKLADOWY SKLEP"])
+        direct_id = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-10", due_date=None,
+            total="61.00", shop="PRZYKŁADOWY SKLEP", nip=None, with_line=True,
+        )
+        direct_hits = {item["entry_reference"]: item["merchant_token_hit"]
+                       for item in self.receipts.detail("owner", direct_id)["candidates"]}
+        self.assertEqual(direct_hits, {
+            reference_digest("p24-same-shop"): True,
+            reference_digest("p24-other-shop"): False,
+        })
+
+        # 2. Gateway receipts (AppMeta payee key or gateway shop token) never get merchant_token_hit=True, staying manual.
+        gateway_id = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-10", due_date=None,
+            total="61.00", shop="PRZYKŁADOWY SKLEP", nip=None, with_line=True,
+        )
+        with self.sessions.begin() as session:
+            session.add(db.AppMeta(key=_payment_payee_key(gateway_id), value="payee-hmac"))
+        gateway_candidates = self.receipts.detail("owner", gateway_id)["candidates"]
+        self.assertEqual(len(gateway_candidates), 2)
+        self.assertTrue(all(item["merchant_token_hit"] is False for item in gateway_candidates))
+
+        named_gateway_id = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-10", due_date=None,
+            total="61.00", shop="P24 PRZYKŁADOWY SKLEP", nip=None, with_line=True,
+        )
+        self.assertTrue(all(item["merchant_token_hit"] is False
+                            for item in self.receipts.detail("owner", named_gateway_id)["candidates"]))
+        chosen = next(item for item in gateway_candidates
+                      if item["entry_reference"] == reference_digest("p24-same-shop"))
+        confirmed_gw = self.receipts.confirm("owner", {
+            "receipt_id": gateway_id, "expected_version": 1, "receipt_kind": "purchase",
+            "receipt_date": "2026-11-10", "receipt_time": None, "total_amount": "61.00",
+            "currency": "PLN", "payment_method": "unknown",
+            "link": {
+                "account_id": chosen["account_id"], "entry_reference": chosen["entry_reference"],
+                "candidate_token": chosen["candidate_token"],
+            },
+        })["receipt"]
+        self.assertEqual((confirmed_gw["status"], confirmed_gw["linked"]), ("confirmed", True))
+
+        # 3. Whole-word token match only (no substring hit like "mart" in "smartmarket").
+        self.add_transaction("a", "substr-bad", amount="42.00", booking_date="2026-11-10", value_date=None,
+                             remittance_information=["SMARTMARKET KRAKOW"])
+        self.add_transaction("a", "word-ok", amount="42.00", booking_date="2026-11-11", value_date=None,
+                             remittance_information=["MART KRAKOW"])
+        word_id = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-10", due_date="2026-11-15",
+            total="42.00", shop="MART", nip=None,
+        )
+        word_hits = {item["entry_reference"]: item["merchant_token_hit"]
+                     for item in self.receipts.detail("owner", word_id)["candidates"]}
+        self.assertEqual(word_hits, {
+            reference_digest("word-ok"): True,
+            reference_digest("substr-bad"): False,
+        })
+
+        # 4. Exact NIP match suffices when merchant name consists solely of generic/short tokens.
+        self.add_transaction("a", "nip-exact", amount="88.00", booking_date="2026-11-12", value_date=None,
+                             remittance_information=["PRZELEW /NIP/526-104-08-28"])
+        self.add_transaction("a", "nip-wrong-len", amount="88.00", booking_date="2026-11-13", value_date=None,
+                             remittance_information=["PRZELEW 52610408289"])
+        nip_id = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-10", due_date="2026-11-15",
+            total="88.00", shop="ABC SP. Z O.O.", nip="5261040828",
+        )
+        nip_hits = {item["entry_reference"]: item["merchant_token_hit"]
+                    for item in self.receipts.detail("owner", nip_id)["candidates"]}
+        self.assertEqual(nip_hits, {
+            reference_digest("nip-exact"): True,
+            reference_digest("nip-wrong-len"): False,
+        })
+
+    def test_unedited_double_space_linked_draft_survives_reconcile(self):
+        from hestia.budget.receipt_reconcile import reconcile_receipt_links
+
+        shop = unicodedata.normalize("NFD", "ŻÓŁTY") + "  SKLEP"
+        parsed = self.receipts.parse_text("owner", receipt_text().replace(PRIVATE_SHOP, shop, 1))
+        match = next(item for item in self.receipts.detail("owner", parsed["receipt_id"])["candidates"]
+                     if item["entry_reference"] == reference_digest("debit"))
+        values = confirm_values(parsed, link={
+            "account_id": match["account_id"], "entry_reference": match["entry_reference"],
+            "candidate_token": match["candidate_token"],
+        })
+        # Omitting raw_shop_name keeps the stored unnormalized spacing/NFD on BudgetReceipt while evidence is normalized.
+        values.pop("raw_shop_name")
+        saved = self.receipts.confirm("owner", values)["receipt"]
+        self.assertEqual((saved["status"], saved["linked"]), ("confirmed", True))
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 5), 0)
+        self.assertEqual(self.receipt_row(parsed["receipt_id"]).status, "confirmed")
+
+    def test_date_window_clamps_max_and_min_bounds_without_overflow(self):
+        from datetime import date
+        from hestia.budget.receipt_store import _shift_clamped
+
+        self.assertEqual(_shift_clamped(date(1, 1, 1), -4), date.min)
+        self.assertEqual(_shift_clamped(date(9999, 12, 31), 14), date.max)
+
+        self.add_transaction("a", "max-date-tx", amount="333.00", booking_date="9999-12-31", value_date=None,
+                             remittance_information=["ORANGE FV"])
+        max_inv = self._seed_imported(
+            document_kind="invoice", issue_date="9999-12-30", due_date="9999-12-31",
+            total="333.00", source_kind="email",
+        )
+        inv_cands = self.receipts.detail("owner", max_inv)["candidates"]
+        self.assertEqual([item["entry_reference"] for item in inv_cands], [reference_digest("max-date-tx")])
+        self.assertEqual(inv_cands[0]["date_distance"], 1)
+
+        min_pc = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="0001-01-01", due_date=None,
+            total="333.00", source_kind="email", with_line=True,
+        )
+        self.assertEqual(self.receipts.detail("owner", min_pc)["candidates"], [])
+
+        max_pc = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="9999-12-31", due_date=None,
+            total="333.00", source_kind="email", with_line=True,
+        )
+        self.assertEqual([item["entry_reference"] for item in self.receipts.detail("owner", max_pc)["candidates"]],
+                         [reference_digest("max-date-tx")])
+
 
 class ReceiptRetentionSweepTests(fixture.unittest.IsolatedAsyncioTestCase):
     async def test_sweep_calls_retain_expired_when_flag_is_off(self):
@@ -2041,6 +2171,32 @@ class ReceiptHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         confirmed = await confirm_res.json()
         api_contract.BudgetReceiptConfirmResult.model_validate(confirmed)
         self.assertEqual((confirmed["receipt"]["status"], confirmed["receipt"]["linked"]), ("confirmed", True))
+
+        # Edge: an imported invoice due 9999-12-31 returns 200 (not 500 OverflowError) from HTTP detail.
+        max_invoice_id = str(uuid.uuid4())
+        with self.sessions.begin() as session:
+            session.add(db.BudgetTransaction(
+                account_id="acc-http", entry_reference="tx-max-date",
+                payload_json=json.dumps({
+                    "entry_reference": "tx-max-date", "amount": "199", "currency": "PLN",
+                    "credit_debit_indicator": "DBIT", "status": "BOOK", "booking_date": "9999-12-31",
+                    "value_date": None, "transaction_date": None,
+                    "remittance_information": ["RESPECT ENERGY"],
+                }),
+                observed_at=now, source="api", api_observed_at=now, uncertain=False,
+            ))
+            session.add(db.BudgetReceipt(
+                id=max_invoice_id, owner="alice", raw_shop_name="Respect Energy",
+                receipt_kind="purchase", receipt_date="9999-12-30", due_date="9999-12-31",
+                total_amount="199", currency="PLN", payment_method=None, status="imported",
+                source_kind="email", document_kind="invoice", import_expires_at=now + 86400,
+                version=1, created_at=now, updated_at=now,
+            ))
+        max_detail_res = await self.get("detail", max_invoice_id, headers=headers)
+        self.assertEqual(max_detail_res.status, 200, await max_detail_res.text())
+        max_detail_body = await max_detail_res.json()
+        self.assertEqual([item["entry_reference"] for item in max_detail_body["candidates"]],
+                         [reference_digest("tx-max-date")])
 
 
 if __name__ == "__main__":

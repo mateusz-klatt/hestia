@@ -1284,60 +1284,83 @@ describe("ReceiptsView", () => {
     expect(host.querySelector(".budget-receipts")?.textContent).not.toContain("Synthetic Grocery");
   });
 
-  it("shows candidates in the detail drawer for imported receipts and links on confirm", async () => {
-    const candA = receiptCandidate({ entry_reference: "a".repeat(64), candidate_token: "tok-imp-a", date_distance: 23, merchant_token_hit: true });
-    const candB = receiptCandidate({ entry_reference: "b".repeat(64), candidate_token: "tok-imp-b", date_distance: 25, merchant_token_hit: false });
-    const clients = fakeClients([
-      receiptSummary({
-        receipt_id: "imp-drawer",
-        status: "imported",
-        source_kind: "email",
-        document_kind: "invoice",
-        raw_shop_name: "Orange",
-        due_date: "2026-11-30",
-        payment_method: null,
-        total_amount: "88.10",
-      }),
-    ]);
-    vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
-      receipt: receiptDetail({
-        receipt_id: "imp-drawer",
-        status: "imported",
-        source_kind: "email",
-        document_kind: "invoice",
-        raw_shop_name: "Orange",
-        due_date: "2026-11-30",
-        payment_method: null,
-        total_amount: "88.10",
-        lines: [{
-          line_no: 1,
-          line_kind: "other",
-          raw_name: "Invoice summary",
-          raw_name_key: "invoice summary",
-          ptu_code: null,
-          quantity: "1",
-          raw_unit: null,
-          unit_price_raw: null,
-          gross_line_total: "88.10",
-          discount_amount: "0",
-          net_line_total: "88.10",
-        }],
-      }),
-      candidates: [candA, candB],
-    }));
+  it("shows candidates in the detail drawer for imported receipts without preselecting them", async () => {
+    const candUnrelated = receiptCandidate({
+      entry_reference: "b".repeat(64),
+      candidate_token: "tok-imp-unrelated",
+      date_distance: 25,
+      merchant_token_hit: false,
+    });
+    const candHit = receiptCandidate({
+      entry_reference: "a".repeat(64),
+      candidate_token: "tok-imp-a",
+      date_distance: 23,
+      merchant_token_hit: true,
+    });
+    const impSummary = receiptSummary({
+      receipt_id: "imp-drawer",
+      status: "imported",
+      source_kind: "email",
+      document_kind: "invoice",
+      raw_shop_name: "Orange",
+      due_date: "2026-11-30",
+      payment_method: null,
+      total_amount: "88.10",
+    });
+    const impDetail = receiptDetail({
+      receipt_id: "imp-drawer",
+      status: "imported",
+      source_kind: "email",
+      document_kind: "invoice",
+      raw_shop_name: "Orange",
+      due_date: "2026-11-30",
+      payment_method: null,
+      total_amount: "88.10",
+      lines: [{
+        line_no: 1,
+        line_kind: "other",
+        raw_name: "Invoice summary",
+        raw_name_key: "invoice summary",
+        ptu_code: null,
+        quantity: "1",
+        raw_unit: null,
+        unit_price_raw: null,
+        gross_line_total: "88.10",
+        discount_amount: "0",
+        net_line_total: "88.10",
+      }],
+    });
+    const clients = fakeClients([impSummary]);
+    vi.mocked(clients.rApi.receiptDetail)
+      .mockImplementationOnce(() => ok({ receipt: impDetail, candidates: [candUnrelated] }))
+      .mockImplementationOnce(() => ok({ receipt: impDetail, candidates: [candHit, candUnrelated] }));
 
+    // 1. Pressing Confirm without selecting leaves unrelated debit unlinked (default "unlink" / no link).
     await renderReceipts(clients);
     await click(openDetailButton(0));
-    const drawer = dialog();
-    expect(linkRadio("candidate:0", drawer).checked).toBe(true);
-    expect(linkRadio("candidate:1", drawer).disabled).toBe(false);
-    expect(drawer.textContent).not.toContain("Candidates are only checked on review");
+    const drawer1 = dialog();
+    expect(linkRadio("unlink", drawer1).checked).toBe(true);
+    expect(linkRadio("candidate:0", drawer1).checked).toBe(false);
+    expect(linkRadio("candidate:0", drawer1).disabled).toBe(false);
+    expect(drawer1.textContent).not.toContain("Candidates are only checked on review");
 
-    await click(linkRadio("candidate:1", drawer));
-    await click(button("Confirm receipt", drawer));
-    expect(clients.rApi.confirmReceipt).toHaveBeenCalledWith(expect.objectContaining({
+    await click(button("Confirm receipt", drawer1));
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
       receipt_id: "imp-drawer",
-      link: { account_id: "local-a", entry_reference: "b".repeat(64), candidate_token: "tok-imp-b" },
+      link: null,
+    }));
+
+    // 2. Explicitly picking a candidate in the drawer links it on confirm.
+    await click(button("Close", drawer1));
+    await click(openDetailButton(0));
+    const drawer2 = dialog();
+    expect(linkRadio("unlink", drawer2).checked).toBe(true);
+    expect(linkRadio("candidate:0", drawer2).checked).toBe(false);
+    await click(linkRadio("candidate:1", drawer2));
+    await click(button("Confirm receipt", drawer2));
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
+      receipt_id: "imp-drawer",
+      link: { account_id: "local-a", entry_reference: "b".repeat(64), candidate_token: "tok-imp-unrelated" },
     }));
   });
 
