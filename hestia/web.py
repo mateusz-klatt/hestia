@@ -589,14 +589,22 @@ def _catalog_request_allowed(actor: str, method: str, path: str) -> bool:
         return _catalog_allows(session, actor, _required_permission(method, path))
 
 
-def _session_context_current(ctx: ValidatedSessionContext) -> bool:
+def _session_credential_current(ctx: ValidatedSessionContext) -> bool:
     envelope = auth.decode_session(ctx.raw_token, now=_now(), secret=_SESSION_SECRET)
-    if envelope is None:
+    if envelope is None or envelope.username != ctx.username:
         return False
     try:
         state = store_sql.load_auth_state(ctx.username)
-        if not state.enabled or not _envelope_matches_state(ctx.carrier, envelope, state):
-            return False
+        return state.enabled and _envelope_matches_state(ctx.carrier, envelope, state)
+    except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
+        return False
+
+
+def _session_context_current(ctx: ValidatedSessionContext) -> bool:
+    if not _session_credential_current(ctx):
+        return False
+    try:
+        state = store_sql.load_auth_state(ctx.username)
         return (
             _role_allows(state.role, _required_role("GET", "/api/events"))
             if state.policy_phase == authz.POLICY_PHASE_LEGACY
@@ -622,8 +630,9 @@ def _envelope_matches_state(carrier: str, envelope: auth.SessionEnvelope, auth_s
         if envelope.generation != auth_state.generation:
             return False
         if envelope.version == 2:
-            expected_purpose = auth.SESSION_PURPOSE_BROWSER if carrier == "cookie" else auth.SESSION_PURPOSE_NATIVE
-            return envelope.purpose == expected_purpose
+            if carrier == "cookie":
+                return envelope.purpose == auth.SESSION_PURPOSE_BROWSER
+            return envelope.purpose in {auth.SESSION_PURPOSE_NATIVE, auth.SESSION_PURPOSE_NATIVE_QR}
         return True
     return envelope.version == 1
 
@@ -941,6 +950,26 @@ def _qr_configured_origin() -> "str | None":
     return _canonical_https_origin(os.environ.get("HESTIA_PUBLIC_ORIGIN"), allow_trailing_slash=True)
 
 
+def _trusted_forwarded_https(request) -> bool:
+    if request.headers.getall("X-Forwarded-Proto", []) != ["https"]:
+        return False
+    try:
+        networks = consent_context._networks(os.environ)
+        peer = ipaddress.ip_address(request.remote or "")
+    except (ValueError, BudgetConfigError):
+        return False
+    return any(peer in network for network in networks)
+
+
+def _qr_public_transport(request, configured: str) -> bool:
+    hosts = request.headers.getall("Host", [])
+    expected = _canonical_origin_tuple(configured)
+    if len(hosts) != 1 or expected is None or _canonical_origin_tuple("https://" + hosts[0]) != expected:
+        return False
+    forwarded = request.headers.getall("X-Forwarded-Proto", [])
+    return not forwarded or _trusted_forwarded_https(request)
+
+
 def _native_auth_available() -> bool:
     if not _AUTH_ENABLED or os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
         return False
@@ -965,7 +994,11 @@ async def _qr_code(request):
     origins = request.headers.getall("Origin", [])
     if supplied != configured or len(origins) != 1 or _canonical_https_origin(origins[0]) != configured:
         return _qr_error(HTTPStatus.BAD_REQUEST, "qr_origin_mismatch")
-    ctx = request[_SESSION_CONTEXT_KEY]
+    ctx = request.get(_SESSION_CONTEXT_KEY)
+    if ctx is None:
+        return _qr_error(HTTPStatus.UNAUTHORIZED, "browser_session_required")
+    if not _session_credential_current(ctx):
+        return _qr_error(HTTPStatus.UNAUTHORIZED, "browser_session_upgrade_required")
     try:
         payload = await asyncio.to_thread(
             auth_qr.issue, ctx.username, configured, ctx.generation, now=_now(), secret=_SESSION_SECRET,
@@ -993,8 +1026,7 @@ async def _qr_redeem(request):
         return body
     if not isinstance(body, dict) or set(body) != {"origin", "code"}:
         return _qr_error(HTTPStatus.UNAUTHORIZED, "qr_code_invalid")
-    supplied = _canonical_https_origin(body["origin"])
-    if supplied != configured:
+    if body["origin"] != configured or not _qr_public_transport(request, configured):
         return _qr_error(HTTPStatus.BAD_REQUEST, "qr_origin_mismatch")
     code = auth_qr.normalize_code(body["code"])
     if code is None:
@@ -1017,7 +1049,7 @@ async def _device_exchange(request):
     ctx = request.get(_SESSION_CONTEXT_KEY)
     if (
         ctx is None or ctx.carrier != "bearer" or ctx.version != 2
-        or ctx.purpose != auth.SESSION_PURPOSE_NATIVE
+        or ctx.purpose not in {auth.SESSION_PURPOSE_NATIVE, auth.SESSION_PURPOSE_NATIVE_QR}
         or ctx.session_phase != store_sql.SESSION_PHASE_V2
     ):
         return _qr_error(HTTPStatus.UNAUTHORIZED, "native_session_required")
@@ -1028,6 +1060,8 @@ async def _device_exchange(request):
     body, error = await _read_json_body(request, 4096, reject_duplicates=True)
     if error:
         return body
+    if not _session_credential_current(ctx):
+        return _qr_error(HTTPStatus.UNAUTHORIZED, "native_session_required")
     if not isinstance(body, dict) or not set(body) <= {"device_name", "prior_token"} or "device_name" not in body:
         return _qr_error(HTTPStatus.BAD_REQUEST, "budget_invalid_request")
     prior = body.get("prior_token")

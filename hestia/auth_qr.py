@@ -159,7 +159,7 @@ def redeem(origin: str, code: str, *, now: float, secret: bytes) -> dict | None:
             row.consumed_at = now
             token = auth.make_session(
                 user.username, now=now, secret=secret,
-                generation=user.credential_generation, purpose=auth.SESSION_PURPOSE_NATIVE,
+                generation=user.credential_generation, purpose=auth.SESSION_PURPOSE_NATIVE_QR,
             )
             owner = authz.resolve_budget_target(session, user.username)
             if owner is not None:

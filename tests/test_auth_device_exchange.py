@@ -311,6 +311,20 @@ class DeviceExchangeWebTests(unittest.IsolatedAsyncioTestCase):
                 headers={"Authorization": f"Bearer {self.token}"})
             self.assertEqual(disabled.status, 404)
 
+    async def test_native_expiry_during_upload_cannot_issue(self):
+        expiring = auth.make_session(
+            "owner", now=web._now(), secret=self.secret, ttl=30,
+            generation=0, purpose=auth.SESSION_PURPOSE_NATIVE,
+        )
+        now = web._now()
+        with mock.patch.object(web, "_now", side_effect=[now, now, now + 31]):
+            response = await self.client.post(device_token.EXCHANGE_PATH, json={"device_name": "Vesta"},
+                headers={"Authorization": f"Bearer {expiring}"})
+        self.assertEqual(response.status, 401)
+        self.assertEqual(await response.json(), {"error": {"code": "native_session_required"}})
+        with self.sessions() as session:
+            self.assertEqual(session.query(db.BudgetReceiptDeviceToken).count(), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

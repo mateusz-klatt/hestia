@@ -112,6 +112,12 @@ ProxyAddHeaders On
 
 `mod_remoteip` restores the client address before proxying. The `RequestHeader` directive strips incoming `X-Forwarded-For`, and `ProxyAddHeaders` builds the forwarded header from Apache's restored address. Use the normal request-header phase for this removal so it follows address restoration. Without the trusted loopback setting and client-address restoration, pairing traffic collapses into one per-IP bucket. [Apache remote-IP documentation](https://httpd.apache.org/docs/2.4/mod/mod_remoteip.html), [Apache proxy headers](https://httpd.apache.org/docs/2.4/mod/mod_proxy.html#proxyaddheaders)
 
+## QR login behind Apache and Cloudflare
+
+QR redemption requires the request `Host` to match the configured HTTPS `HESTIA_PUBLIC_ORIGIN` and the JSON `origin` to equal that canonical origin exactly. Direct requests to the application's own `host:port` therefore do not redeem codes. Apache and Cloudflare may still deliver plain HTTP internally; the Host binding, rather than the direct socket scheme, is the baseline check.
+
+`X-Forwarded-Proto: https` is accepted only when the immediate peer is covered by `HESTIA_BUDGET_TRUSTED_PROXY_CIDRS` (the loopback Apache proxy is configured above). Strip untrusted forwarded headers at Apache. If no trusted-proxy CIDRs are configured, do not rely on forwarded HTTPS: the Host and exact JSON-origin checks alone authorize redemption. QR issuance remains a browser-session operation with its own Origin check.
+
 ## Gmail receipt import (receipts v1d-a, v1d-b, and v1e)
 
 Default off (`HESTIA_BUDGET_GMAIL_IMPORT_ENABLED` unset). The isolated `receipt-parser` service handles plain text and HTML for Gmail imports and extracts text from invoice PDFs (`network_mode: none`, read-only root, `cap_drop: ALL`, `no-new-privileges`, UID 1000, 256 MiB / 32 pids / 0.5 CPU, noexec tmpfs). It is behind the compose profile `receipt-parser`, so an ordinary Hestia deploy does not start it. With the flag on and the service down, the Gmail routes return `503 budget_receipt_gmail_parser_unavailable` before contacting Gmail.
