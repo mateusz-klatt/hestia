@@ -324,6 +324,22 @@ describe("budget api", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("refuses a mutation locked while its actor hash is pending", async () => {
+    let resolveHash!: (digest: ArrayBuffer) => void;
+    const pendingHash = new Promise<ArrayBuffer>((resolve) => { resolveHash = resolve; });
+    const digest = vi.fn(() => pendingHash);
+    vi.stubGlobal("crypto", { subtle: { digest } });
+    const fetchMock = respond(200, {});
+    const scoped = createBudgetApi("owner");
+    const mutation = scoped.setPaused(connection, true);
+    await Promise.resolve();
+    expect(digest).toHaveBeenCalledTimes(1);
+    scoped.setAuthorizationLocked(true);
+    resolveHash(new Uint8Array(32).buffer);
+    expect(await mutation).toEqual({ ok: false, status: 503, error: "budget_server_changed" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("maps refusals, empty middleware bodies and network loss without throwing", async () => {
     respond(409, { ok: false, error: "budget_version_conflict", current: { id: "bank" } });
     expect(await budgetApi.connections()).toEqual({ ok: false, status: 409, error: "budget_version_conflict", current: { id: "bank" } });

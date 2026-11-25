@@ -90,17 +90,24 @@ async function actorDigest(actor: string): Promise<string> {
 
 export function createBudgetApi(expectedActor: string | null = null) {
   let authorizationLocked = false;
-  async function call<T>(target: URL, init: RequestInit = {}): Promise<BudgetResult<T>> {
-    if (expectedActor === null || !target.pathname.includes("/api/budget/")) return request<T>(target, init);
-    let digest: string;
-    try {
-      digest = await actorDigest(expectedActor);
-    } catch {
-      return { ok: false, status: 0, error: "budget_actor_unavailable" };
+  let authorizationGeneration = 0;
+  async function call<T>(target: URL, init: RequestInit = {}, mutation = false): Promise<BudgetResult<T>> {
+    const generation = authorizationGeneration;
+    if (expectedActor !== null && target.pathname.includes("/api/budget/")) {
+      let digest: string;
+      try {
+        digest = await actorDigest(expectedActor);
+      } catch {
+        return { ok: false, status: 0, error: "budget_actor_unavailable" };
+      }
+      const headers = new Headers(init.headers);
+      headers.set("X-Hestia-Expected-Actor", digest);
+      init = { ...init, headers };
     }
-    const headers = new Headers(init.headers);
-    headers.set("X-Hestia-Expected-Actor", digest);
-    return request<T>(target, { ...init, headers });
+    if (mutation && (authorizationLocked || generation !== authorizationGeneration)) {
+      return { ok: false, status: 503, error: "budget_server_changed" };
+    }
+    return request<T>(target, init);
   }
   function post<T>(path: string, body: object, headers: Record<string, string> = {},
     mutation = true): Promise<BudgetResult<T>> {
@@ -109,10 +116,15 @@ export function createBudgetApi(expectedActor: string | null = null) {
     }
     return call<T>(url(path), {
       method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body),
-    });
+    }, mutation);
   }
   return {
-  setAuthorizationLocked: (value: boolean) => { authorizationLocked = value; },
+  setAuthorizationLocked: (value: boolean) => {
+    if (authorizationLocked !== value) {
+      authorizationLocked = value;
+      authorizationGeneration += 1;
+    }
+  },
   capabilities: () => call<AuthorizationCapabilities>(apiUrl("me/capabilities")),
   connections: () => call<ConnectionsData>(url("connections")),
   accounts: (connectionId?: string) =>
