@@ -687,6 +687,51 @@ class StoreEdgeTests(AnalyticsCase):
                 (None, None),
             )
 
+    def test_round3_token_letter_floor_strict_iban_and_corrupt_evidence_edges(self):
+        import uuid
+        from hestia.budget.analytics_core import financial_fingerprint
+        from hestia.budget.receipt_parser import merchant_score_groups
+        from hestia.budget.receipt_reconcile import reconcile_receipt_links
+        from hestia.budget.receipt_store import _mask_iban_sequences, _nip_match
+
+        # Numeric and <3-letter tokens never qualify as distinctive; >=3 letters with digits (>=4 chars) do.
+        self.assertEqual(merchant_score_groups("SKLEP 1234 A123 AB12", None), ((), ("sklep",)))
+        self.assertEqual(merchant_tokens("SKLEP 1234 A123 AB12 ABC1", None), frozenset({"abc1"}))
+
+        # PL+10 digits VAT ID is never eaten by IBAN masker; country length / mod-97 IBANs ARE masked.
+        self.assertIn("PL5260250995", _mask_iban_sequences("NIP PL5260250995 FV2026"))
+        self.assertIn("2026", _mask_iban_sequences("NL92 ABNA 5260 2509 95 2026"))
+        self.assertNotIn("5260250995", _mask_iban_sequences("NL92ABNA5260250995"))
+        self.assertNotIn("5260", _mask_iban_sequences("PL61 1090 1014 0000 5260 2509 9500"))
+        self.assertNotIn("8601", _mask_iban_sequences("NO93 8601 1117 947"))
+        self.assertIn("5260 2509 95", _mask_iban_sequences("DE89 1234 5260 2509 95"))
+        self.assertNotIn("5260", _mask_iban_sequences("XX25 1234 5260 2509 95"))
+        self.assertIn("5260 2509 95", _mask_iban_sequences("XX00 1234 5260 2509 95"))
+        self.assertIn("EFGH IJKL", _mask_iban_sequences("BE92 ABCD EFGH IJKL"))
+        long_single = "PL61" + "0" * 34
+        self.assertEqual(_mask_iban_sequences(long_single), long_single)
+
+        self.assertEqual(_nip_match("5260250995", "NIP PL5260250995 FV2026"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "NL92 ABNA 5260 2509 95 2026"), (False, False))
+        self.assertEqual(_nip_match("5260250995", "a5260250995 5260250995b nr 5260250995"), (False, False))
+
+        # Invalid JSON and non-dict JSON on linked_evidence cleanly fall through to needs_review.
+        for idx, bad_ev in enumerate(("not-json", "[]")):
+            tx_ref = f"r3-bad-ev-{idx}"
+            payload = self.add_transaction("a", tx_ref, amount="12.00", booking_date="2026-11-30")
+            fp = financial_fingerprint(payload)
+            rid = str(uuid.uuid4())
+            with self.sessions.begin() as session:
+                session.add(db.BudgetReceipt(
+                    id=rid, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                    receipt_kind="purchase", receipt_date="2026-11-30", total_amount="12.00", currency="PLN",
+                    payment_method="card", status="confirmed", source_kind="local_ocr", document_kind="receipt",
+                    linked_account_id=self.accounts["a"], linked_entry_ref=tx_ref,
+                    linked_fingerprint=fp, linked_evidence=bad_ev,
+                    version=1, created_at=self.now + idx, updated_at=self.now + idx,
+                ))
+                self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 50 + idx), 1)
+
 
 class ReceiptApiEdgeTests(unittest.TestCase):
     def test_store_refuses_a_non_authoritative_backend(self):

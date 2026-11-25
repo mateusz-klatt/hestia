@@ -559,6 +559,7 @@ const pl: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "Sprzedawca",
   "budget.receipts.suggestedMatchChange": "Zmień",
   "budget.receipts.suggestedMatchUnlink": "Odłącz / bez powiązania",
+  "budget.receipts.bookingDateNote": "(księgowanie {date})",
 
   "budget.consent.title": "Stan zgód i przypomnienia o odnowieniu",
   "budget.consent.intro": "Wyłącznie podgląd ważności zgód bankowych oraz zapisanych prób autoryzacji. Nie zamyka sesji w banku, niczego nie usuwa i nie wysyła żądań do banku.",

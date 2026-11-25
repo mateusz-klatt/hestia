@@ -555,6 +555,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "فروشنده",
   "budget.receipts.suggestedMatchChange": "تغییر",
   "budget.receipts.suggestedMatchUnlink": "قطع اتصال / بدون اتصال",
+  "budget.receipts.bookingDateNote": "(ثبت‌شده {date})",
   "budget.consent.title": "نمای کلی وضعیت و تمدید رضایت‌نامه‌ها",
   "budget.consent.intro": "خلاصهٔ فقط خواندنی از اعتبار رضایت‌نامه‌های بانکی و سوابق مجوز ذخیره‌شده. اینجا هیچ بستن از راه دور، حذف یا درخواست بانکی اجرا نمی‌شود.",
   "budget.consent.loading": "در حال بارگیری نمای رضایت‌نامه‌ها…",

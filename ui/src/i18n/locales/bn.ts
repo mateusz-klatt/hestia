@@ -556,6 +556,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "ব্যবসায়ী",
   "budget.receipts.suggestedMatchChange": "পরিবর্তন করুন",
   "budget.receipts.suggestedMatchUnlink": "বিচ্ছিন্ন / লিঙ্ক নেই",
+  "budget.receipts.bookingDateNote": "(বুকিং {date})",
   "budget.consent.title": "সম্মতির অবস্থা ও নবায়নের সারাংশ",
   "budget.consent.intro": "ব্যাংকের সম্মতির মেয়াদ ও সংরক্ষিত অনুমোদন রেকর্ডের শুধু দেখার উপযোগী সারাংশ। এখানে দূর থেকে বন্ধ করা, মুছে ফেলা বা ব্যাংকে অনুরোধ পাঠানো হয় না।",
   "budget.consent.loading": "সম্মতির সারাংশ লোড হচ্ছে…",

@@ -556,6 +556,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "ร้านค้า",
   "budget.receipts.suggestedMatchChange": "เปลี่ยน",
   "budget.receipts.suggestedMatchUnlink": "ยกเลิก / ไม่เชื่อมโยง",
+  "budget.receipts.bookingDateNote": "(ลงบัญชี {date})",
   "budget.consent.title": "ภาพรวมสถานะความยินยอม และ การต่ออายุ",
   "budget.consent.intro": "สรุปแบบอ่านอย่างเดียวของอายุความยินยอมของธนาคารและบันทึกการอนุญาตที่เก็บไว้ ไม่มีการปิดจากระยะไกล การลบ หรือคำขอไปยังธนาคารจากที่นี่",
   "budget.consent.loading": "กำลังโหลดภาพรวมความยินยอม…",

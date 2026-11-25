@@ -2549,6 +2549,142 @@ NR KARTY ****5555
         })["receipt"]
         self.assertEqual((confirmed_zero_unlinked["status"], confirmed_zero_unlinked["linked"]), ("confirmed", False))
 
+    def test_round3_reconcile_migration_numeric_tokens_and_nip_before_iban_regressions(self):
+        import hashlib
+        import uuid
+        from hestia.budget.analytics_core import financial_fingerprint
+        from hestia.budget.receipt_reconcile import evidence_json, link_evidence, reconcile_receipt_links
+
+        # 1. Pre-creditor/debtor digest legacy evidence stays confirmed when present fields match and silently upgrades.
+        self.add_transaction(
+            "a", "r3-legacy-mig", amount="186.00", credit_debit_indicator="CRDT",
+            booking_date="2026-11-15", value_date=None,
+            remittance_information=["ZWROT BIEDRONKA NIP 7791011327"],
+        )
+        self.metadata("a", "r3-legacy-mig", {"creditor_name": "OWNER", "debtor_name": "BIEDRONKA S.A."})
+        with self.sessions.begin() as session:
+            tx_row = session.get(db.BudgetTransaction, (self.accounts["a"], "r3-legacy-mig"))
+            tx_payload = json.loads(tx_row.payload_json)
+        fp = financial_fingerprint(tx_payload)
+        full_ev = link_evidence(
+            "owner", self.accounts["a"], "r3-legacy-mig", tx_payload,
+            "BIEDRONKA", "7791011327", "OWNER", fp, debtor="BIEDRONKA S.A.",
+        )
+
+        # 1a. 11-key legacy evidence (missing debtor_digest) with present debtor on bank tx.
+        legacy_11 = {k: v for k, v in full_ev.items() if k != "debtor_digest"}
+        rec_11 = str(uuid.uuid4())
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(
+                id=rec_11, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                receipt_kind="refund", receipt_date="2026-11-15", total_amount="186.00", currency="PLN",
+                payment_method="card", status="confirmed", source_kind="local_ocr", document_kind="receipt",
+                linked_account_id=self.accounts["a"], linked_entry_ref="r3-legacy-mig",
+                linked_fingerprint=fp, linked_evidence=evidence_json(legacy_11),
+                version=1, created_at=self.now, updated_at=self.now,
+            ))
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 10), 0)
+            upgraded_11 = json.loads(session.get(db.BudgetReceipt, rec_11).linked_evidence)
+            self.assertEqual(upgraded_11["debtor_digest"], hashlib.sha256(b"BIEDRONKA S.A.").hexdigest())
+            self.assertEqual(len(upgraded_11), 12)
+        self.assertEqual(self.receipt_row(rec_11).status, "confirmed")
+
+        # Once silently upgraded to 12 keys, subsequent debtor drift triggers needs_review.
+        with self.sessions.begin() as session:
+            meta_row = session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "r3-legacy-mig"))
+            meta_row.payload_json = json.dumps({"creditor_name": "OWNER", "debtor_name": "PayU"})
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 20), 1)
+        self.assertEqual(self.receipt_row(rec_11).status, "needs_review")
+
+        # 1b. 10-key legacy evidence (missing both creditor_digest and debtor_digest) also silently upgrades.
+        self.add_transaction(
+            "a", "r3-legacy-mig-10", amount="187.00", credit_debit_indicator="CRDT",
+            booking_date="2026-11-15", value_date=None,
+            remittance_information=["ZWROT BIEDRONKA NIP 7791011327"],
+        )
+        self.metadata("a", "r3-legacy-mig-10", {"creditor_name": "OWNER", "debtor_name": "BIEDRONKA S.A."})
+        with self.sessions.begin() as session:
+            tx_row_10 = session.get(db.BudgetTransaction, (self.accounts["a"], "r3-legacy-mig-10"))
+            tx_payload_10 = json.loads(tx_row_10.payload_json)
+        fp_10 = financial_fingerprint(tx_payload_10)
+        full_ev_10 = link_evidence(
+            "owner", self.accounts["a"], "r3-legacy-mig-10", tx_payload_10,
+            "BIEDRONKA  S.A.", "7791011327", "OWNER", fp_10, debtor="BIEDRONKA S.A.",
+        )
+        legacy_10 = {k: v for k, v in full_ev_10.items() if k not in ("creditor_digest", "debtor_digest")}
+        rec_10 = str(uuid.uuid4())
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(
+                id=rec_10, owner="owner", raw_shop_name="BIEDRONKA  S.A.", raw_nip="7791011327",
+                receipt_kind="refund", receipt_date="2026-11-15", total_amount="187.00", currency="PLN",
+                payment_method="card", status="confirmed", source_kind="local_ocr", document_kind="receipt",
+                linked_account_id=self.accounts["a"], linked_entry_ref="r3-legacy-mig-10",
+                linked_fingerprint=fp_10, linked_evidence=evidence_json(legacy_10),
+                version=1, created_at=self.now, updated_at=self.now,
+            ))
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 30), 0)
+            upgraded_10 = json.loads(session.get(db.BudgetReceipt, rec_10).linked_evidence)
+            self.assertEqual(upgraded_10["creditor_digest"], hashlib.sha256(b"OWNER").hexdigest())
+            self.assertEqual(upgraded_10["debtor_digest"], hashlib.sha256(b"BIEDRONKA S.A.").hexdigest())
+            self.assertEqual(len(upgraded_10), 12)
+
+        # 1c. Legacy 11-key row with changed creditor/remittance does NOT upgrade and flips to needs_review.
+        with self.sessions.begin() as session:
+            meta_row = session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "r3-legacy-mig-10"))
+            meta_row.payload_json = json.dumps({"creditor_name": "OTHER", "debtor_name": "BIEDRONKA S.A."})
+        with self.sessions.begin() as session:
+            row_10 = session.get(db.BudgetReceipt, rec_10)
+            row_10.linked_evidence = evidence_json({k: v for k, v in full_ev_10.items() if k != "debtor_digest"})
+            row_10.status = "confirmed"
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 40), 1)
+        self.assertEqual(self.receipt_row(rec_10).status, "needs_review")
+
+        # 2. Purely numeric and <3-letter tokens never count as distinctive.
+        self.add_transaction(
+            "a", "r3-num-tok", amount="201.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["INNY 1234 A123 AB12"],
+        )
+        rec_num = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="201.00",
+            shop="SKLEP 1234 A123 AB12", nip=None,
+        )
+        cand_num = self.receipts.detail("owner", rec_num)["candidates"][0]
+        self.assertEqual(cand_num["match_strength"], "none")
+        self.assertFalse(cand_num["merchant_token_hit"])
+
+        self.add_transaction(
+            "a", "r3-three-let", amount="202.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["FIRMA ABC1 ZAKUP"],
+        )
+        rec_three = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="202.00",
+            shop="SKLEP ABC1", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_three)["candidates"][0]["match_strength"], "distinctive")
+
+        # 3. Labeled NIP extracted before IBAN masking; PL+10 digits VAT ID not masked; real IBAN + year still masked.
+        self.add_transaction(
+            "a", "r3-nip-pl-fv", amount="203.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["SKLEP NIP PL5260250995 FV2026"],
+        )
+        self.add_transaction(
+            "a", "r3-iban-year", amount="204.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["PRZELEW NL92 ABNA 5260 2509 95 2026"],
+        )
+        rec_pl_fv = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="203.00",
+            shop="NIEZNANY", nip="5260250995",
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_pl_fv)["candidates"][0]["match_strength"], "nip")
+        rec_iban_yr = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="204.00",
+            shop="NIEZNANY", nip="5260250995",
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_iban_yr)["candidates"][0]["match_strength"], "none")
+        self.assertFalse(self.receipts.detail("owner", rec_iban_yr)["candidates"][0]["merchant_token_hit"])
+
 
 class ReceiptRetentionSweepTests(fixture.unittest.IsolatedAsyncioTestCase):
     async def test_sweep_calls_retain_expired_when_flag_is_off(self):

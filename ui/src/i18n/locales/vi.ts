@@ -556,6 +556,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "Cửa hàng",
   "budget.receipts.suggestedMatchChange": "Đổi",
   "budget.receipts.suggestedMatchUnlink": "Hủy liên kết / không liên kết",
+  "budget.receipts.bookingDateNote": "(ghi sổ {date})",
   "budget.consent.title": "Tổng quan trạng thái & gia hạn chấp thuận",
   "budget.consent.intro": "Bản tóm tắt chỉ đọc về hiệu lực chấp thuận ngân hàng và hồ sơ ủy quyền đã lưu. Không thực hiện việc đóng từ xa, xóa hay gửi yêu cầu ngân hàng tại đây.",
   "budget.consent.loading": "Đang tải tổng quan chấp thuận…",

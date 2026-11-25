@@ -556,6 +556,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "व्यापारी",
   "budget.receipts.suggestedMatchChange": "बदलें",
   "budget.receipts.suggestedMatchUnlink": "अनलिंक / कोई लिंक नहीं",
+  "budget.receipts.bookingDateNote": "(बुक किया गया {date})",
   "budget.consent.title": "सहमति की स्थिति और नवीनीकरण का सारांश",
   "budget.consent.intro": "बैंक की सहमति की वैधता और संग्रहीत प्राधिकरण रिकॉर्ड का केवल पढ़ने योग्य सारांश। यहाँ दूरस्थ समापन, हटाना या बैंक अनुरोध नहीं होता।",
   "budget.consent.loading": "सहमति का सारांश लोड हो रहा है…",

@@ -555,6 +555,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "Trgovac",
   "budget.receipts.suggestedMatchChange": "Promijeni",
   "budget.receipts.suggestedMatchUnlink": "Odvoji / bez veze",
+  "budget.receipts.bookingDateNote": "(knjiženo {date})",
   "budget.consent.title": "Pregled stanja i obnove saglasnosti",
   "budget.consent.intro": "Pregled valjanosti saglasnosti banci i spremljenih zapisa autorizacije samo za čitanje. Ovdje se ne pokreću udaljeno zatvaranje, brisanje ni zahtjevi banci.",
   "budget.consent.loading": "Učitavanje pregleda saglasnosti…",

@@ -555,6 +555,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "التاجر",
   "budget.receipts.suggestedMatchChange": "تغيير",
   "budget.receipts.suggestedMatchUnlink": "إلغاء الربط / بدون ربط",
+  "budget.receipts.bookingDateNote": "(تاريخ القيد {date})",
   "budget.consent.title": "نظرة عامة على حالة الموافقات وتجديدها",
   "budget.consent.intro": "ملخص للقراءة فقط لصلاحية الموافقات المصرفية وسجلات التفويض المحفوظة. لا تُنفّذ هنا عمليات إغلاق عن بُعد أو حذف أو طلبات إلى البنك.",
   "budget.consent.loading": "جارٍ تحميل ملخص الموافقات…",

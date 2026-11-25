@@ -555,6 +555,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "Söluaðili",
   "budget.receipts.suggestedMatchChange": "Breyta",
   "budget.receipts.suggestedMatchUnlink": "Aftengja / engin tenging",
+  "budget.receipts.bookingDateNote": "(bókað {date})",
   "budget.consent.title": "Yfirlit yfir stöðu & endurnýjun samþykkis",
   "budget.consent.intro": "Yfirlit til skoðunar yfir gildistíma bankasamþykkis og vistaðar heimildarskrár. Hér fer hvorki fram fjarlokun, eyðing né fyrirspurn til banka.",
   "budget.consent.loading": "Hleð samþykkisyfirliti…",

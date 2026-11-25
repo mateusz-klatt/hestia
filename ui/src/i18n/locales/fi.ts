@@ -555,6 +555,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "Kauppias",
   "budget.receipts.suggestedMatchChange": "Vaihda",
   "budget.receipts.suggestedMatchUnlink": "Poista / ei linkitystä",
+  "budget.receipts.bookingDateNote": "(kirjattu {date})",
   "budget.consent.title": "Suostumusten tila & uusimisen yleiskatsaus",
   "budget.consent.intro": "Vain luettavissa oleva yhteenveto pankkisuostumusten voimassaolosta ja tallennetuista valtuutustiedoista. Tässä ei tehdä etäsulkemisia, poistoja tai pankkipyyntöjä.",
   "budget.consent.loading": "Ladataan suostumusten yleiskatsausta…",

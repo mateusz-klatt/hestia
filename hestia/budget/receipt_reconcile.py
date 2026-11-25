@@ -249,18 +249,38 @@ def reconcile_receipt_links(session, owner, now):
                 for candidate_shop in shop_forms
             ]
             expected_evidence = {evidence_json(ev) for ev in evidences}
-            if normalize_shop_name(debtor) in (None, ""):
-                # Pre-debtor_digest confirmed rows stay confirmed as long as debtor stays absent.
-                expected_evidence.update(
-                    evidence_json({key: val for key, val in ev.items() if key != "debtor_digest"})
-                    for ev in evidences
-                )
         except (AnalyticsError, ValueError, TypeError, RecursionError):
+            evidences = ()
             expected_evidence = ()
-        if current == row.linked_fingerprint and row.linked_evidence in expected_evidence:
-            continue
+        if current == row.linked_fingerprint:
+            if row.linked_evidence in expected_evidence:
+                continue
+            upgraded = _match_legacy_evidence(row.linked_evidence, evidences)
+            if upgraded is not None:
+                row.linked_evidence = upgraded
+                continue
         before = audit_payload(row, "source_changed")
         row.status, row.version, row.updated_at = "needs_review", row.version + 1, now
         write_audit(session, owner, row, "source_changed", before, audit_payload(row, "source_changed"), now)
         changed += 1
     return changed
+
+
+_BASE_EVIDENCE_KEYS = frozenset(_EVIDENCE_KEYS) - {"creditor_digest", "debtor_digest"}
+
+
+def _match_legacy_evidence(stored_raw, evidences):
+    """Compare pre-creditor/debtor digest evidence on its stored keys and return canonical upgraded JSON."""
+    try:
+        stored = _json(stored_raw)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if not isinstance(stored, dict):
+        return None
+    keys = set(stored)
+    if not (_BASE_EVIDENCE_KEYS <= keys and keys < set(_EVIDENCE_KEYS)):
+        return None
+    for ev in evidences:
+        if evidence_json({key: ev[key] for key in keys}) == stored_raw:
+            return evidence_json(ev)
+    return None

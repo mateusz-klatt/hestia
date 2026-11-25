@@ -206,6 +206,33 @@ export function candidateDisplayDate(
   return candidate.booking_date ?? candidate.value_date ?? candidate.transaction_date ?? null;
 }
 
+export interface SuggestedCandidateDateInfo {
+  readonly primaryDate: string | null;
+  readonly bookingDayMonth: string | null;
+}
+
+function formatIsoDayMonth(isoDate: string): string {
+  const parts = isoDate.split("-");
+  if (parts.length === 3 && parts[1]?.length === 2 && parts[2]?.length === 2) {
+    return `${parts[2]}.${parts[1]}`;
+  }
+  return isoDate;
+}
+
+export function suggestedCandidateDates(
+  candidate: Pick<ReceiptCandidate, "booking_date" | "value_date" | "transaction_date">,
+): SuggestedCandidateDateInfo {
+  const primaryDate = candidate.transaction_date ?? candidate.booking_date ?? candidate.value_date ?? null;
+  const bookingDayMonth = (
+    candidate.transaction_date !== null
+    && candidate.booking_date !== null
+    && candidate.transaction_date !== candidate.booking_date
+  )
+    ? formatIsoDayMonth(candidate.booking_date)
+    : null;
+  return { primaryDate, bookingDayMonth };
+}
+
 export function receiptAccountLabel(
   accounts: readonly BudgetAccount[],
   connections: readonly BudgetConnection[],

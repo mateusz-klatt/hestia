@@ -555,6 +555,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "商家",
   "budget.receipts.suggestedMatchChange": "變更",
   "budget.receipts.suggestedMatchUnlink": "取消連結 / 不連結",
+  "budget.receipts.bookingDateNote": "(入帳 {date})",
   "budget.consent.title": "授權狀態與續期概覽",
   "budget.consent.intro": "銀行授權效期與已儲存授權紀錄的唯讀摘要。此處不會執行遠端關閉、刪除或銀行請求。",
   "budget.consent.loading": "正在載入授權概覽…",

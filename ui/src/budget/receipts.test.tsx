@@ -1717,4 +1717,66 @@ describe("ReceiptsView", () => {
       lines: [expect.objectContaining({ line_kind: "other", raw_name: "FV/2026/05", net_line_total: "88" }) as unknown],
     }));
   });
+
+  it("shows suggested banner transaction_date with optional booking note instead of booking_date", async () => {
+    const candDiff = receiptCandidate({
+      entry_reference: "7".repeat(64),
+      candidate_token: "tok-date-diff",
+      transaction_date: "2026-11-12",
+      booking_date: "2026-11-14",
+      value_date: "2026-11-14",
+      date_distance: 0,
+      match_strength: "nip",
+    });
+    const candSame = receiptCandidate({
+      entry_reference: "8".repeat(64),
+      candidate_token: "tok-date-same",
+      transaction_date: "2026-11-14",
+      booking_date: "2026-11-14",
+      date_distance: 0,
+      match_strength: "nip",
+    });
+    const candNullTx = receiptCandidate({
+      entry_reference: "9".repeat(64),
+      candidate_token: "tok-date-null",
+      transaction_date: null,
+      booking_date: "2026-11-14",
+      date_distance: 0,
+      match_strength: "nip",
+    });
+    const rows = [
+      receiptSummary({ receipt_id: "rec-diff", status: "imported" }),
+      receiptSummary({ receipt_id: "rec-same", status: "imported" }),
+      receiptSummary({ receipt_id: "rec-null", status: "imported" }),
+    ];
+    const clients = fakeClients(rows);
+    vi.mocked(clients.rApi.receiptDetail)
+      .mockImplementationOnce(() => ok({ receipt: receiptDetail({ receipt_id: "rec-diff", status: "imported", linked: false }), candidates: [candDiff] }))
+      .mockImplementationOnce(() => ok({ receipt: receiptDetail({ receipt_id: "rec-diff", status: "imported", linked: false }), candidates: [candDiff] }))
+      .mockImplementationOnce(() => ok({ receipt: receiptDetail({ receipt_id: "rec-same", status: "imported", linked: false }), candidates: [candSame] }))
+      .mockImplementationOnce(() => ok({ receipt: receiptDetail({ receipt_id: "rec-null", status: "imported", linked: false }), candidates: [candNullTx] }));
+
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailButton(0, "Szczegóły"));
+    const bannerPlDiff = dialog().querySelector<HTMLElement>(".budget-receipt-suggested");
+    expect(bannerPlDiff?.textContent).toContain("2026-11-12 (księgowanie 14.11)");
+    await click(button("Zamknij", dialog()));
+
+    await renderReceipts(clients, { locale: "en" });
+    await click(openDetailButton(0));
+    const bannerEnDiff = dialog().querySelector<HTMLElement>(".budget-receipt-suggested");
+    expect(bannerEnDiff?.textContent).toContain("2026-11-12 (booked 14.11)");
+    await click(button("Close", dialog()));
+
+    await click(openDetailButton(1));
+    const bannerSame = dialog().querySelector<HTMLElement>(".budget-receipt-suggested");
+    expect(bannerSame?.textContent).toContain("2026-11-14");
+    expect(bannerSame?.textContent).not.toContain("(booked");
+    await click(button("Close", dialog()));
+
+    await click(openDetailButton(2));
+    const bannerNullTx = dialog().querySelector<HTMLElement>(".budget-receipt-suggested");
+    expect(bannerNullTx?.textContent).toContain("2026-11-14");
+    expect(bannerNullTx?.textContent).not.toContain("(booked");
+  });
 });

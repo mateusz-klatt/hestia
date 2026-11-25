@@ -554,6 +554,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "Esercente",
   "budget.receipts.suggestedMatchChange": "Modifica",
   "budget.receipts.suggestedMatchUnlink": "Scollega / nessun collegamento",
+  "budget.receipts.bookingDateNote": "(contabilizzato {date})",
   "budget.consent.title": "Stato dei consensi & riepilogo dei rinnovi",
   "budget.consent.intro": "Riepilogo di sola lettura della validità dei consensi bancari e delle autorizzazioni memorizzate. Qui non vengono eseguite chiusure remote, eliminazioni o richieste bancarie.",
   "budget.consent.loading": "Caricamento del riepilogo dei consensi…",

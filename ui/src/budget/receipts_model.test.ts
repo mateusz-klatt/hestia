@@ -37,6 +37,7 @@ import {
   reconcileLinkChoice,
   resolveDraftFromDetailSession,
   subtractDecimals,
+  suggestedCandidateDates,
   validPolishNip,
   validReceiptDateRange,
 } from "./receipts_model";
@@ -198,6 +199,30 @@ describe("receipts_model", () => {
     expect(merged.map((r) => r.receipt_id)).toEqual(["r1", "r3"]);
 
     expect(candidateDisplayDate(candidateOf({ booking_date: null, value_date: "2026-11-13" }))).toBe("2026-11-13");
+    expect(suggestedCandidateDates(candidateOf({ transaction_date: "2026-11-12", booking_date: "2026-11-14" }))).toEqual({
+      primaryDate: "2026-11-12",
+      bookingDayMonth: "14.11",
+    });
+    expect(suggestedCandidateDates(candidateOf({ transaction_date: "2026-11-14", booking_date: "2026-11-14" }))).toEqual({
+      primaryDate: "2026-11-14",
+      bookingDayMonth: null,
+    });
+    expect(suggestedCandidateDates(candidateOf({ transaction_date: null, booking_date: "2026-11-14", value_date: "2026-11-13" }))).toEqual({
+      primaryDate: "2026-11-14",
+      bookingDayMonth: null,
+    });
+    expect(suggestedCandidateDates(candidateOf({ transaction_date: null, booking_date: null, value_date: "2026-11-13" }))).toEqual({
+      primaryDate: "2026-11-13",
+      bookingDayMonth: null,
+    });
+    expect(suggestedCandidateDates(candidateOf({ transaction_date: null, booking_date: null, value_date: null }))).toEqual({
+      primaryDate: null,
+      bookingDayMonth: null,
+    });
+    expect(suggestedCandidateDates(candidateOf({ transaction_date: "2026-11-12", booking_date: "2026", value_date: null }))).toEqual({
+      primaryDate: "2026-11-12",
+      bookingDayMonth: "2026",
+    });
     const acc = account({
       id: "acc-1",
       connection: connection.id,

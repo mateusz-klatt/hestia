@@ -556,6 +556,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "ဆိုင်",
   "budget.receipts.suggestedMatchChange": "ပြောင်းရန်",
   "budget.receipts.suggestedMatchUnlink": "ဖြုတ်ရန် / မချိတ်ဆက်ပါ",
+  "budget.receipts.bookingDateNote": "(စာရင်းသွင်း {date})",
   "budget.consent.title": "သဘောတူခွင့်ပြုချက် အခြေအနေ နှင့် သက်တမ်းတိုးမှု အနှစ်ချုပ်",
   "budget.consent.intro": "ဘဏ်သဘောတူခွင့်ပြုချက် သက်တမ်းနှင့် သိမ်းထားသော ခွင့်ပြုမှုမှတ်တမ်းများကို ဖတ်ရှုရုံသာ အနှစ်ချုပ်ဖော်ပြသည်။ ဤနေရာတွင် အဝေးမှပိတ်ခြင်း၊ ဖျက်ခြင်း သို့မဟုတ် ဘဏ်သို့ တောင်းဆိုခြင်း မလုပ်ပါ။",
   "budget.consent.loading": "သဘောတူခွင့်ပြုချက် အနှစ်ချုပ် တင်နေသည်…",

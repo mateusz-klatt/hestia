@@ -556,6 +556,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "Έμπορος",
   "budget.receipts.suggestedMatchChange": "Αλλαγή",
   "budget.receipts.suggestedMatchUnlink": "Αποσύνδεση / χωρίς σύνδεση",
+  "budget.receipts.bookingDateNote": "(καταχώριση {date})",
   "budget.consent.title": "Επισκόπηση κατάστασης & ανανέωσης συγκαταθέσεων",
   "budget.consent.intro": "Σύνοψη μόνο για ανάγνωση της ισχύος των τραπεζικών συγκαταθέσεων και των αποθηκευμένων εγγραφών εξουσιοδότησης. Εδώ δεν εκτελούνται απομακρυσμένα κλεισίματα, διαγραφές ή αιτήματα προς τράπεζες.",
   "budget.consent.loading": "Φόρτωση επισκόπησης συγκαταθέσεων…",

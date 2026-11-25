@@ -26,10 +26,10 @@ from ..db import (AppMeta, BudgetAccount as Account, BudgetConnection as Connect
 from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint, negate_money, sum_money
 from .device_token import DeviceTokenError, _issued_mask, _legacy_bearer_allowed, write_device_audit
 from .gmail_store import _payment_payee_key, retain_imports, tombstone_receipt
-from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES,
-                             ReceiptError, chain_for, contains_gateway_marker, merchant_score_groups,
-                             merchant_word_tokens, normalize_shop_name, parse_receipt, redact_digit_field, valid_nip,
-                             validate_confirm, validate_confirm_line_totals)
+from .receipt_parser import (_IBAN_MAX, _IBAN_MIN, CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS,
+                             MAX_RECEIPT_LINES, ReceiptError, _iban_checksum, chain_for, contains_gateway_marker,
+                             merchant_score_groups, merchant_word_tokens, normalize_shop_name, parse_receipt,
+                             redact_digit_field, valid_nip, validate_confirm, validate_confirm_line_totals)
 from .receipt_reconcile import (audit_payload, entry_reference_digest, evidence_json,
                                 erase_receipt_audit, link_evidence, resolved_party_names,
                                 transaction_party_names, write_audit)
@@ -163,8 +163,29 @@ def _payload_party_texts(payload):
     return texts
 
 
+_IBAN_COUNTRY_LENGTHS = {
+    "AD": 24, "AE": 23, "AL": 28, "AT": 20, "AZ": 28, "BA": 20, "BE": 16, "BG": 22, "BH": 22, "BR": 29,
+    "BY": 28, "CH": 21, "CR": 22, "CY": 28, "CZ": 24, "DE": 22, "DK": 18, "DO": 28, "EE": 20, "EG": 29,
+    "ES": 24, "FI": 18, "FO": 18, "FR": 27, "GB": 22, "GE": 22, "GI": 23, "GL": 18, "GR": 27, "GT": 28,
+    "HR": 21, "HU": 28, "IE": 22, "IL": 23, "IQ": 23, "IS": 26, "IT": 27, "JO": 30, "KW": 30, "KZ": 20,
+    "LB": 28, "LC": 32, "LI": 21, "LT": 20, "LU": 20, "LV": 21, "MC": 27, "MD": 24, "ME": 22, "MK": 19,
+    "MR": 27, "MT": 31, "MU": 30, "NL": 18, "NO": 15, "PK": 24, "PL": 28, "PS": 29, "PT": 25, "QA": 29,
+    "RO": 24, "RS": 22, "SA": 24, "SC": 31, "SE": 24, "SI": 19, "SK": 24, "SM": 27, "ST": 25, "SV": 28,
+    "TL": 23, "TN": 24, "TR": 26, "UA": 29, "VA": 22, "VG": 24, "XK": 20,
+}
+
+
+def _is_iban_candidate(compact):
+    return _IBAN_MIN <= len(compact) <= _IBAN_MAX and (
+        len(compact) == _IBAN_COUNTRY_LENGTHS.get(compact[:2]) or _iban_checksum(compact)
+    )
+
+
 def _mask_iban_sequences(haystack):
-    """Replace IBAN-like token sequences (CCdd + grouped alphanumerics, 15..34 chars) with spaces."""
+    """Replace real IBAN sequences (15..34 chars matching country length or mod-97) with spaces.
+
+    ``PL`` followed by exactly 10 digits is a Polish VAT ID, never an IBAN.
+    """
     spans = list(_TOKEN_SPAN_RE.finditer(haystack))
     if not spans:
         return haystack
@@ -177,8 +198,12 @@ def _mask_iban_sequences(haystack):
         if (start_pos > 0 and haystack[start_pos - 1] == "_") or _IBAN_PREFIX_RE.match(token) is None:
             index += 1
             continue
-        length = len(token)
-        saw_digits = any(ch.isdigit() for ch in token[4:])
+        if len(token) == 12 and token[:2].lower() == "pl" and token[2:].isdigit():
+            index += 1
+            continue
+        compact = token.upper()
+        saw_digits = any(ch.isdigit() for ch in compact[4:])
+        matched_last = index if saw_digits and _is_iban_candidate(compact) else None
         last = index
         cursor = index + 1
         while cursor < total:
@@ -186,51 +211,62 @@ def _mask_iban_sequences(haystack):
             if not gap or not all(ch in " -" for ch in gap):
                 break
             nxt = spans[cursor].group(0)
-            if length + len(nxt) > 34:
+            if len(compact) + len(nxt) > _IBAN_MAX:
                 break
             if nxt.isalpha():
                 if saw_digits or len(nxt) > 4:
                     break
             else:
                 saw_digits = True
-            length += len(nxt)
+            compact += nxt.upper()
             last = cursor
             cursor += 1
-        if 15 <= length <= 34 and saw_digits:
-            for pos in range(spans[index].start(), spans[last].end()):
+            if saw_digits and _is_iban_candidate(compact):
+                matched_last = last
+        if matched_last is not None:
+            for pos in range(spans[index].start(), spans[matched_last].end()):
                 chars[pos] = " "
-            index = last + 1
+            index = matched_last + 1
             continue
         index += 1
     return "".join(chars)
 
 
+def _matched_nip_prefix(text, match, nip):
+    """Return ``(before_pl, start)`` if ``match`` is a boundary-valid non-doc hit for ``nip``."""
+    start, end = match.span()
+    before_pl = (
+        start >= 2 and text[start - 2:start].lower() == "pl"
+        and (start == 2 or not (text[start - 3].isalnum() or text[start - 3] == "_"))
+    )
+    if start > 0 and not before_pl and (text[start - 1].isalnum() or text[start - 1] == "_"):
+        return None
+    if end < len(text) and (text[end].isalnum() or text[end] == "_"):
+        return None
+    if re.sub(r"\D", "", match.group(0)) != nip:
+        return None
+    doc_prefix = text[:start - 2] if before_pl else text[:start]
+    if _EXCLUDED_NIP_PREFIX_RE.search(doc_prefix) is not None:
+        return None
+    return before_pl, start
+
+
 def _nip_match(nip, haystack):
-    """Return ``(hit, labeled)`` after masking IBANs and excluding invoice/doc numbers."""
+    """Return ``(hit, labeled)`` extracting labeled NIPs before IBAN masking, then unlabeled after."""
     if not valid_nip(nip):
         return False, False
-    masked = _mask_iban_sequences(haystack)
-    limit = len(masked)
-    hit = False
-    for match in _TX_DIGIT_RUN_RE.finditer(masked):
-        start, end = match.span()
-        before_pl = (
-            start >= 2 and masked[start - 2:start].lower() == "pl"
-            and (start == 2 or not (masked[start - 3].isalnum() or masked[start - 3] == "_"))
-        )
-        if start > 0 and not before_pl and (masked[start - 1].isalnum() or masked[start - 1] == "_"):
+    for match in _TX_DIGIT_RUN_RE.finditer(haystack):
+        matched = _matched_nip_prefix(haystack, match, nip)
+        if matched is None:
             continue
-        if end < limit and (masked[end].isalnum() or masked[end] == "_"):
-            continue
-        if re.sub(r"\D", "", match.group(0)) != nip:
-            continue
-        doc_prefix = masked[:start - 2] if before_pl else masked[:start]
-        if _EXCLUDED_NIP_PREFIX_RE.search(doc_prefix) is not None:
-            continue
-        hit = True
-        if before_pl or _STRICT_NIP_LABEL_RE.search(masked[:start]) is not None:
+        before_pl, start = matched
+        if before_pl or _STRICT_NIP_LABEL_RE.search(haystack[:start]) is not None:
             return True, True
-    return hit, False
+    masked = _mask_iban_sequences(haystack)
+    for match in _TX_DIGIT_RUN_RE.finditer(masked):
+        if _matched_nip_prefix(masked, match, nip) is not None:
+            return True, False
+    return False, False
 
 
 def _nip_in_text(nip, haystack):

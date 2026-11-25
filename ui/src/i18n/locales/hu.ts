@@ -555,6 +555,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "Kereskedő",
   "budget.receipts.suggestedMatchChange": "Módosítás",
   "budget.receipts.suggestedMatchUnlink": "Leválasztás / nincs kapcsolat",
+  "budget.receipts.bookingDateNote": "(könyvelve {date})",
   "budget.consent.title": "Hozzájárulások állapota és megújítása",
   "budget.consent.intro": "A banki hozzájárulások érvényességének és a tárolt engedélyezési adatoknak csak olvasható összefoglalója. Itt nem történik távoli lezárás, törlés vagy banki kérés.",
   "budget.consent.loading": "Hozzájárulások áttekintésének betöltése…",

@@ -555,6 +555,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "Tirgotājs",
   "budget.receipts.suggestedMatchChange": "Mainīt",
   "budget.receipts.suggestedMatchUnlink": "Noņemt / bez sasaistes",
+  "budget.receipts.bookingDateNote": "(iegrāmatots {date})",
   "budget.consent.title": "Piekrišanu statusa un atjaunošanas pārskats",
   "budget.consent.intro": "Tikai lasāms bankas piekrišanu derīguma un saglabāto autorizācijas ierakstu kopsavilkums. Šeit netiek veikta attāla slēgšana, dzēšana vai bankas pieprasījumi.",
   "budget.consent.loading": "Ielādē piekrišanu pārskatu…",

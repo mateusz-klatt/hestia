@@ -556,6 +556,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.matchBadgeMerchant": "店舗名",
   "budget.receipts.suggestedMatchChange": "変更",
   "budget.receipts.suggestedMatchUnlink": "紐付け解除 / 紐付けなし",
+  "budget.receipts.bookingDateNote": "(記帳日 {date})",
   "budget.consent.title": "同意の状態と更新の概要",
   "budget.consent.intro": "銀行への同意の有効期限と保存された認可記録を読み取り専用で表示します。ここではリモート終了、削除、銀行へのリクエストは実行しません。",
   "budget.consent.loading": "同意の概要を読み込み中…",

@@ -595,9 +595,17 @@ def merchant_match_groups(shop_name, nip):
     return tuple(alias for group in groups for alias in group)
 
 
+def _distinctive_shop_words(shop_name):
+    """Return distinctive shop tokens (at least 4 chars, not stop/generic/location, and >= 3 letters)."""
+    return {
+        token for token in merchant_word_tokens(shop_name)
+        if len(token) >= 4 and token not in _STOP_TOKENS and sum(1 for ch in token if ch.isalpha()) >= 3
+    }
+
+
 def merchant_score_groups(shop_name, nip):
     words = [token for token in merchant_word_tokens(shop_name) if len(token) >= 4]
-    distinctive = sorted({token for token in words if token not in _STOP_TOKENS})
+    distinctive = sorted(_distinctive_shop_words(shop_name))
     generic = tuple(sorted({token for token in words if token in _GENERIC_MERCHANT_TOKENS}))
     chain = chain_for(shop_name, nip)
     if chain is not None:
@@ -607,10 +615,7 @@ def merchant_score_groups(shop_name, nip):
 
 
 def merchant_tokens(shop_name, nip):
-    distinctive = {
-        token for token in merchant_word_tokens(shop_name)
-        if len(token) >= 4 and token not in _STOP_TOKENS
-    }
+    distinctive = _distinctive_shop_words(shop_name)
     chain = chain_for(shop_name, nip)
     if chain is not None:
         distinctive.update(_CHAIN_WORDS[chain])

@@ -28,6 +28,7 @@ import {
   buildPlainBulkConfirmRequest,
   buildReceiptListRequest,
   candidateDisplayDate,
+  suggestedCandidateDates,
   computeLinesDelta,
   createPendingReceiptStore,
   editReceiptLine,
@@ -1551,7 +1552,11 @@ function ReceiptDetailDrawer({
                   candidate.account_id,
                   t("budget.main.account"),
                 );
-                const dateText = candidateDisplayDate(candidate) ?? t("budget.receipts.noDate");
+                const { primaryDate, bookingDayMonth } = suggestedCandidateDates(candidate);
+                const baseDate = primaryDate ?? t("budget.receipts.noDate");
+                const dateText = bookingDayMonth === null
+                  ? baseDate
+                  : `${baseDate} ${t("budget.receipts.bookingDateNote", { date: bookingDayMonth })}`;
                 const daysText = candidate.date_distance === 0
                   ? t("budget.receipts.candidateSameDay")
                   : t("budget.receipts.candidateDays", { days: candidate.date_distance });
