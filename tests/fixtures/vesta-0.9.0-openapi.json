@@ -1,0 +1,6532 @@
+{
+  "components": {
+    "schemas": {
+      "ActivityEvent": {
+        "description": "Heatmap row-flash on every decoded frame with a node; `scene` rides only a function-button frame.",
+        "properties": {
+          "node": {
+            "title": "Node",
+            "type": "integer"
+          },
+          "scene": {
+            "$ref": "#/components/schemas/Scene"
+          },
+          "ts": {
+            "title": "Ts",
+            "type": "number"
+          },
+          "type": {
+            "const": "activity",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "node",
+          "ts"
+        ],
+        "title": "ActivityEvent",
+        "type": "object"
+      },
+      "AddUserRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/users \u2014 admin: create an account. ``username`` non-empty, \u2264 64 chars, no ``|`` or ``/``\n(the session token is ``username|expiry``); ``password`` 8..1024; ``role`` one of the three. A\nduplicate username is a 409 (never an overwrite).",
+        "properties": {
+          "password": {
+            "maxLength": 1024,
+            "minLength": 8,
+            "title": "Password",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "username": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[^|/]+$",
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password",
+          "role"
+        ],
+        "title": "AddUserRequest",
+        "type": "object"
+      },
+      "AuditEvent": {
+        "description": "One audit-log row (store_sql.recent_audit). id/ts are non-null; the five string fields are\nnullable at the DB layer (model defensively as str|null), null when the action has no such field.",
+        "properties": {
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Action"
+          },
+          "actor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Actor"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Detail"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "result": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Result"
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Target"
+          },
+          "ts": {
+            "title": "Ts",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "ts"
+        ],
+        "title": "AuditEvent",
+        "type": "object"
+      },
+      "AuditFeed": {
+        "description": "GET /api/audit \u2014 newest-first rows (capped 200); `events` always present ([] when audit off).",
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/AuditEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "title": "AuditFeed",
+        "type": "object"
+      },
+      "AutomationDeleted": {
+        "description": "200 from POST /api/automations/delete: `deleted` is false (200, not 404) for an absent id.",
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "deleted"
+        ],
+        "title": "AutomationDeleted",
+        "type": "object"
+      },
+      "AutomationSaved": {
+        "description": "200 from POST /api/automations: the saved rule's id (NOT the rule object).",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "id"
+        ],
+        "title": "AutomationSaved",
+        "type": "object"
+      },
+      "AutomationsList": {
+        "description": "GET /api/automations \u2014 every saved rule. `automations` (NOT `rules`) is always present.",
+        "properties": {
+          "automations": {
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            },
+            "title": "Automations",
+            "type": "array"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "automations"
+        ],
+        "title": "AutomationsList",
+        "type": "object"
+      },
+      "BudgetError": {
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "ok": {
+            "const": false,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "title": "BudgetError",
+        "type": "object"
+      },
+      "BudgetReceiptCandidate": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "booking_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Booking Date"
+          },
+          "candidate_token": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Candidate Token",
+            "type": "string"
+          },
+          "credit_debit_indicator": {
+            "enum": [
+              "DBIT",
+              "CRDT"
+            ],
+            "title": "Credit Debit Indicator",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "date_distance": {
+            "title": "Date Distance",
+            "type": "integer"
+          },
+          "entry_reference": {
+            "title": "Entry Reference",
+            "type": "string"
+          },
+          "merchant_token_hit": {
+            "title": "Merchant Token Hit",
+            "type": "boolean"
+          },
+          "transaction_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Transaction Date"
+          },
+          "value_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Value Date"
+          }
+        },
+        "required": [
+          "account_id",
+          "entry_reference",
+          "amount",
+          "currency",
+          "credit_debit_indicator",
+          "merchant_token_hit",
+          "date_distance",
+          "candidate_token"
+        ],
+        "title": "BudgetReceiptCandidate",
+        "type": "object"
+      },
+      "BudgetReceiptConfirmRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "currency": {
+            "pattern": "^[A-Z]{3}$",
+            "title": "Currency",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetReceiptLineInput"
+            },
+            "maxItems": 300,
+            "title": "Lines",
+            "type": "array"
+          },
+          "link": {
+            "$ref": "#/components/schemas/BudgetReceiptLinkRequest"
+          },
+          "payment_method": {
+            "enum": [
+              "card",
+              "blik",
+              "cash",
+              "mixed",
+              "unknown"
+            ],
+            "title": "Payment Method",
+            "type": "string"
+          },
+          "raw_nip": {
+            "pattern": "^(?:|[0-9]{10})$",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Raw Nip"
+          },
+          "raw_shop_name": {
+            "maxLength": 128,
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Raw Shop Name"
+          },
+          "receipt_date": {
+            "format": "date",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+            "title": "Receipt Date",
+            "type": "string"
+          },
+          "receipt_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "receipt_kind": {
+            "enum": [
+              "purchase",
+              "refund"
+            ],
+            "title": "Receipt Kind",
+            "type": "string"
+          },
+          "receipt_time": {
+            "pattern": "^(?:|(?:[01][0-9]|2[0-3]):[0-5][0-9])$",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Receipt Time"
+          },
+          "total_amount": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Total Amount",
+            "type": "string"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "expected_version",
+          "receipt_kind",
+          "receipt_date",
+          "total_amount",
+          "currency",
+          "payment_method",
+          "lines"
+        ],
+        "title": "BudgetReceiptConfirmRequest",
+        "type": "object"
+      },
+      "BudgetReceiptConfirmResult": {
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/BudgetReceiptDetail"
+          }
+        },
+        "required": [
+          "ok",
+          "receipt"
+        ],
+        "title": "BudgetReceiptConfirmResult",
+        "type": "object"
+      },
+      "BudgetReceiptDeleteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "minimum": 1,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "receipt_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Receipt Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "expected_version"
+        ],
+        "title": "BudgetReceiptDeleteRequest",
+        "type": "object"
+      },
+      "BudgetReceiptDeleteResult": {
+        "properties": {
+          "deleted": {
+            "const": true,
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "deleted"
+        ],
+        "title": "BudgetReceiptDeleteResult",
+        "type": "object"
+      },
+      "BudgetReceiptDetail": {
+        "properties": {
+          "chain_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Chain Key"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Currency"
+          },
+          "image_available": {
+            "title": "Image Available",
+            "type": "boolean"
+          },
+          "image_expires_at": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Image Expires At"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetReceiptLine"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "linked": {
+            "title": "Linked",
+            "type": "boolean"
+          },
+          "linked_account_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Linked Account Id"
+          },
+          "linked_entry_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Linked Entry Ref"
+          },
+          "math_delta": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Math Delta"
+          },
+          "payment_method": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Payment Method"
+          },
+          "raw_nip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Raw Nip"
+          },
+          "raw_shop_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Raw Shop Name"
+          },
+          "raw_text_expires_at": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Raw Text Expires At"
+          },
+          "receipt_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Receipt Date"
+          },
+          "receipt_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "receipt_kind": {
+            "enum": [
+              "purchase",
+              "refund"
+            ],
+            "title": "Receipt Kind",
+            "type": "string"
+          },
+          "receipt_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Receipt Time"
+          },
+          "shop_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Shop Id"
+          },
+          "source_kind": {
+            "enum": [
+              "live_text",
+              "local_ocr",
+              "cloud_ai"
+            ],
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "draft",
+              "confirmed",
+              "needs_review"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "total_amount": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Total Amount"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "number"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "receipt_kind",
+          "status",
+          "source_kind",
+          "linked",
+          "version",
+          "created_at",
+          "updated_at",
+          "image_available",
+          "lines"
+        ],
+        "title": "BudgetReceiptDetail",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceLoginRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "device_name": {
+            "description": "Printable device name.",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Device Name",
+            "type": "string"
+          },
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string",
+            "writeOnly": true
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password",
+          "device_name"
+        ],
+        "title": "BudgetReceiptDeviceLoginRequest",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceRedeemRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Eight Crockford base32 characters after uppercasing, stripping spaces and dashes, and mapping O to 0 and I or L to 1. U is rejected.",
+            "maxLength": 4096,
+            "minLength": 8,
+            "title": "Code",
+            "type": "string"
+          },
+          "device_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Device Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "device_name"
+        ],
+        "title": "BudgetReceiptDeviceRedeemRequest",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceRedeemResult": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "scope": {
+            "const": "receipts",
+            "title": "Scope",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 43,
+            "minLength": 43,
+            "title": "Token",
+            "type": "string"
+          },
+          "token_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Token Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "token_id",
+          "scope",
+          "expires_at"
+        ],
+        "title": "BudgetReceiptDeviceRedeemResult",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceRevokeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "token_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Token Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token_id"
+        ],
+        "title": "BudgetReceiptDeviceRevokeRequest",
+        "type": "object"
+      },
+      "BudgetReceiptDeviceRevokeResult": {
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "BudgetReceiptDeviceRevokeResult",
+        "type": "object"
+      },
+      "BudgetReceiptLine": {
+        "properties": {
+          "discount_amount": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Discount Amount",
+            "type": "string"
+          },
+          "gross_line_total": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Gross Line Total",
+            "type": "string"
+          },
+          "line_kind": {
+            "enum": [
+              "item",
+              "deposit",
+              "basket_discount",
+              "other"
+            ],
+            "title": "Line Kind",
+            "type": "string"
+          },
+          "line_no": {
+            "title": "Line No",
+            "type": "integer"
+          },
+          "net_line_total": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Net Line Total",
+            "type": "string"
+          },
+          "ptu_code": {
+            "enum": [
+              "A",
+              "B",
+              "C",
+              "D",
+              "E",
+              "F",
+              "G"
+            ],
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Ptu Code"
+          },
+          "quantity": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Quantity",
+            "type": "string"
+          },
+          "raw_name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Raw Name",
+            "type": "string"
+          },
+          "raw_name_key": {
+            "title": "Raw Name Key",
+            "type": "string"
+          },
+          "raw_unit": {
+            "maxLength": 16,
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Raw Unit"
+          },
+          "unit_price_raw": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Unit Price Raw"
+          }
+        },
+        "required": [
+          "line_kind",
+          "raw_name",
+          "quantity",
+          "gross_line_total",
+          "discount_amount",
+          "net_line_total",
+          "line_no",
+          "raw_name_key"
+        ],
+        "title": "BudgetReceiptLine",
+        "type": "object"
+      },
+      "BudgetReceiptLineInput": {
+        "additionalProperties": false,
+        "properties": {
+          "discount_amount": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Discount Amount",
+            "type": "string"
+          },
+          "gross_line_total": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Gross Line Total",
+            "type": "string"
+          },
+          "line_kind": {
+            "enum": [
+              "item",
+              "deposit",
+              "basket_discount",
+              "other"
+            ],
+            "title": "Line Kind",
+            "type": "string"
+          },
+          "net_line_total": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Net Line Total",
+            "type": "string"
+          },
+          "ptu_code": {
+            "enum": [
+              "A",
+              "B",
+              "C",
+              "D",
+              "E",
+              "F",
+              "G"
+            ],
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Ptu Code"
+          },
+          "quantity": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Quantity",
+            "type": "string"
+          },
+          "raw_name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Raw Name",
+            "type": "string"
+          },
+          "raw_unit": {
+            "maxLength": 16,
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Raw Unit"
+          },
+          "unit_price_raw": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Unit Price Raw"
+          }
+        },
+        "required": [
+          "line_kind",
+          "raw_name",
+          "quantity",
+          "gross_line_total",
+          "discount_amount",
+          "net_line_total"
+        ],
+        "title": "BudgetReceiptLineInput",
+        "type": "object"
+      },
+      "BudgetReceiptLinkRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "candidate_token": {
+            "description": "HMAC bound to the owner, transaction, three dates and merchant evidence shown at preview.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Candidate Token",
+            "type": "string"
+          },
+          "entry_reference": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Entry Reference",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "entry_reference",
+          "candidate_token"
+        ],
+        "title": "BudgetReceiptLinkRequest",
+        "type": "object"
+      },
+      "BudgetReceiptParseResult": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetReceiptCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "draft": {
+            "$ref": "#/components/schemas/BudgetReceiptDetail"
+          },
+          "receipt_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "draft",
+          "candidates",
+          "version"
+        ],
+        "title": "BudgetReceiptParseResult",
+        "type": "object"
+      },
+      "BudgetReceiptParseTextRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "source_kind": {
+            "description": "Defaults to paste, stored as live_text. local_ocr is stored as local_ocr.",
+            "enum": [
+              "paste",
+              "local_ocr"
+            ],
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "text": {
+            "description": "UTF-8 text is additionally capped at 32 KiB and 500 lines.",
+            "maxLength": 32768,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "BudgetReceiptParseTextRequest",
+        "type": "object"
+      },
+      "ChangePasswordRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/me/password \u2014 the signed-in user changes their OWN password. ``current`` is verified\n(a stolen cookie alone can't rotate it) before the ``new`` hash is written. ``new`` is 8..1024.",
+        "properties": {
+          "current": {
+            "title": "Current",
+            "type": "string"
+          },
+          "new": {
+            "maxLength": 1024,
+            "minLength": 8,
+            "title": "New",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current",
+          "new"
+        ],
+        "title": "ChangePasswordRequest",
+        "type": "object"
+      },
+      "ControlCover": {
+        "additionalProperties": false,
+        "description": "Set a blind/cover position (0..99).",
+        "properties": {
+          "node": {
+            "description": "device node id",
+            "maximum": 255,
+            "minimum": 0,
+            "title": "Node",
+            "type": "integer"
+          },
+          "op": {
+            "const": "cover",
+            "title": "Op",
+            "type": "string"
+          },
+          "value": {
+            "description": "cover position 0..99",
+            "maximum": 99,
+            "minimum": 0,
+            "title": "Value",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "op",
+          "node",
+          "value"
+        ],
+        "title": "ControlCover",
+        "type": "object"
+      },
+      "ControlError": {
+        "description": "The 400 (malformed) / 503 (device unavailable) body: ``ok`` false + a human error string.",
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "title": "ControlError",
+        "type": "object"
+      },
+      "ControlLevel": {
+        "additionalProperties": false,
+        "description": "Set a dimmer level (0..99).",
+        "properties": {
+          "node": {
+            "description": "device node id",
+            "maximum": 255,
+            "minimum": 0,
+            "title": "Node",
+            "type": "integer"
+          },
+          "op": {
+            "const": "level",
+            "title": "Op",
+            "type": "string"
+          },
+          "value": {
+            "description": "dim level 0..99",
+            "maximum": 99,
+            "minimum": 0,
+            "title": "Value",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "op",
+          "node",
+          "value"
+        ],
+        "title": "ControlLevel",
+        "type": "object"
+      },
+      "ControlRequest": {
+        "description": "A device control command \u2014 one variant per device op.",
+        "discriminator": {
+          "mapping": {
+            "cover": "#/components/schemas/ControlCover",
+            "level": "#/components/schemas/ControlLevel",
+            "switch": "#/components/schemas/ControlSwitch",
+            "thermostat": "#/components/schemas/ControlThermostat",
+            "thermostat_power": "#/components/schemas/ControlThermostatPower"
+          },
+          "propertyName": "op"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ControlSwitch"
+          },
+          {
+            "$ref": "#/components/schemas/ControlThermostatPower"
+          },
+          {
+            "$ref": "#/components/schemas/ControlLevel"
+          },
+          {
+            "$ref": "#/components/schemas/ControlCover"
+          },
+          {
+            "$ref": "#/components/schemas/ControlThermostat"
+          }
+        ]
+      },
+      "ControlSuccess": {
+        "description": "The 200 body when a control command reaches the device: ``ok`` true + the ``sent`` wire frame.",
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "sent": {
+            "description": "the device command frame that was sent, hex-encoded",
+            "title": "Sent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "sent"
+        ],
+        "title": "ControlSuccess",
+        "type": "object"
+      },
+      "ControlSwitch": {
+        "additionalProperties": false,
+        "description": "Turn a relay/light on or off (optionally a single gang of a multi-gang node).",
+        "properties": {
+          "endpoint": {
+            "description": "multi-gang channel 1 or 2; omit for single-gang",
+            "maximum": 2,
+            "minimum": 1,
+            "title": "Endpoint",
+            "type": "integer"
+          },
+          "node": {
+            "description": "device node id",
+            "maximum": 255,
+            "minimum": 0,
+            "title": "Node",
+            "type": "integer"
+          },
+          "on": {
+            "title": "On",
+            "type": "boolean"
+          },
+          "op": {
+            "const": "switch",
+            "title": "Op",
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "node",
+          "on"
+        ],
+        "title": "ControlSwitch",
+        "type": "object"
+      },
+      "ControlThermostat": {
+        "additionalProperties": false,
+        "description": "Set a thermostat/TRV target temperature (4..28 \u00b0C).",
+        "properties": {
+          "celsius": {
+            "anyOf": [
+              {
+                "maximum": 28,
+                "minimum": 4,
+                "type": "integer"
+              },
+              {
+                "maximum": 28,
+                "minimum": 4,
+                "type": "number"
+              }
+            ],
+            "description": "target \u00b0C, 4..28",
+            "title": "Celsius"
+          },
+          "node": {
+            "description": "device node id",
+            "maximum": 255,
+            "minimum": 0,
+            "title": "Node",
+            "type": "integer"
+          },
+          "op": {
+            "const": "thermostat",
+            "title": "Op",
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "node",
+          "celsius"
+        ],
+        "title": "ControlThermostat",
+        "type": "object"
+      },
+      "ControlThermostatPower": {
+        "additionalProperties": false,
+        "description": "Power a thermostat/TRV on or off.",
+        "properties": {
+          "node": {
+            "description": "device node id",
+            "maximum": 255,
+            "minimum": 0,
+            "title": "Node",
+            "type": "integer"
+          },
+          "on": {
+            "title": "On",
+            "type": "boolean"
+          },
+          "op": {
+            "const": "thermostat_power",
+            "title": "Op",
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "node",
+          "on"
+        ],
+        "title": "ControlThermostatPower",
+        "type": "object"
+      },
+      "DbStats": {
+        "description": "GET /api/db/stats \u2014 SQLite on-disk size + per-table row counts (admin). ``tables`` maps each\ntracked table name to its current row count.",
+        "properties": {
+          "file_bytes": {
+            "title": "File Bytes",
+            "type": "integer"
+          },
+          "tables": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Tables",
+            "type": "object"
+          }
+        },
+        "required": [
+          "file_bytes",
+          "tables"
+        ],
+        "title": "DbStats",
+        "type": "object"
+      },
+      "DeviceInfo": {
+        "description": "One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base\n+ live-state fields are ALWAYS present (required), null when unseen \u2014 so `0`/`false` are never lost.\nThe registry labels (``name``/``room``/``endpoint_names``) are OPTIONAL \u2014 absent until set, never null.\n``confidence`` is usually a string but a legacy/hand-edited registry node (a ``type`` without a\n``confidence``) can surface null, so the contract admits it. NOTE: the whole-home scene opt-out\n(``exclude_from_all``) is deliberately NOT exposed here \u2014 it lives only on the dedicated\n``/api/whole-home`` surface, so adding it never changes this (client-decoded) response shape.",
+        "properties": {
+          "battery": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Battery"
+          },
+          "confidence": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Confidence"
+          },
+          "door": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Door"
+          },
+          "endpoint_names": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Endpoint Names",
+            "type": "object"
+          },
+          "endpoints": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": [
+              "object",
+              "null"
+            ],
+            "title": "Endpoints"
+          },
+          "energy_kwh": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Energy Kwh"
+          },
+          "last_seen": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Last Seen"
+          },
+          "level": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Level"
+          },
+          "motion": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "title": "Motion"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "power": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Power"
+          },
+          "power_w": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Power W"
+          },
+          "room": {
+            "title": "Room",
+            "type": "string"
+          },
+          "setpoint": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Setpoint"
+          },
+          "switch": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "title": "Switch"
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Temperature"
+          },
+          "thermostat_last_cmd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Thermostat Last Cmd"
+          },
+          "thermostat_on": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "title": "Thermostat On"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "voltage_v": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Voltage V"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "DeviceInfo",
+        "type": "object"
+      },
+      "DeviceStatePatch": {
+        "description": "A partial of DeviceInfo \u2014 exactly the live-state keys a frame can change (State.apply's `changed`\nmap, after `scene` is popped). Discovery-side fields (power/type/confidence/battery/last_seen) never\nride a `state` event \u2014 they arrive via a discovery_changed refetch.",
+        "properties": {
+          "door": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Door"
+          },
+          "endpoints": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": [
+              "object",
+              "null"
+            ],
+            "title": "Endpoints"
+          },
+          "energy_kwh": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Energy Kwh"
+          },
+          "level": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Level"
+          },
+          "motion": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "title": "Motion"
+          },
+          "power_w": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Power W"
+          },
+          "setpoint": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Setpoint"
+          },
+          "switch": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "title": "Switch"
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Temperature"
+          },
+          "thermostat_on": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "title": "Thermostat On"
+          },
+          "voltage_v": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Voltage V"
+          }
+        },
+        "title": "DeviceStatePatch",
+        "type": "object"
+      },
+      "Discovery": {
+        "description": "``GET /api/discovery`` \u2014 the whole dashboard snapshot. Every key is always present; ``klima_state``\nis null until an A/C IR command is seen, ``env_override`` is null unless ``HESTIA_MODE`` pins the mode.",
+        "properties": {
+          "devices": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DeviceInfo"
+            },
+            "title": "Devices",
+            "type": "object"
+          },
+          "env_override": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Env Override"
+          },
+          "globals": {
+            "$ref": "#/components/schemas/Globals"
+          },
+          "ir_buttons": {
+            "items": {
+              "$ref": "#/components/schemas/IrButton"
+            },
+            "title": "Ir Buttons",
+            "type": "array"
+          },
+          "klima": {
+            "$ref": "#/components/schemas/Klima"
+          },
+          "klima_state": {
+            "$ref": "#/components/schemas/KlimaState"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "rule_vocab": {
+            "$ref": "#/components/schemas/RuleVocab"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "target_mode": {
+            "title": "Target Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "devices",
+          "summary",
+          "globals",
+          "ir_buttons",
+          "klima",
+          "rule_vocab",
+          "mode",
+          "target_mode"
+        ],
+        "title": "Discovery",
+        "type": "object"
+      },
+      "DiscoveryChangedEvent": {
+        "description": "Re-fetch GET /api/discovery (identity/name/classifier change). No payload.",
+        "properties": {
+          "type": {
+            "const": "discovery_changed",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "DiscoveryChangedEvent",
+        "type": "object"
+      },
+      "Globals": {
+        "description": "Node-less global fields (``proxy.globals_snapshot``). Every key is ALWAYS present (required),\nnull when its poller is off. ``crib_temp_ts`` / ``outdoor_temp_ts`` are the ISO ts of the last\ncrib / outdoor sample (the \"N ago\" freshness badge); ``outdoor_battery_ok`` is the local 433 sensor's\nbattery flag (false = low) \u2014 null when HESTIA_RTL433_BATTERY_WARN is off (the default).",
+        "properties": {
+          "crib_temp": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Crib Temp"
+          },
+          "crib_temp_ts": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Crib Temp Ts"
+          },
+          "outdoor_battery_ok": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "title": "Outdoor Battery Ok"
+          },
+          "outdoor_humidity": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Outdoor Humidity"
+          },
+          "outdoor_temp": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Outdoor Temp"
+          },
+          "outdoor_temp_ts": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Outdoor Temp Ts"
+          }
+        },
+        "title": "Globals",
+        "type": "object"
+      },
+      "GlobalsEvent": {
+        "properties": {
+          "fields": {
+            "$ref": "#/components/schemas/GlobalsPatch"
+          },
+          "type": {
+            "const": "globals",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "fields"
+        ],
+        "title": "GlobalsEvent",
+        "type": "object"
+      },
+      "GlobalsPatch": {
+        "description": "A partial of Globals \u2014 the changed global field(s) in a `globals` event (2 keys for the niania /\nOpen-Meteo poll: value + its `*_ts`; up to 4 for a 433 reading: temp, humidity, ts, battery).",
+        "properties": {
+          "crib_temp": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Crib Temp"
+          },
+          "crib_temp_ts": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Crib Temp Ts"
+          },
+          "outdoor_battery_ok": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "title": "Outdoor Battery Ok"
+          },
+          "outdoor_humidity": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Outdoor Humidity"
+          },
+          "outdoor_temp": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Outdoor Temp"
+          },
+          "outdoor_temp_ts": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Outdoor Temp Ts"
+          }
+        },
+        "title": "GlobalsPatch",
+        "type": "object"
+      },
+      "IrButton": {
+        "description": "A configured one-tap IR button (``HESTIA_IR_BUTTONS``) \u2192 transmits a saved Flipper signal.",
+        "properties": {
+          "button": {
+            "title": "Button",
+            "type": "string"
+          },
+          "file": {
+            "title": "File",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "file",
+          "button"
+        ],
+        "title": "IrButton",
+        "type": "object"
+      },
+      "IrRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/ir \u2014 transmit a saved Flipper IR signal (same 200/400/503 envelopes as /api/control).",
+        "properties": {
+          "button": {
+            "minLength": 1,
+            "title": "Button",
+            "type": "string"
+          },
+          "file": {
+            "minLength": 1,
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "button"
+        ],
+        "title": "IrRequest",
+        "type": "object"
+      },
+      "Klima": {
+        "description": "The A/C control map parsed from the klima.ir signal names \u2014 an empty ``{}`` when no klima.ir is\npresent, so every field is OPTIONAL (absent, never null). ``modes``/``power_on`` map each mode to its\nsorted temps; ``presets`` carries ``off`` + any non-temp signal.",
+        "properties": {
+          "file": {
+            "title": "File",
+            "type": "string"
+          },
+          "modes": {
+            "additionalProperties": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "title": "Modes",
+            "type": "object"
+          },
+          "power_on": {
+            "additionalProperties": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "title": "Power On",
+            "type": "object"
+          },
+          "presets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Presets",
+            "type": "array"
+          }
+        },
+        "title": "Klima",
+        "type": "object"
+      },
+      "KlimaEvent": {
+        "properties": {
+          "klima": {
+            "$ref": "#/components/schemas/KlimaState"
+          },
+          "type": {
+            "const": "klima",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "klima"
+        ],
+        "title": "KlimaEvent",
+        "type": "object"
+      },
+      "KlimaState": {
+        "description": "The A/C state derived from IR traffic (``state``): power + optional mode/target.",
+        "properties": {
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Mode"
+          },
+          "power": {
+            "title": "Power",
+            "type": "boolean"
+          },
+          "temp": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Temp"
+          }
+        },
+        "required": [
+          "power"
+        ],
+        "title": "KlimaState",
+        "type": "object"
+      },
+      "LiveEvent": {
+        "description": "One Server-Sent-Events frame (the JSON after `data:`).",
+        "discriminator": {
+          "mapping": {
+            "activity": "#/components/schemas/ActivityEvent",
+            "discovery_changed": "#/components/schemas/DiscoveryChangedEvent",
+            "globals": "#/components/schemas/GlobalsEvent",
+            "klima": "#/components/schemas/KlimaEvent",
+            "state": "#/components/schemas/StateEvent"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/DiscoveryChangedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/StateEvent"
+          },
+          {
+            "$ref": "#/components/schemas/ActivityEvent"
+          },
+          {
+            "$ref": "#/components/schemas/GlobalsEvent"
+          },
+          {
+            "$ref": "#/components/schemas/KlimaEvent"
+          }
+        ]
+      },
+      "LoginRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/login body. ``bearer: true`` opts a native client into a token in the response (which\nit then sends as ``Authorization: Bearer``); the browser omits it and relies on the httponly cookie.",
+        "properties": {
+          "bearer": {
+            "title": "Bearer",
+            "type": "boolean"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user",
+          "password"
+        ],
+        "title": "LoginRequest",
+        "type": "object"
+      },
+      "LoginSuccess": {
+        "description": "200 from /api/login. ``token`` is present ONLY when the request set ``bearer: true``.",
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "user"
+        ],
+        "title": "LoginSuccess",
+        "type": "object"
+      },
+      "NameRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/name \u2014 set a device's registry labels. ``node`` is required; at least one of\nname/room/type must be present (server-enforced cross-field, not expressible here). name/room\naccept null (clear); type is a DeviceType; ep is a multi-gang channel label. Unknown keys \u2192 400.",
+        "properties": {
+          "ep": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Ep"
+          },
+          "name": {
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Name"
+          },
+          "node": {
+            "title": "Node",
+            "type": "integer"
+          },
+          "op": {
+            "const": "name",
+            "title": "Op",
+            "type": "string"
+          },
+          "room": {
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Room"
+          },
+          "type": {
+            "enum": [
+              "light",
+              "blind",
+              "thermostat",
+              "door",
+              "motion",
+              "smoke",
+              "water",
+              "plug",
+              "unknown"
+            ],
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Type"
+          }
+        },
+        "required": [
+          "node"
+        ],
+        "title": "NameRequest",
+        "type": "object"
+      },
+      "OkResult": {
+        "description": "A bare ``{ok: true}`` acknowledgement (e.g. /api/logout).",
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "OkResult",
+        "type": "object"
+      },
+      "ResetPasswordRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/users/reset-password \u2014 admin: set ANOTHER user's password (no current-password check).\nRefuses self (an admin rotates their OWN credential via /api/me/password, which verifies the current\none). NOTE the field is ``new`` (not ``password``).",
+        "properties": {
+          "new": {
+            "maxLength": 1024,
+            "minLength": 8,
+            "title": "New",
+            "type": "string"
+          },
+          "username": {
+            "minLength": 1,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "new"
+        ],
+        "title": "ResetPasswordRequest",
+        "type": "object"
+      },
+      "Rf433Device": {
+        "description": "One discovered 433 MHz device (``rf433.Rf433Registry.snapshot``). ``fields`` is the last decoded\npacket's JSON-safe scalars (rtl_433 ``time``/``mic`` noise stripped). All five keys are always present.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "fields": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "title": "Fields",
+            "type": "object"
+          },
+          "first_seen": {
+            "title": "First Seen",
+            "type": "number"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "last_seen": {
+            "title": "Last Seen",
+            "type": "number"
+          }
+        },
+        "required": [
+          "key",
+          "first_seen",
+          "last_seen",
+          "count",
+          "fields"
+        ],
+        "title": "Rf433Device",
+        "type": "object"
+      },
+      "Rf433Feed": {
+        "description": "GET /api/rf433 \u2014 every decoded 433 device, newest-seen first (admin observability). ``devices`` is\n``[]`` until the local-433 feeder is running.",
+        "properties": {
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/Rf433Device"
+            },
+            "title": "Devices",
+            "type": "array"
+          }
+        },
+        "required": [
+          "devices"
+        ],
+        "title": "Rf433Feed",
+        "type": "object"
+      },
+      "RoomIconRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/rooms/icons \u2014 set one shared room emoji. Send icon=\"\" (empty string, NOT null) to clear.",
+        "properties": {
+          "icon": {
+            "maxLength": 16,
+            "title": "Icon",
+            "type": "string"
+          },
+          "room": {
+            "maxLength": 64,
+            "title": "Room",
+            "type": "string"
+          }
+        },
+        "required": [
+          "room",
+          "icon"
+        ],
+        "title": "RoomIconRequest",
+        "type": "object"
+      },
+      "Rule": {
+        "description": "A saved automation rule (automations.Rule.to_dict) \u2014 all 7 keys ALWAYS present in the output.",
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/RuleAction"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "conditions": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TimeWindowCondition"
+                },
+                {
+                  "$ref": "#/components/schemas/StatePredicate"
+                }
+              ]
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "debounce": {
+            "title": "Debounce",
+            "type": "number"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "modes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Modes",
+            "type": "array"
+          },
+          "trigger": {
+            "discriminator": {
+              "mapping": {
+                "cron": "#/components/schemas/TriggerCron",
+                "presence": "#/components/schemas/TriggerPresence",
+                "scene": "#/components/schemas/TriggerScene",
+                "state": "#/components/schemas/TriggerState",
+                "sun": "#/components/schemas/TriggerSun",
+                "time": "#/components/schemas/TriggerTime"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TriggerScene"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerState"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerTime"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerSun"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerPresence"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerCron"
+              }
+            ],
+            "title": "Trigger"
+          }
+        },
+        "required": [
+          "id",
+          "enabled",
+          "modes",
+          "debounce",
+          "trigger",
+          "conditions",
+          "actions"
+        ],
+        "title": "Rule",
+        "type": "object"
+      },
+      "RuleAction": {
+        "additionalProperties": true,
+        "description": "One action. Only `op` (+ ir's file/button) is validated at save; all other per-op fields are\nauthor-supplied and pass through verbatim \u2014 so this is open (extra=allow), not a closed per-op union.",
+        "properties": {
+          "op": {
+            "enum": [
+              "raw",
+              "cover",
+              "level",
+              "switch",
+              "lights",
+              "thermostat",
+              "thermostat_power",
+              "ir"
+            ],
+            "title": "Op",
+            "type": "string"
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "title": "RuleAction",
+        "type": "object"
+      },
+      "RuleInput": {
+        "additionalProperties": false,
+        "description": "POST /api/automations body. id/trigger/actions required; enabled/modes/debounce/conditions are\noptional (server-defaulted by Rule.from_dict: enabled=true, modes=[proxy,standalone], debounce=0,\nconditions=[]). Authoritative validation is Rule.from_dict \u2014 this shape is the codegen guide.",
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/RuleAction"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "conditions": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TimeWindowCondition"
+                },
+                {
+                  "$ref": "#/components/schemas/StatePredicate"
+                }
+              ]
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "debounce": {
+            "title": "Debounce",
+            "type": "number"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "modes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Modes",
+            "type": "array"
+          },
+          "trigger": {
+            "discriminator": {
+              "mapping": {
+                "cron": "#/components/schemas/TriggerCron",
+                "presence": "#/components/schemas/TriggerPresence",
+                "scene": "#/components/schemas/TriggerScene",
+                "state": "#/components/schemas/TriggerState",
+                "sun": "#/components/schemas/TriggerSun",
+                "time": "#/components/schemas/TriggerTime"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TriggerScene"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerState"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerTime"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerSun"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerPresence"
+              },
+              {
+                "$ref": "#/components/schemas/TriggerCron"
+              }
+            ],
+            "title": "Trigger"
+          }
+        },
+        "required": [
+          "id",
+          "trigger",
+          "actions"
+        ],
+        "title": "RuleInput",
+        "type": "object"
+      },
+      "RuleVocab": {
+        "description": "The automation-rule grammar the guided form builds from (``automations.rule_vocab``).",
+        "properties": {
+          "cmp_ops": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cmp Ops",
+            "type": "array"
+          },
+          "condition_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Condition Types",
+            "type": "array"
+          },
+          "frame_action_ops": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Frame Action Ops",
+            "type": "array"
+          },
+          "modes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Modes",
+            "type": "array"
+          },
+          "presence_events": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Presence Events",
+            "type": "array"
+          },
+          "state_fields": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "State Fields",
+            "type": "object"
+          },
+          "sun_events": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sun Events",
+            "type": "array"
+          },
+          "trigger_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Trigger Types",
+            "type": "array"
+          }
+        },
+        "required": [
+          "trigger_types",
+          "state_fields",
+          "cmp_ops",
+          "frame_action_ops",
+          "modes",
+          "sun_events",
+          "presence_events",
+          "condition_types"
+        ],
+        "title": "RuleVocab",
+        "type": "object"
+      },
+      "Scene": {
+        "description": "A function-button press riding an `activity` event. `kind` distinguishes the two frame types.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "scene",
+              "central"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "Scene",
+        "type": "object"
+      },
+      "SceneRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/scene \u2014 fan one house-wide scene out across the per-device control path.",
+        "properties": {
+          "op": {
+            "enum": [
+              "lights_off",
+              "lights_on",
+              "blinds_down",
+              "blinds_up",
+              "blinds_set"
+            ],
+            "title": "Op",
+            "type": "string"
+          },
+          "value": {
+            "maximum": 99,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "op"
+        ],
+        "title": "SceneRequest",
+        "type": "object"
+      },
+      "SceneResult": {
+        "description": "200 from /api/scene: how many of the scene's per-device commands the gateway accepted.",
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "sent": {
+            "title": "Sent",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok",
+          "sent",
+          "total"
+        ],
+        "title": "SceneResult",
+        "type": "object"
+      },
+      "SetDisabledRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/users/disabled \u2014 admin: enable/disable ANOTHER account. Refuses self + the last enabled admin.",
+        "properties": {
+          "disabled": {
+            "title": "Disabled",
+            "type": "boolean"
+          },
+          "username": {
+            "minLength": 1,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "disabled"
+        ],
+        "title": "SetDisabledRequest",
+        "type": "object"
+      },
+      "SetRoleRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/users/role \u2014 admin: change ANOTHER user's role. Refuses self (no self-demote) and the\nlast enabled admin (server-enforced). ``username`` only has to be non-empty (it names an existing\naccount, so the create-time char rules don't re-apply).",
+        "properties": {
+          "role": {
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "username": {
+            "minLength": 1,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "role"
+        ],
+        "title": "SetRoleRequest",
+        "type": "object"
+      },
+      "Settings": {
+        "description": "GET /api/settings \u2014 the logged-in user's UI prefs. All three keys are ALWAYS present, null when\nunset (an unauthenticated / no-row request returns all-null, never an error).",
+        "properties": {
+          "locale": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Locale"
+          },
+          "temp_scale": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Temp Scale"
+          },
+          "theme": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Theme"
+          }
+        },
+        "title": "Settings",
+        "type": "object"
+      },
+      "SettingsUpdate": {
+        "additionalProperties": false,
+        "description": "POST /api/settings \u2014 a PARTIAL update: only the keys present are persisted (absent keys are left\nuntouched). null clears a field. temp_scale \u2208 {C,F,K}. locale \u2264 35 chars.",
+        "properties": {
+          "locale": {
+            "maxLength": 35,
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Locale"
+          },
+          "temp_scale": {
+            "enum": [
+              "C",
+              "F",
+              "K"
+            ],
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Temp Scale"
+          },
+          "theme": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Theme"
+          }
+        },
+        "title": "SettingsUpdate",
+        "type": "object"
+      },
+      "StateEvent": {
+        "properties": {
+          "fields": {
+            "$ref": "#/components/schemas/DeviceStatePatch"
+          },
+          "node": {
+            "title": "Node",
+            "type": "integer"
+          },
+          "type": {
+            "const": "state",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "node",
+          "fields"
+        ],
+        "title": "StateEvent",
+        "type": "object"
+      },
+      "StatePredicate": {
+        "description": "A condition with NO `type` key (the absence IS the discriminant vs time_window).",
+        "properties": {
+          "endpoint": {
+            "maximum": 2,
+            "minimum": 1,
+            "title": "Endpoint",
+            "type": "integer"
+          },
+          "field": {
+            "enum": [
+              "door",
+              "motion",
+              "level",
+              "switch",
+              "setpoint",
+              "thermostat_on",
+              "temperature",
+              "power_w",
+              "energy_kwh",
+              "voltage_v",
+              "crib_temp",
+              "outdoor_temp"
+            ],
+            "title": "Field",
+            "type": "string"
+          },
+          "node": {
+            "title": "Node",
+            "type": "integer"
+          },
+          "op": {
+            "enum": [
+              "eq",
+              "ne",
+              "lt",
+              "le",
+              "gt",
+              "ge"
+            ],
+            "title": "Op",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "field",
+          "op",
+          "value"
+        ],
+        "title": "StatePredicate",
+        "type": "object"
+      },
+      "Summary": {
+        "description": "Discovery roster counters (``web._summary``).",
+        "properties": {
+          "confirmed": {
+            "title": "Confirmed",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "unknown": {
+            "title": "Unknown",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "confirmed",
+          "unknown"
+        ],
+        "title": "Summary",
+        "type": "object"
+      },
+      "TimeWindowCondition": {
+        "description": "A time-of-day guard condition. `days` is OMITTED entirely when unset (unlike time/sun triggers).",
+        "properties": {
+          "days": {
+            "items": {
+              "maximum": 6,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "title": "Days",
+            "type": "array"
+          },
+          "end": {
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          },
+          "type": {
+            "const": "time_window",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "start",
+          "end"
+        ],
+        "title": "TimeWindowCondition",
+        "type": "object"
+      },
+      "TriggerCron": {
+        "properties": {
+          "expr": {
+            "title": "Expr",
+            "type": "string"
+          },
+          "type": {
+            "const": "cron",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "expr"
+        ],
+        "title": "TriggerCron",
+        "type": "object"
+      },
+      "TriggerPresence": {
+        "properties": {
+          "event": {
+            "enum": [
+              "arrive",
+              "leave"
+            ],
+            "title": "Event",
+            "type": "string"
+          },
+          "mac": {
+            "title": "Mac",
+            "type": "string"
+          },
+          "type": {
+            "const": "presence",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "mac",
+          "event"
+        ],
+        "title": "TriggerPresence",
+        "type": "object"
+      },
+      "TriggerScene": {
+        "properties": {
+          "node": {
+            "title": "Node",
+            "type": "integer"
+          },
+          "scene_id": {
+            "title": "Scene Id",
+            "type": "integer"
+          },
+          "type": {
+            "const": "scene",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "node",
+          "scene_id"
+        ],
+        "title": "TriggerScene",
+        "type": "object"
+      },
+      "TriggerState": {
+        "properties": {
+          "endpoint": {
+            "maximum": 2,
+            "minimum": 1,
+            "title": "Endpoint",
+            "type": "integer"
+          },
+          "field": {
+            "enum": [
+              "door",
+              "motion",
+              "level",
+              "switch",
+              "setpoint",
+              "thermostat_on",
+              "temperature",
+              "power_w",
+              "energy_kwh",
+              "voltage_v",
+              "crib_temp",
+              "outdoor_temp"
+            ],
+            "title": "Field",
+            "type": "string"
+          },
+          "node": {
+            "title": "Node",
+            "type": "integer"
+          },
+          "op": {
+            "enum": [
+              "eq",
+              "ne",
+              "lt",
+              "le",
+              "gt",
+              "ge"
+            ],
+            "title": "Op",
+            "type": "string"
+          },
+          "type": {
+            "const": "state",
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "type",
+          "field",
+          "op",
+          "value"
+        ],
+        "title": "TriggerState",
+        "type": "object"
+      },
+      "TriggerSun": {
+        "properties": {
+          "days": {
+            "items": {
+              "maximum": 6,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ],
+            "title": "Days"
+          },
+          "event": {
+            "enum": [
+              "sunrise",
+              "sunset"
+            ],
+            "title": "Event",
+            "type": "string"
+          },
+          "offset_min": {
+            "title": "Offset Min",
+            "type": "integer"
+          },
+          "type": {
+            "const": "sun",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "event",
+          "offset_min"
+        ],
+        "title": "TriggerSun",
+        "type": "object"
+      },
+      "TriggerTime": {
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "days": {
+            "items": {
+              "maximum": 6,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ],
+            "title": "Days"
+          },
+          "type": {
+            "const": "time",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "at"
+        ],
+        "title": "TriggerTime",
+        "type": "object"
+      },
+      "UserRow": {
+        "description": "One account in the admin user list (``store_sql.list_users``) \u2014 username / role / disabled,\nNEVER the password hash.",
+        "properties": {
+          "disabled": {
+            "title": "Disabled",
+            "type": "boolean"
+          },
+          "role": {
+            "enum": [
+              "viewer",
+              "operator",
+              "admin"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "role",
+          "disabled"
+        ],
+        "title": "UserRow",
+        "type": "object"
+      },
+      "UsersList": {
+        "description": "GET /api/users \u2014 every account (admin). ``users`` is always present; there is NO top-level ``ok``.",
+        "properties": {
+          "users": {
+            "items": {
+              "$ref": "#/components/schemas/UserRow"
+            },
+            "title": "Users",
+            "type": "array"
+          }
+        },
+        "required": [
+          "users"
+        ],
+        "title": "UsersList",
+        "type": "object"
+      },
+      "WhoAmI": {
+        "description": "GET /api/whoami \u2014 the caller's identity + RBAC role; both null when auth is off (loopback/dev).",
+        "properties": {
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Role"
+          },
+          "user": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "User"
+          }
+        },
+        "title": "WhoAmI",
+        "type": "object"
+      },
+      "WholeHomeConfig": {
+        "description": "GET /api/whole-home \u2014 what is opted out of the house-wide \"all lights / all blinds\" sweeps.\nRegistry-only config (deliberately NOT in DeviceInfo, so adding the opt-out never changes the\ndevice-snapshot wire shape a pinned native client decodes). ``excluded_nodes`` = whole devices;\n``excluded_endpoints`` = single gangs of a multi-gang switch (node id \u2192 sorted gang numbers).",
+        "properties": {
+          "excluded_endpoints": {
+            "additionalProperties": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "title": "Excluded Endpoints",
+            "type": "object"
+          },
+          "excluded_nodes": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Excluded Nodes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "excluded_nodes",
+          "excluded_endpoints"
+        ],
+        "title": "WholeHomeConfig",
+        "type": "object"
+      },
+      "WholeHomeRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/whole-home \u2014 opt one device in (``exclude``=false) / out (true) of the house-wide\n\"all\" sweeps. With ``ep`` (gang 1 or 2, like the control op's ``endpoint``) the opt-out targets\nthat single gang of a multi-gang switch instead of the whole node.",
+        "properties": {
+          "ep": {
+            "maximum": 2,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Ep"
+          },
+          "exclude": {
+            "title": "Exclude",
+            "type": "boolean"
+          },
+          "node": {
+            "description": "device node id",
+            "maximum": 255,
+            "minimum": 0,
+            "title": "Node",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "node",
+          "exclude"
+        ],
+        "title": "WholeHomeRequest",
+        "type": "object"
+      },
+      "BudgetAccountStatus": {
+        "properties": {
+          "components": {
+            "$ref": "#/components/schemas/BudgetComponents"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "control_version": {
+            "title": "Control Version",
+            "type": "integer"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "kind_confirmed_at": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Kind Confirmed At"
+          },
+          "last_attempt": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Last Attempt"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Last Error"
+          },
+          "last_success": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Last Success"
+          },
+          "paused": {
+            "title": "Paused",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "enabled",
+          "configured",
+          "paused",
+          "control_version",
+          "kind",
+          "components"
+        ],
+        "title": "BudgetAccountStatus",
+        "type": "object"
+      },
+      "BudgetAnalyticsAnnotation": {
+        "properties": {
+          "category_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Category Id"
+          },
+          "display_label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Display Label"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Label"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "mode",
+          "kind",
+          "stale"
+        ],
+        "title": "BudgetAnalyticsAnnotation",
+        "type": "object"
+      },
+      "BudgetAnalyticsEffective": {
+        "properties": {
+          "category_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Category Id"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "rule_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Rule Id"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "source"
+        ],
+        "title": "BudgetAnalyticsEffective",
+        "type": "object"
+      },
+      "BudgetAnalyticsMetadata": {
+        "properties": {
+          "creditor_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Creditor Name"
+          },
+          "debtor_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Debtor Name"
+          },
+          "mcc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Mcc"
+          }
+        },
+        "title": "BudgetAnalyticsMetadata",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudget": {
+        "description": "Read-only owner-private monthly budget dashboard evaluated in Europe/Warsaw from one snapshot.",
+        "properties": {
+          "available_currencies": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Currencies",
+            "type": "array"
+          },
+          "card_exposure": {
+            "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetCardExposure"
+          },
+          "category_spend": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetCategorySpend"
+            },
+            "title": "Category Spend",
+            "type": "array"
+          },
+          "configuration": {
+            "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetConfiguration"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetCoverage"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "current_month": {
+            "title": "Current Month",
+            "type": "string"
+          },
+          "cutoff": {
+            "title": "Cutoff",
+            "type": "string"
+          },
+          "end": {
+            "title": "End",
+            "type": "string"
+          },
+          "evaluated_at": {
+            "title": "Evaluated At",
+            "type": "number"
+          },
+          "evaluation_date": {
+            "title": "Evaluation Date",
+            "type": "string"
+          },
+          "evaluation_timezone": {
+            "const": "Europe/Warsaw",
+            "title": "Evaluation Timezone",
+            "type": "string"
+          },
+          "expected_income": {
+            "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetExpectedIncome"
+          },
+          "pace": {
+            "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetPace"
+          },
+          "pass_through": {
+            "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetPassThrough"
+          },
+          "period": {
+            "title": "Period",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetSummary"
+          }
+        },
+        "required": [
+          "period",
+          "start",
+          "end",
+          "cutoff",
+          "current_month",
+          "evaluated_at",
+          "evaluation_date",
+          "evaluation_timezone",
+          "currency",
+          "available_currencies",
+          "configuration",
+          "coverage",
+          "category_spend",
+          "card_exposure"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudget",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudgetCardExposure": {
+        "properties": {
+          "amount": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Amount"
+          },
+          "as_of_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "As Of Date"
+          },
+          "status": {
+            "const": "unavailable",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudgetCardExposure",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudgetCategoryLimit": {
+        "properties": {
+          "monthly_limit": {
+            "title": "Monthly Limit",
+            "type": "string"
+          },
+          "over_by": {
+            "maxLength": 192,
+            "title": "Over By",
+            "type": "string"
+          },
+          "percent_used_floor": {
+            "maxLength": 192,
+            "title": "Percent Used Floor",
+            "type": "string"
+          },
+          "remaining": {
+            "maxLength": 192,
+            "title": "Remaining",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "within",
+              "approaching",
+              "at_limit",
+              "exceeded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "warning_percent": {
+            "maximum": 99,
+            "minimum": 1,
+            "title": "Warning Percent",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "monthly_limit",
+          "remaining",
+          "over_by",
+          "percent_used_floor",
+          "warning_percent",
+          "status"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudgetCategoryLimit",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudgetCategorySpend": {
+        "properties": {
+          "archived": {
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "category_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Category Id"
+          },
+          "color_hue": {
+            "maximum": 359,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Color Hue"
+          },
+          "display_label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Display Label"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Display Name"
+          },
+          "expenses": {
+            "maxLength": 192,
+            "title": "Expenses",
+            "type": "string"
+          },
+          "limit": {
+            "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetCategoryLimit"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Name"
+          },
+          "net_spending": {
+            "maxLength": 192,
+            "title": "Net Spending",
+            "type": "string"
+          },
+          "one_off": {
+            "title": "One Off",
+            "type": "boolean"
+          },
+          "one_off_key": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "One Off Key"
+          },
+          "refunds": {
+            "maxLength": 192,
+            "title": "Refunds",
+            "type": "string"
+          }
+        },
+        "required": [
+          "archived",
+          "expenses",
+          "refunds",
+          "net_spending"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudgetCategorySpend",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudgetConfiguration": {
+        "properties": {
+          "income_window": {
+            "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetIncomeWindow"
+          },
+          "source": {
+            "enum": [
+              "bootstrap",
+              "saved",
+              "none"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "unconfigured"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "source"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudgetConfiguration",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudgetCoverage": {
+        "properties": {
+          "has_activity": {
+            "title": "Has Activity",
+            "type": "boolean"
+          },
+          "ledger_as_of": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Ledger As Of"
+          },
+          "pending_row_keys": {
+            "items": {
+              "maxLength": 1153,
+              "minLength": 3,
+              "pattern": "^[^/\\x00-\\x1f\\x7f]{1,128}/[^\\x00-\\x1f\\x7f]{1,1024}$",
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Pending Row Keys",
+            "type": "array"
+          },
+          "pending_row_keys_truncated": {
+            "title": "Pending Row Keys Truncated",
+            "type": "boolean"
+          },
+          "pending_transfer_rows": {
+            "title": "Pending Transfer Rows",
+            "type": "integer"
+          },
+          "provisional": {
+            "title": "Provisional",
+            "type": "boolean"
+          },
+          "purchase_date_fallback_count": {
+            "title": "Purchase Date Fallback Count",
+            "type": "integer"
+          },
+          "stale_selected_accounts": {
+            "title": "Stale Selected Accounts",
+            "type": "integer"
+          },
+          "transfer_scan_limited": {
+            "title": "Transfer Scan Limited",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "stale_selected_accounts",
+          "purchase_date_fallback_count",
+          "pending_transfer_rows",
+          "transfer_scan_limited",
+          "provisional",
+          "has_activity"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudgetCoverage",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudgetExpectedIncome": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetExpectedIncomeItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "estimated",
+              "partial",
+              "unavailable",
+              "none",
+              "historical"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "total": {
+            "maxLength": 192,
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Total"
+          }
+        },
+        "required": [
+          "status",
+          "items"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudgetExpectedIncome",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudgetExpectedIncomeItem": {
+        "properties": {
+          "amount": {
+            "maxLength": 192,
+            "title": "Amount",
+            "type": "string"
+          },
+          "category_id": {
+            "title": "Category Id",
+            "type": "string"
+          },
+          "expected_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Expected Date"
+          },
+          "source": {
+            "const": "previous_month",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category_id",
+          "amount",
+          "source"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudgetExpectedIncomeItem",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudgetIncomeWindow": {
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          },
+          "start_day": {
+            "maximum": 28,
+            "minimum": 1,
+            "title": "Start Day",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "start_day"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudgetIncomeWindow",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudgetPace": {
+        "properties": {
+          "basis": {
+            "enum": [
+              "received",
+              "received_plus_expected"
+            ],
+            "title": "Basis",
+            "type": "string"
+          },
+          "budget": {
+            "maxLength": 192,
+            "title": "Budget",
+            "type": "string"
+          },
+          "daily_rate": {
+            "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetRatio"
+          },
+          "exhaustion_day": {
+            "maximum": 31,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ],
+            "title": "Exhaustion Day"
+          },
+          "projected_month_spend": {
+            "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudgetRatio"
+          },
+          "status": {
+            "enum": [
+              "historical",
+              "no_budget",
+              "already_reached",
+              "no_positive_pace",
+              "runs_out",
+              "within_budget"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "basis",
+          "budget",
+          "status"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudgetPace",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudgetPassThrough": {
+        "properties": {
+          "matched": {
+            "maxLength": 192,
+            "title": "Matched",
+            "type": "string"
+          },
+          "mortgage_category_id": {
+            "title": "Mortgage Category Id",
+            "type": "string"
+          },
+          "mortgage_debits": {
+            "maxLength": 192,
+            "title": "Mortgage Debits",
+            "type": "string"
+          },
+          "mortgage_refunds": {
+            "maxLength": 192,
+            "title": "Mortgage Refunds",
+            "type": "string"
+          },
+          "rent_category_id": {
+            "title": "Rent Category Id",
+            "type": "string"
+          },
+          "rent_received": {
+            "maxLength": 192,
+            "title": "Rent Received",
+            "type": "string"
+          },
+          "unapplied_mortgage_refunds": {
+            "maxLength": 192,
+            "title": "Unapplied Mortgage Refunds",
+            "type": "string"
+          },
+          "unapplied_rent": {
+            "maxLength": 192,
+            "title": "Unapplied Rent",
+            "type": "string"
+          },
+          "uncovered_mortgage": {
+            "maxLength": 192,
+            "title": "Uncovered Mortgage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rent_category_id",
+          "mortgage_category_id",
+          "rent_received",
+          "mortgage_debits",
+          "mortgage_refunds",
+          "unapplied_mortgage_refunds",
+          "matched",
+          "unapplied_rent",
+          "uncovered_mortgage"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudgetPassThrough",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudgetRatio": {
+        "properties": {
+          "denominator": {
+            "minimum": 1,
+            "title": "Denominator",
+            "type": "integer"
+          },
+          "numerator": {
+            "maxLength": 192,
+            "title": "Numerator",
+            "type": "string"
+          }
+        },
+        "required": [
+          "numerator",
+          "denominator"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudgetRatio",
+        "type": "object"
+      },
+      "BudgetAnalyticsMonthlyBudgetSummary": {
+        "properties": {
+          "remaining": {
+            "maxLength": 192,
+            "title": "Remaining",
+            "type": "string"
+          },
+          "spent": {
+            "maxLength": 192,
+            "title": "Spent",
+            "type": "string"
+          },
+          "start_budget": {
+            "maxLength": 192,
+            "title": "Start Budget",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_budget",
+          "spent",
+          "remaining"
+        ],
+        "title": "BudgetAnalyticsMonthlyBudgetSummary",
+        "type": "object"
+      },
+      "BudgetAnalyticsTransaction": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "amount": {
+            "pattern": "^[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Amount",
+            "type": "string"
+          },
+          "annotation": {
+            "$ref": "#/components/schemas/BudgetAnalyticsAnnotation"
+          },
+          "api_observed_at": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Api Observed At"
+          },
+          "booking_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Booking Date"
+          },
+          "counterparty_account": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Counterparty Account"
+          },
+          "counterparty_account_key": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Counterparty Account Key"
+          },
+          "credit_debit_indicator": {
+            "enum": [
+              "CRDT",
+              "DBIT"
+            ],
+            "title": "Credit Debit Indicator",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "effective": {
+            "$ref": "#/components/schemas/BudgetAnalyticsEffective"
+          },
+          "entry_reference": {
+            "title": "Entry Reference",
+            "type": "string"
+          },
+          "fingerprint": {
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/BudgetAnalyticsMetadata"
+          },
+          "observed_at": {
+            "title": "Observed At",
+            "type": "number"
+          },
+          "remittance_information": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Remittance Information",
+            "type": "array"
+          },
+          "source": {
+            "description": "Currently api or offline_import; clients must handle future values.",
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "const": "BOOK",
+            "title": "Status",
+            "type": "string"
+          },
+          "transaction_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Transaction Date"
+          },
+          "transfer": {
+            "$ref": "#/components/schemas/BudgetAnalyticsTransactionTransfer"
+          },
+          "transfer_fingerprint": {
+            "title": "Transfer Fingerprint",
+            "type": "string"
+          },
+          "value_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Value Date"
+          }
+        },
+        "required": [
+          "entry_reference",
+          "amount",
+          "currency",
+          "credit_debit_indicator",
+          "status",
+          "remittance_information",
+          "source",
+          "observed_at",
+          "account_id",
+          "fingerprint",
+          "transfer_fingerprint",
+          "annotation",
+          "effective",
+          "transfer"
+        ],
+        "title": "BudgetAnalyticsTransaction",
+        "type": "object"
+      },
+      "BudgetAnalyticsTransactionTransfer": {
+        "properties": {
+          "ambiguous": {
+            "title": "Ambiguous",
+            "type": "boolean"
+          },
+          "candidate_count": {
+            "title": "Candidate Count",
+            "type": "integer"
+          },
+          "decision_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Decision Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "candidate_count",
+          "ambiguous"
+        ],
+        "title": "BudgetAnalyticsTransactionTransfer",
+        "type": "object"
+      },
+      "BudgetAnalyticsTransactions": {
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "string"
+          },
+          "filtered_total": {
+            "title": "Filtered Total",
+            "type": "integer"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Next Cursor"
+          },
+          "period": {
+            "title": "Period",
+            "type": "string"
+          },
+          "snapshot_digest": {
+            "title": "Snapshot Digest",
+            "type": "string"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          },
+          "transactions": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAnalyticsTransaction"
+            },
+            "title": "Transactions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "period",
+          "start",
+          "end",
+          "snapshot_digest",
+          "transactions",
+          "filtered_total"
+        ],
+        "title": "BudgetAnalyticsTransactions",
+        "type": "object"
+      },
+      "BudgetComponentStatus": {
+        "description": "Independent API freshness and effective component/shared retry policy.",
+        "properties": {
+          "age_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Age Seconds"
+          },
+          "failures": {
+            "title": "Failures",
+            "type": "integer"
+          },
+          "last_attempt": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Last Attempt"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Last Error"
+          },
+          "last_success": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Last Success"
+          },
+          "next_attempt": {
+            "title": "Next Attempt",
+            "type": "number"
+          },
+          "retry_at": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Retry At"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "stale_after_seconds": {
+            "title": "Stale After Seconds",
+            "type": "integer"
+          },
+          "state": {
+            "description": "Currently blocked, running, error, deferred, never, ready or ok; clients must handle future values.",
+            "title": "State",
+            "type": "string"
+          },
+          "suspended": {
+            "title": "Suspended",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "failures",
+          "next_attempt",
+          "state",
+          "suspended",
+          "stale",
+          "stale_after_seconds"
+        ],
+        "title": "BudgetComponentStatus",
+        "type": "object"
+      },
+      "BudgetComponents": {
+        "properties": {
+          "balances": {
+            "$ref": "#/components/schemas/BudgetComponentStatus"
+          },
+          "transactions": {
+            "$ref": "#/components/schemas/BudgetComponentStatus"
+          }
+        },
+        "required": [
+          "transactions",
+          "balances"
+        ],
+        "title": "BudgetComponents",
+        "type": "object"
+      },
+      "BudgetConnectionStatus": {
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetAccountStatus"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "configured_accounts": {
+            "title": "Configured Accounts",
+            "type": "integer"
+          },
+          "connection": {
+            "title": "Connection",
+            "type": "string"
+          },
+          "control_version": {
+            "title": "Control Version",
+            "type": "integer"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "failures": {
+            "title": "Failures",
+            "type": "integer"
+          },
+          "last_attempt": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Last Attempt"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Last Error"
+          },
+          "last_success": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Last Success"
+          },
+          "next_attempt": {
+            "title": "Next Attempt",
+            "type": "number"
+          },
+          "offline_imports": {
+            "title": "Offline Imports",
+            "type": "integer"
+          },
+          "offline_transactions": {
+            "title": "Offline Transactions",
+            "type": "integer"
+          },
+          "offline_unresolved": {
+            "title": "Offline Unresolved",
+            "type": "integer"
+          },
+          "owner": {
+            "title": "Owner",
+            "type": "string"
+          },
+          "paused": {
+            "title": "Paused",
+            "type": "boolean"
+          },
+          "renewal_due": {
+            "title": "Renewal Due",
+            "type": "boolean"
+          },
+          "request_limits": {
+            "$ref": "#/components/schemas/BudgetSharedState"
+          },
+          "selected_accounts": {
+            "title": "Selected Accounts",
+            "type": "integer"
+          },
+          "selection_policy_version": {
+            "minimum": 1,
+            "title": "Selection Policy Version",
+            "type": "integer"
+          },
+          "transactions": {
+            "title": "Transactions",
+            "type": "integer"
+          },
+          "uncertain_transactions": {
+            "title": "Uncertain Transactions",
+            "type": "integer"
+          },
+          "unresolved": {
+            "title": "Unresolved",
+            "type": "integer"
+          },
+          "valid_until": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Valid Until"
+          }
+        },
+        "required": [
+          "connection",
+          "owner",
+          "enabled",
+          "paused",
+          "control_version",
+          "selection_policy_version",
+          "configured_accounts",
+          "selected_accounts",
+          "transactions",
+          "unresolved",
+          "uncertain_transactions",
+          "offline_imports",
+          "offline_transactions",
+          "offline_unresolved",
+          "next_attempt",
+          "failures",
+          "request_limits",
+          "renewal_due",
+          "accounts"
+        ],
+        "title": "BudgetConnectionStatus",
+        "type": "object"
+      },
+      "BudgetSharedState": {
+        "properties": {
+          "next_attempt": {
+            "title": "Next Attempt",
+            "type": "number"
+          },
+          "retry_at": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Retry At"
+          },
+          "suspended": {
+            "title": "Suspended",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "next_attempt",
+          "suspended"
+        ],
+        "title": "BudgetSharedState",
+        "type": "object"
+      },
+      "BudgetStatus": {
+        "properties": {
+          "status": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetConnectionStatus"
+            },
+            "title": "Status",
+            "type": "array"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "BudgetStatus",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
+    "title": "hestia API",
+    "version": "0.9.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/audit": {
+      "get": {
+        "description": "Requires the viewer role.",
+        "operationId": "audit",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditFeed"
+                }
+              }
+            },
+            "description": "the audit feed"
+          }
+        },
+        "summary": "Recent audit-log rows (newest first, capped 200)",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/automations": {
+      "get": {
+        "description": "Requires the admin role (rules can carry presence-trigger MACs).",
+        "operationId": "listAutomations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationsList"
+                }
+              }
+            },
+            "description": "the rules"
+          }
+        },
+        "summary": "List every saved automation rule",
+        "x-required-role": "admin"
+      },
+      "post": {
+        "description": "Requires the admin role. Authoritative validation is Rule.from_dict.",
+        "operationId": "saveAutomation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationSaved"
+                }
+              }
+            },
+            "description": "saved"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid rule"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "save failed"
+          }
+        },
+        "summary": "Create or replace a rule (the body IS the rule; id is client-supplied)",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/automations/delete": {
+      "post": {
+        "description": "Requires the admin role.",
+        "operationId": "deleteAutomation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationDeleted"
+                }
+              }
+            },
+            "description": "deleted (or no-op)"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid id"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "save failed"
+          }
+        },
+        "summary": "Delete a rule by id (deleted=false, still 200, for an absent id)",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/receipts/confirm": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "operationId": "confirmBudgetReceipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptConfirmResult"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stale expected_version (budget_receipt_conflict), the bank transaction is already linked (budget_receipt_tx_already_linked), or the candidate token no longer matches the owner, transaction, dates and merchant evidence shown at preview (budget_receipt_stale_source). A missing SQLite users backend also returns 409 (budget_requires_sqlite_users)."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 131072 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Validate exact line and total identities, review an optional bank link; JSON body cap 128 KiB.",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/receipts/delete": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "operationId": "deleteBudgetReceipt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptDeleteResult"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stale expected_version (budget_receipt_conflict). A missing SQLite users backend also returns 409 (budget_requires_sqlite_users)."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 16384 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Delete receipt lines before their owned receipt using expected_version CAS.",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/receipts/device-token/login": {
+      "post": {
+        "description": "Requires budget HTTP and receipts. Send uncompressed application/json (at most 4096 bytes) without Cookie or Authorization. Shares the /api/login quota of 10 attempts per minute per username and IPv4 address or IPv6 /64. An unrevoked token with the same device name is rotated. At five active tokens, a new device name is rejected with 409 device_token_limit_reached; same-name rotation remains allowed.",
+        "operationId": "loginBudgetReceiptDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptDeviceLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptDeviceRedeemResult"
+                }
+              }
+            },
+            "description": "One-time receipt device token with a sliding 90-day TTL and a 180-day hard cap."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Invalid JSON request or budget_auth_ambiguous if Cookie or Authorization is present."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Generic device_token_rejected for invalid credentials or an ineligible account."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Budget HTTP or receipts are disabled."
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Request body read timed out."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "The owner has 5 active tokens and this is a new device name (device_token_limit_reached). Same-name rotation is still allowed."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 4096 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Too many password attempts (device_token_rate_limited).",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until another password attempt is allowed.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Internal error."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Budget configuration unavailable."
+          }
+        },
+        "summary": "Issue a receipts-scoped device token using an enabled budget owner's password.",
+        "x-required-role": "public"
+      }
+    },
+    "/api/budget/receipts/device-token/redeem": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous. Send an application/json body of at most 4096 bytes without cookie or Authorization. After five bad codes, issue a new code to unlock pending pairing.",
+        "operationId": "redeemBudgetReceiptDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptDeviceRedeemRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptDeviceRedeemResult"
+                }
+              }
+            },
+            "description": "One-time receipt device token with a sliding 90-day TTL and a 180-day hard cap."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Generic device_token_rejected for invalid framing, input or pairing state. Cookie plus Authorization returns 400 budget_auth_ambiguous."
+          },
+          "403": {
+            "description": "A browser session below the admin role floor is forbidden."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Receipts are disabled."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Rate limited per IP and globally (Retry-After). The error is device_token_rejected."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Internal error."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Budget configuration unavailable."
+          }
+        },
+        "summary": "Exchange a pairing code for a receipts-scoped bearer, once.",
+        "x-required-role": "public"
+      }
+    },
+    "/api/budget/receipts/device-token/revoke": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Cookie plus Authorization returns 400 budget_auth_ambiguous.  The browser owner may revoke any of their tokens. A device token may revoke only itself; any other id is 403.",
+        "operationId": "revokeBudgetReceiptDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptDeviceRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptDeviceRevokeResult"
+                }
+              }
+            },
+            "description": "Idempotent. An unknown id for this owner is still ok."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "SQLite session users required"
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 4096 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Revoke one receipts device token.",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/receipts/parse-text": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite admin owner's browser cookie with exact Origin, or a receipts device token. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "operationId": "parseBudgetReceiptText",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptParseTextRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptParseResult"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "SQLite users backend is required (budget_requires_sqlite_users)."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 49152 bytes, or the owner already has 20 active drafts (budget_receipt_quota_exceeded)."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "A receipts device token is limited to 30 parse-text requests per minute (Retry-After). Browser cookie requests are not limited here."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Paste Live Text, redact PAN data and create a 48-hour draft; JSON body cap 48 KiB.",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/control": {
+      "post": {
+        "description": "Requires the operator role.",
+        "operationId": "control",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ControlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlSuccess"
+                }
+              }
+            },
+            "description": "command sent to the device"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "malformed command"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "device unavailable / command rejected"
+          }
+        },
+        "summary": "Issue a device control command",
+        "x-required-role": "operator"
+      }
+    },
+    "/api/db/stats": {
+      "get": {
+        "description": "Requires the admin role.",
+        "operationId": "dbStats",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DbStats"
+                }
+              }
+            },
+            "description": "the database stats"
+          }
+        },
+        "summary": "SQLite file size + per-table row counts",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/discovery": {
+      "get": {
+        "description": "Requires the viewer role. The primary read a client polls/refetches.",
+        "operationId": "discovery",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Discovery"
+                }
+              }
+            },
+            "description": "the current snapshot"
+          }
+        },
+        "summary": "The full dashboard snapshot (devices + globals + klima + rule grammar)",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/events": {
+      "get": {
+        "description": "Requires the viewer role. An unbounded text/event-stream; each `data:` frame is one LiveEvent. `:`-comment keepalives carry no data. Browser/native clients auto-reconnect (the stream closes on a max-lifetime deadline).",
+        "operationId": "events",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveEvent"
+                }
+              }
+            },
+            "description": "the event stream (one LiveEvent per data frame)"
+          }
+        },
+        "summary": "Live updates (Server-Sent Events)",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/ir": {
+      "post": {
+        "description": "Requires the operator role.",
+        "operationId": "ir",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IrRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "transmitted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "malformed"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "IR disabled / queue full / failed"
+          }
+        },
+        "summary": "Transmit a saved IR signal via the Flipper",
+        "x-required-role": "operator"
+      }
+    },
+    "/api/login": {
+      "post": {
+        "description": "Public. Sets the httponly session cookie; with `bearer: true` the 200 body also carries a `token` for `Authorization: Bearer` (native clients).",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginSuccess"
+                }
+              }
+            },
+            "description": "authenticated"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid credentials"
+          }
+        },
+        "summary": "Exchange credentials for a session (cookie + optional bearer token)",
+        "x-required-role": "public"
+      }
+    },
+    "/api/logout": {
+      "post": {
+        "description": "Public. Clears the cookie; a bearer client simply discards its token.",
+        "operationId": "logout",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "logged out"
+          }
+        },
+        "summary": "Clear the session cookie",
+        "x-required-role": "public"
+      }
+    },
+    "/api/me/password": {
+      "post": {
+        "description": "Requires a session (viewer+). 401 when not signed in; 403 when the current password is wrong.",
+        "operationId": "changeOwnPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "password changed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid / missing fields"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "not signed in"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "current password is incorrect"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "account no longer exists (or SQLite backend inactive)"
+          }
+        },
+        "summary": "Change your own password (verifies the current one)",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/name": {
+      "post": {
+        "description": "Requires the admin role. Save failure maps to 500 (not 503).",
+        "operationId": "setName",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "labels saved"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "malformed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "registry save failed"
+          }
+        },
+        "summary": "Set a device's registry labels (name / room / type / endpoint)",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/rf433": {
+      "get": {
+        "description": "Requires the admin role. Engineering observability; empty until the local-433 feeder runs.",
+        "operationId": "rf433",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rf433Feed"
+                }
+              }
+            },
+            "description": "the 433 device feed"
+          }
+        },
+        "summary": "Discovered 433 MHz devices (newest-seen first)",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/rooms/icons": {
+      "get": {
+        "description": "Requires the viewer role. A bare object (room name \u2192 emoji); {} when none set.",
+        "operationId": "getRoomIcons",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "the room\u2192icon map"
+          }
+        },
+        "summary": "Shared room\u2192emoji map",
+        "x-required-role": "viewer"
+      },
+      "post": {
+        "description": "Requires the admin role.",
+        "operationId": "setRoomIcon",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomIconRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "saved"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "malformed"
+          }
+        },
+        "summary": "Set one room's emoji (send icon=\"\" to clear)",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/scene": {
+      "post": {
+        "description": "Requires the operator role. 200 reports how many device commands landed.",
+        "operationId": "scene",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SceneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SceneResult"
+                }
+              }
+            },
+            "description": "scene dispatched"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "unknown scene"
+          }
+        },
+        "summary": "Run a house-wide scene (all lights/blinds on/off)",
+        "x-required-role": "operator"
+      }
+    },
+    "/api/settings": {
+      "get": {
+        "description": "Requires the viewer role. All keys present, null when unset.",
+        "operationId": "getSettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            },
+            "description": "the user's settings"
+          }
+        },
+        "summary": "The logged-in user's UI preferences",
+        "x-required-role": "viewer"
+      },
+      "post": {
+        "description": "Requires the viewer role.",
+        "operationId": "setSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "saved"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "malformed"
+          }
+        },
+        "summary": "Update UI preferences (partial \u2014 only the keys sent are persisted)",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/users": {
+      "get": {
+        "description": "Requires the admin role. 409 when the SQLite users backend isn't active.",
+        "operationId": "listUsers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsersList"
+                }
+              }
+            },
+            "description": "the accounts"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "user management requires the SQLite backend"
+          }
+        },
+        "summary": "List every account (username / role / disabled \u2014 never the password hash)",
+        "x-required-role": "admin"
+      },
+      "post": {
+        "description": "Requires the admin role. 409 on a duplicate username (never an overwrite).",
+        "operationId": "addUser",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "account created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid username / password / role"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "duplicate username (or SQLite backend inactive)"
+          }
+        },
+        "summary": "Create a new account",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/users/disabled": {
+      "post": {
+        "description": "Requires the admin role. Refuses self (403) and the last enabled admin (409).",
+        "operationId": "setUserDisabled",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDisabledRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "updated"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid username / disabled flag"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "cannot disable your own account"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "no such user"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "would leave no enabled admin (or SQLite backend inactive)"
+          }
+        },
+        "summary": "Enable or disable another account",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/users/reset-password": {
+      "post": {
+        "description": "Requires the admin role. Refuses self (403); rotate your own via /api/me/password.",
+        "operationId": "resetUserPassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "password reset"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid username / password"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "use change-password for your own account"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "no such user"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "SQLite backend inactive"
+          }
+        },
+        "summary": "Reset another user's password (admin reset \u2014 no current-password check)",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/users/role": {
+      "post": {
+        "description": "Requires the admin role. Refuses self (403) and the last enabled admin (409).",
+        "operationId": "setUserRole",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "role changed"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid username / role"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "cannot change your own role"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "no such user"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "would leave no enabled admin (or SQLite backend inactive)"
+          }
+        },
+        "summary": "Change another user's role",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/whoami": {
+      "get": {
+        "description": "Requires a session (cookie or bearer). user/role are null when auth is off.",
+        "operationId": "whoami",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WhoAmI"
+                }
+              }
+            },
+            "description": "the current session's identity"
+          }
+        },
+        "summary": "The caller's identity + RBAC role",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/whole-home": {
+      "get": {
+        "description": "Requires the admin role. Registry-only config \u2014 kept off DeviceInfo so the device snapshot stays wire-stable for pinned native clients.",
+        "operationId": "getWholeHome",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WholeHomeConfig"
+                }
+              }
+            },
+            "description": "the opt-out config"
+          }
+        },
+        "summary": "Which devices are opted out of the house-wide \"all\" sweeps",
+        "x-required-role": "admin"
+      },
+      "post": {
+        "description": "Requires the admin role.",
+        "operationId": "setWholeHome",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WholeHomeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResult"
+                }
+              }
+            },
+            "description": "saved"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "malformed"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "registry save failed"
+          }
+        },
+        "summary": "Opt one device in/out of the house-wide \"all\" sweeps",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/analytics/monthly-budget": {
+      "get": {
+        "description": "Pure read-only single-snapshot monthly budget dashboard evaluated in Europe/Warsaw from one UTC instant. Computes booked configured start budget, adjusted category spending and limits, rent/mortgage pass-through, unresolved transfer and repayment candidate provisional flags, previous-month expected income estimates (including cross-account salary matching), and spending pace. Card exposure is reported as unavailable in P1. Makes no bank requests and no database writes.",
+        "operationId": "getBudgetAnalyticsMonthlyBudget",
+        "parameters": [
+          {
+            "description": "Optional calendar month YYYY-MM, 1900 through the current Europe/Warsaw month; defaults to current month.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "pattern": "^[0-9]{4}-[0-9]{2}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional uppercase 3-letter ISO currency code; defaults to PLN.",
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "default": "PLN",
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetAnalyticsMonthlyBudget"
+                }
+              }
+            },
+            "description": "Owner-private monthly budget dashboard and ledger coverage from one local snapshot."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Invalid monthly budget query: period must match ^[0-9]{4}-[0-9]{2}$ through the current Europe/Warsaw month, currency must match ^[A-Z]{3}$, and unknown or duplicate parameters are rejected."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "SQLite backend required: monthly-budget requires HESTIA_PERSIST=sqlite."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Monthly budget limit exceeded (>100,000 selected rows, >1,000 category limits, >192-character aggregate decimal output, or >4 MiB UTF-8 JSON payload); no partial totals returned."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stored ledger, category, limit, metadata, or timestamp integrity check failed (`budget_analytics_data_error`), including stored-data helper errors mapped to 500 after query validation, or unexpected internal failure (`budget_internal_error`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Analytics storage, Europe/Warsaw time zone, or monthly budget configuration unavailable (`budget_analytics_unavailable` or `budget_unavailable`)."
+          }
+        },
+        "summary": "Read the owner-private monthly budget dashboard",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/analytics/transactions": {
+      "get": {
+        "operationId": "getBudgetAnalyticsTransactions",
+        "parameters": [
+          {
+            "description": "Inclusive calendar month or year, 1900 through 9999.",
+            "in": "query",
+            "name": "period",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9]{4}(?:-[0-9]{2})?$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "pattern": "^[A-Z]{3}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Category ID, or uncategorised for no category.",
+            "in": "query",
+            "name": "category_id",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque cursor bound to the current projection. A changed snapshot returns 409.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 8192,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetAnalyticsTransactions"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Explicit analytics processing or owner configuration limit; no partial totals."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Read owner-private local budget analytics",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/status": {
+      "get": {
+        "description": "Requires an authenticated SQLite admin owner. Reads never contact a bank.",
+        "operationId": "getBudgetStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetStatus"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "SQLite session users required"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Stored component freshness and acquisition health",
+        "x-required-role": "admin"
+      }
+    }
+  }
+}

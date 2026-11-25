@@ -114,7 +114,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.47.0: additive parse_failed_reasons on BudgetReceiptGmailStatus and retry_parse_failed on BudgetReceiptGmailSyncRequest (zero migration).
 # 0.48.0: read-only bounded expansion of recurring calendar events into concrete instances.
 # 0.49.0: per-card credit_limit ({amount, currency}) control on accounts + additive card_debt on monthly budget (legacy card_exposure kept at 0.47.0 shape for Vesta).
-CONTRACT_VERSION = "0.49.0"
+# 0.50.0: additive authorization capabilities, public feature detection, and per-operation catalog requirements.
+CONTRACT_VERSION = "0.50.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -793,6 +794,38 @@ class WhoAmI(BaseModel):
     role: str | None
 
 
+class OwnBudgetCapabilities(BaseModel):
+    model_config = _READ
+    permissions: list[str]
+    can_view: bool
+    can_use_receipts: bool
+    can_manage_devices: bool
+
+
+class DelegatedReceiptCapabilities(BaseModel):
+    model_config = _READ
+    permissions: list[str]
+    can_use: bool
+
+
+class MeCapabilities(BaseModel):
+    """Effective permissions for the authenticated actor; delegated responses never name an owner."""
+
+    model_config = _READ
+    user: str | None
+    installation_permissions: list[str]
+    own_budget: OwnBudgetCapabilities | None
+    delegated_receipts: DelegatedReceiptCapabilities | None
+    household_available: bool
+
+
+class AuthFeatures(BaseModel):
+    model_config = _READ
+    auth_contract: Annotated[int, Field(ge=2)]
+    features: list[str]
+    qr_origin: str | None
+
+
 class OkResult(BaseModel):
     """A bare ``{ok: true}`` acknowledgement (e.g. /api/logout)."""
 
@@ -800,7 +833,10 @@ class OkResult(BaseModel):
     ok: bool
 
 
-_AUTH_MODELS = (LoginRequest, LoginSuccess, WhoAmI, OkResult)
+_AUTH_MODELS = (
+    LoginRequest, LoginSuccess, WhoAmI, OwnBudgetCapabilities, DelegatedReceiptCapabilities,
+    MeCapabilities, AuthFeatures, OkResult,
+)
 
 
 # ---- user management + engineering observability ----------------------------
@@ -3649,7 +3685,9 @@ _PATH_ROLES = {
     ("POST", _P_ROOM_ICONS): "admin",
     ("POST", "/api/login"): "public",
     ("POST", "/api/logout"): "public",
+    ("GET", "/api/auth/features"): "public",
     ("GET", "/api/whoami"): "viewer",
+    ("GET", "/api/me/capabilities"): "viewer",
     ("GET", "/api/discovery"): "viewer",
     ("GET", _P_AUTOMATIONS): "admin",
     ("POST", _P_AUTOMATIONS): "admin",
@@ -3946,6 +3984,34 @@ def build_openapi() -> dict:
                     },
                 }
             },
+            "/api/me/capabilities": {
+                "get": {
+                    "operationId": "meCapabilities",
+                    "summary": "Effective installation and own-Budget capabilities",
+                    "description": "Authenticated. Cache-Control: no-store. Delegated responses never identify an owner.",
+                    "responses": {
+                        "200": {
+                            "description": "the current actor's effective capabilities",
+                            "headers": {"Cache-Control": {"schema": {"type": "string", "const": "no-store"}}},
+                            "content": {_APP_JSON: {"schema": _ref("MeCapabilities")}},
+                        }
+                    },
+                }
+            },
+            "/api/auth/features": {
+                "get": {
+                    "operationId": "authFeatures",
+                    "summary": "Public authentication contract and available features",
+                    "description": "Public and Cache-Control: no-store. Only actually registered features are listed.",
+                    "responses": {
+                        "200": {
+                            "description": "the authentication contract and feature strings",
+                            "headers": {"Cache-Control": {"schema": {"type": "string", "const": "no-store"}}},
+                            "content": {_APP_JSON: {"schema": _ref("AuthFeatures")}},
+                        }
+                    },
+                }
+            },
             "/api/discovery": {
                 "get": {
                     "operationId": "discovery",
@@ -4203,11 +4269,15 @@ def build_openapi() -> dict:
         "components": {"schemas": _component_schemas()},
     }
     doc["paths"].update(_budget_paths())
-    # Tag every operation with its RBAC floor (machine-readable; a test cross-checks each against the
-    # real web._required_role / public allowlist so the contract's roles can never drift from the server).
+    # Keep the old role extension as a compatibility projection; catalog requirements are authoritative.
+    from . import web
     for path, ops in doc["paths"].items():
         for method, op in ops.items():
-            op["x-required-role"] = _PATH_ROLES[(method.upper(), path)]
+            upper = method.upper()
+            op["x-required-role"] = _PATH_ROLES[(upper, path)]
+            op["x-required-permission"] = (
+                "public" if web._is_public_route(upper, path) else web._required_permission(upper, path)
+            )
     _make_responses_tolerant(doc)
     return doc
 
