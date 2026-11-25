@@ -112,7 +112,13 @@ _CHAIN_TOKENS = {
     "carrefour": ("carrefour",),
     "lidl": ("lidl",),
 }
-_STOP_TOKENS = frozenset({"polska", "spolka", "zoo", "fiskalny", "paragon"})
+GATEWAY_TOKENS = frozenset({"p24", "przelewy24", "payu", "autopay", "tpay", "paynow", "blik"})
+_STOP_TOKENS = frozenset({
+    "sklep", "shop", "store",
+    "sp", "z", "o", "oo", "sa", "spolka", "zoo", "polska",
+    "pl", "com", "www",
+    "fiskalny", "paragon",
+}) | GATEWAY_TOKENS
 
 
 class ReceiptError(ValueError):
@@ -456,10 +462,16 @@ def chain_for(shop_name, nip):
                  if any(token in key for token in tokens)), None)
 
 
+def merchant_word_tokens(value):
+    if not isinstance(value, str):
+        return ()
+    return tuple(re.findall(r"[^\W_]+", fold_text(value), re.UNICODE))
+
+
 def merchant_tokens(shop_name, nip):
     chain = chain_for(shop_name, nip)
     tokens = set(_CHAIN_TOKENS.get(chain, ()))
-    for token in re.findall(r"[\w%]+", fold_text(shop_name or ""), re.UNICODE):
+    for token in merchant_word_tokens(shop_name):
         if len(token) >= 4 and token not in _STOP_TOKENS:
             tokens.add(token)
     return frozenset(tokens)

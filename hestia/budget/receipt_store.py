@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import base64
-from datetime import date
+from datetime import date, timedelta
 import hashlib
 import hmac
 import json
@@ -20,15 +20,16 @@ from sqlalchemy import delete, exists, func, literal_column, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from .. import authz
-from ..db import (BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
+from ..db import (AppMeta, BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
                   BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line, BudgetShop as Shop,
                   BudgetTransaction as Transaction, BudgetTransferLeg as Leg)
 from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint, negate_money, sum_money
 from .device_token import DeviceTokenError, _legacy_bearer_allowed, write_device_audit
-from .gmail_store import retain_imports, tombstone_receipt
-from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES,
-                             ReceiptError, chain_for, merchant_tokens, normalize_shop_name, parse_receipt,
-                             redact_digit_field, validate_confirm, validate_confirm_line_totals)
+from .gmail_store import _payment_payee_key, retain_imports, tombstone_receipt
+from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, GATEWAY_TOKENS, MAX_RECEIPT_LINES,
+                             ReceiptError, chain_for, merchant_tokens, merchant_word_tokens, normalize_shop_name,
+                             parse_receipt, redact_digit_field, valid_nip, validate_confirm,
+                             validate_confirm_line_totals)
 from .receipt_reconcile import (audit_payload, creditor_name, entry_reference_digest, evidence_json,
                                 erase_receipt_audit, link_evidence, write_audit)
 from .views import BudgetHTTPStore
@@ -78,14 +79,36 @@ def _valid_date(value):
         return False
 
 
-def _date_distance(payload, receipt_date):
+def _shift_clamped(day, days):
+    if days >= 0:
+        return date.max if (date.max - day).days < days else day + timedelta(days=days)
+    return date.min if (day - date.min).days < -days else day + timedelta(days=days)
+
+
+def _date_distance(payload, receipt_date, *, document_kind=None, due_date=None):
     if not _valid_date(receipt_date):
         return None
     target = date.fromisoformat(receipt_date)
-    distances = [abs((date.fromisoformat(value) - target).days)
+    if document_kind == "invoice":
+        due = date.fromisoformat(due_date) if _valid_date(due_date) else target
+        start = _shift_clamped(target, -1)
+        end = _shift_clamped(max(due, target), 14)
+    else:
+        start = _shift_clamped(target, -4)
+        end = _shift_clamped(target, 4)
+    distances = [abs((tx_date - target).days)
                  for value in (payload.get("transaction_date"), payload.get("booking_date"), payload.get("value_date"))
-                 if _valid_date(value)]
+                 if _valid_date(value) and start <= (tx_date := date.fromisoformat(value)) <= end]
     return min(distances) if distances else None
+
+
+_TX_NIP_RE = re.compile(r"(?<!\w)(?:pl\s*)?([0-9](?:[ -]?[0-9]){9})(?!\w)")
+
+
+def _nip_in_text(nip, haystack):
+    if not valid_nip(nip):
+        return False
+    return any(match.group(1).replace(" ", "").replace("-", "") == nip for match in _TX_NIP_RE.finditer(haystack))
 
 
 def _subkey(material, info):
@@ -282,7 +305,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             total_amount=parsed["total_amount"], currency=parsed["currency"],
             receipt_date=parsed["receipt_date"], payment_method=parsed["payment_method"],
             receipt_kind=parsed["receipt_kind"], raw_shop_name=parsed["raw_shop_name"],
-            raw_nip=parsed["raw_nip"],
+            raw_nip=parsed["raw_nip"], document_kind=parsed.get("document_kind"),
+            due_date=parsed.get("due_date"),
         )
         with self._read(owner, permission=None) as session:
             return self._candidates(session, owner, preview, parsed)
@@ -319,9 +343,14 @@ class BudgetReceiptStore(BudgetHTTPStore):
             return []
         direction = "CRDT" if row.receipt_kind == "refund" else "DBIT"
         shop_name = normalize_shop_name(row.raw_shop_name)
-        tokens = merchant_tokens(row.raw_shop_name, row.raw_nip)
+        row_id = getattr(row, "id", None)
+        is_gateway = (
+            bool(GATEWAY_TOKENS.intersection(merchant_word_tokens(row.raw_shop_name)))
+            or (row_id is not None and session.get(AppMeta, _payment_payee_key(row_id)) is not None)
+        )
+        tokens = frozenset() if is_gateway else merchant_tokens(row.raw_shop_name, row.raw_nip)
         ranked = []
-        for transaction, row_id in self._candidate_rows(session, owner, include_receipt_id=include_receipt_id):
+        for transaction, tx_row_id in self._candidate_rows(session, owner, include_receipt_id=include_receipt_id):
             try:
                 payload = _json(transaction.payload_json)
                 if (not isinstance(payload, dict) or payload.get("status") != "BOOK"
@@ -329,8 +358,12 @@ class BudgetReceiptStore(BudgetHTTPStore):
                         or payload.get("currency") != row.currency
                         or canonical_money(payload.get("amount")) != total):
                     continue
-                distance = _date_distance(payload, row.receipt_date)
-                if distance is None or distance > 4:
+                distance = _date_distance(
+                    payload, row.receipt_date,
+                    document_kind=getattr(row, "document_kind", None),
+                    due_date=getattr(row, "due_date", None),
+                )
+                if distance is None:
                     continue
             except (AnalyticsError, ValueError, TypeError, KeyError, RecursionError):
                 continue
@@ -343,7 +376,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 evidence = link_evidence(
                     owner, transaction.account_id, transaction.entry_reference, payload,
                     shop_name, row.raw_nip, creditor, fingerprint)
-                token = self._candidate_token(evidence, transaction.account_id, row_id)
+                token = self._candidate_token(evidence, transaction.account_id, tx_row_id)
             except (AnalyticsError, ValueError, TypeError, RecursionError):
                 continue
             remittance = payload.get("remittance_information")
@@ -351,7 +384,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 remittance = []
             description = " ".join(value for value in remittance if isinstance(value, str))
             haystack = fold_for_match(description + " " + (creditor or ""))
-            hit = any(token in haystack for token in tokens)
+            hit = not is_gateway and (
+                _nip_in_text(row.raw_nip, haystack)
+                or bool(tokens.intersection(merchant_word_tokens(haystack)))
+            )
             candidate = {
                 "account_id": transaction.account_id,
                 "entry_reference": entry_reference_digest(transaction.entry_reference),
@@ -398,8 +434,12 @@ class BudgetReceiptStore(BudgetHTTPStore):
                     or payload.get("currency") != cleaned["currency"]
                     or canonical_money(payload.get("amount")) != cleaned["total_amount"]):
                 raise ReceiptError()
-            distance = _date_distance(payload, cleaned["receipt_date"])
-            if distance is None or distance > 4:
+            distance = _date_distance(
+                payload, cleaned["receipt_date"],
+                document_kind=cleaned.get("document_kind"),
+                due_date=cleaned.get("due_date"),
+            )
+            if distance is None:
                 raise ReceiptError()
             fingerprint = financial_fingerprint(payload)
         except ReceiptError:
@@ -520,6 +560,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             effective.setdefault("raw_shop_name", row.raw_shop_name)
             effective.setdefault("raw_nip", row.raw_nip)
             effective["chain_key"] = chain_for(effective["raw_shop_name"], effective["raw_nip"])
+            effective["document_kind"] = row.document_kind
+            effective["due_date"] = row.due_date
             if effective["lines"] is None:
                 self._check_stored_lines(session, owner, row.id, effective["total_amount"])
             row_was_draft = row.status == "draft"
@@ -699,10 +741,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
             receipt = self._detail(session, row)
             # Re-issue outside the writer lock. The token is bound to this receipt's
             # own reservation; confirm checks the link again inside BEGIN IMMEDIATE.
-            preview = None if row.status != "needs_review" else SimpleNamespace(
+            preview = None if row.status not in ("imported", "draft", "needs_review") else SimpleNamespace(
                 total_amount=row.total_amount, currency=row.currency, receipt_date=row.receipt_date,
                 payment_method=row.payment_method, receipt_kind=row.receipt_kind,
-                raw_shop_name=row.raw_shop_name, raw_nip=row.raw_nip, id=row.id,
+                raw_shop_name=row.raw_shop_name, raw_nip=row.raw_nip,
+                document_kind=row.document_kind, due_date=row.due_date, id=row.id,
             )
         if preview is None:
             return {"receipt": receipt}

@@ -11,6 +11,7 @@ from ..db import (BudgetAccount as Account, BudgetAnalyticsAudit as Audit, Budge
                   BudgetReceipt as Receipt, BudgetTransaction as Transaction,
                   BudgetTransactionMetadata as Metadata, BudgetTransferLeg as Leg)
 from .analytics_core import AnalyticsError, financial_fingerprint
+from .receipt_parser import normalize_shop_name
 
 _CHUNK = 400
 _MAX_CREDITOR_LEN = 256
@@ -203,8 +204,8 @@ def reconcile_receipt_links(session, owner, now):
             payload = {} if transaction is None else _json(transaction.payload_json)
             creditor = creditor_name(session, owner, row.linked_account_id, row.linked_entry_ref, current)
             evidence = evidence_json(link_evidence(
-                owner, row.linked_account_id, row.linked_entry_ref, payload, row.raw_shop_name, row.raw_nip,
-                creditor, current))
+                owner, row.linked_account_id, row.linked_entry_ref, payload,
+                normalize_shop_name(row.raw_shop_name), row.raw_nip, creditor, current))
         except (AnalyticsError, ValueError, TypeError, RecursionError):
             evidence = None
         if current == row.linked_fingerprint and evidence == row.linked_evidence:

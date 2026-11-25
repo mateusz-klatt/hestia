@@ -5,6 +5,7 @@ import {
   REDACTED_VALUE,
   addDecimals,
   availableLinkOptions,
+  buildBulkConfirmRequest,
   buildBulkSelectionPlan,
   buildConfirmRequest,
   buildPlainBulkConfirmRequest,
@@ -321,18 +322,32 @@ describe("receipts_model", () => {
     expect(confirmedBuilt.ok).toBe(true);
     if (confirmedBuilt.ok) expect(confirmedBuilt.request.link).toBeNull();
 
-    // 6. unlinked draft & imported -> never pick candidates; defaults to link: null.
+    // 6. unlinked draft & imported -> offer candidates, default to "unlink" ("no link") even with candidates, and allow explicit pick.
     for (const status of ["draft", "imported"] as const) {
       const unlinkedImport = detailOf({ status, linked: false });
+      expect(availableLinkOptions(unlinkedImport, [cand], "card").canPickCandidates).toBe(true);
       const draftImport = draftFromDetail(unlinkedImport, [cand]);
       expect(draftImport.linkChoice).toBe("unlink");
-      expect(buildConfirmRequest(unlinkedImport, { ...draftImport, linkChoice: "candidate:0" }, [cand])).toEqual({
-        ok: false,
-        errorKey: "budget.receipts.invalidForm",
-      });
-      const builtImport = buildConfirmRequest(unlinkedImport, draftImport, [cand]);
-      expect(builtImport.ok).toBe(true);
-      if (builtImport.ok) expect(builtImport.request.link).toBeNull();
+      const builtDefaultUnlinked = buildConfirmRequest(unlinkedImport, draftImport, [cand]);
+      expect(builtDefaultUnlinked.ok).toBe(true);
+      if (builtDefaultUnlinked.ok) expect(builtDefaultUnlinked.request.link).toBeNull();
+
+      const builtExplicitLinked = buildConfirmRequest(unlinkedImport, { ...draftImport, linkChoice: "candidate:0" }, [cand]);
+      expect(builtExplicitLinked.ok).toBe(true);
+      if (builtExplicitLinked.ok) {
+        expect(builtExplicitLinked.request.link).toEqual({
+          account_id: cand.account_id,
+          entry_reference: cand.entry_reference,
+          candidate_token: cand.candidate_token,
+        });
+      }
+      expect(reconcileLinkChoice(unlinkedImport, "candidate:0", { ...draftImport, rawShopName: "Changed" }, [cand])).toBe("unlink");
+
+      const noCandidatesDraft = draftFromDetail(unlinkedImport, []);
+      expect(noCandidatesDraft.linkChoice).toBe("unlink");
+      const builtNoCand = buildConfirmRequest(unlinkedImport, noCandidatesDraft, []);
+      expect(builtNoCand.ok).toBe(true);
+      if (builtNoCand.ok) expect(builtNoCand.request.link).toBeNull();
     }
 
     // 7. Total mismatch & invalid NIP rejected before network calls.
@@ -630,5 +645,54 @@ describe("receipts_model", () => {
       ok: false,
       errorCode: "budget_receipt_conflict",
     });
+
+    // Bulk auto-link rules: single candidate with merchant_token_hit -> linked; 2 cands / 0 cands / no merchant hit -> unlinked or skipped.
+    const hitCand = candidateOf({ entry_reference: "1".repeat(64), candidate_token: "tok-1", merchant_token_hit: true });
+    const hitCand2 = candidateOf({ entry_reference: "2".repeat(64), candidate_token: "tok-2", merchant_token_hit: true });
+    const noHitCand = candidateOf({ entry_reference: "3".repeat(64), candidate_token: "tok-3", merchant_token_hit: false });
+
+    const autoInv = buildBulkConfirmRequest(invoiceDetail, [hitCand], "Summary", { autoLink: true, confirmUnlinked: true });
+    expect(autoInv).toEqual({
+      action: "confirm",
+      linked: true,
+      request: expect.objectContaining({
+        receipt_id: "r-imp-inv",
+        link: { account_id: "acc-1", entry_reference: "1".repeat(64), candidate_token: "tok-1" },
+        lines: [expect.objectContaining({ raw_name: "FV/2026/05", net_line_total: "99.5" }) as unknown],
+      }) as unknown,
+    });
+
+    const autoPay = buildBulkConfirmRequest(paymentDetail, [hitCand], "Summary", { autoLink: true, confirmUnlinked: false });
+    expect(autoPay.action).toBe("confirm");
+    if (autoPay.action === "confirm") {
+      expect(autoPay.linked).toBe(true);
+      expect(autoPay.request.link).toEqual({ account_id: "acc-1", entry_reference: "1".repeat(64), candidate_token: "tok-1" });
+      expect("lines" in autoPay.request).toBe(false);
+    }
+
+    expect(buildBulkConfirmRequest(paymentDetail, [hitCand], "Summary", { autoLink: false, confirmUnlinked: true })).toEqual({
+      action: "confirm",
+      linked: false,
+      request: expect.objectContaining({ receipt_id: "r-imp-pay", link: null }) as unknown,
+    });
+    expect(buildBulkConfirmRequest(paymentDetail, [hitCand], "Summary", { autoLink: false, confirmUnlinked: false })).toEqual({
+      action: "skip",
+    });
+
+    for (const nonMatchCandidates of [[hitCand, hitCand2], [], [noHitCand]]) {
+      const confirmUnlinkedRes = buildBulkConfirmRequest(paymentDetail, nonMatchCandidates, "Summary", {
+        autoLink: true,
+        confirmUnlinked: true,
+      });
+      expect(confirmUnlinkedRes).toEqual({
+        action: "confirm",
+        linked: false,
+        request: expect.objectContaining({ receipt_id: "r-imp-pay", link: null }) as unknown,
+      });
+      expect(buildBulkConfirmRequest(paymentDetail, nonMatchCandidates, "Summary", {
+        autoLink: true,
+        confirmUnlinked: false,
+      })).toEqual({ action: "skip" });
+    }
   });
 });
