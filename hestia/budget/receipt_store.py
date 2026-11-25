@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import base64
-from datetime import date
+from datetime import date, timedelta
 import hashlib
 import hmac
 import json
@@ -78,13 +78,20 @@ def _valid_date(value):
         return False
 
 
-def _date_distance(payload, receipt_date):
+def _date_distance(payload, receipt_date, *, document_kind=None, due_date=None):
     if not _valid_date(receipt_date):
         return None
     target = date.fromisoformat(receipt_date)
-    distances = [abs((date.fromisoformat(value) - target).days)
+    if document_kind == "invoice":
+        due = date.fromisoformat(due_date) if _valid_date(due_date) else target
+        start = target - timedelta(days=1)
+        end = max(due, target) + timedelta(days=14)
+    else:
+        start = target - timedelta(days=4)
+        end = target + timedelta(days=4)
+    distances = [abs((tx_date - target).days)
                  for value in (payload.get("transaction_date"), payload.get("booking_date"), payload.get("value_date"))
-                 if _valid_date(value)]
+                 if _valid_date(value) and start <= (tx_date := date.fromisoformat(value)) <= end]
     return min(distances) if distances else None
 
 
@@ -282,7 +289,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             total_amount=parsed["total_amount"], currency=parsed["currency"],
             receipt_date=parsed["receipt_date"], payment_method=parsed["payment_method"],
             receipt_kind=parsed["receipt_kind"], raw_shop_name=parsed["raw_shop_name"],
-            raw_nip=parsed["raw_nip"],
+            raw_nip=parsed["raw_nip"], document_kind=parsed.get("document_kind"),
+            due_date=parsed.get("due_date"),
         )
         with self._read(owner, permission=None) as session:
             return self._candidates(session, owner, preview, parsed)
@@ -329,8 +337,12 @@ class BudgetReceiptStore(BudgetHTTPStore):
                         or payload.get("currency") != row.currency
                         or canonical_money(payload.get("amount")) != total):
                     continue
-                distance = _date_distance(payload, row.receipt_date)
-                if distance is None or distance > 4:
+                distance = _date_distance(
+                    payload, row.receipt_date,
+                    document_kind=getattr(row, "document_kind", None),
+                    due_date=getattr(row, "due_date", None),
+                )
+                if distance is None:
                     continue
             except (AnalyticsError, ValueError, TypeError, KeyError, RecursionError):
                 continue
@@ -398,8 +410,12 @@ class BudgetReceiptStore(BudgetHTTPStore):
                     or payload.get("currency") != cleaned["currency"]
                     or canonical_money(payload.get("amount")) != cleaned["total_amount"]):
                 raise ReceiptError()
-            distance = _date_distance(payload, cleaned["receipt_date"])
-            if distance is None or distance > 4:
+            distance = _date_distance(
+                payload, cleaned["receipt_date"],
+                document_kind=cleaned.get("document_kind"),
+                due_date=cleaned.get("due_date"),
+            )
+            if distance is None:
                 raise ReceiptError()
             fingerprint = financial_fingerprint(payload)
         except ReceiptError:
@@ -520,6 +536,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             effective.setdefault("raw_shop_name", row.raw_shop_name)
             effective.setdefault("raw_nip", row.raw_nip)
             effective["chain_key"] = chain_for(effective["raw_shop_name"], effective["raw_nip"])
+            effective["document_kind"] = row.document_kind
+            effective["due_date"] = row.due_date
             if effective["lines"] is None:
                 self._check_stored_lines(session, owner, row.id, effective["total_amount"])
             row_was_draft = row.status == "draft"
@@ -699,10 +717,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
             receipt = self._detail(session, row)
             # Re-issue outside the writer lock. The token is bound to this receipt's
             # own reservation; confirm checks the link again inside BEGIN IMMEDIATE.
-            preview = None if row.status != "needs_review" else SimpleNamespace(
+            preview = None if row.status not in ("imported", "draft", "needs_review") else SimpleNamespace(
                 total_amount=row.total_amount, currency=row.currency, receipt_date=row.receipt_date,
                 payment_method=row.payment_method, receipt_kind=row.receipt_kind,
-                raw_shop_name=row.raw_shop_name, raw_nip=row.raw_nip, id=row.id,
+                raw_shop_name=row.raw_shop_name, raw_nip=row.raw_nip,
+                document_kind=row.document_kind, due_date=row.due_date, id=row.id,
             )
         if preview is None:
             return {"receipt": receipt}

@@ -1245,8 +1245,13 @@ NR KARTY ****5555
         shop = unicodedata.normalize("NFD", "ŻÓŁTY") + "  SKLEP"
         parsed = self.receipts.parse_text("owner", receipt_text().replace(PRIVATE_SHOP, shop, 1))
         self.assertEqual(parsed["draft"]["raw_shop_name"], "ŻÓŁTY  SKLEP")
-        self.assertNotIn("candidates", self.receipts.detail("owner", parsed["receipt_id"]))
-        saved = self.receipts.confirm("owner", confirm_values(parsed, link=self.link()))["receipt"]
+        draft_detail = self.receipts.detail("owner", parsed["receipt_id"])
+        match = next(item for item in draft_detail["candidates"] if item["entry_reference"] == reference_digest("debit"))
+        saved = self.receipts.confirm("owner", confirm_values(parsed, link={
+            "account_id": match["account_id"], "entry_reference": match["entry_reference"],
+            "candidate_token": match["candidate_token"],
+        }))["receipt"]
+        self.assertNotIn("candidates", self.receipts.detail("owner", saved["receipt_id"]))
         self.assertEqual(saved["raw_shop_name"], "ŻÓŁTY SKLEP")
         self.assertTrue(saved["linked"])
         self.assertEqual(json.loads(self.receipt_row(parsed["receipt_id"]).linked_evidence)["raw_shop_name"],
@@ -1559,6 +1564,218 @@ NR KARTY ****5555
         self.assertFalse(any(row.owner == "owner" and row.subject_type == "receipt" and row.subject_id == draft_id
                              for row in self.rows(db.BudgetAnalyticsAudit)))
 
+    def _seed_imported(self, *, document_kind, issue_date, due_date=None, total="100", shop="ORANGE POLSKA",
+                       nip="5260250995", source_kind="email", with_line=False):
+        import uuid
+        identifier = str(uuid.uuid4())
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(
+                id=identifier, owner="owner", raw_shop_name=shop, raw_nip=nip,
+                receipt_kind="purchase", receipt_date=issue_date, due_date=due_date,
+                total_amount=total, currency="PLN", payment_method=None,
+                status="imported", source_kind=source_kind, document_kind=document_kind,
+                import_expires_at=self.now + 86400, version=1, created_at=self.now, updated_at=self.now,
+            ))
+            if with_line:
+                session.add(db.BudgetReceiptLine(
+                    receipt_id=identifier, owner="owner", line_no=1, line_kind="other",
+                    raw_name="Opłata miesięczna", raw_name_key="oplata miesieczna", quantity="1",
+                    gross_line_total=total, discount_amount="0", net_line_total=total,
+                ))
+        return identifier
+
+    def test_imported_invoice_due_date_window_confirm_reservation_and_reconcile(self):
+        from hestia.budget.receipt_reconcile import reconcile_receipt_links
+
+        # Invoice issued 2026-11-01, due 2026-11-20 => window is [2026-10-31, 2026-12-04].
+        # Default debit in AnalyticsCase is 2026-11-30 (100 PLN), which is inside [2026-10-31, 2026-12-04].
+        # Add out-of-window transactions at issue_date-2 and due_date+15, and exact boundary transactions.
+        self.add_transaction("a", "inv-before", amount="123.45", booking_date="2026-10-30", value_date=None)
+        self.add_transaction("a", "inv-after", amount="123.45", booking_date="2026-12-05", value_date=None)
+        self.add_transaction("a", "inv-due-plus-3", amount="123.45", booking_date="2026-11-23", value_date=None,
+                             remittance_information=["ORANGE POLSKA FV"])
+        invoice_id = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-01", due_date="2026-11-20",
+            total="123.45", source_kind="attachment",
+        )
+        second_invoice_id = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-01", due_date="2026-11-20",
+            total="123.45", source_kind="attachment",
+        )
+        detail = self.receipts.detail("owner", invoice_id)
+        api_contract.BudgetReceiptDetailResult.model_validate(detail)
+        candidates = detail["candidates"]
+        self.assertEqual([item["entry_reference"] for item in candidates], [reference_digest("inv-due-plus-3")])
+        self.assertTrue(candidates[0]["merchant_token_hit"])
+        self.assertEqual(candidates[0]["date_distance"], 22)
+
+        # Boundary inclusivity: issue_date - 1 and due_date + 14 are accepted.
+        self.add_transaction("a", "inv-start", amount="123.45", booking_date="2026-10-31", value_date=None)
+        self.add_transaction("a", "inv-end", amount="123.45", booking_date="2026-12-04", value_date=None)
+        boundary_refs = {item["entry_reference"] for item in self.receipts.detail("owner", invoice_id)["candidates"]}
+        self.assertEqual(boundary_refs, {
+            reference_digest("inv-due-plus-3"),
+            reference_digest("inv-start"),
+            reference_digest("inv-end"),
+        })
+        self.assertNotIn(reference_digest("inv-before"), boundary_refs)
+        self.assertNotIn(reference_digest("inv-after"), boundary_refs)
+
+        # Verify _verify_link enforces the exact same invoice date window at confirm.
+        cleaned_invoice = validate_confirm({
+            "receipt_id": invoice_id, "expected_version": 1, "receipt_kind": "purchase",
+            "receipt_date": "2026-11-01", "receipt_time": None, "total_amount": "123.45",
+            "currency": "PLN", "payment_method": "unknown",
+            "lines": [{
+                "line_kind": "other", "raw_name": "Faktura", "ptu_code": None, "quantity": "1",
+                "raw_unit": None, "unit_price_raw": None, "gross_line_total": "123.45",
+                "discount_amount": "0", "net_line_total": "123.45",
+            }],
+            "link": None,
+        })
+        cleaned_invoice["document_kind"] = "invoice"
+        cleaned_invoice["due_date"] = "2026-11-20"
+        with self.sessions() as session:
+            for bad_ref in ("inv-before", "inv-after"):
+                with self.subTest(bad_ref=bad_ref), self.assertRaises(ReceiptError):
+                    self.receipts._verify_link(
+                        session, "owner", cleaned_invoice,
+                        {"account_id": self.accounts["a"], "entry_reference": bad_ref}, invoice_id,
+                    )
+
+        # Confirming the imported invoice with the token issued while imported links & confirms it.
+        summary_line = {
+            "line_kind": "other", "raw_name": "Faktura Orange", "ptu_code": None, "quantity": "1",
+            "raw_unit": None, "unit_price_raw": None, "gross_line_total": "123.45",
+            "discount_amount": "0", "net_line_total": "123.45",
+        }
+        chosen = candidates[0]
+        stale_cas = {
+            "receipt_id": invoice_id, "expected_version": 99, "receipt_kind": "purchase",
+            "receipt_date": "2026-11-01", "receipt_time": None, "total_amount": "123.45",
+            "currency": "PLN", "payment_method": "unknown", "lines": [summary_line],
+            "link": {
+                "account_id": chosen["account_id"],
+                "entry_reference": chosen["entry_reference"],
+                "candidate_token": chosen["candidate_token"],
+            },
+        }
+        second_pre_confirm = next(
+            item for item in self.receipts.detail("owner", second_invoice_id)["candidates"]
+            if item["entry_reference"] == chosen["entry_reference"]
+        )
+        with self.assertRaises(ReceiptError) as cas_err:
+            self.receipts.confirm("owner", stale_cas)
+        self.assertEqual((cas_err.exception.code, cas_err.exception.status), ("budget_receipt_conflict", 409))
+
+        confirmed = self.receipts.confirm("owner", {**stale_cas, "expected_version": 1, "link": dict(stale_cas["link"])})["receipt"]
+        self.assertEqual((confirmed["status"], confirmed["linked"], confirmed["version"]), ("confirmed", True, 2))
+        self.assertIsNone(confirmed["import_expires_at"])
+        self.assertEqual(confirmed["linked_entry_ref"], reference_digest("inv-due-plus-3"))
+        self.assertNotIn("candidates", self.receipts.detail("owner", invoice_id))
+
+        # Second imported invoice no longer sees the reserved transaction; old token fails with 409.
+        second_refs = {item["entry_reference"] for item in self.receipts.detail("owner", second_invoice_id)["candidates"]}
+        self.assertNotIn(reference_digest("inv-due-plus-3"), second_refs)
+        with self.assertRaises(ReceiptError) as already_linked:
+            self.receipts.confirm("owner", {
+                **stale_cas, "receipt_id": second_invoice_id, "expected_version": 1,
+                "link": {
+                    "account_id": second_pre_confirm["account_id"],
+                    "entry_reference": second_pre_confirm["entry_reference"],
+                    "candidate_token": second_pre_confirm["candidate_token"],
+                },
+            })
+        self.assertEqual((already_linked.exception.code, already_linked.exception.status),
+                         ("budget_receipt_tx_already_linked", 409))
+
+        # Reconcile keeps the linked invoice confirmed even though payment is >4 days after issue_date.
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 10), 0)
+        self.assertEqual(self.receipt_row(invoice_id).status, "confirmed")
+
+        # Remittance drift latches to needs_review; detail() still returns the reserved tx via invoice window.
+        self.change_transaction("a", "inv-due-plus-3", remittance_information=["ORANGE POLSKA CHANGED"])
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 20), 1)
+        self.assertEqual(self.receipt_row(invoice_id).status, "needs_review")
+        review_detail = self.receipts.detail("owner", invoice_id)
+        review_match = next(item for item in review_detail["candidates"]
+                            if item["entry_reference"] == reference_digest("inv-due-plus-3"))
+        reconfirmed = self.receipts.confirm("owner", {
+            "receipt_id": invoice_id, "expected_version": review_detail["receipt"]["version"],
+            "receipt_kind": "purchase", "receipt_date": "2026-11-01", "receipt_time": None,
+            "total_amount": "123.45", "currency": "PLN", "payment_method": "unknown", "lines": None,
+            "link": {
+                "account_id": review_match["account_id"],
+                "entry_reference": review_match["entry_reference"],
+                "candidate_token": review_match["candidate_token"],
+            },
+        })["receipt"]
+        self.assertEqual((reconfirmed["status"], reconfirmed["linked"]), ("confirmed", True))
+
+        # Invoice without due_date or with due_date < issue_date uses [issue_date - 1, issue_date + 14].
+        self.add_transaction("a", "nodue-in", amount="55.00", booking_date="2026-11-15", value_date=None)
+        self.add_transaction("a", "nodue-out", amount="55.00", booking_date="2026-11-16", value_date=None)
+        no_due = self._seed_imported(document_kind="invoice", issue_date="2026-11-01", due_date=None, total="55.00")
+        early_due = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-01", due_date="2026-10-25", total="55.00",
+        )
+        for identifier in (no_due, early_due):
+            refs = {item["entry_reference"] for item in self.receipts.detail("owner", identifier)["candidates"]}
+            self.assertEqual(refs, {reference_digest("nodue-in")})
+
+    def test_imported_payment_confirmation_keeps_plus_minus_four_days_and_links_with_omitted_fields(self):
+        self.add_transaction("a", "pc-minus-5", amount="77.00", booking_date="2026-11-05", value_date=None)
+        self.add_transaction("a", "pc-minus-4", amount="77.00", booking_date="2026-11-06", value_date=None)
+        self.add_transaction("a", "pc-plus-4", amount="77.00", booking_date="2026-11-14", value_date=None,
+                             remittance_information=["PRZYKLADOWY SKLEP"])
+        self.add_transaction("a", "pc-plus-5", amount="77.00", booking_date="2026-11-15", value_date=None)
+        payment_id = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-10", due_date=None,
+            total="77.00", shop="PRZYKLADOWY SKLEP", nip=None, with_line=True,
+        )
+        detail = self.receipts.detail("owner", payment_id)
+        candidates = detail["candidates"]
+        self.assertEqual([item["entry_reference"] for item in candidates], [
+            reference_digest("pc-plus-4"),
+            reference_digest("pc-minus-4"),
+        ])
+        self.assertTrue(candidates[0]["merchant_token_hit"])
+        self.assertFalse(candidates[1]["merchant_token_hit"])
+
+        # Out-of-window ±5 transactions are also rejected by _verify_link.
+        cleaned_pc = validate_confirm({
+            "receipt_id": payment_id, "expected_version": 1, "receipt_kind": "purchase",
+            "receipt_date": "2026-11-10", "receipt_time": None, "total_amount": "77.00",
+            "currency": "PLN", "payment_method": "unknown", "link": None,
+        })
+        cleaned_pc["document_kind"] = "payment_confirmation"
+        cleaned_pc["due_date"] = None
+        with self.sessions() as session:
+            for bad_ref in ("pc-minus-5", "pc-plus-5"):
+                with self.subTest(bad_ref=bad_ref), self.assertRaises(ReceiptError):
+                    self.receipts._verify_link(
+                        session, "owner", cleaned_pc,
+                        {"account_id": self.accounts["a"], "entry_reference": bad_ref}, payment_id,
+                    )
+
+        # Confirm omitting lines, raw_shop_name, raw_nip links cleanly using the candidate issued while imported.
+        chosen = candidates[0]
+        saved = self.receipts.confirm("owner", {
+            "receipt_id": payment_id, "expected_version": 1, "receipt_kind": "purchase",
+            "receipt_date": "2026-11-10", "receipt_time": None, "total_amount": "77.00",
+            "currency": "PLN", "payment_method": "unknown",
+            "link": {
+                "account_id": chosen["account_id"],
+                "entry_reference": chosen["entry_reference"],
+                "candidate_token": chosen["candidate_token"],
+            },
+        })["receipt"]
+        self.assertEqual((saved["status"], saved["linked"], saved["raw_shop_name"]),
+                         ("confirmed", True, "PRZYKLADOWY SKLEP"))
+        self.assertEqual(saved["linked_entry_ref"], reference_digest("pc-plus-4"))
+
 
 class ReceiptRetentionSweepTests(fixture.unittest.IsolatedAsyncioTestCase):
     async def test_sweep_calls_retain_expired_when_flag_is_off(self):
@@ -1763,6 +1980,67 @@ class ReceiptHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
             rejected = await self.client.get(receipt_api.PREFIX + "/detail", params=params, headers=self.headers())
             self.assertEqual(rejected.status, 400)
             self.assertEqual((await rejected.json())["error"], "budget_receipt_invalid_request")
+
+    async def test_http_imported_invoice_candidates_and_confirm_link(self):
+        import uuid
+        invoice_id = str(uuid.uuid4())
+        now = web._now()
+        with self.sessions.begin() as session:
+            session.add(db.BudgetConnection(
+                id="conn-http", owner="alice", application_id="app", bank_name="Bank", country="PL",
+                enabled=True, next_attempt=0, failures=0,
+            ))
+            session.flush()
+            session.add(db.BudgetAccount(
+                id="acc-http", connection_id="conn-http", owner="alice", identification_hash="acc",
+                enabled=True, balances_json="{}",
+            ))
+            session.flush()
+            session.add(db.BudgetTransaction(
+                account_id="acc-http", entry_reference="tx-due-3",
+                payload_json=json.dumps({
+                    "entry_reference": "tx-due-3", "amount": "150", "currency": "PLN",
+                    "credit_debit_indicator": "DBIT", "status": "BOOK", "booking_date": "2026-11-23",
+                    "value_date": None, "transaction_date": None,
+                    "remittance_information": ["RESPECT ENERGY FV"],
+                }),
+                observed_at=now, source="api", api_observed_at=now, uncertain=False,
+            ))
+            session.add(db.BudgetReceipt(
+                id=invoice_id, owner="alice", raw_shop_name="Respect Energy", raw_nip="7791011327",
+                receipt_kind="purchase", receipt_date="2026-11-01", due_date="2026-11-20",
+                total_amount="150", currency="PLN", payment_method=None, status="imported",
+                source_kind="email", document_kind="invoice", import_expires_at=now + 86400,
+                version=1, created_at=now, updated_at=now,
+            ))
+        headers = {**self.headers(origin=True), "X-Hestia-Contract-Version": "0.40.0"}
+        detail_res = await self.get("detail", invoice_id, headers=headers)
+        self.assertEqual(detail_res.status, 200, await detail_res.text())
+        detail_body = await detail_res.json()
+        api_contract.BudgetReceiptDetailResult.model_validate(detail_body)
+        self.assertEqual(detail_body["receipt"]["status"], "imported")
+        self.assertEqual(len(detail_body["candidates"]), 1)
+        candidate = detail_body["candidates"][0]
+        self.assertTrue(candidate["merchant_token_hit"])
+        confirm_res = await self.post("confirm", {
+            "receipt_id": invoice_id, "expected_version": 1, "receipt_kind": "purchase",
+            "receipt_date": "2026-11-01", "receipt_time": None, "total_amount": "150",
+            "currency": "PLN", "payment_method": "unknown",
+            "lines": [{
+                "line_kind": "other", "raw_name": "Respect Energy", "ptu_code": None, "quantity": "1",
+                "raw_unit": None, "unit_price_raw": None, "gross_line_total": "150",
+                "discount_amount": "0", "net_line_total": "150",
+            }],
+            "link": {
+                "account_id": candidate["account_id"],
+                "entry_reference": candidate["entry_reference"],
+                "candidate_token": candidate["candidate_token"],
+            },
+        }, headers=headers)
+        self.assertEqual(confirm_res.status, 200, await confirm_res.text())
+        confirmed = await confirm_res.json()
+        api_contract.BudgetReceiptConfirmResult.model_validate(confirmed)
+        self.assertEqual((confirmed["receipt"]["status"], confirmed["receipt"]["linked"]), ("confirmed", True))
 
 
 if __name__ == "__main__":
