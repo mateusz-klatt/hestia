@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { account, component, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetJob, BudgetTransaction } from "./model";
-import { OPEN_FLOW, READY_FLOW, accountLabel, consentIntent, effectiveState, safeAuthorizationUrl, formatAmount, freshness, hasActiveJob, idempotencyKey, isAccessLoss,
+import { OPEN_FLOW, READY_FLOW, accountLabel, consentIntent, effectiveState, safeAuthorizationUrl, formatAmount, formatEstimate, freshness, hasActiveJob, idempotencyKey, isAccessLoss,
   isComponentLimit, latestJob, limitState, newer, otherObservedCurrencies, presetRange, transactionDate,
   transactionText, validRange, when } from "./model";
 
@@ -26,6 +26,31 @@ describe("exact decimal presentation", () => {
   });
   it("shows an unparseable amount verbatim instead of guessing", () => {
     expect(formatAmount("1e5", "PLN", "en")).toBe("1e5 PLN");
+  });
+  it("rounds exact decimal estimates to 2 fraction digits half away from zero without float math", () => {
+    const pl = (amount: string) => formatEstimate(amount, "PLN", "pl").replace(/\s/g, " ");
+    expect(pl("54.335")).toBe("54,34 PLN");
+    expect(pl("14079.7625")).toBe("14 079,76 PLN");
+    expect(pl("3724.0225")).toBe("3 724,02 PLN");
+    expect(pl("-1.005")).toBe("−1,01 PLN");
+    expect(pl("0.004")).toBe("0,00 PLN");
+    expect(pl("-0.004")).toBe("0,00 PLN");
+    expect(pl("-0.005")).toBe("−0,01 PLN");
+    expect(pl("0.005")).toBe("0,01 PLN");
+    expect(pl("10")).toBe("10,00 PLN");
+    expect(pl("9.995")).toBe("10,00 PLN");
+    expect(pl("-9.995")).toBe("−10,00 PLN");
+    expect(pl("12345678901234567890.125")).toBe("12 345 678 901 234 567 890,13 PLN");
+
+    expect(formatEstimate("54.335", "PLN", "en")).toBe("54.34 PLN");
+    expect(formatEstimate("14079.7625", "PLN", "en")).toBe("14,079.76 PLN");
+    expect(formatEstimate("3724.0225", "PLN", "en")).toBe("3,724.02 PLN");
+    expect(formatEstimate("-1.005", "PLN", "en")).toBe("−1.01 PLN");
+    expect(formatEstimate("0.004", "PLN", "en")).toBe("0.00 PLN");
+    expect(formatEstimate("-0.004", "PLN", "en")).toBe("0.00 PLN");
+    expect(formatEstimate("10", "PLN", "en")).toBe("10.00 PLN");
+    expect(formatEstimate("12345678901234567890.125", "PLN", "en")).toBe("12,345,678,901,234,567,890.13 PLN");
+    expect(formatEstimate("1e5", "PLN", "en")).toBe("1e5 PLN");
   });
 });
 

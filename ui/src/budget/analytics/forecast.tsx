@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { t, tPlural } from "../../i18n";
 import type { BudgetApi } from "../api";
-import { formatAmount } from "../model";
+import { formatAmount, formatCents, formatEstimate, roundToCents } from "../model";
 import type { BudgetAccount, BudgetConnection } from "../model";
-import { FORECAST_CONFIDENCE_KEYS, accountName, labelOf, monthLabel, mortgageCurrencies, validCurrency } from "./model";
-import type { AnalyticsForecast, AnalyticsForecastMonth } from "./model";
+import { FORECAST_CONFIDENCE_KEYS, accountName, isZero, labelOf, monthLabel, mortgageCurrencies, parseScaledInt,
+  validCurrency } from "./model";
+import type { AnalyticsForecast, AnalyticsForecastCurrencyTotal, AnalyticsForecastItem, AnalyticsForecastMonth } from "./model";
 
 type CategoryNames = ReadonlyMap<string, string> | "error" | "loading";
 
@@ -98,14 +99,48 @@ function ForecastSummary({ data, accounts, connections, locale, categoryNames, o
   );
 }
 
+function decimalsSumTo(a: string, b: string, sum: string): boolean {
+  const pa = parseScaledInt(a);
+  const pb = parseScaledInt(b);
+  const ps = parseScaledInt(sum);
+  if (pa === null || pb === null || ps === null) return false;
+  const scale = Math.max(pa.scale, pb.scale, ps.scale);
+  const toUnits = (parsed: NonNullable<ReturnType<typeof parseScaledInt>>) =>
+    (parsed.negative ? -parsed.coeff : parsed.coeff) * (10n ** BigInt(scale - parsed.scale));
+  return toUnits(pa) + toUnits(pb) === toUnits(ps);
+}
+
+/** Format a forecast currency total: purely scheduled totals stay exact via `formatAmount`. When estimates are
+ *  included (`estimated_total` nonzero), round the mixed total as `round(scheduled_total) + round(estimated_total)`
+ *  so displayed "Total" visibly equals "Scheduled" + "Estimated" (falling back to `formatEstimate(total)` otherwise). */
+function formatForecastTotal(entry: AnalyticsForecastCurrencyTotal, locale: string): string {
+  if (isZero(entry.estimated_total)) {
+    return formatAmount(entry.total, entry.currency, locale);
+  }
+  if (decimalsSumTo(entry.scheduled_total, entry.estimated_total, entry.total)) {
+    const scheduledCents = roundToCents(entry.scheduled_total);
+    const estimatedCents = roundToCents(entry.estimated_total);
+    if (scheduledCents !== null && estimatedCents !== null) {
+      return formatAmount(formatCents(scheduledCents + estimatedCents), entry.currency, locale);
+    }
+  }
+  return formatEstimate(entry.total, entry.currency, locale);
+}
+
+/** Mortgage items are exact scheduled obligations; recurring hints and category baselines contribute to `estimated_total`. */
+function isScheduledItem(item: AnalyticsForecastItem): boolean {
+  return item.source === "mortgage" || item.confidence === "scheduled";
+}
+
 function ForecastChart({ months, currency, locale }: {
   months: readonly AnalyticsForecastMonth[];
   currency: string;
   locale: string;
 }) {
-  const rows = months.map(({ month, currencies }) => ({
-    month, amount: currencies.find((total) => total.currency === currency)?.total ?? "0",
-  }));
+  const rows = months.map(({ month, currencies }) => {
+    const entry = currencies.find((total) => total.currency === currency);
+    return { month, entry, amount: entry?.total ?? "0" };
+  });
   const decimals = rows.map(({ amount }) => amount.split("."));
   const scale = Math.max(0, ...decimals.map(([, fraction]) => fraction?.length ?? 0));
   const units = decimals.map(([whole, fraction = ""]) => BigInt(`${whole ?? "0"}${fraction.padEnd(scale, "0")}`));
@@ -141,8 +176,11 @@ function ForecastChart({ months, currency, locale }: {
           <caption>{monthlyTotalsTitle} · {currency}</caption>
           <thead><tr><th scope="col">{t("budget.forecast.month")}</th><th scope="col">{t("budget.forecast.total")}</th></tr></thead>
           <tbody>
-            {rows.map(({ month, amount }) => (
-              <tr key={month}><th scope="row">{monthLabel(month, locale)}</th><td>{formatAmount(amount, currency, locale)}</td></tr>
+            {rows.map(({ month, entry }) => (
+              <tr key={month}>
+                <th scope="row">{monthLabel(month, locale)}</th>
+                <td>{entry === undefined ? formatAmount("0", currency, locale) : formatForecastTotal(entry, locale)}</td>
+              </tr>
             ))}
           </tbody>
         </table>
@@ -159,11 +197,11 @@ function ForecastMonth({ month, locale }: { month: AnalyticsForecastMonth; local
       {month.items.length === 0 ? <p className="budget-muted">{t("budget.forecast.emptyMonth")}</p> : (
         <>
           <div className="budget-totals">
-            {month.currencies.map(({ currency, total, scheduled_total, estimated_total }) => (
-              <dl key={currency} aria-label={currency}>
-                <dt>{t("budget.forecast.total")}</dt><dd><strong>{formatAmount(total, currency, locale)}</strong></dd>
-                <dt>{t("budget.forecast.scheduledTotal")}</dt><dd>{formatAmount(scheduled_total, currency, locale)}</dd>
-                <dt>{t("budget.forecast.estimatedTotal")}</dt><dd>{formatAmount(estimated_total, currency, locale)}</dd>
+            {month.currencies.map((entry) => (
+              <dl key={entry.currency} aria-label={entry.currency}>
+                <dt>{t("budget.forecast.total")}</dt><dd><strong>{formatForecastTotal(entry, locale)}</strong></dd>
+                <dt>{t("budget.forecast.scheduledTotal")}</dt><dd>{formatAmount(entry.scheduled_total, entry.currency, locale)}</dd>
+                <dt>{t("budget.forecast.estimatedTotal")}</dt><dd>{formatEstimate(entry.estimated_total, entry.currency, locale)}</dd>
               </dl>
             ))}
           </div>
@@ -173,7 +211,11 @@ function ForecastMonth({ month, locale }: { month: AnalyticsForecastMonth; local
               <li key={index} className="budget-entry">
                 <div className="budget-recurring-main">
                   <span className="budget-entry-text">{item.label}</span>
-                  <strong className="budget-recurring-amount">{formatAmount(item.amount, item.currency, locale)}</strong>
+                  <strong className="budget-recurring-amount">
+                    {isScheduledItem(item)
+                      ? formatAmount(item.amount, item.currency, locale)
+                      : formatEstimate(item.amount, item.currency, locale)}
+                  </strong>
                 </div>
                 <div className="budget-entry-facts">
                   <time dateTime={item.expected_date}>{item.expected_date}</time>
