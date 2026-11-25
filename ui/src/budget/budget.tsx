@@ -53,13 +53,13 @@ type LegacyBudgetApi = BudgetApi & { setLegacyReadOnly?: (value: boolean) => voi
 async function loadAuthorization(api: LegacyBudgetApi): Promise<BudgetResult<RuntimeAuthorization>> {
   const result = await api.capabilities();
   if (result.ok || result.status !== 404) {
-    api.setLegacyReadOnly?.(false);
+    api.setLegacyReadOnly(false);
     return result;
   }
   const legacy = await api.whoami();
   if (!legacy.ok) return { ok: false, status: legacy.status, error: legacy.error };
   const owner = legacy.data.role === "admin";
-  api.setLegacyReadOnly?.(true);
+  api.setLegacyReadOnly(true);
   return { ok: true, data: {
     user: legacy.data.user, installation_permissions: [],
     own_budget: owner ? {
