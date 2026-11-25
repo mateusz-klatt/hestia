@@ -53,7 +53,7 @@ class CatalogCutoverTests(unittest.TestCase):
                 for name in ("owner", "second", "disabled", "operator", "conflicted")
             }, {
                 "owner": True, "second": True, "disabled": True,
-                "operator": False, "conflicted": False,
+                "operator": False, "conflicted": True,
             })
             token = session.get(db.BudgetReceiptDeviceToken, "old-token")
             self.assertEqual(token.actor, "owner")
@@ -75,6 +75,37 @@ class CatalogCutoverTests(unittest.TestCase):
             )
             self.assertTrue(authz.authorize(session, "disabled", "ioc.view") is False)
             self.assertEqual(authz.project_legacy_role(session, "disabled", include_disabled=True), "admin")
+
+    def test_promoted_admin_keeps_self_ledger_and_viewers_keep_household(self):
+        with self.sessions.begin() as session:
+            session.add_all([
+                db.User(username="promoted", password_hash="h6", role="operator"),
+                db.User(username="household_viewer", password_hash="h7", role="viewer"),
+            ])
+            session.flush()
+            session.add_all([
+                db.BudgetHouseholdMember(
+                    member_username="promoted", owner="owner", grant_id="d" * 64,
+                ),
+                db.BudgetHouseholdMember(
+                    member_username="household_viewer", owner="conflicted", grant_id="e" * 64,
+                ),
+            ])
+            session.get(db.User, "promoted").role = "admin"
+        self.assertEqual(store_sql.activate_catalog_compat(path=self.path), "activated")
+        with self.sessions() as session:
+            for username in ("promoted", "conflicted"):
+                self.assertTrue(session.get(db.User, username).budget_owner)
+                self.assertTrue(authz.has_legacy_receipt_profile(session, username))
+            self.assertTrue(
+                authz.authorize(session, "household_viewer", "household.view", owner="conflicted")
+            )
+            self.assertIsNone(
+                session.execute(select(db.PermissionGrant).where(
+                    db.PermissionGrant.username == "promoted",
+                    db.PermissionGrant.permission_id == "household.view",
+                )).scalar_one_or_none()
+            )
 
     def test_cutover_is_transactional(self):
         before = {

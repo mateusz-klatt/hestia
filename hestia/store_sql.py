@@ -819,20 +819,8 @@ def activate_catalog_compat(*, path=None) -> str:
                 sync_legacy_grants(session)
                 return "already_active"
 
-            foreign_grants = set(session.execute(
-                select(PermissionGrant.username).where(
-                    PermissionGrant.target_owner.is_not(None),
-                    PermissionGrant.target_owner != PermissionGrant.username,
-                )
-            ).scalars())
-            household_members = set(session.execute(
-                select(BudgetHouseholdMember.member_username).where(
-                    BudgetHouseholdMember.member_username != BudgetHouseholdMember.owner
-                )
-            ).scalars())
-            conflicts = foreign_grants | household_members
             for user in session.execute(select(User)).scalars():
-                if user.role == "admin" and user.username not in conflicts:
+                if user.role == "admin":
                     user.budget_owner = True
             _upsert(
                 session, AppMeta, "key", authz.POLICY_PHASE_KEY,
