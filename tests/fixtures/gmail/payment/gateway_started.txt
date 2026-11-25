@@ -1,0 +1,7 @@
+Potwierdzenie rozpoczęcia transakcji dla - https://sklep.example.test/
+
+Identyfikator transakcji: AAAAAAAAAA
+Numer płatności: ZZ_000000_PL_22_11_2026
+Kwota transakcji: 146,37 PLN
+Opłata za realizację transakcji: 0,00 PLN
+Do zapłaty: 146,37 PLN
