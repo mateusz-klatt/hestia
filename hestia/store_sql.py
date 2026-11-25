@@ -651,12 +651,16 @@ def set_user_disabled(username: str, disabled: bool, *, path=None) -> str:
     try:
         with Session(engine) as session, session.begin():
             s_phase = auth_session_phase(session)
-            authz.require_supported_policy_phase(session)
+            p_phase = authz.require_supported_policy_phase(session)
             row = session.get(User, username)
             if row is None:
                 return "not_found"
             if disabled and not row.disabled:
-                if row.role == "admin" and _other_enabled_admins(session, username) == 0:
+                projected_admin = (
+                    authz.project_legacy_role(session, username) == "admin"
+                    if p_phase == authz.POLICY_PHASE_CUSTOM else row.role == "admin"
+                )
+                if projected_admin and _other_enabled_admins(session, username) == 0:
                     return "last_admin"
                 row.disabled = True
                 _invalidate_account_credentials(session, row, s_phase=s_phase, include_owner_tokens=True)

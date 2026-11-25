@@ -11,10 +11,8 @@ from unittest import mock
 from aiohttp import web as aiohttp_web
 from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 from sqlalchemy import select
-from sqlalchemy.orm import Session
-
 from hestia import auth, authz, db, store_sql, web
-from hestia.budget import household
+from hestia.budget import device_token, household
 
 
 def _registered_routes(app):
@@ -77,6 +75,21 @@ class RouteMatrixTests(unittest.TestCase):
             self.assertTrue(web._catalog_allows(session, "viewer", "calendar.view"))
             self.assertFalse(web._catalog_allows(session, "viewer", "system.manage_users"))
 
+    def test_legacy_household_availability_stays_boolean_and_role_scoped(self):
+        with self.sessions.begin() as session:
+            session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_LEGACY
+        with self.sessions() as session:
+            self.assertTrue(authz.household_available(session, "viewer"))
+            self.assertTrue(authz.household_available(session, "operator"))
+            self.assertFalse(authz.household_available(session, "admin"))
+            self.assertFalse(authz.household_available(session, "ghost"))
+        with self.sessions.begin() as session:
+            session.get(db.User, "admin").disabled = True
+            session.get(db.User, "viewer").disabled = True
+        with self.sessions() as session:
+            self.assertFalse(authz.household_available(session, "viewer"))
+            self.assertFalse(authz.household_available(session, "operator"))
+
     def test_custom_grants_not_legacy_roles_control_routes(self):
         with self.sessions.begin() as session:
             session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
@@ -99,6 +112,20 @@ class RouteMatrixTests(unittest.TestCase):
                 False,
             )
 
+    def test_custom_account_writes_and_projected_last_admin_guard(self):
+        with self.sessions.begin() as session:
+            session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
+        self.assertEqual(store_sql.add_user("candidate", "h", "viewer", path=self.path), "ok")
+        self.assertEqual(
+            store_sql.set_user_db("candidate", "h2", "operator", path=self.path),
+            "legacy_role_changes_disabled",
+        )
+        self.assertEqual(store_sql.provision_budget_owner("candidate", path=self.path), "ok")
+        with self.sessions.begin() as session:
+            session.get(db.User, "admin").role = "viewer"
+            session.get(db.User, "owner2").disabled = True
+        self.assertEqual(store_sql.set_user_disabled("admin", True, path=self.path), "last_admin")
+
     def test_custom_role_writes_are_rejected_without_changing_projection(self):
         with self.sessions.begin() as session:
             session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
@@ -110,6 +137,70 @@ class RouteMatrixTests(unittest.TestCase):
         response = web._user_outcome("legacy_role_changes_disabled")
         self.assertEqual(response.status, 409)
         self.assertEqual(json.loads(response.body)["error"], "legacy_role_changes_disabled")
+
+
+class CapabilityUnitTests(unittest.TestCase):
+    def _state(self, role="admin", *, enabled=True, phase="legacy"):
+        return store_sql.AuthState(
+            backend="json", session_phase="legacy", policy_phase=phase,
+            enabled=enabled, role=role if enabled else None, generation=0,
+        )
+
+    def test_pure_json_capabilities_do_not_open_sqlite(self):
+        with mock.patch.object(store_sql, "authorization_snapshot", side_effect=AssertionError("opened SQLite")):
+            admin = web._capability_payload("admin", self._state())
+            viewer = web._capability_payload("viewer", self._state("viewer"))
+        self.assertFalse(admin["own_budget"]["can_view"])
+        self.assertEqual(admin["installation_permissions"], sorted(store_sql._LEGACY_ADMIN_GRANTS))
+        self.assertIsNone(viewer["own_budget"])
+        self.assertEqual(viewer["installation_permissions"], sorted(store_sql._LEGACY_VIEWER_GRANTS))
+
+    def test_issued_masks_accept_only_valid_legacy_self_profiles(self):
+        self.assertEqual(
+            device_token._issued_mask(SimpleNamespace(actor="owner", owner="owner", issued_permissions=None)),
+            authz.LEGACY_RECEIPT_PERMISSIONS,
+        )
+        self.assertEqual(
+            device_token._issued_mask(SimpleNamespace(actor="delegate", owner="owner", issued_permissions=None)),
+            frozenset(),
+        )
+        self.assertEqual(
+            device_token._issued_mask(SimpleNamespace(
+                actor="owner", owner="owner",
+                issued_permissions=json.dumps(sorted(authz.LEGACY_RECEIPT_PERMISSIONS)),
+            )),
+            authz.LEGACY_RECEIPT_PERMISSIONS,
+        )
+        for invalid in ("{", "{}", '["unknown.permission"]', '["budget.view",1]', 1):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(
+                    device_token._issued_mask(SimpleNamespace(
+                        actor="owner", owner="owner", issued_permissions=invalid,
+                    )),
+                    frozenset(),
+                )
+
+    def test_session_context_recheck_covers_legacy_custom_and_failures(self):
+        ctx = web.ValidatedSessionContext(
+            username="admin", role="admin", carrier="cookie", version=1, purpose=None,
+            generation=0, expiry=2**40, session_phase="legacy", policy_phase="legacy", raw_token="bad",
+        )
+        self.assertFalse(web._session_context_current(ctx))
+        valid = auth.make_session("admin", now=web._now(), secret=b"route-secret")
+        ctx = mock.Mock(raw_token=valid, username="admin", carrier="cookie")
+        with mock.patch.object(web, "_SESSION_SECRET", b"route-secret"), \
+             mock.patch.object(store_sql, "load_auth_state", return_value=self._state(enabled=False)):
+            self.assertFalse(web._session_context_current(ctx))
+        with mock.patch.object(web, "_SESSION_SECRET", b"route-secret"), \
+             mock.patch.object(store_sql, "load_auth_state", return_value=self._state()):
+            self.assertTrue(web._session_context_current(ctx))
+        with mock.patch.object(web, "_SESSION_SECRET", b"route-secret"), \
+             mock.patch.object(store_sql, "load_auth_state", return_value=self._state(phase="catalog_custom")), \
+             mock.patch.object(web, "_catalog_request_allowed", return_value=True):
+            self.assertTrue(web._session_context_current(ctx))
+        with mock.patch.object(web, "_SESSION_SECRET", b"route-secret"), \
+             mock.patch.object(store_sql, "load_auth_state", side_effect=authz.PolicyPhaseUnsupported("future")):
+            self.assertFalse(web._session_context_current(ctx))
 
 
 class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
