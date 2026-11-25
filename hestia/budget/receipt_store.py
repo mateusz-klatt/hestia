@@ -26,12 +26,12 @@ from ..db import (AppMeta, BudgetAccount as Account, BudgetConnection as Connect
 from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint, negate_money, sum_money
 from .device_token import DeviceTokenError, _issued_mask, _legacy_bearer_allowed, write_device_audit
 from .gmail_store import _payment_payee_key, retain_imports, tombstone_receipt
-from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, GATEWAY_TOKENS, MAX_RECEIPT_LINES,
-                             ReceiptError, chain_for, merchant_score_groups, merchant_word_tokens,
-                             normalize_shop_name, parse_receipt, redact_digit_field, valid_nip, validate_confirm,
-                             validate_confirm_line_totals)
+from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES,
+                             ReceiptError, chain_for, contains_gateway_marker, merchant_score_groups,
+                             merchant_word_tokens, normalize_shop_name, parse_receipt, redact_digit_field, valid_nip,
+                             validate_confirm, validate_confirm_line_totals)
 from .receipt_reconcile import (audit_payload, creditor_name, entry_reference_digest, evidence_json,
-                                erase_receipt_audit, link_evidence, write_audit)
+                                erase_receipt_audit, link_evidence, transaction_party_names, write_audit)
 from .views import BudgetHTTPStore
 
 MAX_DRAFTS = 20
@@ -106,8 +106,15 @@ def _date_distance(payload, receipt_date, *, document_kind=None, due_date=None):
 
 
 _TX_DIGIT_RUN_RE = re.compile(r"[0-9]+(?:[\s/.\-\u2010-\u2015]+[0-9]+)*")
+_TOKEN_SPAN_RE = re.compile(r"[A-Za-z0-9]+")
+_IBAN_PREFIX_RE = re.compile(r"[A-Za-z]{2}[0-9]{2}")
+_NIP_PRE_LABEL_RE = re.compile(
+    r"(?:(?<![a-z0-9])/nip/|(?<![a-z0-9])(?:nip|vat|tax\s+id)(?![a-z]))([^0-9\n]{0,8})\Z",
+    re.IGNORECASE | re.ASCII,
+)
 _GATEWAY_DOMAINS = frozenset({
-    "przelewy24.pl", "p24.pl", "paypro.pl", "autopay.pl", "bluemedia.pl", "tpay.com", "paynow.pl", "dotpay.pl",
+    "przelewy24.pl", "p24.pl", "paypro.pl", "autopay.pl", "bluemedia.pl", "tpay.com",
+    "paynow.pl", "dotpay.pl", "stripe.com", "paypal.com", "paypal.pl", "adyen.com", "klarna.com",
 })
 
 
@@ -127,7 +134,7 @@ def _is_gateway_receipt(session, row):
     row_id = getattr(row, "id", None)
     if row_id is not None and session.get(AppMeta, _payment_payee_key(row_id)) is not None:
         return True
-    if GATEWAY_TOKENS.intersection(merchant_word_tokens(getattr(row, "raw_shop_name", None))):
+    if contains_gateway_marker(getattr(row, "raw_shop_name", None)):
         return True
     return any(
         _is_gateway_domain(getattr(row, field, None))
@@ -135,23 +142,87 @@ def _is_gateway_receipt(session, row):
     )
 
 
-def _nip_in_text(nip, haystack):
+def _payload_party_texts(payload):
+    texts = []
+    for key in ("creditor_name", "debtor_name"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            texts.append(value)
+    for key in ("creditor", "debtor"):
+        party = payload.get(key)
+        if isinstance(party, dict) and isinstance(party.get("name"), str) and party["name"]:
+            texts.append(party["name"])
+    return texts
+
+
+def _mask_iban_sequences(haystack):
+    """Replace IBAN-like token sequences (CCdd + grouped alphanumerics, 15..34 chars) with spaces."""
+    spans = list(_TOKEN_SPAN_RE.finditer(haystack))
+    if not spans:
+        return haystack
+    chars = list(haystack)
+    index = 0
+    total = len(spans)
+    while index < total:
+        token = spans[index].group(0)
+        start_pos = spans[index].start()
+        if (start_pos > 0 and haystack[start_pos - 1] == "_") or _IBAN_PREFIX_RE.match(token) is None:
+            index += 1
+            continue
+        length = len(token)
+        saw_digits = any(ch.isdigit() for ch in token[4:])
+        last = index
+        cursor = index + 1
+        while cursor < total:
+            gap = haystack[spans[last].end():spans[cursor].start()]
+            if not gap or not all(ch in " -" for ch in gap):
+                break
+            nxt = spans[cursor].group(0)
+            if length + len(nxt) > 34:
+                break
+            if nxt.isalpha():
+                if saw_digits or len(nxt) > 4:
+                    break
+            else:
+                saw_digits = True
+            length += len(nxt)
+            last = cursor
+            cursor += 1
+        if 15 <= length <= 34 and saw_digits:
+            for pos in range(spans[index].start(), spans[last].end()):
+                chars[pos] = " "
+            index = last + 1
+            continue
+        index += 1
+    return "".join(chars)
+
+
+def _nip_match(nip, haystack):
+    """Return ``(hit, labeled_nearby)`` after masking IBAN-like sequences."""
     if not valid_nip(nip):
-        return False
-    limit = len(haystack)
-    for match in _TX_DIGIT_RUN_RE.finditer(haystack):
+        return False, False
+    masked = _mask_iban_sequences(haystack)
+    limit = len(masked)
+    hit = False
+    for match in _TX_DIGIT_RUN_RE.finditer(masked):
         start, end = match.span()
         before_pl = (
-            start >= 2 and haystack[start - 2:start] == "pl"
-            and (start == 2 or not (haystack[start - 3].isalnum() or haystack[start - 3] == "_"))
+            start >= 2 and masked[start - 2:start].lower() == "pl"
+            and (start == 2 or not (masked[start - 3].isalnum() or masked[start - 3] == "_"))
         )
-        if start > 0 and not before_pl and (haystack[start - 1].isalnum() or haystack[start - 1] == "_"):
+        if start > 0 and not before_pl and (masked[start - 1].isalnum() or masked[start - 1] == "_"):
             continue
-        if end < limit and (haystack[end].isalnum() or haystack[end] == "_"):
+        if end < limit and (masked[end].isalnum() or masked[end] == "_"):
             continue
         if re.sub(r"\D", "", match.group(0)) == nip:
-            return True
-    return False
+            hit = True
+            if _NIP_PRE_LABEL_RE.search(masked[:start]) is not None:
+                return True, True
+    return hit, False
+
+
+def _nip_in_text(nip, haystack):
+    return _nip_match(nip, haystack)[0]
 
 
 def _subkey(material, info):
@@ -444,6 +515,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             return []
         direction = "CRDT" if row.receipt_kind == "refund" else "DBIT"
         shop_name = normalize_shop_name(row.raw_shop_name)
+        chain = chain_for(row.raw_shop_name, row.raw_nip)
         groups, generic_tokens = merchant_score_groups(row.raw_shop_name, row.raw_nip)
         receipt_is_gateway = _is_gateway_receipt(session, row)
         linked_key = (getattr(row, "linked_account_id", None), getattr(row, "linked_entry_ref", None))
@@ -470,7 +542,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             except AnalyticsError:
                 continue
             try:
-                creditor = creditor_name(session, owner, transaction.account_id, transaction.entry_reference, fingerprint)
+                creditor, debtor = transaction_party_names(
+                    session, owner, transaction.account_id, transaction.entry_reference, fingerprint)
                 evidence = link_evidence(
                     owner, transaction.account_id, transaction.entry_reference, payload,
                     shop_name, row.raw_nip, creditor, fingerprint)
@@ -481,21 +554,31 @@ class BudgetReceiptStore(BudgetHTTPStore):
             if not isinstance(remittance, list):
                 remittance = []
             description = " ".join(value for value in remittance if isinstance(value, str))
-            haystack = fold_for_match(description + " " + (creditor or ""))
+            party_texts = _payload_party_texts(payload)
+            counterparty = debtor if direction == "CRDT" else creditor
+            haystack = fold_for_match(" ".join(part for part in (description, counterparty) if part))
             haystack_words = frozenset(merchant_word_tokens(haystack))
-            nip_hit = _nip_in_text(row.raw_nip, haystack)
+            nip_hit, nip_labeled = _nip_match(row.raw_nip, haystack)
             distinctive_score = sum(
                 1 for group in groups if any(alias.issubset(haystack_words) for alias in group)
             )
             generic_score = sum(1 for token in generic_tokens if token in haystack_words)
             sole_generic_hit = not groups and len(generic_tokens) == 1 and generic_score > 0
             hit = nip_hit or distinctive_score > 0 or sole_generic_hit
-            bank_has_gateway = bool(GATEWAY_TOKENS & haystack_words)
+            chain_group_hit = (
+                chain is not None
+                and any(alias.issubset(haystack_words) for alias in groups[0])
+            )
+            all_distinctive_hit = bool(groups) and distinctive_score == len(groups)
+            bank_has_gateway = any(
+                contains_gateway_marker(text)
+                for text in (description, creditor, debtor, *party_texts)
+            )
             if receipt_is_gateway or bank_has_gateway:
                 strength = "none"
-            elif nip_hit:
+            elif nip_labeled:
                 strength = "nip"
-            elif distinctive_score > 0:
+            elif chain_group_hit or all_distinctive_hit:
                 strength = "distinctive"
             elif generic_score > 0:
                 strength = "generic"

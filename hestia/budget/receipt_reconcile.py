@@ -87,21 +87,30 @@ def _bound_date(value):
         return None
 
 
-def creditor_name(session, owner, account_id, entry_reference, fingerprint):
-    """Creditor text is usable only when its metadata row matches this ledger fingerprint."""
-    if fingerprint is None:
-        return None
-    metadata = session.get(Metadata, (account_id, entry_reference))
-    if metadata is None or metadata.owner != owner or metadata.ledger_fingerprint != fingerprint:
-        return None
-    try:
-        data = _json(metadata.payload_json)
-    except (ValueError, TypeError, RecursionError):
-        return None
-    value = data.get("creditor_name") if isinstance(data, dict) else None
+def _party_string(data, field):
+    value = data.get(field) if isinstance(data, dict) else None
     if not isinstance(value, str) or not value or len(value) > _MAX_CREDITOR_LEN:
         return None
     return value
+
+
+def transaction_party_names(session, owner, account_id, entry_reference, fingerprint):
+    """Creditor and debtor names are usable only when metadata matches this ledger fingerprint."""
+    if fingerprint is None:
+        return None, None
+    metadata = session.get(Metadata, (account_id, entry_reference))
+    if metadata is None or metadata.owner != owner or metadata.ledger_fingerprint != fingerprint:
+        return None, None
+    try:
+        data = _json(metadata.payload_json)
+    except (ValueError, TypeError, RecursionError):
+        return None, None
+    return _party_string(data, "creditor_name"), _party_string(data, "debtor_name")
+
+
+def creditor_name(session, owner, account_id, entry_reference, fingerprint):
+    """Creditor text is usable only when its metadata row matches this ledger fingerprint."""
+    return transaction_party_names(session, owner, account_id, entry_reference, fingerprint)[0]
 
 
 def _remittance_digest(payload):

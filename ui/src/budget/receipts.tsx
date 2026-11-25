@@ -30,7 +30,6 @@ import {
   candidateDisplayDate,
   computeLinesDelta,
   createPendingReceiptStore,
-  draftFromDetail,
   editReceiptLine,
   filterReceiptRows,
   findCurrentLinkedCandidate,
@@ -50,6 +49,7 @@ import {
   receiptHasRedactedLines,
   receiptMerchantGroupKey,
   reconcileLinkChoice,
+  resolveDraftFromDetailSession,
   validReceiptDateRange,
 } from "./receipts_model";
 import type {
@@ -63,6 +63,8 @@ import type {
   ReceiptFilter,
   ReceiptLineEditField,
   ReceiptLineInput,
+  ReceiptLinkExplicitChoice,
+  ReceiptLinkSessionEntry,
   ReceiptPaymentMethod,
   ReceiptSettledEvent,
   ReceiptSourceKind,
@@ -281,6 +283,7 @@ export function ReceiptsView({
   const detailGeneration = useRef(0);
   const imageGeneration = useRef(0);
   const receiptFloorGenRef = useRef<Map<string, number>>(new Map());
+  const receiptLinkMemoryRef = useRef<Map<string, ReceiptLinkSessionEntry>>(new Map());
   const openReceiptIdRef = useRef<string | null>(null);
   const loadedReceiptIdRef = useRef<string | null>(null);
   const staleCursorReloadedRef = useRef(false);
@@ -319,6 +322,7 @@ export function ReceiptsView({
     bulkCancelledRef.current = true;
     bulkRunGenRef.current += 1;
     receiptFloorGenRef.current.clear();
+    receiptLinkMemoryRef.current.clear();
     staleCursorReloadedRef.current = false;
     resetDrawer();
     setSelectedForBulk(new Set());
@@ -696,6 +700,38 @@ export function ReceiptsView({
     if (openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null) return;
     resetDrawer();
   }, [store, resetDrawer]);
+
+  const resolveDetailDraft = useCallback((
+    detail: ReceiptDetail,
+    candidates: readonly ReceiptCandidate[],
+  ): { draft: ReceiptConfirmDraft; showSuggestedBanner: boolean } => {
+    const key = `${actorKey}:${detail.receipt_id}`;
+    const resolved = resolveDraftFromDetailSession(
+      detail,
+      candidates,
+      receiptLinkMemoryRef.current.get(key),
+    );
+    receiptLinkMemoryRef.current.set(key, resolved.nextSessionEntry);
+    return { draft: resolved.draft, showSuggestedBanner: resolved.showSuggestedBanner };
+  }, [actorKey]);
+
+  const recordLinkChoiceTouched = useCallback((
+    receiptId: string,
+    choice: ReceiptLinkExplicitChoice,
+    detail?: Pick<ReceiptDetail, "version" | "status" | "linked">,
+  ) => {
+    const key = `${actorKey}:${receiptId}`;
+    const prev = receiptLinkMemoryRef.current.get(key);
+    receiptLinkMemoryRef.current.set(key, {
+      touched: true,
+      choice,
+      baselineVersion: prev?.baselineVersion ?? detail?.version ?? 0,
+      baselineStatus: prev?.baselineStatus ?? detail?.status ?? "draft",
+      baselineLinked: prev?.baselineLinked ?? detail?.linked ?? false,
+      baselineCandidateKeys: prev?.baselineCandidateKeys ?? [],
+      candidateSetChanged: prev?.candidateSetChanged ?? false,
+    });
+  }, [actorKey]);
 
   const applyFilter = (next: ReceiptFilter) => {
     if (bulkProgress !== null || !validReceiptDateRange(next)) return;
@@ -1158,10 +1194,13 @@ export function ReceiptsView({
           imageState={imageState}
           actionBusy={drawerActionBusy}
           isOpenReceipt={(receiptId) => openReceiptIdRef.current === receiptId}
+          resolveDetailDraft={resolveDetailDraft}
+          onLinkChoiceTouched={recordLinkChoiceTouched}
           onAccessLoss={checkBarrier}
           onClose={closeDetail}
           onRetryDetail={() => { setDetailRefresh((current) => current + 1); }}
           onConfirmed={(updated) => {
+            receiptLinkMemoryRef.current.delete(`${actorKey}:${updated.receipt_id}`);
             const floorToken = ++detailGeneration.current;
             receiptFloorGenRef.current.set(updated.receipt_id, floorToken);
             setDetailState({ kind: "ready", detail: updated, candidates: [] });
@@ -1169,12 +1208,14 @@ export function ReceiptsView({
             reloadList();
           }}
           onConflictOrStale={(receiptId) => {
+            recordLinkChoiceTouched(receiptId, { kind: "empty" });
             const floorToken = ++detailGeneration.current;
             receiptFloorGenRef.current.set(receiptId, floorToken);
             setDetailRefresh((current) => current + 1);
             reloadList();
           }}
           onNotFound={(receiptId) => {
+            receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
             const floorToken = ++detailGeneration.current;
             receiptFloorGenRef.current.set(receiptId, floorToken);
             resetDrawer();
@@ -1182,6 +1223,7 @@ export function ReceiptsView({
             reloadList();
           }}
           onDeleted={(receiptId) => {
+            receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
             const floorToken = ++detailGeneration.current;
             receiptFloorGenRef.current.set(receiptId, floorToken);
             resetDrawer();
@@ -1204,6 +1246,11 @@ interface DrawerProps {
   imageState: ImageState;
   actionBusy: ReceiptActionKind | null;
   isOpenReceipt: (receiptId: string) => boolean;
+  resolveDetailDraft: (
+    detail: ReceiptDetail,
+    candidates: readonly ReceiptCandidate[],
+  ) => { draft: ReceiptConfirmDraft; showSuggestedBanner: boolean };
+  onLinkChoiceTouched: (receiptId: string, choice: ReceiptLinkExplicitChoice) => void;
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
   onClose: () => void;
   onRetryDetail: () => void;
@@ -1224,6 +1271,8 @@ function ReceiptDetailDrawer({
   imageState,
   actionBusy,
   isOpenReceipt,
+  resolveDetailDraft,
+  onLinkChoiceTouched,
   onAccessLoss,
   onClose,
   onRetryDetail,
@@ -1255,9 +1304,10 @@ function ReceiptDetailDrawer({
   }, [onClose, actionBusy]);
 
   useEffect(() => {
-    setSuggestionDismissed(false);
     if (detailState.kind === "ready") {
-      setConfirmDraft(draftFromDetail(detailState.detail, detailState.candidates));
+      const resolved = resolveDetailDraft(detailState.detail, detailState.candidates);
+      setConfirmDraft(resolved.draft);
+      setSuggestionDismissed(!resolved.showSuggestedBanner);
       if (keepActionErrorRef.current) {
         keepActionErrorRef.current = false;
       } else {
@@ -1265,16 +1315,18 @@ function ReceiptDetailDrawer({
       }
       setConfirmingDelete(false);
     } else if (detailState.kind === "loading") {
+      setSuggestionDismissed(false);
       setConfirmDraft(null);
       if (!keepActionErrorRef.current) setActionError(null);
       setConfirmingDelete(false);
     } else {
+      setSuggestionDismissed(false);
       keepActionErrorRef.current = false;
       setConfirmDraft(null);
       setActionError(null);
       setConfirmingDelete(false);
     }
-  }, [detailState]);
+  }, [detailState, resolveDetailDraft]);
 
   const title = t("budget.receipts.detailTitle");
 
@@ -1294,7 +1346,7 @@ function ReceiptDetailDrawer({
   };
 
   const submitConfirm = async (detail: ReceiptDetail, candidates: readonly ReceiptCandidate[], draft: ReceiptConfirmDraft) => {
-    const built = buildConfirmRequest(detail, draft, candidates);
+    const built = buildConfirmRequest(detail, draft, candidates, t("budget.receipts.summaryLineDefault"));
     if (!built.ok) {
       setActionError(t(built.errorKey));
       return;
@@ -1441,7 +1493,10 @@ function ReceiptDetailDrawer({
           const linkOptions = availableLinkOptions(detail, candidates, draftMethod, matchingChanged);
           const { currentCandidate } = linkOptions;
           const hasStoredKeepCandidate = findCurrentLinkedCandidate(detail, candidates) !== null;
-          const lineDelta = confirmDraft === null ? null : computeLinesDelta(confirmDraft.lines, confirmDraft.totalAmount);
+          const lineDelta = confirmDraft === null
+            || (detail.document_kind === "invoice" && detail.lines.length === 0 && confirmDraft.lines.length === 0)
+            ? null
+            : computeLinesDelta(confirmDraft.lines, confirmDraft.totalAmount);
           const deltaCurrency = (confirmDraft?.currency.trim() || detail.currency) ?? "PLN";
           const lineDeltaDisplay = lineDelta !== null && lineDelta !== "0"
             ? formatAmount(lineDelta, deltaCurrency, locale)
@@ -1539,6 +1594,7 @@ function ReceiptDetailDrawer({
                         className="budget-link"
                         disabled={actionBusy !== null}
                         onClick={() => {
+                          onLinkChoiceTouched(detail.receipt_id, { kind: "empty" });
                           setSuggestionDismissed(true);
                           setConfirmDraft((current) => (current === null ? null : { ...current, linkChoice: "" }));
                           linkChoicesRef.current?.focus();
@@ -1553,6 +1609,7 @@ function ReceiptDetailDrawer({
                         type="button"
                         disabled={actionBusy !== null}
                         onClick={() => {
+                          onLinkChoiceTouched(detail.receipt_id, { kind: "unlink" });
                           setSuggestionDismissed(true);
                           setConfirmDraft((current) => (current === null ? null : { ...current, linkChoice: "unlink" }));
                         }}
@@ -1743,7 +1800,6 @@ function ReceiptDetailDrawer({
                   className="budget-receipt-section budget-receipt-confirm"
                   onSubmit={(event) => {
                     event.preventDefault();
-                    void submitConfirm(detail, candidates, confirmDraft);
                   }}
                 >
                   <h5>{t("budget.receipts.confirmHeading")}</h5>
@@ -1987,7 +2043,10 @@ function ReceiptDetailDrawer({
                           value="keep"
                           disabled={disableTokens}
                           checked={confirmDraft.linkChoice === "keep" && linkOptions.canKeep}
-                          onChange={() => { setConfirmDraft({ ...confirmDraft, linkChoice: "keep" }); }}
+                          onChange={() => {
+                            onLinkChoiceTouched(detail.receipt_id, { kind: "keep" });
+                            setConfirmDraft({ ...confirmDraft, linkChoice: "keep" });
+                          }}
                         />
                         <span>{t("budget.receipts.linkChoiceKeep")}</span>
                       </label>
@@ -2000,7 +2059,10 @@ function ReceiptDetailDrawer({
                         value="unlink"
                         disabled={actionBusy !== null}
                         checked={confirmDraft.linkChoice === "unlink"}
-                        onChange={() => { setConfirmDraft({ ...confirmDraft, linkChoice: "unlink" }); }}
+                        onChange={() => {
+                          onLinkChoiceTouched(detail.receipt_id, { kind: "unlink" });
+                          setConfirmDraft({ ...confirmDraft, linkChoice: "unlink" });
+                        }}
                       />
                       <span>
                         {detail.linked ? t("budget.receipts.linkChoiceUnlink") : t("budget.receipts.linkChoiceNone")}
@@ -2033,7 +2095,14 @@ function ReceiptDetailDrawer({
                             value={choiceValue}
                             disabled={disableTokens}
                             checked={confirmDraft.linkChoice === choiceValue && linkOptions.canPickCandidates}
-                            onChange={() => { setConfirmDraft({ ...confirmDraft, linkChoice: choiceValue }); }}
+                            onChange={() => {
+                              onLinkChoiceTouched(detail.receipt_id, {
+                                kind: "candidate",
+                                account_id: candidate.account_id,
+                                entry_reference: candidate.entry_reference,
+                              });
+                              setConfirmDraft({ ...confirmDraft, linkChoice: choiceValue });
+                            }}
                           />
                           <span>
                             {accountText} · {dateText} · {amountText}
@@ -2049,9 +2118,12 @@ function ReceiptDetailDrawer({
 
                   <div className="budget-actions">
                     <button
-                      type="submit"
+                      type="button"
                       className="budget-primary"
                       disabled={actionBusy !== null || confirmDraft.linkChoice === ""}
+                      onClick={() => {
+                        void submitConfirm(detail, candidates, confirmDraft);
+                      }}
                     >
                       {actionBusy === "confirm"
                         ? t("budget.receipts.confirming")

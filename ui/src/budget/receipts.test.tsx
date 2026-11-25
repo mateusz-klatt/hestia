@@ -762,10 +762,10 @@ describe("ReceiptsView", () => {
     await click(openDetailButton(0));
     const drawer = dialog();
 
-    const form = drawer.querySelector<HTMLFormElement>("form.budget-receipt-confirm");
+    const confirmBtn = button("Confirm receipt", drawer);
     await act(async () => {
-      form?.requestSubmit();
-      form?.requestSubmit();
+      confirmBtn.click();
+      confirmBtn.click();
       await Promise.resolve();
     });
     expect(clients.rApi.confirmReceipt).toHaveBeenCalledTimes(1);
@@ -1428,6 +1428,12 @@ describe("ReceiptsView", () => {
       receiptSummary({ receipt_id: "rec-nip", status: "imported", raw_shop_name: "Biedronka" }),
       receiptSummary({ receipt_id: "rec-dist", status: "draft", raw_shop_name: "Biedronka" }),
       receiptSummary({ receipt_id: "rec-review", status: "needs_review", raw_shop_name: "Biedronka" }),
+      receiptSummary({ receipt_id: "rec-gen", status: "imported", raw_shop_name: "Biedronka" }),
+      receiptSummary({ receipt_id: "rec-none", status: "imported", raw_shop_name: "Biedronka" }),
+      receiptSummary({ receipt_id: "rec-two", status: "imported", raw_shop_name: "Biedronka" }),
+      receiptSummary({ receipt_id: "rec-conf-u", status: "confirmed", raw_shop_name: "Biedronka" }),
+      receiptSummary({ receipt_id: "rec-conf-l", status: "confirmed", raw_shop_name: "Biedronka" }),
+      receiptSummary({ receipt_id: "rec-cash", status: "imported", raw_shop_name: "Biedronka" }),
     ];
     const baseDetail = (overrides: Partial<ReceiptDetail> = {}) => receiptDetail({
       status: "imported",
@@ -1447,11 +1453,11 @@ describe("ReceiptsView", () => {
       // 3. EN needs_review single "nip" -> 1-click Confirm sends candNip link
       .mockImplementationOnce(() => ok({ receipt: baseDetail({ receipt_id: "rec-review", status: "needs_review" }), candidates: [candNip] }))
       // 4. EN single "generic" -> NO preselect
-      .mockImplementationOnce(() => ok({ receipt: baseDetail({ receipt_id: "rec-nip", status: "imported" }), candidates: [candGeneric] }))
+      .mockImplementationOnce(() => ok({ receipt: baseDetail({ receipt_id: "rec-gen", status: "imported" }), candidates: [candGeneric] }))
       // 5. EN single "none" -> NO preselect
-      .mockImplementationOnce(() => ok({ receipt: baseDetail({ receipt_id: "rec-nip", status: "imported" }), candidates: [candNone] }))
+      .mockImplementationOnce(() => ok({ receipt: baseDetail({ receipt_id: "rec-none", status: "imported" }), candidates: [candNone] }))
       // 6. EN two candidates even when first is "nip" -> NO preselect
-      .mockImplementationOnce(() => ok({ receipt: baseDetail({ receipt_id: "rec-nip", status: "imported" }), candidates: [candNip, candNone] }))
+      .mockImplementationOnce(() => ok({ receipt: baseDetail({ receipt_id: "rec-two", status: "imported" }), candidates: [candNip, candNone] }))
       // 7. EN linked / stored link changed -> NO preselect
       .mockImplementationOnce(() => ok({
         receipt: baseDetail({
@@ -1464,10 +1470,10 @@ describe("ReceiptsView", () => {
         candidates: [candNip],
       }))
       // 8. EN confirmed unlinked & confirmed linked re-edit with single "nip" -> NO preselect
-      .mockImplementationOnce(() => ok({ receipt: baseDetail({ receipt_id: "rec-nip", status: "confirmed", linked: false }), candidates: [candNip] }))
+      .mockImplementationOnce(() => ok({ receipt: baseDetail({ receipt_id: "rec-conf-u", status: "confirmed", linked: false }), candidates: [candNip] }))
       .mockImplementationOnce(() => ok({
         receipt: baseDetail({
-          receipt_id: "rec-nip",
+          receipt_id: "rec-conf-l",
           status: "confirmed",
           linked: true,
           linked_account_id: "local-a",
@@ -1477,7 +1483,7 @@ describe("ReceiptsView", () => {
       }))
       // 9. EN cash payment unlinked with single "nip" -> NO banner, unlink selected
       .mockImplementationOnce(() => ok({
-        receipt: baseDetail({ receipt_id: "rec-nip", status: "imported", payment_method: "cash" }),
+        receipt: baseDetail({ receipt_id: "rec-cash", status: "imported", payment_method: "cash" }),
         candidates: [candNip],
       }));
 
@@ -1493,7 +1499,7 @@ describe("ReceiptsView", () => {
     expect(bannerPl1?.textContent).toContain("42,50");
     expect(bannerPl1?.querySelector('[data-match-strength="nip"]')?.textContent).toBe("NIP");
     expect(linkRadio("candidate:0", dPl1).checked).toBe(true);
-    const submitPl1 = dPl1.querySelector<HTMLButtonElement>('form.budget-receipt-confirm button[type="submit"]');
+    const submitPl1 = dPl1.querySelector<HTMLButtonElement>("form.budget-receipt-confirm button.budget-primary");
     expect(submitPl1?.disabled).toBe(false);
 
     await click(button("Zmień", dPl1));
@@ -1516,7 +1522,7 @@ describe("ReceiptsView", () => {
     await click(button("Odłącz / bez powiązania", dPl2));
     expect(dPl2.querySelector(".budget-receipt-suggested")).toBeNull();
     expect(linkRadio("unlink", dPl2).checked).toBe(true);
-    const submitPl2 = dPl2.querySelector<HTMLButtonElement>('form.budget-receipt-confirm button[type="submit"]');
+    const submitPl2 = dPl2.querySelector<HTMLButtonElement>("form.budget-receipt-confirm button.budget-primary");
     if (submitPl2 === null) throw new Error("expected submit button");
     expect(submitPl2.disabled).toBe(false);
     await click(submitPl2);
@@ -1544,7 +1550,7 @@ describe("ReceiptsView", () => {
     await click(button("Close", dEn1));
 
     // generic, none, 2+ candidates, stored link changed -> no banner, empty choice, Confirm disabled.
-    for (const rowIdx of [0, 0, 0, 2]) {
+    for (const rowIdx of [3, 4, 5, 2]) {
       await click(openDetailButton(rowIdx));
       const d = dialog();
       expect(d.querySelector(".budget-receipt-suggested")).toBeNull();
@@ -1555,7 +1561,7 @@ describe("ReceiptsView", () => {
     }
 
     // confirmed unlinked -> no banner, unlink auto-selected, no candidate offered.
-    await click(openDetailButton(0));
+    await click(openDetailButton(6));
     const dConfirmedUnlinked = dialog();
     expect(dConfirmedUnlinked.querySelector(".budget-receipt-suggested")).toBeNull();
     expect(dConfirmedUnlinked.querySelector('input[name="link_choice"][value="candidate:0"]')).toBeNull();
@@ -1564,7 +1570,7 @@ describe("ReceiptsView", () => {
     await click(button("Close", dConfirmedUnlinked));
 
     // confirmed linked (re-edit) -> no banner, empty choice, Confirm disabled until explicit Unlink.
-    await click(openDetailButton(0));
+    await click(openDetailButton(7));
     const dConfirmedLinked = dialog();
     expect(dConfirmedLinked.querySelector(".budget-receipt-suggested")).toBeNull();
     expect(dConfirmedLinked.querySelector('input[name="link_choice"][value="candidate:0"]')).toBeNull();
@@ -1573,11 +1579,142 @@ describe("ReceiptsView", () => {
     await click(button("Close", dConfirmedLinked));
 
     // cash payment -> no banner, no candidate preselected (unlink auto-selected for cash).
-    await click(openDetailButton(0));
+    await click(openDetailButton(8));
     const dCash = dialog();
     expect(dCash.querySelector(".budget-receipt-suggested")).toBeNull();
     expect(linkRadio("unlink", dCash).checked).toBe(true);
     expect(button("Confirm receipt", dCash).disabled).toBe(false);
     await click(button("Close", dCash));
+  });
+
+  it("never confirms or links on implicit Enter or form submit with a preselected candidate", async () => {
+    const candNip = receiptCandidate({
+      entry_reference: "1".repeat(64),
+      candidate_token: "tok-enter-nip",
+      match_strength: "nip",
+    });
+    const clients = fakeClients(
+      [receiptSummary({ receipt_id: "rec-enter", status: "imported" })],
+      receiptDetail({ receipt_id: "rec-enter", status: "imported", linked: false }),
+      [candNip],
+    );
+
+    await renderReceipts(clients);
+    await click(openDetailButton(0));
+    const d = dialog();
+    expect(linkRadio("candidate:0", d).checked).toBe(true);
+    const shopInput = inputByName("raw_shop_name", d);
+    const form = d.querySelector<HTMLFormElement>("form.budget-receipt-confirm");
+    await act(async () => {
+      shopInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      form?.requestSubmit();
+      await Promise.resolve();
+    });
+    expect(clients.rApi.confirmReceipt).not.toHaveBeenCalled();
+
+    await click(button("Confirm receipt", d));
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
+      receipt_id: "rec-enter",
+      link: { account_id: "local-a", entry_reference: "1".repeat(64), candidate_token: "tok-enter-nip" },
+    }));
+  });
+
+  it("keeps Odłącz across background refreshes and drawer reopen, and clears preselection if candidates change", async () => {
+    const candNipA = receiptCandidate({
+      entry_reference: "a".repeat(64),
+      candidate_token: "tok-a",
+      match_strength: "nip",
+    });
+    const candNipB = receiptCandidate({
+      entry_reference: "b".repeat(64),
+      candidate_token: "tok-b",
+      match_strength: "nip",
+    });
+    const rows = [
+      receiptSummary({ receipt_id: "rec-stay-unlink", status: "imported" }),
+      receiptSummary({ receipt_id: "rec-cand-shift", status: "imported" }),
+    ];
+    const clients = fakeClients(rows);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      if (id === "rec-stay-unlink") {
+        return ok({ receipt: receiptDetail({ receipt_id: id, status: "imported", linked: false }), candidates: [candNipA] });
+      }
+      return ok({ receipt: receiptDetail({ receipt_id: id, status: "imported", linked: false }), candidates: [candNipA] });
+    });
+
+    await renderReceipts(clients, { locale: "pl", revision: 1 });
+    await click(openDetailButton(0, "Szczegóły"));
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
+    await click(button("Odłącz / bez powiązania", dialog()));
+    expect(linkRadio("unlink", dialog()).checked).toBe(true);
+
+    // Background refresh returns the exact same strong candidate -> unlink must stay selected, banner gone.
+    await renderReceipts(clients, { locale: "pl", revision: 2 });
+    expect(linkRadio("unlink", dialog()).checked).toBe(true);
+    expect(dialog().querySelector(".budget-receipt-suggested")).toBeNull();
+
+    // Close and re-open same receipt -> still unlink and no banner.
+    await click(button("Zamknij", dialog()));
+    await click(openDetailButton(0, "Szczegóły"));
+    expect(linkRadio("unlink", dialog()).checked).toBe(true);
+    expect(dialog().querySelector(".budget-receipt-suggested")).toBeNull();
+    await click(button("Zamknij", dialog()));
+
+    // Untouched receipt where background refresh changes candidate set -> preselection must not re-apply to candNipB.
+    await renderReceipts(clients, { locale: "en", revision: 3 });
+    await click(openDetailButton(1));
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() =>
+      ok({ receipt: receiptDetail({ receipt_id: "rec-cand-shift", status: "imported", linked: false }), candidates: [candNipB] }));
+    await renderReceipts(clients, { locale: "en", revision: 4 });
+    expect(dialog().querySelector(".budget-receipt-suggested")).toBeNull();
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(false);
+    expect(linkRadio("unlink", dialog()).checked).toBe(false);
+    expect(button("Confirm receipt", dialog()).disabled).toBe(true);
+  });
+
+  it("confirms a zero-line Gmail invoice with a preselected strong candidate on single click", async () => {
+    const candNip = receiptCandidate({
+      entry_reference: "5".repeat(64),
+      candidate_token: "tok-zero-inv",
+      match_strength: "nip",
+    });
+    const invSummary = receiptSummary({
+      receipt_id: "rec-zero-inv",
+      status: "imported",
+      source_kind: "attachment",
+      document_kind: "invoice",
+      invoice_number: "FV/2026/05",
+      total_amount: "88.00",
+      payment_method: null,
+      math_delta: null,
+    });
+    const invDetail = receiptDetail({
+      receipt_id: "rec-zero-inv",
+      status: "imported",
+      source_kind: "attachment",
+      document_kind: "invoice",
+      invoice_number: "FV/2026/05",
+      total_amount: "88.00",
+      payment_method: null,
+      math_delta: null,
+      lines: [],
+      linked: false,
+    });
+    const clients = fakeClients([invSummary], invDetail, [candNip]);
+    await renderReceipts(clients);
+    await click(openDetailButton(0));
+    const d = dialog();
+    expect(d.textContent).not.toContain("Line math discrepancy");
+    expect(d.querySelector(".budget-receipt-suggested")).not.toBeNull();
+    expect(linkRadio("candidate:0", d).checked).toBe(true);
+    expect(button("Confirm receipt", d).disabled).toBe(false);
+    await click(button("Confirm receipt", d));
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      receipt_id: "rec-zero-inv",
+      link: { account_id: "local-a", entry_reference: "5".repeat(64), candidate_token: "tok-zero-inv" },
+      lines: [expect.objectContaining({ line_kind: "other", raw_name: "FV/2026/05", net_line_total: "88" }) as unknown],
+    }));
   });
 });

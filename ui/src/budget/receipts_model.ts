@@ -383,6 +383,144 @@ export function preselectedCandidate(
   return sole;
 }
 
+export type ReceiptLinkExplicitChoice =
+  | { kind: "empty" }
+  | { kind: "unlink" }
+  | { kind: "keep" }
+  | { kind: "candidate"; account_id: string; entry_reference: string };
+
+export interface ReceiptLinkSessionEntry {
+  touched: boolean;
+  choice: ReceiptLinkExplicitChoice | null;
+  baselineVersion: number;
+  baselineStatus: ReceiptDetail["status"];
+  baselineLinked: boolean;
+  baselineCandidateKeys: readonly string[];
+  candidateSetChanged: boolean;
+}
+
+export function candidateIdentityKeys(candidates: readonly ReceiptCandidate[]): string[] {
+  return candidates.map((cand) => `${cand.account_id}:${cand.entry_reference}`);
+}
+
+export function sameCandidateIdentitySet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  for (let i = 0; i < sortedA.length; i += 1) {
+    if (sortedA[i] !== sortedB[i]) return false;
+  }
+  return true;
+}
+
+function defaultAmbiguousOrUnlink(
+  detail: Pick<ReceiptDetail, "linked">,
+  options: Pick<ReceiptLinkOptions, "canPickCandidates">,
+): string {
+  return detail.linked || options.canPickCandidates ? "" : "unlink";
+}
+
+function resolveTouchedLinkChoice(
+  choice: ReceiptLinkExplicitChoice | null,
+  detail: Pick<ReceiptDetail, "status" | "linked">,
+  options: ReceiptLinkOptions,
+  candidates: readonly ReceiptCandidate[],
+): string {
+  if (choice === null) {
+    return defaultAmbiguousOrUnlink(detail, options);
+  }
+  if (choice.kind === "unlink") {
+    return "unlink";
+  }
+  if (choice.kind === "empty") {
+    return !options.paymentAllowsLink && !detail.linked ? "unlink" : "";
+  }
+  if (choice.kind === "keep") {
+    if (options.canKeep) return "keep";
+    return !options.paymentAllowsLink && !detail.linked ? "unlink" : "";
+  }
+  const idx = candidates.findIndex(
+    (cand) => cand.account_id === choice.account_id && cand.entry_reference === choice.entry_reference,
+  );
+  if (options.canPickCandidates && idx >= 0) {
+    return `candidate:${String(idx)}`;
+  }
+  if ((!options.paymentAllowsLink || detail.status === "confirmed") && !detail.linked) {
+    return "unlink";
+  }
+  return "";
+}
+
+/**
+ * Builds the drawer draft for a receipt while preserving the user's explicit link choice across
+ * reloads/refreshes in this session and never re-applying preselection after interaction or
+ * candidate-set changes.
+ */
+export function resolveDraftFromDetailSession(
+  detail: ReceiptDetail,
+  candidates: readonly ReceiptCandidate[],
+  previous: ReceiptLinkSessionEntry | undefined,
+): { draft: ReceiptConfirmDraft; nextSessionEntry: ReceiptLinkSessionEntry; showSuggestedBanner: boolean } {
+  const currentKeys = candidateIdentityKeys(candidates);
+  const serverStateChanged = previous !== undefined && (
+    previous.baselineVersion !== detail.version
+    || previous.baselineStatus !== detail.status
+    || previous.baselineLinked !== detail.linked
+  );
+  const nextSessionEntry: ReceiptLinkSessionEntry = previous === undefined
+    ? {
+        touched: false,
+        choice: null,
+        baselineVersion: detail.version,
+        baselineStatus: detail.status,
+        baselineLinked: detail.linked,
+        baselineCandidateKeys: currentKeys,
+        candidateSetChanged: false,
+      }
+    : {
+        ...previous,
+        choice: serverStateChanged ? null : previous.choice,
+        baselineVersion: detail.version,
+        baselineStatus: detail.status,
+        baselineLinked: detail.linked,
+        baselineCandidateKeys: serverStateChanged ? currentKeys : previous.baselineCandidateKeys,
+        candidateSetChanged:
+          previous.candidateSetChanged
+          || !sameCandidateIdentitySet(previous.baselineCandidateKeys, currentKeys),
+      };
+  const baseDraft = draftFromDetail(detail, candidates);
+  if (nextSessionEntry.touched) {
+    const paymentMethod = baseDraft.paymentMethod;
+    const options = availableLinkOptions(detail, candidates, paymentMethod, false);
+    return {
+      draft: {
+        ...baseDraft,
+        linkChoice: resolveTouchedLinkChoice(nextSessionEntry.choice, detail, options, candidates),
+      },
+      nextSessionEntry,
+      showSuggestedBanner: false,
+    };
+  }
+  if (nextSessionEntry.candidateSetChanged) {
+    const options = availableLinkOptions(detail, candidates, baseDraft.paymentMethod, false);
+    return {
+      draft: {
+        ...baseDraft,
+        linkChoice: defaultAmbiguousOrUnlink(detail, options),
+      },
+      nextSessionEntry,
+      showSuggestedBanner: false,
+    };
+  }
+  const canPreselect = baseDraft.linkChoice === "candidate:0"
+    && preselectedCandidate(detail, candidates, baseDraft.paymentMethod) !== null;
+  return {
+    draft: baseDraft,
+    nextSessionEntry,
+    showSuggestedBanner: canPreselect,
+  };
+}
+
 export function draftFromDetail(
   detail: ReceiptDetail,
   candidates: readonly ReceiptCandidate[] = [],
@@ -610,10 +748,41 @@ export function haveConfirmLinesChanged(
   return false;
 }
 
+function synthesizeInvoiceSummaryLine(
+  detail: Pick<ReceiptDetail, "invoice_number" | "raw_shop_name">,
+  draftShopName: string,
+  normalizedTotal: string,
+  summaryFallbackName: string,
+): ReceiptLineInput {
+  const invoiceName = detail.invoice_number !== null && !isRedactedValue(detail.invoice_number)
+    ? detail.invoice_number.trim()
+    : "";
+  const shopTrimmed = draftShopName.trim();
+  const rawShop = shopTrimmed !== "" && !isRedactedValue(shopTrimmed)
+    ? shopTrimmed
+    : (detail.raw_shop_name !== null && !isRedactedValue(detail.raw_shop_name)
+      ? detail.raw_shop_name.trim()
+      : "");
+  const candidateName = invoiceName || rawShop || summaryFallbackName;
+  const rawName = candidateName === "" || isRedactedValue(candidateName) ? "Document" : candidateName;
+  return {
+    line_kind: "other",
+    raw_name: rawName,
+    ptu_code: null,
+    quantity: "1",
+    raw_unit: null,
+    unit_price_raw: null,
+    gross_line_total: normalizedTotal,
+    discount_amount: "0",
+    net_line_total: normalizedTotal,
+  };
+}
+
 export function buildConfirmRequest(
   detail: ReceiptDetail,
   draft: ReceiptConfirmDraft,
   candidates: readonly ReceiptCandidate[],
+  summaryFallbackName = "Document",
 ): { ok: true; request: ReceiptConfirmRequest } | { ok: false; errorKey: MessageKey } {
   const origShop = (detail.raw_shop_name ?? "").trim();
   const shopName = draft.rawShopName.trim();
@@ -696,8 +865,15 @@ export function buildConfirmRequest(
     });
   }
 
-  const netSum = addDecimals(cleanLines.map((line) => line.net_line_total));
-  if (netSum !== total) return { ok: false, errorKey: "budget.receipts.totalMismatch" };
+  let effectiveLines = cleanLines;
+  let sendLines = linesChanged;
+  if (detail.lines.length === 0 && cleanLines.length === 0 && detail.document_kind === "invoice") {
+    effectiveLines = [synthesizeInvoiceSummaryLine(detail, shopName, total, summaryFallbackName)];
+    sendLines = true;
+  } else {
+    const netSum = addDecimals(cleanLines.map((line) => line.net_line_total));
+    if (netSum !== total) return { ok: false, errorKey: "budget.receipts.totalMismatch" };
+  }
 
   if (draft.linkChoice === "") {
     return { ok: false, errorKey: "budget.receipts.explicitUnlinkRequired" };
@@ -751,8 +927,8 @@ export function buildConfirmRequest(
   if (nipEdited) {
     request.raw_nip = nip === "" ? null : nip;
   }
-  if (linesChanged) {
-    request.lines = cleanLines;
+  if (sendLines) {
+    request.lines = effectiveLines;
   }
   return { ok: true, request };
 }
@@ -919,27 +1095,11 @@ export function buildPlainBulkConfirmRequest(
     if (normalizedTotal === null) {
       return { ok: false, errorCode: "budget_receipt_invalid_request" };
     }
-    const invoiceName = detail.invoice_number !== null && !isRedactedValue(detail.invoice_number)
-      ? detail.invoice_number.trim()
-      : "";
-    const shopName = detail.raw_shop_name !== null && !isRedactedValue(detail.raw_shop_name)
-      ? detail.raw_shop_name.trim()
-      : "";
-    const candidateName = invoiceName || shopName || summaryFallbackName;
-    const rawName = isRedactedValue(candidateName) ? "Document" : candidateName;
-    draft.lines.push({
-      line_kind: "other",
-      raw_name: rawName,
-      ptu_code: null,
-      quantity: "1",
-      raw_unit: null,
-      unit_price_raw: null,
-      gross_line_total: normalizedTotal,
-      discount_amount: "0",
-      net_line_total: normalizedTotal,
-    });
+    draft.lines.push(
+      synthesizeInvoiceSummaryLine(detail, detail.raw_shop_name ?? "", normalizedTotal, summaryFallbackName),
+    );
   }
-  const built = buildConfirmRequest(detail, draft, []);
+  const built = buildConfirmRequest(detail, draft, [], summaryFallbackName);
   if (!built.ok) {
     return {
       ok: false,

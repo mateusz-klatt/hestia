@@ -114,17 +114,87 @@ _CHAIN_ALIAS_GROUPS = {
 }
 _CHAIN_WORDS = {chain: frozenset().union(*groups) for chain, groups in _CHAIN_ALIAS_GROUPS.items()}
 GATEWAY_TOKENS = frozenset({
-    "p24", "przelewy24", "paypro", "payu", "autopay", "tpay", "paynow", "dotpay", "blik",
+    "p24", "przelewy24", "paypro", "payu", "autopay", "tpay", "paynow", "dotpay",
+    "blik", "bluemedia", "stripe", "paypal", "adyen", "klarna",
+})
+GATEWAY_PHRASE_TOKENS = frozenset({
+    ("blue", "media"),
+    ("revolut", "pay"),
 })
 _NON_MERCHANT_TOKENS = frozenset({
     "sp", "z", "o", "oo", "sa", "spolka", "zoo",
     "com", "pl", "www", "net", "eu",
     "fiskalny", "paragon",
 }) | GATEWAY_TOKENS
+_POLISH_CITY_TOKENS = frozenset({
+    # 50+ largest Polish cities (with and without diacritics; multi-word components included).
+    "warszawa",
+    "krakow", "kraków",
+    "wroclaw", "wrocław",
+    "lodz", "łódź",
+    "poznan", "poznań",
+    "gdansk", "gdańsk",
+    "szczecin",
+    "bydgoszcz",
+    "lublin",
+    "bialystok", "białystok",
+    "katowice",
+    "gdynia",
+    "czestochowa", "częstochowa",
+    "radom",
+    "rzeszow", "rzeszów",
+    "torun", "toruń",
+    "sosnowiec",
+    "kielce",
+    "gliwice",
+    "olsztyn",
+    "zabrze",
+    "bielsko", "biala", "biała",
+    "bytom",
+    "zielona", "gora", "góra",
+    "rybnik",
+    "ruda", "slaska", "śląska",
+    "opole",
+    "tychy",
+    "gorzow", "gorzów", "wielkopolski",
+    "dabrowa", "dąbrowa", "gornicza", "górnicza",
+    "elblag", "elbląg",
+    "plock", "płock",
+    "koszalin",
+    "tarnow", "tarnów",
+    "wloclawek", "włocławek",
+    "walbrzych", "wałbrzych",
+    "chorzow", "chorzów",
+    "kalisz",
+    "legnica",
+    "grudziadz", "grudziądz",
+    "jaworzno",
+    "slupsk", "słupsk",
+    "jastrzebie", "jastrzębie", "zdroj", "zdrój",
+    "nowy", "sacz", "sącz",
+    "jelenia",
+    "siedlce",
+    "myslowice", "mysłowice",
+    "konin",
+    "pila", "piła",
+    "piotrkow", "piotrków", "trybunalski",
+    "inowroclaw", "inowrocław",
+    "lubin",
+    "ostrow", "ostrów",
+    "suwalki", "suwałki",
+    "stargard",
+    "gniezno",
+    "ostrowiec", "swietokrzyski", "świętokrzyski",
+    "glogow", "głogów",
+    "pabianice",
+})
+_LOCATION_STOP_TOKENS = frozenset({
+    "ul", "ulica", "al", "aleja", "plac", "centrum", "galeria",
+})
 _GENERIC_MERCHANT_TOKENS = frozenset({
     "grocery", "groceries", "grocer", "energy", "energia", "polska", "poland", "services", "service",
     "group", "store", "shop", "sklep", "market", "online", "pay", "payment", "oplata",
-})
+}) | _POLISH_CITY_TOKENS | _LOCATION_STOP_TOKENS
 _STOP_TOKENS = _NON_MERCHANT_TOKENS | _GENERIC_MERCHANT_TOKENS
 
 
@@ -473,6 +543,16 @@ def merchant_word_tokens(value):
     if not isinstance(value, str):
         return ()
     return tuple(re.findall(r"[^\W_]+", fold_text(value), re.UNICODE))
+
+
+def contains_gateway_marker(text):
+    """True when text contains any payment gateway token or multi-word gateway phrase."""
+    words = merchant_word_tokens(text)
+    if not words:
+        return False
+    if GATEWAY_TOKENS.intersection(words):
+        return True
+    return any(pair in GATEWAY_PHRASE_TOKENS for pair in zip(words, words[1:]))
 
 
 def merchant_match_groups(shop_name, nip):

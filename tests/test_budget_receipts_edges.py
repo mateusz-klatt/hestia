@@ -134,7 +134,9 @@ class ParserEdgeTests(unittest.TestCase):
                         "service", "group", "store", "shop", "sklep", "market", "online", "pay", "payment",
                         "oplata", "opłata", "sp", "z", "o", "oo", "sa", "spółka", "zoo", "com", "pl", "www",
                         "net", "eu", "p24", "przelewy24", "paypro", "payu", "autopay", "tpay", "paynow", "dotpay",
-                        "blik", "abc"):
+                        "blik", "bluemedia", "stripe", "paypal", "adyen", "klarna",
+                        "krakow", "kraków", "warszawa", "wrocław", "łódź", "poznań", "gdańsk",
+                        "ul", "ulica", "al", "aleja", "plac", "centrum", "galeria", "abc"):
             self.assertEqual(merchant_tokens(generic, None), frozenset(), generic)
         self.assertNotIn("polska", merchant_tokens("ab polska market piernik", None))
         self.assertFalse(valid_nip(None))
@@ -581,6 +583,69 @@ class StoreEdgeTests(AnalyticsCase):
             self.assertTrue(_is_gateway_receipt(session, SimpleNamespace(
                 id="gw-rec-1", raw_shop_name="Lidl", forwarded_sender_domain=None, sender_domain="lidl.pl",
             )))
+            self.assertTrue(_is_gateway_receipt(session, SimpleNamespace(
+                id=None, raw_shop_name="SKLEP / BLUE MEDIA", forwarded_sender_domain=None, sender_domain=None,
+            )))
+            self.assertTrue(_is_gateway_receipt(session, SimpleNamespace(
+                id=None, raw_shop_name="SKLEP REVOLUT PAY", forwarded_sender_domain=None, sender_domain=None,
+            )))
+
+    def test_iban_masking_nip_proximity_party_names_and_gateway_phrases_cover_branches(self):
+        from hestia.budget.receipt_parser import contains_gateway_marker
+        from hestia.budget.receipt_reconcile import transaction_party_names
+        from hestia.budget.receipt_store import _mask_iban_sequences, _nip_in_text, _nip_match, _payload_party_texts
+
+        # Gateway marker edge branches: empty, non-gateway pairs vs all phrase/token variants.
+        self.assertFalse(contains_gateway_marker(None))
+        self.assertFalse(contains_gateway_marker("MEDIA MARKT"))
+        self.assertFalse(contains_gateway_marker("REVOLUT TRANSFER"))
+        for marker in ("BLUE MEDIA", "Blue-Media", "BLUEMEDIA", "REVOLUT PAY", "Stripe", "PayPal", "Adyen", "Klarna"):
+            self.assertTrue(contains_gateway_marker(marker), marker)
+
+        # IBAN masking branches: empty, underscore prefix, >4 alpha non-IBAN word, >34 cap, valid BBAN, short PL+NIP.
+        self.assertEqual(_mask_iban_sequences(""), "")
+        self.assertEqual(_mask_iban_sequences("..."), "...")
+        self.assertIn("5260 2509 95", _mask_iban_sequences("ref_nl92 abna 5260 2509 95"))
+        self.assertIn("5260250995", _mask_iban_sequences("ab12 sklepy 5260250995"))
+        over_34 = "pl61 1090 1014 0000 0712 1981 2874 1234 5260250995"
+        self.assertIn("5260250995", _mask_iban_sequences(over_34))
+        self.assertEqual(_nip_match("5260250995", "nl92 abna 5260 2509 95"), (False, False))
+        self.assertEqual(_nip_match("5260250995", "nl92abna5260250995"), (False, False))
+        self.assertEqual(_nip_match("5260250995", "nl92 abna 5260 2509 95 nip 5260250995"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "vat: pl 526-025-09-95"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "/nip/5260250995"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "tax id: 5260250995"), (True, True))
+        self.assertEqual(_nip_match("5260250995", "pl5260250995"), (True, False))
+        self.assertTrue(_nip_in_text("5260250995", "pl5260250995"))
+
+        # Payload party extraction and metadata debtor/creditor branches.
+        self.assertEqual(
+            _payload_party_texts({
+                "creditor_name": "BLUE MEDIA", "debtor_name": "",
+                "creditor": "not-dict", "debtor": {"name": "PayU"},
+            }),
+            ["BLUE MEDIA", "PayU"],
+        )
+        self.add_transaction("a", "meta-bad-json", amount="12.30", booking_date="2026-11-30")
+        self.metadata("a", "meta-bad-json", {"creditor_name": "ACME", "debtor_name": "PAYU"})
+        with self.sessions.begin() as session:
+            self.assertEqual(transaction_party_names(session, "owner", self.accounts["a"], "meta-bad-json", None),
+                             (None, None))
+            meta = session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "meta-bad-json"))
+            self.assertEqual(
+                transaction_party_names(session, "owner", self.accounts["a"], "meta-bad-json", meta.ledger_fingerprint),
+                ("ACME", "PAYU"),
+            )
+            self.assertEqual(
+                transaction_party_names(session, "other", self.accounts["a"], "meta-bad-json", meta.ledger_fingerprint),
+                (None, None),
+            )
+            meta.payload_json = "{bad"
+            session.flush()
+            self.assertEqual(
+                transaction_party_names(session, "owner", self.accounts["a"], "meta-bad-json", meta.ledger_fingerprint),
+                (None, None),
+            )
 
 
 class ReceiptApiEdgeTests(unittest.TestCase):
