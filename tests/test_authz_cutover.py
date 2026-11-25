@@ -112,6 +112,17 @@ class CatalogCutoverTests(unittest.TestCase):
             self.assertFalse(session.get(db.User, "owner").budget_owner)
             self.assertIsNone(session.get(db.BudgetReceiptDeviceToken, "old-token").actor)
 
+    def test_custom_role_cli_is_read_only(self):
+        with self.sessions.begin() as session:
+            session.add(db.AppMeta(key=authz.POLICY_PHASE_KEY, value=authz.POLICY_PHASE_CUSTOM))
+        env = {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.path)}
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(auth._cli(["role", "operator", "admin"]), 1)
+            self.assertEqual(
+                auth._cli(["add", "operator", "--role", "admin"], prompt=mock.Mock(side_effect=["pw", "pw"])),
+                1,
+            )
+
     def test_auth_cli_runs_the_explicit_step(self):
         env = {"HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(self.path)}
         with mock.patch.dict(os.environ, env):

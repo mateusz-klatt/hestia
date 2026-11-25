@@ -1,5 +1,7 @@
 """Exhaustive route authorization parity and PR 2 discovery contracts."""
 
+import asyncio
+import io
 import json
 import os
 from pathlib import Path
@@ -11,7 +13,7 @@ from unittest import mock
 from aiohttp import web as aiohttp_web
 from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 from sqlalchemy import select
-from hestia import auth, authz, db, store_sql, web
+from hestia import auth, authz, db, proxy, store_sql, web
 from hestia.budget import device_token, household
 
 
@@ -115,6 +117,7 @@ class RouteMatrixTests(unittest.TestCase):
     def test_custom_account_writes_and_projected_last_admin_guard(self):
         with self.sessions.begin() as session:
             session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
+        self.assertEqual(store_sql.set_user_db("custom-new", "h", path=self.path), "viewer")
         self.assertEqual(store_sql.add_user("candidate", "h", "viewer", path=self.path), "ok")
         self.assertEqual(
             store_sql.set_user_db("candidate", "h2", "operator", path=self.path),
@@ -125,6 +128,26 @@ class RouteMatrixTests(unittest.TestCase):
             session.get(db.User, "admin").role = "viewer"
             session.get(db.User, "owner2").disabled = True
         self.assertEqual(store_sql.set_user_disabled("admin", True, path=self.path), "last_admin")
+        granted = household.grant_member("candidate", "admin", path=str(self.path))
+        with self.sessions.begin() as session:
+            permission = session.execute(select(db.PermissionGrant).where(
+                db.PermissionGrant.username == "candidate",
+                db.PermissionGrant.permission_id == "household.view",
+                db.PermissionGrant.target_owner == "admin",
+            )).scalar_one()
+            session.delete(permission)
+        self.assertEqual(
+            household.revoke_grant("candidate", "admin", granted["grant_id"], path=str(self.path))["status"],
+            "revoked",
+        )
+        with self.sessions.begin() as session:
+            session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = "future_phase"
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            result = household.run_household_command(SimpleNamespace(
+                action="grant", member="candidate", owner="admin", db=str(self.path),
+            ))
+        self.assertEqual(result, 1)
+        self.assertIn("authorization_bridge_incompatible", stderr.getvalue())
 
     def test_custom_role_writes_are_rejected_without_changing_projection(self):
         with self.sessions.begin() as session:
@@ -231,7 +254,9 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
                 member_username="viewer", owner="admin", grant_id="3" * 64,
             ))
         store_sql.activate_catalog_compat(path=self.path)
-        self.client = TestClient(TestServer(web.make_app(SimpleNamespace())))
+        app = web.make_app(SimpleNamespace())
+        app[web._RT_KEY].event_bus = proxy.EventBus()
+        self.client = TestClient(TestServer(app))
         await self.client.start_server()
         self.addCleanup(self.client.close)
 
@@ -308,6 +333,39 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["own_budget"]["can_manage_devices"])
         whoami = await self.client.get("/api/whoami", headers=self._cookie("admin"))
         self.assertEqual(await whoami.json(), {"user": "admin", "role": "viewer"})
+
+    async def test_capability_handler_rechecks_disabled_and_incompatible_states(self):
+        request = make_mocked_request("GET", "/api/me/capabilities", app=self.client.server.app)
+        request[web._USER_KEY] = "admin"
+        disabled = store_sql.AuthState(
+            backend="sqlite", session_phase="legacy", policy_phase="catalog_compat",
+            enabled=False, role=None, generation=0,
+        )
+        with mock.patch.object(store_sql, "load_auth_state", return_value=disabled):
+            response = await web._me_capabilities(request)
+        self.assertEqual(response.status, 401)
+        with mock.patch.object(
+            store_sql, "load_auth_state", side_effect=store_sql.SessionPhaseUnsupported("future"),
+        ):
+            response = await web._me_capabilities(request)
+        self.assertEqual(response.status, 503)
+        self.assertEqual(json.loads(response.body)["error"], "authorization_bridge_incompatible")
+
+        with mock.patch.object(
+            web, "_catalog_request_allowed", side_effect=authz.PolicyPhaseUnsupported("future"),
+        ):
+            response = await self.client.get("/api/discovery", headers=self._cookie("admin"))
+        self.assertEqual(response.status, 503)
+
+    async def test_sse_rechecks_and_closes_after_authorization_loss(self):
+        with mock.patch.multiple(web, SSE_IDLE_TIMEOUT=0.05, SSE_MAX_LIFETIME=0.5):
+            response = await self.client.get("/api/events", headers=self._cookie("admin"))
+            self.assertEqual(response.status, 200)
+            chunk, _ = await asyncio.wait_for(response.content.readchunk(), 2)
+            self.assertTrue(chunk)
+            with self.sessions.begin() as session:
+                session.get(db.User, "admin").disabled = True
+            await asyncio.wait_for(response.read(), 2)
 
     async def test_auth_off_capabilities_have_no_private_budget_or_owner(self):
         with mock.patch.object(web, "_AUTH_ENABLED", False):

@@ -43,6 +43,7 @@ class LegacyReceiptRollbackTests(unittest.IsolatedAsyncioTestCase):
         self.alice_device = self.store.login("alice", self.password, "Legacy Alice")
         self.bob_device = self.store.login("bob", self.password, "Legacy Bob")
         parsed = receipt_api._store(budget_fixture.SECRET).parse_text("alice", receipt_text())
+        self.pair_code = self.store.issue_code("alice")
         self.receipt_id = parsed["receipt_id"]
         with self.sessions.begin() as session:
             session.get(db.BudgetReceipt, self.receipt_id).submitted_by = "viewer"
@@ -114,6 +115,10 @@ class LegacyReceiptRollbackTests(unittest.IsolatedAsyncioTestCase):
             {"Authorization": f"Bearer {self.alice_device['token']}"},
         )
         self.assertEqual(narrowed_bearer.status, 403)
+        with self.assertRaises(device_token.DeviceTokenError) as pair_guard:
+            self.store.issue_code("alice")
+        self.assertEqual(pair_guard.exception.code, "budget_forbidden")
+        self.assertIsNone(self.store.redeem(self.pair_code["code"], "Narrowed"))
         with self.assertRaises(device_token.DeviceTokenError) as browser_guard:
             receipt_api._store(budget_fixture.SECRET).parse_text("alice", receipt_text())
         self.assertEqual(browser_guard.exception.code, "budget_forbidden")
