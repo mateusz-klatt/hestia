@@ -102,6 +102,13 @@ class RouteMatrixTests(unittest.TestCase):
             session.add(db.PermissionGrant(
                 username="viewer", permission_id="budget.view", target_owner="admin",
             ))
+            store_sql.sync_legacy_grants(session)
+            self.assertNotIn("ioc.control", set(session.execute(
+                select(db.PermissionGrant.permission_id).where(
+                    db.PermissionGrant.username == "viewer",
+                    db.PermissionGrant.target_owner.is_(None),
+                )
+            ).scalars()))
         with self.sessions() as session:
             self.assertTrue(authz.authorize(session, "viewer", "calendar.edit"))
             self.assertFalse(authz.authorize(session, "viewer", "ioc.control"))

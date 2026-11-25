@@ -336,7 +336,10 @@ def effective_permissions(session, actor: str, *, owner: "str | None" = None) ->
         pid for pid in rows
         if (spec := CATALOG.get(pid)) is not None
         and spec.storage_scope == "owner"
-        and (actor == owner or spec.delegation == "delegable")
+        and (
+            actor == owner
+            or (spec.delegation == "delegable" and not pid.startswith("budget.receipts."))
+        )
     }
     return _closure(direct)
 

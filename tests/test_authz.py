@@ -207,7 +207,7 @@ class AuthzEvaluationTests(unittest.TestCase):
             # Self-only receipts.match implies delegable receipts.view for owner.
             _add_grant(session, "owner", "budget.receipts.match", "owner")
             _add_grant(session, "owner", "budget.edit", "owner")
-            # Delegate gets receipts.edit (implies add + view) plus household.view, while a rogue self-only row is ignored.
+            # PR 2 retains delegated receipt rows as dormant data; only household.view is effective.
             _add_grant(session, "spouse", "budget.receipts.edit", "owner")
             _add_grant(session, "spouse", "household.view", "owner")
             _add_grant(session, "spouse", "budget.view", "owner")
@@ -220,10 +220,10 @@ class AuthzEvaluationTests(unittest.TestCase):
             self.assertEqual(authz.resolve_budget_target(session, "owner"), "owner")
             self.assertEqual(
                 authz.effective_permissions(session, "spouse", owner="owner"),
-                frozenset({"budget.receipts.edit", "budget.receipts.add", "budget.receipts.view", "household.view"}),
+                frozenset({"household.view"}),
             )
             self.assertFalse(authz.authorize(session, "spouse", "budget.view", owner="owner"))
-            self.assertTrue(authz.authorize(session, "spouse", "budget.receipts.add", owner="owner"))
+            self.assertFalse(authz.authorize(session, "spouse", "budget.receipts.add", owner="owner"))
             self.assertEqual(authz.resolve_budget_target(session, "spouse"), "owner")
 
     def test_disabled_missing_unprovisioned_and_demoted_owner_rejected(self):

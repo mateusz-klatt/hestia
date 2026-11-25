@@ -439,7 +439,7 @@ def sync_legacy_grants(session: Session) -> None:
     Requires caller to hold a write-locked ``BEGIN IMMEDIATE`` transaction."""
     session.flush()
     phase = authz.require_supported_policy_phase(session)
-    if phase == authz.POLICY_PHASE_LEGACY:
+    if phase in (authz.POLICY_PHASE_LEGACY, authz.POLICY_PHASE_CUSTOM):
         return
     desired = _desired_legacy_grants(session)
     existing_rows = session.execute(select(PermissionGrant)).scalars().all()
