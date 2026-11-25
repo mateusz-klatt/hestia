@@ -1967,6 +1967,7 @@ class RoleHelpersTests(unittest.TestCase):
 
     def test_required_role_classified_routes(self):
         self.assertEqual(web._required_role("GET", "/api/discovery"), "viewer")
+        self.assertEqual(web._required_role("GET", "/api/calendars/instances"), "viewer")
         self.assertEqual(web._required_role("POST", "/api/settings"), "viewer")
         self.assertEqual(web._required_role("POST", "/api/control"), "operator")
         self.assertEqual(web._required_role("POST", "/api/automations"), "admin")
@@ -2040,6 +2041,7 @@ SPOUSE_ROUTE_STATUS = {
     ("GET", "/api/budget/status"): 403,
     ("GET", "/api/budget/transactions"): 403,
     ("GET", "/api/calendars"): 200,
+    ("GET", "/api/calendars/instances"): 400,
     ("GET", "/api/db/stats"): 403,
     ("GET", "/api/discovery"): 200,
     ("GET", "/api/events"): 200,

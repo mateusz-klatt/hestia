@@ -274,6 +274,7 @@ _ROUTE_MIN_ROLE = {
     ("POST", "/api/budget/refresh"): _ADMIN,
     ("GET", "/api/budget/jobs"): _ADMIN,
     ("GET", "/api/calendars"): _VIEWER,
+    ("GET", "/api/calendars/instances"): _VIEWER,
     ("POST", "/api/calendars/events"): _OPERATOR,
     ("POST", "/api/calendars/events/delete"): _OPERATOR,
     # reads every signed-in user (incl. a read-only viewer) needs — the room / event-log / temps / own-prefs surface

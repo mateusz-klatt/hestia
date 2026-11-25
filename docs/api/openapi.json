@@ -13032,6 +13032,100 @@
         "title": "CalendarEvent",
         "type": "object"
       },
+      "CalendarExpandedInstance": {
+        "properties": {
+          "all_day": {
+            "title": "All Day",
+            "type": "boolean"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalendarDate"
+              },
+              {
+                "$ref": "#/components/schemas/CalendarDateTime"
+              }
+            ],
+            "title": "End"
+          },
+          "event_id": {
+            "title": "Event Id",
+            "type": "string"
+          },
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "instance_id": {
+            "description": "Unique within this response and stable across calls. Series use event_id/original-start, where all-day dates use YYYY-MM-DD and timed slots use their canonical UTC instant; moved exceptions retain the original slot ID. Single events use event_id.",
+            "title": "Instance Id",
+            "type": "string"
+          },
+          "location": {
+            "title": "Location",
+            "type": "string"
+          },
+          "recurrence_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalendarDate"
+              },
+              {
+                "$ref": "#/components/schemas/CalendarDateTime"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Original series slot; null for a non-recurring event.",
+            "title": "Recurrence Id"
+          },
+          "revision": {
+            "minimum": 1,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalendarDate"
+              },
+              {
+                "$ref": "#/components/schemas/CalendarDateTime"
+              }
+            ],
+            "title": "Start"
+          },
+          "status": {
+            "enum": [
+              "confirmed",
+              "tentative"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance_id",
+          "event_id",
+          "revision",
+          "group",
+          "summary",
+          "location",
+          "start",
+          "end",
+          "all_day",
+          "status",
+          "recurrence_id"
+        ],
+        "title": "CalendarExpandedInstance",
+        "type": "object"
+      },
       "CalendarGroup": {
         "properties": {
           "id": {
@@ -13136,6 +13230,42 @@
           "end"
         ],
         "title": "CalendarInstance",
+        "type": "object"
+      },
+      "CalendarInstances": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/CalendarGroup"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "instances": {
+            "items": {
+              "$ref": "#/components/schemas/CalendarExpandedInstance"
+            },
+            "maxItems": 2000,
+            "title": "Instances",
+            "type": "array"
+          },
+          "truncated": {
+            "description": "True when matching instances were omitted at the 2000-instance cap or an event could not be fully expanded within compatibility and work limits.",
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "groups",
+          "instances",
+          "truncated"
+        ],
+        "title": "CalendarInstances",
         "type": "object"
       },
       "CalendarPayload": {
@@ -15856,7 +15986,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.47.0"
+    "version": "0.48.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -25906,6 +26036,85 @@
         },
         "summary": "Permanently tombstone an event and enqueue deletion of remote copies",
         "x-required-role": "operator"
+      }
+    },
+    "/api/calendars/instances": {
+      "get": {
+        "description": "Requires viewer. Expands S1-S7 allowlisted RRULE shapes and RDATEs, applies moved or modified exceptions, and omits EXDATE and every cancelled occurrence. Events outside the S1-S7 allowlist (including SECONDLY/MINUTELY/HOURLY rules, multiple RRULEs, >500 RDATE/EXDATEs, or >31-day recurring durations) or exceeding 5000 occurrences in the padded window return only DTSTART with truncated=true when within budget. Requests also enforce shared SQL and expansion budgets (5000 events, 16 MiB stored JSON, 600000 replay day-check units, and 50000 candidates): events over the SQL or pre-parse explicit-date/override budget are omitted without parsing and set truncated=true, and exhausting the candidate budget stops expansion with truncated=true. The window is [from, to) at local midnights in tz (default UTC), from is inclusive, to is exclusive, and its duration cannot exceed 92 days. Instances are sorted by start and capped at 2000. Disabled synchronization returns 200 with enabled=false and empty groups and instances.",
+        "operationId": "getCalendarInstances",
+        "parameters": [
+          {
+            "description": "Inclusive window start date (YYYY-MM-DD).",
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exclusive window end date (YYYY-MM-DD), matching exclusive CalendarDate end semantics.",
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          },
+          {
+            "description": "IANA time zone used to interpret from/to as local midnights. Defaults to UTC; aliases resolve through the server's canonical timezone helpers. Host keys such as localtime, posixrules, posix/* and right/* are rejected.",
+            "in": "query",
+            "name": "tz",
+            "schema": {
+              "default": "UTC",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Selected configured group; defaults to the first group.",
+            "in": "query",
+            "name": "group",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarInstances"
+                }
+              }
+            },
+            "description": "expanded calendar instances"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarError"
+                }
+              }
+            },
+            "description": "invalid window (invalid_calendar_event) or unknown group (unknown_calendar_group)"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarError"
+                }
+              }
+            },
+            "description": "invalid configuration"
+          }
+        },
+        "summary": "Concrete calendar occurrences in a half-open date window",
+        "x-required-role": "viewer"
       }
     },
     "/api/control": {

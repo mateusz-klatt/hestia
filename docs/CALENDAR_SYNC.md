@@ -189,6 +189,123 @@ na odświeżonej liście i edytuj je z aktualną rewizją. Zwykłe edycje i usun
 używają `id` i `revision`, bez `idempotency_key`.
 CLI tworzy nowe wydarzenie przy każdym osobnym wywołaniu `put` bez `--event`.
 
+### Rozwinięta agenda HTTP
+
+`GET /api/calendars/instances?from=2026-11-01&to=2026-12-01` zwraca konkretne
+wystąpienia dla natywnego klienta, który nie musi interpretować reguł RFC 5545.
+Parametry `from` i `to` są wymagane, w formacie `YYYY-MM-DD`; zakres jest półotwarty
+`[from, to)`: początek jest włączony, a koniec wyłączony jak `end.date`. Może mieć
+najwyżej 92 dni; równe daty dają pusty zakres. Opcjonalny `tz` przyjmuje strefę IANA
+(domyślnie `UTC`) i określa lokalne północe graniczne, np. `tz=Europe/Warsaw`;
+aliasy są rozpoznawane przez istniejący mechanizm kanonizacji stref. Klucze hosta,
+takie jak `localtime`, `posixrules`, `posix/*` i `right/*`, są odrzucane. Opcjonalny `group`
+działa jak w `GET /api/calendars`, czyli bez parametru wybiera pierwszą skonfigurowaną
+grupę. Odczyt wymaga roli `viewer` i obsługuje natywną sesję `Authorization: Bearer`.
+
+Odpowiedź `{"enabled": bool, "groups": [{"id": ...}], "truncated": bool,
+"instances": [...]}` jest posortowana według początku. `groups` jest identyczne jak
+w zwykłym odczycie kalendarza. Wyłączona synchronizacja zwraca `200` z
+`enabled: false` oraz pustymi `groups` i `instances`. Każde wystąpienie zawiera
+`instance_id`, `event_id`, `revision`, `group`, `summary`, `location`, `start`, `end`,
+`all_day`, `status` oraz `recurrence_id` (`null` dla wydarzenia niecyklicznego).
+`instance_id` jest unikalne w odpowiedzi i stabilne między wywołaniami: dla pojedynczego
+wydarzenia to `event_id`, a dla serii `event_id/pierwotny_początek`. Data całodniowa
+ma postać `YYYY-MM-DD`, a pierwotna godzina jest kanoniczną chwilą UTC. Przeniesiony
+wyjątek zachowuje identyfikator pierwotnego miejsca w serii.
+
+`start` i `end` używają tej samej reprezentacji `date` albo `dateTime`/`timeZone` co
+zwykły odczyt kalendarza. Godzina jest zawsze bezwzględna i ma przesunięcie UTC;
+czas floating jest rozwiązywany przez strefę wydarzenia lub regułę strefy źródła.
+Rozwijane są `RRULE` i `RDATE` przez bibliotekę `recurring-ical-events`, pomijane
+`EXDATE` oraz wszystkie odwołane wystąpienia. Nieistniejąca godzina przy wiosennej
+zmianie czasu jest przesuwana z użyciem wcześniejszego przesunięcia UTC i liczy się
+do `COUNT` zgodnie z erratą RFC 5545. Przed wywołaniem biblioteki każda reguła `RRULE`
+musi pasować do zamkniętej listy prostych kształtów (`S1`–`S7`), z których każdy ma
+prosty dowód produktywności. Poza parametrami z tabeli dozwolone są wyłącznie
+`INTERVAL` (1..1000), `COUNT`, `UNTIL` oraz `WKST`:
+
+| Kształt | Wymagania i ograniczenia | Uzasadnienie produktywności |
+| --- | --- | --- |
+| `S1` | Dowolne `FREQ` (`DAILY`/`WEEKLY`/`MONTHLY`/`YEARLY`), brak selektorów `BY*`; dla `MONTHLY`/`YEARLY` z `DTSTART` w dniach 29–31 tylko `INTERVAL=1` | Domyślny dzień z `DTSTART` wraca co najwyżej co 2 miesiące (29 lutego co najwyżej co 8 lat) |
+| `S2` | `WEEKLY`, lista `BYDAY` bez liczebników porządkowych | Każdy tydzień zawiera każdy dzień tygodnia |
+| `S3` | `DAILY`, lista `BYDAY` bez liczebników porządkowych, tylko `INTERVAL=1` | Co każde 7 dni występują wszystkie dni tygodnia |
+| `S4` | `MONTHLY`, dokładnie jedna wartość `BYMONTHDAY` `d`; `29 <= \|d\| <= 31` tylko przy `INTERVAL=1` | Dni `1..28` istnieją w każdym miesiącu; `29..31` wracają co najwyżej co 2 miesiące przy `INTERVAL=1` |
+| `S5(a)` | `MONTHLY`, lista `BYDAY` bez liczebników porządkowych | Każdy miesiąc zawiera każdy dzień tygodnia |
+| `S5(b)` | `MONTHLY`, dokładnie jeden porządkowy `BYDAY` `nXX`; `1 <= \|n\| <= 4` dla dowolnego `INTERVAL`, `\|n\| = 5` tylko przy `INTERVAL=1` | Co najmniej 4 wystąpienia każdego dnia w miesiącu; 5. wystąpienie wraca przy `INTERVAL=1` |
+| `S6` | `MONTHLY`, lista `BYDAY` bez liczebników porządkowych oraz dokładnie jedno `BYSETPOS` `p` z `1 <= \|p\| <= 4 * len(BYDAY)` | Każdy miesiąc ma co najmniej 4 wystąpienia każdego wybranego dnia tygodnia |
+| `S7(a)` | `YEARLY`, dokładnie jeden `BYMONTH` `m` i dokładnie jeden poprawny `BYMONTHDAY` `d` dla `m`; `m=2, \|d\|=29` tylko przy `INTERVAL=1` | Dzień istnieje w każdym odwiedzanym roku (29 lutego co najwyżej co 8 lat przy `INTERVAL=1`) |
+| `S7(b)` | `YEARLY`, dokładnie jeden `BYMONTH` `m` i dokładnie jeden porządkowy `BYDAY` `nXX`; `1 <= \|n\| <= 4` dla dowolnego `INTERVAL`, `\|n\| = 5` tylko przy `INTERVAL=1` | Wskazany miesiąc ma co najmniej 4 wystąpienia każdego dnia tygodnia; 5. wraca przy `INTERVAL=1` |
+| `S7(c)` | `YEARLY`, dokładnie jeden `BYMONTH` `m` oraz lista `BYDAY` bez liczebników porządkowych | Każdy odwiedzany miesiąc zawiera każdy dzień tygodnia |
+
+**Wszystko inne korzysta z fallbacku do samego `DTSTART`**: w szczególności więcej niż
+jedna reguła `RRULE` w wydarzeniu, ponad `500` dat `RDATE` lub `EXDATE`, wydarzenia
+cykliczne (z `RRULE` lub `RDATE`) o czasie trwania dłuższym niż 31 dni, mieszane
+listy `BYDAY` (zwykłe z porządkowymi), wielokrotne `BYMONTH`/`BYMONTHDAY`/`BYSETPOS`,
+przecięcia `BYDAY`+`BYMONTHDAY`, `BYSETPOS` przy `YEARLY`/`DAILY`/`WEEKLY`,
+`SECONDLY`/`MINUTELY`/`HOURLY`, `BYYEARDAY`, `BYWEEKNO`, `BYHOUR`, `BYMINUTE`,
+`BYSECOND`, niemożliwe pary miesiąca i dnia oraz `INTERVAL > 1000`. Taki przypadek
+zwraca wyłącznie `DTSTART` (z obsługą `EXDATE` i wyjątków dla `DTSTART`) z
+`truncated: true` i wpisem ostrzeżenia do dziennika serwera.
+Jeśli górne oszacowanie liczby wystąpień w poszerzonym oknie (z uwzględnieniem
+lookbacku od `query_start - czas_trwania` oraz końca `UNTIL` reguły) przekracza 5000
+albo szacowany koszt badania zdarzenia przekracza pozostały wspólny budżet żądania
+(`REQUEST_REPLAY_BUDGET`, 600000 jednostek sprawdzeń dni, limit `50000` kandydatów
+wygenerowanych lub skonstruowanych w bibliotece oraz budżet `16 MiB` zdekodowanego JSON
+`REQUEST_PAYLOAD_BYTES` w SQL dla maksymalnie `5000` wydarzeń pobieranych w ustalonej
+kolejności identyfikatorów z `LIMIT 5001` oraz `octet_length(payload_json)` na SQLite `3.43+`,
+a na starszych wersjach SQLite zapasowym `length(CAST(payload_json AS BLOB))`),
+stosowane jest cięcie pracy:
+- oba zapytania SQL wykonują się w jednej jawnej transakcji odczytu `BEGIN` (wspólna migawka WAL),
+  najpierw jako lekkie zapytanie o `(id, octet_length(payload_json))` z `ORDER BY id` i
+  `LIMIT 5001`, a następnie w porcjach `WHERE id IN (...)` wyłącznie dla zaakceptowanych
+  identyfikatorów (na starszym SQLite bez `octet_length` sprawdzenie bajtów nadal czyta
+  kolumnę `payload_json`); wiersze przekraczające pozostały budżet bajtów albo limit `5000`
+  wydarzeń są pomijane i ustawiają `truncated: true`;
+- gdy pozostały budżet nie pokrywa nawet kosztu jawnych dat `RDATE`/`EXDATE` (po 300
+  jednostek) i zapisanych wyjątków zdarzenia (po 100 jednostek na wyjątek przed
+  zbudowaniem jakichkolwiek map), zdarzenie jest w całości pomijane bez parsowania
+  `RDATE`/`EXDATE` ani indeksowania wyjątków i bez emitowania `DTSTART` (aby uniknąć
+  pokazania wykluczonego wystąpienia), z ustawieniem `truncated: true`;
+- w przeciwnym razie fallback zwraca samo `DTSTART` (z odjęciem kosztu parsowanych
+  `EXDATE` i wyjątków, bez wywoływania biblioteki i bez pomniejszania budżetu dla
+  kolejnych mniejszych lub niecyklicznych wydarzeń).
+Koszt zdarzenia sumuje sprawdzenia dni z `RRULE` od `min(DTSTART, query_start -
+czas_trwania)` do `min(koniec_okna, UNTIL + 1 dzień)` (bez przesuwania `DTSTART`, aby
+zachować fazy `COUNT`/`INTERVAL`: `okresy * dni_w_okresie * 1` kandydat dziennie, gdzie
+`DAILY=1`, `WEEKLY=7`, `MONTHLY=31`, `YEARLY=366`), policzoną przed parsowaniem liczbę
+`RDATE`/`EXDATE` oraz liczbę wyjątków (indeksowanych po wstępnym odfiltrowaniu do
+poszerzonego okna). Wywołanie `RRULE` zachowuje górną granicę `UNTIL + 1 dzień`, więc
+zakończone serie nie generują zbędnych kandydatów po końcu serii, jawne `DTSTART` pozostaje
+emitowane niezależnie od odcięcia `UNTIL` (zgodnie z RFC 5545, o ile nie jest odwołane ani
+wykluczone przez `EXDATE`/`exceptions`), a każdy wygenerowany
+kandydat biblioteki (również odrzucony) obciąża budżet `50000` instancji. Przepełnienie
+daty przy konwersji strefy końca pojedynczego wystąpienia (np. wokół roku `9999` w
+`Pacific/Kiritimati`) pomija tylko to wystąpienie bez odrzucania wcześniejszych.
+Rozwijanie przekazuje strefy `ZoneInfo` bezpośrednio do `icalendar` bez budowania
+`VTIMEZONE` na każde zdarzenie (a serializacja `to_ical` buforuje `VTIMEZONE` w pamięci
+podręcznej LRU). Po przekroczeniu limitu `5000` wydarzeń, `16 MiB` bajtów lub `50000`
+kandydatów w żądaniu rozwijanie przerywa pracę i ustawia `truncated: true`, używając
+ograniczonego wyboru `heapq.nsmallest` zamiast pełnego sortowania. Zmieniony wyjątek
+zastępuje swoje pierwotne wystąpienie, a kontrola osieroconych wyjątków używa tego
+samego wyłącznego końca poszerzonego okna co wywołanie biblioteki.
+Odległy `RECURRENCE-ID` nie poszerza generowania, ale zapisany wyjątek trafiający w
+żądane okno może zostać zwrócony jako samodzielne wystąpienie. Uwzględniane są także
+wystąpienia zaczynające się przed oknem, ale nachodzące na nie. Daty całodniowe
+pozostają datami, a godziny zachowują strefę IANA przez zmianę czasu. Odpowiedź jest
+ograniczona do 2000 najwcześniejszych wystąpień. `truncated: true` sygnalizuje także
+niepełne rozwinięcie po przekroczeniu budżetu pracy albo pominięcie niezgodnej reguły;
+takie zdarzenie jest raportowane w dzienniku serwera i nie blokuje pozostałych.
+
+Znane ograniczenia: fallback nieobsługiwanych reguł (m.in. `SECONDLY`/`MINUTELY`/`HOURLY`
+lub reguł spoza białej listy) obejmuje tylko `DTSTART`, więc później aktywowane wyjątki
+odwołanego wzorca pozostają w nim pominięte. Wystąpienia oddalone o mniej niż czas trwania
+zdarzenia od `0001-01-01` mogą zostać pominięte, gdy obliczenie granicznego czasu UTC
+wyszłoby poza obsługiwany zakres dat.
+
+Nieprawidłowa data, odwrócony zakres lub zakres dłuższy niż 92 dni zwraca `400`
+z `{"error": "invalid_calendar_event"}`. Nieznana grupa zwraca `400` z
+`unknown_calendar_group`, a błąd konfiguracji `503` z `calendar_configuration_invalid`.
+
 ## Reguły i odporność
 
 Lokalne identyfikatory, UID, identyfikatory kopii, ETagi, kursory synchronizacji,

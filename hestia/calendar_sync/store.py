@@ -7,17 +7,36 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import time
 import uuid
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from sqlalchemy import select, text
+from sqlalchemy import LargeBinary, cast, func, select, text
 
 from ..db import CalendarEndpoint as Endpoint, CalendarEvent as Event
 from ..db import CalendarGroup as Group, CalendarOutbox as Outbox, CalendarReplica as Replica
 from .events import fingerprint, validate_payload
+
+
+REQUEST_PAYLOAD_BYTES = 16 * 1024 * 1024  # 16 MiB per-request JSON decode budget.
+_EVENT_ID_CHUNK_SIZE = 500  # Keep SQLite IN (...) batches well below parameter limits.
+
+
+def _supports_octet_length(version: str | None = None) -> bool:
+    raw = sqlite3.sqlite_version if version is None else version
+    return tuple(int(part) for part in raw.split(".")[:2]) >= (3, 43)
+
+
+_HAS_OCTET_LENGTH = _supports_octet_length()
+
+
+def _payload_bytes_expr():
+    if _HAS_OCTET_LENGTH:
+        return func.octet_length(Event.payload_json)
+    return func.length(cast(Event.payload_json, LargeBinary))
 
 
 class CalendarConflict(ValueError):
@@ -115,13 +134,49 @@ class SyncStore:
                 "payload": json.loads(event.payload_json), "revision": event.revision,
                 "deleted": event.deleted, "modified_at": event.modified_at}
 
+    def _group_events_where(self, s, group, include_deleted=False):
+        self._require_group(s, group)
+        filters = [Event.group_id == group]
+        if not include_deleted:
+            filters.append(Event.deleted.is_(False))
+        return filters
+
+    def _group_events_query(self, s, group, include_deleted=False):
+        return select(Event).where(*self._group_events_where(s, group, include_deleted)).order_by(Event.id)
+
     def list_events(self, group, include_deleted=False):
         with self.sessions() as s:
-            self._require_group(s, group)
-            query = select(Event).where(Event.group_id == group)
-            if not include_deleted:
-                query = query.where(Event.deleted.is_(False))
-            return [self._event_dict(row) for row in s.scalars(query.order_by(Event.id))]
+            return [self._event_dict(row) for row in s.scalars(self._group_events_query(s, group, include_deleted))]
+
+    def list_bounded_events(self, group, *, limit, max_payload_bytes=REQUEST_PAYLOAD_BYTES):
+        with self.sessions() as s:
+            # SQLite's legacy transaction mode does not begin for SELECT; hold one
+            # WAL read snapshot across group check, metadata scan, and chunked loads.
+            s.execute(text("BEGIN"))
+            meta_query = (
+                select(Event.id, _payload_bytes_expr())
+                .where(*self._group_events_where(s, group))
+                .order_by(Event.id)
+                .limit(limit + 1)
+            )
+            accepted_ids = []
+            remaining = max_payload_bytes
+            truncated = False
+            for event_id, payload_bytes in s.execute(meta_query):
+                if len(accepted_ids) >= limit:
+                    truncated = True
+                    break
+                if payload_bytes > remaining:
+                    truncated = True
+                    continue
+                remaining -= payload_bytes
+                accepted_ids.append(event_id)
+            events = []
+            for start in range(0, len(accepted_ids), _EVENT_ID_CHUNK_SIZE):
+                chunk = accepted_ids[start:start + _EVENT_ID_CHUNK_SIZE]
+                rows = s.scalars(select(Event).where(Event.id.in_(chunk)).order_by(Event.id))
+                events.extend(self._event_dict(row) for row in rows)
+            return events, truncated
 
     @staticmethod
     def _require_group(s, group):

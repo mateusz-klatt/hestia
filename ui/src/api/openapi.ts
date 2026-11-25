@@ -1764,6 +1764,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/calendars/instances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Concrete calendar occurrences in a half-open date window
+         * @description Requires viewer. Expands S1-S7 allowlisted RRULE shapes and RDATEs, applies moved or modified exceptions, and omits EXDATE and every cancelled occurrence. Events outside the S1-S7 allowlist (including SECONDLY/MINUTELY/HOURLY rules, multiple RRULEs, >500 RDATE/EXDATEs, or >31-day recurring durations) or exceeding 5000 occurrences in the padded window return only DTSTART with truncated=true when within budget. Requests also enforce shared SQL and expansion budgets (5000 events, 16 MiB stored JSON, 600000 replay day-check units, and 50000 candidates): events over the SQL or pre-parse explicit-date/override budget are omitted without parsing and set truncated=true, and exhausting the candidate budget stops expansion with truncated=true. The window is [from, to) at local midnights in tz (default UTC), from is inclusive, to is exclusive, and its duration cannot exceed 92 days. Instances are sorted by start and capped at 2000. Disabled synchronization returns 200 with enabled=false and empty groups and instances.
+         */
+        get: operations["getCalendarInstances"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/control": {
         parameters: {
             query?: never;
@@ -6477,6 +6497,40 @@ export interface components {
             /** Uid */
             uid: string;
         };
+        /** CalendarExpandedInstance */
+        CalendarExpandedInstance: {
+            /** All Day */
+            all_day: boolean;
+            /** End */
+            end: components["schemas"]["CalendarDate"] | components["schemas"]["CalendarDateTime"];
+            /** Event Id */
+            event_id: string;
+            /** Group */
+            group: string;
+            /**
+             * Instance Id
+             * @description Unique within this response and stable across calls. Series use event_id/original-start, where all-day dates use YYYY-MM-DD and timed slots use their canonical UTC instant; moved exceptions retain the original slot ID. Single events use event_id.
+             */
+            instance_id: string;
+            /** Location */
+            location: string;
+            /**
+             * Recurrence Id
+             * @description Original series slot; null for a non-recurring event.
+             */
+            recurrence_id: components["schemas"]["CalendarDate"] | components["schemas"]["CalendarDateTime"] | null;
+            /** Revision */
+            revision: number;
+            /** Start */
+            start: components["schemas"]["CalendarDate"] | components["schemas"]["CalendarDateTime"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "confirmed" | "tentative";
+            /** Summary */
+            summary: string;
+        };
         /** CalendarGroup */
         CalendarGroup: {
             /** Id */
@@ -6528,6 +6582,20 @@ export interface components {
              * @enum {string}
              */
             visibility: "default" | "public" | "private" | "confidential";
+        };
+        /** CalendarInstances */
+        CalendarInstances: {
+            /** Enabled */
+            enabled: boolean;
+            /** Groups */
+            groups: components["schemas"]["CalendarGroup"][];
+            /** Instances */
+            instances: components["schemas"]["CalendarExpandedInstance"][];
+            /**
+             * Truncated
+             * @description True when matching instances were omitted at the 2000-instance cap or an event could not be fully expanded within compatibility and work limits.
+             */
+            truncated: boolean;
         };
         /**
          * CalendarPayload
@@ -15830,6 +15898,53 @@ export interface operations {
                 };
             };
             /** @description disabled or invalid configuration */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarError"];
+                };
+            };
+        };
+    };
+    getCalendarInstances: {
+        parameters: {
+            query: {
+                /** @description Inclusive window start date (YYYY-MM-DD). */
+                from: string;
+                /** @description Exclusive window end date (YYYY-MM-DD), matching exclusive CalendarDate end semantics. */
+                to: string;
+                /** @description IANA time zone used to interpret from/to as local midnights. Defaults to UTC; aliases resolve through the server's canonical timezone helpers. Host keys such as localtime, posixrules, posix/* and right/* are rejected. */
+                tz?: string;
+                /** @description Selected configured group; defaults to the first group. */
+                group?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description expanded calendar instances */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarInstances"];
+                };
+            };
+            /** @description invalid window (invalid_calendar_event) or unknown group (unknown_calendar_group) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarError"];
+                };
+            };
+            /** @description invalid configuration */
             503: {
                 headers: {
                     [name: string]: unknown;

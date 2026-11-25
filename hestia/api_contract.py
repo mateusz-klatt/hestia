@@ -112,7 +112,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 #         (migration 0029, down_revision 0028), resolved display fields and admin bulk import.
 # 0.46.0: additive 409 device_token_limit_reached response for new password-login device names at the active cap.
 # 0.47.0: additive parse_failed_reasons on BudgetReceiptGmailStatus and retry_parse_failed on BudgetReceiptGmailSyncRequest (zero migration).
-CONTRACT_VERSION = "0.47.0"
+# 0.48.0: read-only bounded expansion of recurring calendar events into concrete instances.
+CONTRACT_VERSION = "0.48.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -124,6 +125,7 @@ _P_AUTOMATIONS = "/api/automations"
 _P_USERS = "/api/users"
 _P_WHOLE_HOME = "/api/whole-home"
 _P_CALENDARS = "/api/calendars"
+_P_CALENDAR_INSTANCES = _P_CALENDARS + "/instances"
 _P_CALENDAR_EVENTS = _P_CALENDARS + "/events"
 _P_CALENDAR_DELETE = _P_CALENDAR_EVENTS + "/delete"
 _P_BUDGET = "/api/budget/"
@@ -1040,6 +1042,29 @@ class Calendars(BaseModel):
     status: CalendarSyncStatus
 
 
+class CalendarExpandedInstance(BaseModel):
+    model_config = _READ
+    instance_id: str = Field(description="Unique within this response and stable across calls. Series use event_id/original-start, where all-day dates use YYYY-MM-DD and timed slots use their canonical UTC instant; moved exceptions retain the original slot ID. Single events use event_id.")
+    event_id: str
+    revision: Annotated[int, Field(ge=1)]
+    group: str
+    summary: str
+    location: str
+    start: CalendarTime
+    end: CalendarTime
+    all_day: bool
+    status: Literal["confirmed", "tentative"]
+    recurrence_id: CalendarTime | None = Field(description="Original series slot; null for a non-recurring event.")
+
+
+class CalendarInstances(BaseModel):
+    model_config = _READ
+    enabled: bool
+    groups: list[CalendarGroup]
+    instances: list[CalendarExpandedInstance] = Field(max_length=2000)
+    truncated: bool = Field(description="True when matching instances were omitted at the 2000-instance cap or an event could not be fully expanded within compatibility and work limits.")
+
+
 class CalendarSaved(BaseModel):
     model_config = _READ
     ok: Literal[True]
@@ -1052,7 +1077,7 @@ class CalendarError(BaseModel):
 
 
 _CALENDAR_MODELS = (CalendarCreateRequest, CalendarUpdateRequest, CalendarDeleteRequest,
-                    Calendars, CalendarSaved, CalendarError)
+                    Calendars, CalendarInstances, CalendarSaved, CalendarError)
 
 
 BudgetId = Annotated[str, Field(min_length=1, max_length=128)]
@@ -3574,6 +3599,7 @@ _PATH_ROLES = {
     ("GET", "/api/rf433"): "admin",
     ("GET", "/api/db/stats"): "admin",
     ("GET", _P_CALENDARS): "viewer",
+    ("GET", _P_CALENDAR_INSTANCES): "viewer",
     ("POST", _P_CALENDAR_EVENTS): "operator",
     ("POST", _P_CALENDAR_DELETE): "operator",
     ("GET", _P_BUDGET_CONNECTIONS): "admin",
@@ -4037,6 +4063,42 @@ def build_openapi() -> dict:
                     "responses": {
                         "200": {"description": "calendar state", "content": {_APP_JSON: {"schema": _ref("Calendars")}}},
                         "400": {"description": "unknown group", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
+                        "503": {"description": "invalid configuration", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
+                    },
+                },
+            },
+            _P_CALENDAR_INSTANCES: {
+                "get": {
+                    "operationId": "getCalendarInstances",
+                    "summary": "Concrete calendar occurrences in a half-open date window",
+                    "description": (
+                        "Requires viewer. Expands S1-S7 allowlisted RRULE shapes and RDATEs, applies moved or "
+                        "modified exceptions, and omits EXDATE and every cancelled occurrence. Events outside "
+                        "the S1-S7 allowlist (including SECONDLY/MINUTELY/HOURLY rules, multiple RRULEs, >500 "
+                        "RDATE/EXDATEs, or >31-day recurring durations) or exceeding 5000 occurrences in the "
+                        "padded window return only DTSTART with truncated=true when within budget. Requests "
+                        "also enforce shared SQL and expansion budgets (5000 events, 16 MiB stored JSON, "
+                        "600000 replay day-check units, and 50000 candidates): events over the SQL or "
+                        "pre-parse explicit-date/override budget are omitted without parsing and set "
+                        "truncated=true, and exhausting the candidate budget stops expansion with "
+                        "truncated=true. The window is [from, to) at local midnights in tz (default UTC), "
+                        "from is inclusive, to is exclusive, and its duration cannot exceed 92 days. Instances "
+                        "are sorted by start and capped at 2000. Disabled synchronization returns 200 with "
+                        "enabled=false and empty groups and instances."
+                    ),
+                    "parameters": [
+                        {"name": "from", "in": "query", "required": True, "schema": {"type": "string", "format": "date"},
+                         "description": "Inclusive window start date (YYYY-MM-DD)."},
+                        {"name": "to", "in": "query", "required": True, "schema": {"type": "string", "format": "date"},
+                         "description": "Exclusive window end date (YYYY-MM-DD), matching exclusive CalendarDate end semantics."},
+                        {"name": "tz", "in": "query", "schema": {"type": "string", "default": "UTC"},
+                         "description": "IANA time zone used to interpret from/to as local midnights. Defaults to UTC; aliases resolve through the server's canonical timezone helpers. Host keys such as localtime, posixrules, posix/* and right/* are rejected."},
+                        {"name": "group", "in": "query", "schema": {"type": "string"},
+                         "description": "Selected configured group; defaults to the first group."},
+                    ],
+                    "responses": {
+                        "200": {"description": "expanded calendar instances", "content": {_APP_JSON: {"schema": _ref("CalendarInstances")}}},
+                        "400": {"description": "invalid window (invalid_calendar_event) or unknown group (unknown_calendar_group)", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
                         "503": {"description": "invalid configuration", "content": {_APP_JSON: {"schema": _ref("CalendarError")}}},
                     },
                 },

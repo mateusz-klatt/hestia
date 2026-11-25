@@ -28,3 +28,5 @@ pydantic>=2.14.4,<3
 # RFC 5545 parsing/serialization for the optional server-side calendar bridge.
 # The existing <8 ceiling already selected 7.x; the floor tracks the current 7 release.
 icalendar>=7.3.2,<8
+# Bounded RFC 5545 expansion, including DST errata and RECURRENCE-ID overrides.
+recurring-ical-events>=3.8.2,<4

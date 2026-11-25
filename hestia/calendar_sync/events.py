@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 import hashlib
 import html
 import json
@@ -433,6 +434,11 @@ def from_ical(data: str | bytes, *, floating_time_zone: str | None = None) -> tu
         _fail("Invalid iCalendar resource")
 
 
+@lru_cache(maxsize=64)
+def _vtimezone(name: str) -> Timezone:
+    return Timezone.from_tzinfo(ZoneInfo(name), first_date=date(1970, 1, 1), last_date=date(2100, 1, 1))
+
+
 def to_ical(payload: dict, uid: str, *, explicit_end: bool = False) -> bytes:
     """Serialize portable content, optionally including server-required end fields.
 
@@ -471,5 +477,5 @@ def to_ical(payload: dict, uid: str, *, explicit_end: bool = False) -> bytes:
             event.add(name, parsed[name], encode=False)
         calendar.add_component(event)
     for name in sorted(zones):
-        calendar.add_component(Timezone.from_tzinfo(ZoneInfo(name), first_date=date(1970, 1, 1), last_date=date(2100, 1, 1)))
+        calendar.add_component(deepcopy(_vtimezone(name)))
     return calendar.to_ical()
