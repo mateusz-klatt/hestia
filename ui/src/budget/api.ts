@@ -77,11 +77,18 @@ export interface AuthorizationCapabilities {
   household_available: boolean;
 }
 
+function encodeActor(actor: string): string {
+  const bytes = new TextEncoder().encode(actor);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 export function createBudgetApi(expectedActor: string | null = null) {
   function call<T>(target: URL, init: RequestInit = {}): Promise<BudgetResult<T>> {
     if (expectedActor === null || !target.pathname.includes("/api/budget/")) return request<T>(target, init);
     const headers = new Headers(init.headers);
-    headers.set("X-Hestia-Expected-Actor", expectedActor);
+    headers.set("X-Hestia-Expected-Actor", encodeActor(expectedActor));
     return request<T>(target, { ...init, headers });
   }
   function post<T>(path: string, body: object, headers: Record<string, string> = {}): Promise<BudgetResult<T>> {

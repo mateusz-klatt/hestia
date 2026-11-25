@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from datetime import date
 import hmac
 import logging
@@ -53,16 +54,34 @@ def _error(status, code, **extra):
     return web.json_response({"ok": False, "error": code, **extra}, status=status, headers=PRIVATE_HEADERS)
 
 
+def expected_actor_matches(request, user):
+    headers = getattr(request, "headers", {})
+    getall = getattr(headers, "getall", None)
+    values = [] if getall is None else getall("X-Hestia-Expected-Actor", [])
+    if not values:
+        return True
+    if len(values) != 1:
+        return False
+    encoded = values[0]
+    try:
+        if not encoded or len(encoded) > 256 or not encoded.isascii():
+            return False
+        decoded = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8")
+        canonical = base64.urlsafe_b64encode(decoded.encode("utf-8")).rstrip(b"=").decode("ascii")
+        if not hmac.compare_digest(encoded, canonical):
+            return False
+    except (ValueError, UnicodeError):
+        return False
+    return hmac.compare_digest(decoded.encode("utf-8"), user.encode("utf-8"))
+
+
 def _principal(request, auth_enabled):
     if os.environ.get("HESTIA_BUDGET_HTTP_ENABLED") != "1":
         raise _Rejected(404, "budget_disabled")
     user = request.get("hestia_user")
     if not auth_enabled() or not isinstance(user, str) or not user:
         raise _Rejected(401, "budget_not_signed_in")
-    headers = getattr(request, "headers", {})
-    getall = getattr(headers, "getall", None)
-    expected = [] if getall is None else getall("X-Hestia-Expected-Actor", [])
-    if len(expected) > 1 or (expected and not hmac.compare_digest(expected[0], user)):
+    if not expected_actor_matches(request, user):
         raise _Rejected(409, "budget_actor_changed")
     if os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
         raise BudgetUsersBackendRequired()

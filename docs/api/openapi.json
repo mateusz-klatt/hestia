@@ -16745,7 +16745,7 @@
           }
         },
         "summary": "Explicitly confirm one owned account's kind",
-        "x-required-permission": "ioc.configure",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -16853,7 +16853,7 @@
           }
         },
         "summary": "Select or deselect one owned account",
-        "x-required-permission": "ioc.configure",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -17950,7 +17950,7 @@
           }
         },
         "summary": "Read owner-private live active alerts inbox (pure read-only)",
-        "x-required-permission": "budget.view",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -18061,7 +18061,7 @@
           }
         },
         "summary": "Mark or unmark owner-private inbox alerts (atomic anti-ABA CAS)",
-        "x-required-permission": "budget.edit",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -20776,7 +20776,7 @@
           }
         },
         "summary": "Opt one owned connection in or out of unattended acquisition",
-        "x-required-permission": "ioc.configure",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -20988,7 +20988,7 @@
           }
         },
         "summary": "Pause or resume one owned connection locally",
-        "x-required-permission": "ioc.configure",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -23796,7 +23796,7 @@
           }
         },
         "summary": "Recent owner refresh jobs, newest first, at most 20",
-        "x-required-permission": "ioc.configure",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -25177,7 +25177,7 @@
           }
         },
         "summary": "Enable or disable the local Gmail grant",
-        "x-required-permission": "ioc.configure",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -25308,7 +25308,7 @@
           }
         },
         "summary": "Revoke the local grant and purge unconfirmed imports",
-        "x-required-permission": "ioc.configure",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -25399,7 +25399,7 @@
           }
         },
         "summary": "Read safe Gmail import state",
-        "x-required-permission": "ioc.configure",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -25540,7 +25540,7 @@
           }
         },
         "summary": "Schedule one Gmail import for the background poller",
-        "x-required-permission": "ioc.configure",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -26203,7 +26203,7 @@
           }
         },
         "summary": "Queue one owner refresh under existing quotas",
-        "x-required-permission": "ioc.configure",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },

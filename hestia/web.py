@@ -42,6 +42,7 @@ from pathlib import Path
 from aiohttp import ClientConnectionError, web
 
 from . import auth, authz, store_sql
+from .budget import api as budget_api
 from .budget import consent_api, consent_context, device_token
 from .budget.config import BudgetConfigError
 from .budget.i18n import validate_languages
@@ -344,13 +345,15 @@ _USER_ADMIN_ROUTES = frozenset({
 _OWNER_ONLY_ROUTES = frozenset({
     (method, path) for (method, path) in _ROUTE_MIN_ROLE
     if path.startswith("/api/budget/consent/")
-    or path in {
+    or (method, path) in {
         ("GET", "/api/budget/jobs"),
         ("POST", "/api/budget/account-selection"),
         ("POST", "/api/budget/account-kind"),
         ("POST", "/api/budget/connection-state"),
         ("POST", "/api/budget/background-selection"),
         ("POST", "/api/budget/refresh"),
+        ("GET", "/api/budget/analytics/inbox"),
+        ("POST", "/api/budget/analytics/inbox-mark"),
         ("POST", "/api/budget/receipts/gmail-grant"),
         ("POST", "/api/budget/receipts/gmail-revoke"),
         ("POST", "/api/budget/receipts/gmail-sync"),
@@ -598,6 +601,8 @@ def _envelope_matches_state(carrier: str, envelope: auth.SessionEnvelope, auth_s
 @web.middleware
 async def _auth_middleware(request, handler):
     """Authenticate + authorize requests across legacy and active session/policy bridge phases."""
+    if (request.method, request.path) == ("GET", "/api/auth/features"):
+        return await handler(request)
     if device_token.receipts_path(request.path) and not device_token.receipts_enabled():
         return device_token.disabled_response()
     authorization = request.headers.get("Authorization", "")
@@ -684,6 +689,10 @@ async def _auth_middleware(request, handler):
         except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
             return _incompatible_bridge_response()
     if not allowed:
+        if request.path.startswith("/api/budget/"):
+            if not budget_api.expected_actor_matches(request, envelope.username):
+                return _json(HTTPStatus.CONFLICT, {"error": {"code": "budget_actor_changed"}})
+            return _json(HTTPStatus.FORBIDDEN, {"error": {"code": "budget_forbidden"}})
         return _empty(HTTPStatus.FORBIDDEN)
     if (
         auth_state.session_phase == store_sql.SESSION_PHASE_V2

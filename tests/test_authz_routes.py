@@ -1,6 +1,7 @@
 """Exhaustive route authorization parity and PR 2 discovery contracts."""
 
 import asyncio
+import base64
 import io
 import json
 import os
@@ -262,6 +263,10 @@ class CapabilityUnitTests(unittest.TestCase):
             self.assertFalse(web._session_context_current(ctx))
 
 
+def _actor_header(username):
+    return base64.urlsafe_b64encode(username.encode("utf-8")).rstrip(b"=").decode("ascii")
+
+
 class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._dir = tempfile.TemporaryDirectory()
@@ -402,6 +407,68 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
             with self.sessions.begin() as session:
                 session.get(db.User, "admin").disabled = True
             await asyncio.wait_for(response.read(), 2)
+
+    async def test_owner_only_jobs_and_mixed_inbox_ignore_ledger_and_ioc_grants(self):
+        with self.sessions.begin() as session:
+            session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
+            session.execute(db.PermissionGrant.__table__.delete().where(
+                db.PermissionGrant.username == "admin",
+                db.PermissionGrant.permission_id.in_(
+                    ("budget.view", "budget.edit", "ioc.configure")
+                ),
+            ))
+        for path in ("/api/budget/jobs", "/api/budget/analytics/inbox"):
+            with self.subTest(path=path):
+                response = await self.client.get(path, headers=self._cookie("admin"))
+                self.assertEqual(response.status, 200, await response.text())
+        denied = await self.client.get("/api/budget/analytics/overview", headers=self._cookie("admin"))
+        self.assertEqual(denied.status, 403)
+
+    async def test_custom_delegate_and_stale_actor_receive_contract_error_envelopes(self):
+        with self.sessions.begin() as session:
+            session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
+            session.add(db.PermissionGrant(
+                username="viewer", permission_id="budget.receipts.add", target_owner="admin",
+            ))
+        denied = await self.client.post(
+            "/api/budget/receipts/parse-text", json={"text": "synthetic"},
+            headers={**self._cookie("viewer"), "Origin": "https://unused.example"},
+        )
+        self.assertEqual(denied.status, 403)
+        self.assertEqual(await denied.json(), {"error": {"code": "budget_forbidden"}})
+        stale = await self.client.get(
+            "/api/budget/accounts",
+            headers={**self._cookie("viewer"), "X-Hestia-Expected-Actor": _actor_header("admin")},
+        )
+        self.assertEqual(stale.status, 409)
+        self.assertEqual(await stale.json(), {"error": {"code": "budget_actor_changed"}})
+
+    async def test_unicode_expected_actor_headers_match_after_decoding(self):
+        with self.sessions.begin() as session:
+            session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
+            for username in ("Ági", "Łukasz"):
+                session.add(db.User(username=username, password_hash="h", role="viewer", budget_owner=True))
+                session.flush()
+                session.add(db.PermissionGrant(
+                    username=username, permission_id="budget.view", target_owner=username,
+                ))
+        for username in ("Ági", "Łukasz"):
+            with self.subTest(username=username):
+                response = await self.client.get(
+                    "/api/budget/accounts",
+                    headers={**self._cookie(username), "X-Hestia-Expected-Actor": _actor_header(username)},
+                )
+                self.assertEqual(response.status, 200, await response.text())
+
+    async def test_public_feature_probe_ignores_all_credentials(self):
+        for headers in (
+            {"Authorization": "Bearer " + "A" * 43},
+            {"Cookie": "hestia_session=invalid", "Authorization": "Bearer invalid"},
+        ):
+            with self.subTest(headers=headers):
+                response = await self.client.get("/api/auth/features", headers=headers)
+                self.assertEqual(response.status, 200)
+                self.assertEqual((await response.json())["auth_contract"], 2)
 
     async def test_auth_off_capabilities_have_no_private_budget_or_owner(self):
         with mock.patch.object(web, "_AUTH_ENABLED", False):

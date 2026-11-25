@@ -25,7 +25,11 @@ describe("budget api", () => {
     await scoped.receiptDevices();
     expect(new Headers(sent(fetchMock, 0).init.headers).has("X-Hestia-Expected-Actor")).toBe(false);
     for (const index of [1, 2]) {
-      expect(new Headers(sent(fetchMock, index).init.headers).get("X-Hestia-Expected-Actor")).toBe("owner");
+      expect(new Headers(sent(fetchMock, index).init.headers).get("X-Hestia-Expected-Actor")).toBe("b3duZXI");
+    }
+    for (const [index, actor, encoded] of [[3, "Ági", "w4FnaQ"], [4, "Łukasz", "xYF1a2Fzeg"]] as const) {
+      await createBudgetApi(actor).accounts();
+      expect(new Headers(sent(fetchMock, index).init.headers).get("X-Hestia-Expected-Actor")).toBe(encoded);
     }
   });
 
