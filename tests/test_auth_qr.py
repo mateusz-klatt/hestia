@@ -323,6 +323,9 @@ class QrLoginWebTests(unittest.IsolatedAsyncioTestCase):
                 headers=self._browser_headers("https://" + "a" * 40 + ".example"))
             self.assertEqual(response.status, 400)
             self.assertEqual(await response.json(), {"error": {"code": "qr_origin_too_long"}})
+            features = await (await self.client.get("/api/auth/features")).json()
+            self.assertIsNone(features["qr_origin"])
+            self.assertNotIn("qr_login", features["features"])
         with mock.patch.object(auth_qr, "issue", side_effect=authz.PolicyPhaseUnsupported("future")):
             response = await self.client.post(auth_qr.CODE_PATH, json={"origin": "https://hestia.example"},
                                               headers=self._browser_headers())

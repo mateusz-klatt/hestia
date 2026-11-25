@@ -739,15 +739,16 @@ async def _auth_middleware(request, handler):
         if auth_state.policy_phase != authz.POLICY_PHASE_LEGACY and request.path.startswith("/api/budget/"):
             return _json(HTTPStatus.FORBIDDEN, {"error": {"code": "budget_forbidden"}})
         return _empty(HTTPStatus.FORBIDDEN)
-    if (
-        auth_state.session_phase == store_sql.SESSION_PHASE_V2
-        and (request.method, request.path) in _CORE_BROWSER_ROUTES
+    route = request.method, request.path
+    grant_write = route == ("POST", _PATH_USER_GRANTS)
+    if grant_write or (
+        auth_state.session_phase == store_sql.SESSION_PHASE_V2 and route in _CORE_BROWSER_ROUTES
     ):
         if carrier != "cookie":
             return _json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "browser_session_required"})
-        if envelope.version != 2:
+        if envelope.version != 2 or (grant_write and envelope.purpose != auth.SESSION_PURPOSE_BROWSER):
             return _json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "browser_session_upgrade_required"})
-        if (request.method, request.path) in _CORE_BROWSER_MUTATION_ROUTES:
+        if grant_write or route in _CORE_BROWSER_MUTATION_ROUTES:
             origin_err = _check_core_origin(request)
             if origin_err is not None:
                 return origin_err
@@ -1091,6 +1092,8 @@ async def _auth_features(request):
     )
     native_auth = _native_auth_available()
     qr_origin = _qr_configured_origin() if native_auth else None
+    if qr_origin is not None and len(qr_origin.encode("ascii")) > auth_qr.MAX_ORIGIN_BYTES:
+        qr_origin = None
     features = ["capabilities"]
     if qr_origin is not None:
         features.append("qr_login")

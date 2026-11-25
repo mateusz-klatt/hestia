@@ -521,6 +521,29 @@ class GrantEditorHTTPTests(unittest.IsolatedAsyncioTestCase):
         after = await self.client.get("/api/users/grants?username=viewer", headers=self._headers())
         self.assertEqual(_grant_keys(await after.json()), {("ioc.control", None)})
 
+    async def test_legacy_issuance_cannot_activate_custom_with_v1_bearer_or_cookie(self):
+        with self.sessions.begin() as session:
+            session.get(db.AppMeta, store_sql._SESSION_PHASE_KEY).value = store_sql.SESSION_PHASE_LEGACY
+        v1 = auth.make_session("admin", now=web._now(), secret=self.secret)
+        for headers, status in (
+            ({"Authorization": f"Bearer {v1}"}, 403),
+            ({"Cookie": f"hestia_session={v1}", "Origin": self._headers(origin=True)["Origin"]}, 401),
+        ):
+            response = await self.client.post(
+                "/api/users/grants",
+                json={"username": "viewer", "grants": [_grant("ioc.control")]},
+                headers=headers,
+            )
+            self.assertEqual(response.status, status)
+        with self.sessions() as session:
+            self.assertEqual(
+                session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value,
+                authz.POLICY_PHASE_COMPAT,
+            )
+            self.assertFalse(session.query(db.PermissionGrant).filter_by(
+                username="viewer", permission_id="ioc.control",
+            ).first())
+
     async def test_self_manage_users_cannot_be_removed_over_http(self):
         current = await self.client.get("/api/users/grants?username=admin", headers=self._headers())
         grants = [
