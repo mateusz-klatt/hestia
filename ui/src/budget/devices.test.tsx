@@ -115,7 +115,7 @@ describe("receipt devices", () => {
 
   it("says the QR is unavailable when the payload does not fit", async () => {
     const client = api();
-    client.pairReceiptDevice.mockImplementation(() => ok({ ...pairing(), qr_payload: "x".repeat(40) }));
+    client.pairReceiptDevice.mockImplementation(() => ok({ ...pairing(), qr_payload: "x".repeat(79) }));
     await render(client);
     await act(async () => { button("Add device").click(); await Promise.resolve(); });
     expect(host.textContent).toContain("A QR code is unavailable");
