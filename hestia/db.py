@@ -1013,9 +1013,9 @@ class BudgetReceipt(Base):
     gateway_ref_hmac: Mapped[str | None]
     fee_amount: Mapped[str | None]
     payee_host: Mapped[str | None]
-    # Single-column self-FK (inline, like submitted_by): a composite SET NULL would
-    # also null owner (NOT NULL). The 0031 DDL carries ON DELETE SET NULL; the SQLite
-    # dialect does not reflect inline FK actions, so the model omits it.
+    # Migration 0031 enforces same-owner evidence with triggers and clears the
+    # pointer via ON DELETE SET NULL. SQLite's dialect omits inline FK actions
+    # when reflecting the schema, so the model omits the action too.
     evidence_for_receipt_id: Mapped[str | None] = mapped_column(ForeignKey("budget_receipts.id"))
     import_expires_at: Mapped[float | None]
     invoice_number: Mapped[str | None]

@@ -13,8 +13,14 @@ depends_on = None
 
 _RECEIPTS = "budget_receipts"
 _REF_INDEX = "uq_budget_receipts_gateway_ref"
+_INSERT_OWNER_TRIGGER = "budget_receipts_evidence_owner_insert"
+_UPDATE_OWNER_TRIGGER = "budget_receipts_evidence_owner_update"
 _COLUMNS = ("gateway", "gateway_status", "gateway_ref_hmac", "fee_amount", "payee_host",
             "evidence_for_receipt_id")
+_INVALID_TARGET = f"""NEW.evidence_for_receipt_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM {_RECEIPTS}
+    WHERE id = NEW.evidence_for_receipt_id AND owner = NEW.owner
+)"""
 
 # Inline CHECK/REFERENCES (the 0030 pattern): a batch rebuild would turn the inline
 # REFERENCES on submitted_by into a table-level FK, which SQLite DROP COLUMN rejects,
@@ -48,11 +54,33 @@ def upgrade():
     # Single-column self-FK: a composite SET NULL would also null owner (NOT NULL).
     op.execute(f"ALTER TABLE {_RECEIPTS} ADD COLUMN evidence_for_receipt_id VARCHAR "
                f"REFERENCES {_RECEIPTS}(id) ON DELETE SET NULL")
+    op.execute(f"""
+        CREATE TRIGGER {_INSERT_OWNER_TRIGGER}
+        BEFORE INSERT ON {_RECEIPTS}
+        WHEN {_INVALID_TARGET}
+        BEGIN
+            SELECT RAISE(ABORT, 'invalid receipt evidence owner');
+        END
+    """)
+    # Also protect existing evidence if its target's owner changes.
+    op.execute(f"""
+        CREATE TRIGGER {_UPDATE_OWNER_TRIGGER}
+        BEFORE UPDATE OF evidence_for_receipt_id, owner ON {_RECEIPTS}
+        WHEN ({_INVALID_TARGET}) OR (OLD.owner <> NEW.owner AND EXISTS (
+            SELECT 1 FROM {_RECEIPTS}
+            WHERE evidence_for_receipt_id = OLD.id AND owner <> NEW.owner
+        ))
+        BEGIN
+            SELECT RAISE(ABORT, 'invalid receipt evidence owner');
+        END
+    """)
     op.create_index(_REF_INDEX, _RECEIPTS, ["owner", "gateway", "gateway_ref_hmac"], unique=True,
                     sqlite_where=sa.text("gateway_ref_hmac IS NOT NULL"))
 
 
 def downgrade():
+    op.execute(f"DROP TRIGGER {_UPDATE_OWNER_TRIGGER}")
+    op.execute(f"DROP TRIGGER {_INSERT_OWNER_TRIGGER}")
     op.drop_index(_REF_INDEX, table_name=_RECEIPTS)
     for column in reversed(_COLUMNS):
         op.drop_column(_RECEIPTS, column)

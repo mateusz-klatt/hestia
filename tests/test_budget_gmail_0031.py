@@ -125,3 +125,26 @@ class GatewayEvidenceMigrationTests(unittest.TestCase):
                 "SELECT gateway, gateway_status, gateway_ref_hmac, fee_amount, payee_host, "
                 "evidence_for_receipt_id FROM budget_receipts").all(),
                 [(None, None, None, None, None, None)] * 4)
+
+    def test_evidence_pointer_rejects_cross_owner_insert_and_updates(self):
+        engine, _ = db.init_db(self.path)
+        insert = (
+            "INSERT INTO budget_receipts (id, owner, status, source_kind, document_kind, "
+            "version, created_at, updated_at, evidence_for_receipt_id) "
+            "VALUES (?, ?, 'imported', 'email', 'payment_confirmation', 1, 1, 1, ?)"
+        )
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "INSERT INTO users (username, password_hash, role) "
+                "VALUES ('owner', 'synthetic', 'admin'), ('other', 'synthetic', 'admin')")
+            connection.exec_driver_sql(insert, [("doc", "owner", None), ("pay", "owner", "doc"),
+                                                 ("other-payment", "other", None)])
+        for statement, values in (
+            (insert, ("new-payment", "other", "doc")),
+            ("UPDATE budget_receipts SET evidence_for_receipt_id = 'doc' WHERE id = 'other-payment'", ()),
+            ("UPDATE budget_receipts SET owner = 'other' WHERE id = 'pay'", ()),
+            ("UPDATE budget_receipts SET owner = 'other' WHERE id = 'doc'", ()),
+        ):
+            with self.subTest(statement=statement), engine.begin() as connection:
+                with self.assertRaisesRegex(IntegrityError, "invalid receipt evidence owner"):
+                    connection.exec_driver_sql(statement, values)
