@@ -17,8 +17,8 @@ from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
 from .gmail_payment import _payee_key, inspect_payment
 from .gmail_store import (GATEWAY_REF_DOMAIN, ORDER_REFERENCE_DOMAIN, PAYMENT_PAYEE_DOMAIN, PAYMENT_SENDER_DOMAIN,
                           RFC_MESSAGE_DOMAIN, PendingMessage, PendingPayment, digest, normalize_parse_failed_reason)
-from .gmail_trust import (classify_sender, domain_matches, forward_sender_domain, mime_parts, payment_sender_for,
-                          unwrap_trusted_forward)
+from .gmail_trust import (classify_sender, domain_matches, forward_sender_domain, inline_forward_body,
+                          mime_parts, payment_sender_for, unwrap_trusted_forward)
 from .gmail_worker import MAX_HTML_BYTES, MAX_PDF_BYTES, PDFUnsupported, WorkerRejected, WorkerUnavailable
 
 
@@ -155,6 +155,10 @@ def _document_payload(kind, part):
     return payload
 
 
+def _has_rfc822_attachment(message):
+    return any(part.get_content_type() == "message/rfc822" for part in mime_parts(message))
+
+
 class GmailMessageProcessor:
     def __init__(self, settings, worker):
         self.settings = settings
@@ -169,7 +173,7 @@ class GmailMessageProcessor:
                                payment_senders=getattr(self.settings, "payment_senders", ()))
 
     def _manual_forward(self, outer, inner, pending):
-        attached = any(part.get_content_type() == "message/rfc822" for part in mime_parts(outer))
+        attached = _has_rfc822_attachment(outer)
         return replace(pending, outcome="imported", invoice=None, forwarded_manually=True,
                        sender_domain=forward_sender_domain(inner), source_kind="attachment" if attached else "email")
 
@@ -198,58 +202,75 @@ class GmailMessageProcessor:
                                parse_failed_reason=None)
         return pending
 
-    def _payment(self, message, pending, sender):
+    def _payment_from_part(self, kind, part, subjects, pending, sender, message, *, cut_inline=False):
+        try:
+            payload = _document_payload(kind, part)
+            if not payload:
+                return pending, True, True
+            text = self.worker.parse(kind, payload)
+        except _PartOversized:
+            return replace(pending, outcome="skipped_oversized"), True, False
+        except WorkerRejected as error:
+            return _parse_failed(pending, _worker_reason(error)), True, False
+        if cut_inline:
+            text = inline_forward_body(text)
+        if not text.strip():
+            return pending, True, True
+        inspected = inspect_payment(text, subjects=subjects, merchant=sender.merchant, gateway=sender.gateway,
+                                    provider=sender.provider)
+        if inspected.missing_total:
+            return pending, True, True
+        secret = self.settings.hmac_secret
+        if inspected.reject_reason == "failed":
+            if sender.gateway and inspected.gateway_ref is not None:
+                ref_hmac = digest(secret, GATEWAY_REF_DOMAIN, inspected.gateway_ref)
+                return replace(pending, outcome="skipped_non_receipt",
+                               failed_gateway=(sender.merchant, ref_hmac)), False, False
+            return pending, False, False
+        payment = inspected.payment
+        if payment is None:
+            return pending, False, False
+        try:
+            receipt_date = datetime.fromtimestamp(pending.internal_date, _WARSAW).date()
+        except (OverflowError, OSError, ValueError):
+            return pending, False, False
+        if any(abs((body_date - receipt_date).days) > 3 for body_date in payment.body_dates):
+            return pending, False, False
+        reference = payment.order_reference
+        provenance = PendingPayment(
+            replace(payment, order_reference=None), receipt_date,
+            digest(secret, PAYMENT_SENDER_DOMAIN, sender.sender),
+            order_reference_hmac=digest(secret, ORDER_REFERENCE_DOMAIN, reference) if reference else None,
+            gateway=sender.gateway,
+            payee_hmac=(digest(secret, PAYMENT_PAYEE_DOMAIN, _payee_key(payment.merchant))
+                        if sender.gateway and not payment.payee_from_config else None),
+            status=inspected.status,
+            gateway_ref_hmac=(digest(secret, GATEWAY_REF_DOMAIN, inspected.gateway_ref)
+                              if inspected.gateway_ref is not None else None),
+            gateway_name=sender.merchant if sender.gateway else None,
+        )
+        return replace(pending, outcome="imported", payment=provenance,
+                       rfc_message_id_hmac=_rfc_message_hmac(message, secret)), False, False
+
+    def _payment(self, message, pending, sender, *, inline_outer=None):
         subjects = tuple(map(str, message.get_all("Subject", ())))
         failure = pending
+        missing_total = False
         for kind, part in _body_parts(message):
-            try:
-                payload = _document_payload(kind, part)
-                if not payload:
-                    continue
-                text = self.worker.parse(kind, payload)
-            except _PartOversized:
-                failure = replace(pending, outcome="skipped_oversized")
-                continue
-            except WorkerRejected as error:
-                failure = _parse_failed(pending, _worker_reason(error))
-                continue
-            if not text.strip():
-                continue
-            inspected = inspect_payment(text, subjects=subjects, merchant=sender.merchant, gateway=sender.gateway,
-                                        provider=sender.provider)
-            if inspected.missing_total:
-                continue
-            secret = self.settings.hmac_secret
-            if inspected.reject_reason == "failed":
-                if sender.gateway and inspected.gateway_ref is not None:
-                    ref_hmac = digest(secret, GATEWAY_REF_DOMAIN, inspected.gateway_ref)
-                    return replace(pending, outcome="skipped_non_receipt",
-                                   failed_gateway=(sender.merchant, ref_hmac))
-                return pending
-            payment = inspected.payment
-            if payment is None:
-                return pending
-            try:
-                receipt_date = datetime.fromtimestamp(pending.internal_date, _WARSAW).date()
-            except (OverflowError, OSError, ValueError):
-                return pending
-            if any(abs((body_date - receipt_date).days) > 3 for body_date in payment.body_dates):
-                return pending
-            reference = payment.order_reference
-            provenance = PendingPayment(
-                replace(payment, order_reference=None), receipt_date,
-                digest(secret, PAYMENT_SENDER_DOMAIN, sender.sender),
-                order_reference_hmac=digest(secret, ORDER_REFERENCE_DOMAIN, reference) if reference else None,
-                gateway=sender.gateway,
-                payee_hmac=(digest(secret, PAYMENT_PAYEE_DOMAIN, _payee_key(payment.merchant))
-                            if sender.gateway and not payment.payee_from_config else None),
-                status=inspected.status,
-                gateway_ref_hmac=(digest(secret, GATEWAY_REF_DOMAIN, inspected.gateway_ref)
-                                  if inspected.gateway_ref is not None else None),
-                gateway_name=sender.merchant if sender.gateway else None,
+            result, should_continue, part_missing = self._payment_from_part(
+                kind, part, subjects, pending, sender, message,
             )
-            return replace(pending, outcome="imported", payment=provenance,
-                           rfc_message_id_hmac=_rfc_message_hmac(message, secret))
+            if not should_continue:
+                return result
+            failure = result if result is not pending else failure
+            missing_total |= part_missing
+        if missing_total and inline_outer is not None and inline_outer.get_body(("plain",)) is not None:
+            html_part = inline_outer.get_body(("html",))
+            if html_part is not None:
+                result, _, _ = self._payment_from_part(
+                    "html", html_part, subjects, pending, sender, message, cut_inline=True,
+                )
+                return result
         return failure
 
     def _parse(self, raw, pending):
@@ -276,7 +297,8 @@ class GmailMessageProcessor:
                     return imported
             sender = payment_sender_for(inner.raw_items(), payment_senders)
             if sender is not None:
-                imported = self._payment(inner, pending, sender)
+                inline_outer = None if _has_rfc822_attachment(message) else message
+                imported = self._payment(inner, pending, sender, inline_outer=inline_outer)
                 if imported.outcome == "imported":
                     return imported
             return self._manual_forward(message, inner, pending)

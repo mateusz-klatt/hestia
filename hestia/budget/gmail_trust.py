@@ -36,7 +36,12 @@ _MAX_FORWARD_BYTES = 1024 * 1024
 _MAX_FORWARD_HEADER_LINES = 32
 _MAX_FORWARD_HEADER_CHARS = 4096
 _RFC822_TRANSFER_ENCODINGS = frozenset({"7bit", "8bit", "binary"})
-_FORWARD_MARKERS = frozenset({"forwarded message", "begin forwarded message", "przekazana wiadomość"})
+_FORWARD_MARKERS = frozenset({
+    "forwarded message",
+    "begin forwarded message",
+    "przekazana wiadomość",
+    "wiadomość przekazana dalej",
+})
 _FORWARD_HEADERS = frozenset({
     "from", "od", "date", "data", "sent", "wysłano", "subject", "temat", "to", "do", "cc", "dw",
     "reply-to", "message-id",
@@ -316,8 +321,7 @@ def classify_sender(headers, sender_allowlist, spouse_forward_senders, owner_mai
     return path
 
 
-def _inline_forward(text):
-    lines = text.splitlines()
+def _split_inline_forward(lines):
     markers = [i for i, line in enumerate(lines) if line.strip(" \t-:").casefold() in _FORWARD_MARKERS]
     if not markers:
         return None
@@ -347,6 +351,15 @@ def _inline_forward(text):
         fields[name] = value.strip()
     else:
         return _INVALID_FORWARD
+    return fields, index
+
+
+def _inline_forward(text):
+    lines = text.splitlines()
+    split = _split_inline_forward(lines)
+    if split is None or split is _INVALID_FORWARD:
+        return split
+    fields, index = split
     address = _mailbox(fields.get("from", ""))
     if not address:
         return _INVALID_FORWARD
@@ -358,6 +371,15 @@ def _inline_forward(text):
         original["Message-ID"] = fields["message-id"]
     original.set_content("\n".join(lines[index:]))
     return original
+
+
+def inline_forward_body(text: str) -> str:
+    """Return the body after a single inline forward marker and headers, or text if absent."""
+    lines = text.splitlines()
+    split = _split_inline_forward(lines)
+    if isinstance(split, tuple):
+        return "\n".join(lines[split[1]:])
+    return "" if split is _INVALID_FORWARD else text
 
 
 def _inline_original(message, render_html):

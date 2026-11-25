@@ -13,7 +13,7 @@ from unittest.mock import Mock
 from sqlalchemy import select
 
 from hestia import db
-from hestia.budget import gmail_message
+from hestia.budget import gmail_message, gmail_worker
 from hestia.budget.gmail_invoice import extract_invoice
 from hestia.budget.gmail_payment import ImportedPayment, inspect_payment
 from hestia.budget.gmail_store import (DAY as SECONDS_PER_DAY, GATEWAY_REF_DOMAIN, ORDER_REFERENCE_DOMAIN,
@@ -1218,3 +1218,109 @@ class V1f2ForwardedPaymentTests(unittest.TestCase):
                         self.assertEqual((first_row.outcome, second_row.outcome), ("imported", "skipped_duplicate"))
                         self.assertEqual(first_row.receipt_id, receipts[0].id)
                         self.assertIsNone(second_row.receipt_id)
+
+
+_V1F3_FIXTURES = Path(__file__).parent / "fixtures" / "gmail" / "payment" / "v1f3"
+
+
+def _render_via_worker(kind, source):
+    code = b"H" if kind == "html" else b"T"
+    rendered = gmail_worker._render(code + source)
+    assert rendered.startswith(b"+")
+    return rendered[1:].decode("utf-8")
+
+
+class V1f3ForwardBodyTests(unittest.TestCase):
+    def setUp(self):
+        self.settings = SimpleNamespace(
+            sender_allowlist=(),
+            spouse_forward_senders=("spouse@gmail.com",),
+            owner_mailbox="owner@gmail.com",
+            hmac_secret=_SECRET,
+            payment_senders=(
+                PaymentSender("@payu.com", "PayU", gateway=True),
+                PaymentSender("@shop.example.test", "Example Shop"),
+            ),
+        )
+        self.worker = Mock()
+        self.worker.ready.return_value = True
+        self.worker.parse.side_effect = _render_via_worker
+        self.processor = gmail_message.GmailMessageProcessor(self.settings, self.worker)
+
+    def _process(self, message, gmail_id):
+        metadata = {"id": gmail_id, "internalDate": "1795566945123", "sizeEstimate": 512,
+                    "payload": {"headers": [{"name": name, "value": value}
+                                            for name, value in message.raw_items()]}}
+        run = Mock()
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii").rstrip("=")
+        run.message.side_effect = [metadata, {"id": gmail_id, "raw": raw}]
+        return self.processor.process(run, gmail_id, digest(_SECRET, b"test", gmail_id))
+
+    def test_forwarded_payu_markdown_emphasis_fixture_parses(self):
+        body = (_V1F3_FIXTURES / "forwarded_payu_markdown_emphasis.txt").read_text(encoding="utf-8")
+        forwarded = V1f2ForwardedPaymentTests._email("owner@gmail.com", body, rfc_id="<owner-v1f3-payu@gmail.com>")
+        pending = self._process(forwarded, "v1f3-payu-fwd")
+        self.assertEqual((pending.trust_path, pending.outcome, pending.forwarded_manually, pending.source_kind),
+                         ("owner_forward", "imported", False, "email"))
+        self.assertEqual(pending.rfc_message_id_hmac,
+                         digest(_SECRET, RFC_MESSAGE_DOMAIN, "payu-v1f3-1@payu.example.test"))
+        self.assertEqual((pending.payment.gateway, pending.payment.gateway_name, pending.payment.status,
+                          pending.payment.gateway_ref_hmac),
+                         (True, "PayU", "registered", digest(_SECRET, GATEWAY_REF_DOMAIN, "246813579")))
+        self.assertEqual((pending.payment.fields.merchant, pending.payment.fields.total_amount,
+                          pending.payment.fields.currency, pending.payment.fields.payee_host),
+                         ("SKLEP PRZYKŁADOWY", "109", "PLN", "shop.example.test"))
+
+    def test_direct_email_with_markdown_emphasis_amount_parses(self):
+        direct_body = (
+            "Zarejestrowaliśmy zlecenie płatności dla SKLEP PRZYKŁADOWY (http://www.shop.example.test).\n\n"
+            "- Kwota: *109,00 PLN*\n"
+            "- Kwota po przewalutowaniu: *-*\n"
+        )
+        direct = V1f2ForwardedPaymentTests._email(
+            "powiadomienia@payu.com", direct_body,
+            subject="Zlecenie płatności (246813579) dla SKLEP PRZYKŁADOWY",
+            rfc_id="<payu-v1f3-direct@payu.example.test>",
+        )
+        pending = self._process(direct, "v1f3-payu-direct")
+        self.assertEqual((pending.trust_path, pending.outcome, pending.forwarded_manually),
+                         ("direct_allowlist", "imported", False))
+        self.assertEqual((pending.payment.fields.merchant, pending.payment.fields.total_amount,
+                          pending.payment.fields.currency),
+                         ("SKLEP PRZYKŁADOWY", "109", "PLN"))
+
+    def test_inline_forward_with_dropped_table_in_plain_falls_back_to_outer_html(self):
+        plain = (_V1F3_FIXTURES / "forwarded_table_dropped_plain.txt").read_text(encoding="utf-8")
+        html = (_V1F3_FIXTURES / "forwarded_table_dropped_html.html").read_text(encoding="utf-8")
+        forwarded = V1f2ForwardedPaymentTests._email("owner@gmail.com", plain, rfc_id="<owner-v1f3-table@gmail.com>")
+        forwarded.add_alternative(html, subtype="html")
+        pending = self._process(forwarded, "v1f3-table-html")
+        self.assertEqual((pending.trust_path, pending.outcome, pending.forwarded_manually, pending.source_kind),
+                         ("owner_forward", "imported", False, "email"))
+        self.assertEqual(pending.rfc_message_id_hmac,
+                         digest(_SECRET, RFC_MESSAGE_DOMAIN, "shop-v1f3-table@shop.example.test"))
+        self.assertEqual((pending.payment.fields.merchant, pending.payment.fields.total_amount,
+                          pending.payment.fields.currency, pending.payment.order_reference_hmac),
+                         ("Example Shop", "42.5", "PLN", digest(_SECRET, ORDER_REFERENCE_DOMAIN, "xx12345")))
+
+    def test_forwarder_note_amount_above_marker_is_never_used(self):
+        plain = (_V1F3_FIXTURES / "forwarded_note_amount_plain.txt").read_text(encoding="utf-8")
+        html = (_V1F3_FIXTURES / "forwarded_note_amount_html.html").read_text(encoding="utf-8")
+        no_total_fwd = V1f2ForwardedPaymentTests._email("spouse@gmail.com", plain, rfc_id="<spouse-v1f3-note@gmail.com>")
+        no_total_fwd.add_alternative(html, subtype="html")
+        fallback = self._process(no_total_fwd, "v1f3-note-only")
+        self.assertEqual((fallback.trust_path, fallback.outcome, fallback.forwarded_manually,
+                          fallback.sender_domain, fallback.payment, fallback.rfc_message_id_hmac),
+                         ("spouse_forward", "imported", True, "shop.example.test", None, None))
+
+        # When the forwarded table below the marker HAS a total, the note amount above the marker is still ignored.
+        html_with_table = html.replace("<tr><td>Status</td><td>Opłacone</td></tr>",
+                                       "<tr><td>Razem</td><td>42,50 PLN</td></tr>")
+        with_table_fwd = V1f2ForwardedPaymentTests._email(
+            "spouse@gmail.com", plain, rfc_id="<spouse-v1f3-note-table@gmail.com>",
+        )
+        with_table_fwd.add_alternative(html_with_table, subtype="html")
+        imported = self._process(with_table_fwd, "v1f3-note-with-table")
+        self.assertEqual((imported.trust_path, imported.outcome, imported.forwarded_manually,
+                          imported.payment.fields.merchant, imported.payment.fields.total_amount),
+                         ("spouse_forward", "imported", False, "Example Shop", "42.5"))

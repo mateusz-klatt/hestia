@@ -9,8 +9,8 @@ from unittest.mock import Mock
 
 from hestia.budget.gmail_address import canonical_mailbox
 from hestia.budget.gmail_trust import (
-    PaymentSender, classify_sender, forward_sender_domain, normalize_payment_senders, normalize_sender_rules,
-    payment_sender_for, unwrap_trusted_forward,
+    PaymentSender, classify_sender, forward_sender_domain, inline_forward_body, normalize_payment_senders,
+    normalize_sender_rules, payment_sender_for, unwrap_trusted_forward,
 )
 
 
@@ -335,6 +335,7 @@ class GmailTrustTests(unittest.TestCase):
 
     def test_inline_forward_from_bounded_english_and_polish_headers(self):
         for marker, sender_header in (("---------- Forwarded message ---------", "From"),
+                                      ("---------- Wiadomość przekazana dalej ----------", "Od"),
                                       ("Begin forwarded message:", "From"), ("Przekazana wiadomość", "Od")):
             with self.subTest(marker=marker):
                 outer = _message(SPOUSE, _inline(marker, sender_header))
@@ -405,3 +406,15 @@ class GmailTrustTests(unittest.TestCase):
         self.assertEqual(original["From"], MERCHANT)
         self.assertIsNone(unwrap_trusted_forward(outer, sender_allowlist=DIRECT,
                                                  render_html=lambda _payload: _inline(sender="other@merchant.example")))
+
+    def test_inline_forward_body_cuts_after_marker_and_headers_only_when_present(self):
+        self.assertEqual(
+            inline_forward_body("Zapłacono: 999 PLN\n" + _inline("---------- Wiadomość przekazana dalej ----------", "Od")),
+            f"\n{INVOICE.rstrip()}",
+        )
+        self.assertEqual(
+            inline_forward_body("Note: 999 PLN\n---------- Forwarded message ---------\nRazem: 10 PLN"),
+            "Razem: 10 PLN",
+        )
+        self.assertEqual(inline_forward_body("Razem: 10 PLN"), "Razem: 10 PLN")
+        self.assertEqual(inline_forward_body("Note: 999 PLN\n" + _inline() + _inline()), "")

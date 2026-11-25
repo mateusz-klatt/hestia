@@ -1,0 +1,10 @@
+Zapłacono: 999,00 PLN wcześniej.
+
+---------- Wiadomość przekazana dalej ----------
+Od: Example Shop <orders@shop.example.test>
+Data: śr., 25 lis 2026 o 10:30
+Temat: Dziękujemy za opłacenie zamówienia nr XX99999
+Message-ID: <shop-v1f3-note@shop.example.test>
+Do: owner@gmail.com
+
+Dziękujemy za opłacenie zamówienia nr XX99999.
