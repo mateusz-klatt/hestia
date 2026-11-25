@@ -569,6 +569,7 @@ describe("ReceiptsView", () => {
     expect(button("Confirm receipt", d1).disabled).toBe(false);
     await click(button("Confirm receipt", d1));
     expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({ link: null }));
+    expect("lines" in (vi.mocked(clients.rApi.confirmReceipt).mock.calls.at(-1)?.[0] ?? {})).toBe(false);
 
     // 2. Confirmed linked receipt also requires explicit Unlink before Confirm becomes active.
     vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
@@ -891,20 +892,16 @@ describe("ReceiptsView", () => {
     await click(openDetailButton(0));
     const drawer = dialog();
 
-    // Reformatting net "9.00" -> "9," -> "9,00" must preserve gross 10 and discount 1 on save.
+    // Reformatting net "9.00" -> "9," -> "9,00" preserves gross 10 and discount 1 and omits `lines` since decimal value is unchanged.
     await typeInto(inputByName("line_net", drawer), "9,");
     await typeInto(inputByName("line_net", drawer), "9,00");
     expect(inputByName("line_gross", drawer).value).toBe("10.00");
     expect(inputByName("line_discount", drawer).value).toBe("1.00");
 
     await click(button("Confirm receipt", drawer));
-    expect(clients.rApi.confirmReceipt).toHaveBeenCalledWith(expect.objectContaining({
-      lines: [expect.objectContaining({
-        gross_line_total: "10",
-        discount_amount: "1",
-        net_line_total: "9",
-      }) as unknown],
-    }));
+    const reformatCall = vi.mocked(clients.rApi.confirmReceipt).mock.calls[0]?.[0];
+    expect(reformatCall).toMatchObject({ total_amount: "9", link: null });
+    expect("lines" in (reformatCall ?? {})).toBe(false);
 
     // Reopen and edit net -> discount stays 1, gross updates cleanly; then edit discount -> net updates cleanly.
     await click(button("Close", dialog()));
@@ -932,41 +929,90 @@ describe("ReceiptsView", () => {
         net_line_total: "9.5",
       }) as unknown],
     }));
+
+    // Entering the redacted placeholder into an editable line is blocked before submit.
+    await click(button("Close", dialog()));
+    await click(openDetailButton(0));
+    const drawer3 = dialog();
+    await typeInto(inputByName("line_name", drawer3), REDACTED_VALUE);
+    await click(button("Confirm receipt", drawer3));
+    expect(drawer3.textContent).toContain("Line editing is disabled because one or more lines contain redacted data.");
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledTimes(2);
   });
 
-  it("bulk confirms imported/draft receipts while excluding needs_review, runs sequentially with CAS, handles partial failures, cancel, and actor aborts", async () => {
+  it("disables line editing with a hint and omits lines when confirming a receipt containing redacted lines", async () => {
+    const clients = fakeClients(
+      [receiptSummary({ receipt_id: "rec-red", status: "needs_review", total_amount: "42.50", linked: false })],
+      receiptDetail({ receipt_id: "rec-red", status: "needs_review", total_amount: "42.50", linked: false }),
+    );
+    await renderReceipts(clients);
+    await click(openDetailButton(0));
+    const drawer = dialog();
+
+    expect(drawer.textContent).toContain("Line editing is disabled because one or more lines contain redacted data.");
+    expect(button("Add item", drawer).disabled).toBe(true);
+    for (const field of ["line_name", "line_gross", "line_discount", "line_net"]) {
+      for (const el of drawer.querySelectorAll<HTMLInputElement>(`input[name="${field}"]`)) {
+        expect(el.disabled).toBe(true);
+      }
+    }
+    for (const btn of [...drawer.querySelectorAll("button")].filter((b) => b.textContent === "Remove")) {
+      expect(btn.disabled).toBe(true);
+    }
+
+    await typeInto(inputByName("raw_shop_name", drawer), "Updated Safe Shop");
+    await click(button("Confirm receipt", drawer));
+    const sent = vi.mocked(clients.rApi.confirmReceipt).mock.calls[0]?.[0];
+    expect(sent).toMatchObject({ receipt_id: "rec-red", raw_shop_name: "Updated Safe Shop" });
+    expect("lines" in (sent ?? {})).toBe(false);
+  });
+
+  it("restricts bulk confirm to Gmail imports, separates same-name sellers by NIP, omits unedited lines, handles failures/cancel/actor aborts", async () => {
     const rows = [
-      receiptSummary({ receipt_id: "imp-1", status: "imported", document_kind: "invoice", raw_shop_name: "Acme Power", total_amount: "50.00", version: 2 }),
-      receiptSummary({ receipt_id: "imp-2", status: "imported", document_kind: "payment_confirmation", raw_shop_name: "Acme Power", total_amount: "30.00", version: 5 }),
-      receiptSummary({ receipt_id: "rev-1", status: "needs_review", document_kind: "receipt", raw_shop_name: "Acme Power", total_amount: "42.50", version: 4 }),
-      receiptSummary({ receipt_id: "drf-1", status: "draft", document_kind: "receipt", raw_shop_name: "Corner Cafe", total_amount: "15.00", version: 8 }),
-      receiptSummary({ receipt_id: "cnf-1", status: "confirmed", document_kind: "receipt", raw_shop_name: "Corner Cafe", total_amount: "20.00", version: 9 }),
+      receiptSummary({ receipt_id: "imp-1", status: "imported", source_kind: "attachment", document_kind: "invoice", raw_shop_name: "Acme Power", raw_nip: "7791011327", total_amount: "50.00", version: 2 }),
+      receiptSummary({ receipt_id: "imp-2", status: "imported", source_kind: "email", document_kind: "payment_confirmation", raw_shop_name: "Acme Power", raw_nip: "7791011327", total_amount: "30.00", version: 5 }),
+      receiptSummary({ receipt_id: "imp-other-nip", status: "imported", source_kind: "email", document_kind: "payment_confirmation", raw_shop_name: "Acme Power", raw_nip: "5261040828", total_amount: "45.00", version: 3 }),
+      receiptSummary({ receipt_id: "rev-1", status: "needs_review", source_kind: "email", document_kind: "receipt", raw_shop_name: "Acme Power", raw_nip: "7791011327", total_amount: "42.50", version: 4 }),
+      receiptSummary({ receipt_id: "drf-ocr", status: "draft", source_kind: "local_ocr", document_kind: "receipt", raw_shop_name: "OCR Scan", raw_nip: null, total_amount: "15.00", version: 8 }),
+      receiptSummary({ receipt_id: "drf-paste", status: "draft", source_kind: "paste", document_kind: "receipt", raw_shop_name: "Pasted Receipt", raw_nip: null, total_amount: "12.00", version: 1 }),
+      receiptSummary({ receipt_id: "drf-live", status: "draft", source_kind: "live_text", document_kind: "receipt", raw_shop_name: "Live Scan", raw_nip: null, total_amount: "18.00", version: 1 }),
+      receiptSummary({ receipt_id: "cnf-1", status: "confirmed", source_kind: "email", document_kind: "receipt", raw_shop_name: "Corner Cafe", raw_nip: null, total_amount: "20.00", version: 9 }),
     ];
     const clients = fakeClients(rows);
 
     await renderReceipts(clients);
 
-    // needs_review & confirmed checkboxes stay disabled; Select all loaded selects only the 3 eligible receipts.
+    // needs_review, OCR/paste/live_text drafts, & confirmed checkboxes stay disabled; only 3 Gmail imports are selectable.
     expect(inputByName("select_receipt_rev-1").disabled).toBe(true);
+    expect(inputByName("select_receipt_drf-ocr").disabled).toBe(true);
+    expect(inputByName("select_receipt_drf-paste").disabled).toBe(true);
+    expect(inputByName("select_receipt_drf-live").disabled).toBe(true);
     expect(inputByName("select_receipt_cnf-1").disabled).toBe(true);
     expect(inputByName("select_receipt_imp-1").disabled).toBe(false);
 
     await click(inputByName("select_all_loaded"));
     expect(inputByName("select_receipt_imp-1").checked).toBe(true);
     expect(inputByName("select_receipt_imp-2").checked).toBe(true);
-    expect(inputByName("select_receipt_drf-1").checked).toBe(true);
+    expect(inputByName("select_receipt_imp-other-nip").checked).toBe(true);
+    expect(inputByName("select_receipt_drf-ocr").checked).toBe(false);
+    expect(inputByName("select_receipt_drf-paste").checked).toBe(false);
+    expect(inputByName("select_receipt_drf-live").checked).toBe(false);
     expect(inputByName("select_receipt_rev-1").checked).toBe(false);
     expect(host.textContent).toContain("Excluded 1 needing review (open individually to pick a bank link).");
+    expect(host.textContent).toContain("Excluded 3 OCR, pasted or live-text drafts (open individually to confirm).");
     expect(host.textContent).toContain("Confirm selected (3)");
-    expect(host.textContent).toContain("Confirm all from: Acme Power");
+    // Two distinct groups for same merchant name with different NIPs!
+    expect(host.textContent).toContain("Confirm all from: Acme Power (NIP 7791011327)");
+    expect(host.textContent).toContain("Confirm all from: Acme Power (NIP 5261040828)");
 
-    // Polish localization labels check ("Zaznacz wszystkie załadowane", "Zatwierdź zaznaczone", "Zatwierdź wszystkie od: Acme Power").
+    // Polish localization labels check.
     await renderReceipts(clients, { locale: "pl" });
     expect(host.textContent).toContain("Zaznacz wszystkie załadowane");
-    expect(host.textContent).toContain("Zatwierdź wszystkie od: Acme Power");
+    expect(host.textContent).toContain("Zatwierdź wszystkie od: Acme Power (NIP 7791011327)");
+    expect(host.textContent).toContain("Pominięto 3 szkiców OCR, wklejonych lub z aparatu (otwórz pojedynczo, aby zatwierdzić).");
     expect(host.textContent).toContain("Zatwierdź zaznaczone (3)");
 
-    // Switch back to EN and test sequential confirms with each receipt's CAS version + partial failure counts.
+    // Switch back to EN and test sequential confirms with each receipt's CAS version, omitted lines for payment confirmations, & partial failures.
     await renderReceipts(clients, { locale: "en" });
     const callOrder: string[] = [];
     const firstDeferred = deferred<{ ok: true; receipt: ReceiptDetail }>();
@@ -975,18 +1021,18 @@ describe("ReceiptsView", () => {
       callOrder.push(`detail:${id}`);
       if (id === "imp-1") {
         return ok({
-          receipt: receiptDetail({ receipt_id: "imp-1", status: "imported", document_kind: "invoice", invoice_number: "FV/1", payment_method: null, total_amount: "50.00", lines: [], version: 2 }),
+          receipt: receiptDetail({ receipt_id: "imp-1", status: "imported", source_kind: "attachment", document_kind: "invoice", invoice_number: "FV/1", raw_shop_name: "Acme Power", raw_nip: "7791011327", payment_method: null, total_amount: "50.00", lines: [], version: 2 }),
           candidates: [],
         });
       }
       if (id === "imp-2") {
         return ok({
-          receipt: receiptDetail({ receipt_id: "imp-2", status: "imported", document_kind: "payment_confirmation", payment_method: null, total_amount: "30.00", lines: [{ line_no: 1, line_kind: "other", raw_name: "Power bill", raw_name_key: "power bill", ptu_code: null, quantity: "1", raw_unit: null, unit_price_raw: null, gross_line_total: "30.00", discount_amount: "0", net_line_total: "30.00" }], version: 5 }),
+          receipt: receiptDetail({ receipt_id: "imp-2", status: "imported", source_kind: "email", document_kind: "payment_confirmation", raw_shop_name: "Acme Power", raw_nip: "7791011327", payment_method: null, total_amount: "30.00", lines: [{ line_no: 1, line_kind: "other", raw_name: REDACTED_VALUE, raw_name_key: "[usunieto]", ptu_code: null, quantity: "1", raw_unit: null, unit_price_raw: null, gross_line_total: "30.00", discount_amount: "0", net_line_total: "30.00" }], version: 5 }),
           candidates: [],
         });
       }
       return ok({
-        receipt: receiptDetail({ receipt_id: "drf-1", status: "draft", total_amount: "15.00", lines: [{ line_no: 1, line_kind: "item", raw_name: "Espresso", raw_name_key: "espresso", ptu_code: "A", quantity: "1", raw_unit: "szt", unit_price_raw: "15.00", gross_line_total: "15.00", discount_amount: "0", net_line_total: "15.00" }], version: 8 }),
+        receipt: receiptDetail({ receipt_id: "imp-other-nip", status: "imported", source_kind: "email", document_kind: "payment_confirmation", raw_shop_name: "Acme Power", raw_nip: "5261040828", payment_method: null, total_amount: "45.00", lines: [{ line_no: 1, line_kind: "other", raw_name: "Hosting bill", raw_name_key: "hosting bill", ptu_code: null, quantity: "1", raw_unit: null, unit_price_raw: null, gross_line_total: "45.00", discount_amount: "0", net_line_total: "45.00" }], version: 3 }),
         candidates: [],
       });
     });
@@ -1001,15 +1047,15 @@ describe("ReceiptsView", () => {
     await click(button("Confirm selected (3)"));
     const confirmBox = alertBox();
     expect(confirmBox.textContent).toContain("Confirm 3 documents without bank links?");
-    expect(confirmBox.textContent).toContain("Merchants: Acme Power, Corner Cafe");
+    expect(confirmBox.textContent).toContain("Merchants: Acme Power (NIP 7791011327), Acme Power (NIP 5261040828)");
     expect(confirmBox.textContent).toContain("Excluded 1 needing review");
+    expect(confirmBox.textContent).toContain("Excluded 3 OCR, pasted or live-text drafts");
 
     await act(async () => {
       button("Start bulk confirm", confirmBox).click();
       await Promise.resolve();
     });
     await settle();
-    // Strictly sequential: imp-1 is paused at confirmReceipt, imp-2 detail has NOT even started!
     expect(callOrder).toEqual(["detail:imp-1", "confirm:imp-1:v2"]);
     expect(host.textContent).toContain("Confirming 0 / 3…");
     expect(openDetailButton(0).disabled).toBe(true);
@@ -1025,27 +1071,31 @@ describe("ReceiptsView", () => {
       "confirm:imp-1:v2",
       "detail:imp-2",
       "confirm:imp-2:v5",
-      "detail:drf-1",
-      "confirm:drf-1:v8",
+      "detail:imp-other-nip",
+      "confirm:imp-other-nip:v3",
     ]);
-    // Invoices with 0 lines synthesized summary line and link: null.
+    // Invoices with 0 lines synthesize 1 summary line; payment confirmations (even with redacted line) OMIT `lines`.
     expect(clients.rApi.confirmReceipt).toHaveBeenNthCalledWith(1, expect.objectContaining({
       receipt_id: "imp-1",
       expected_version: 2,
       link: null,
       lines: [expect.objectContaining({ line_kind: "other", raw_name: "FV/1", net_line_total: "50" }) as unknown],
     }));
+    const secondPayload = vi.mocked(clients.rApi.confirmReceipt).mock.calls[1]?.[0];
+    const thirdPayload = vi.mocked(clients.rApi.confirmReceipt).mock.calls[2]?.[0];
+    expect("lines" in (secondPayload ?? {})).toBe(false);
+    expect("lines" in (thirdPayload ?? {})).toBe(false);
     expect(host.textContent).toContain("Bulk confirm finished: 2 confirmed, 1 failed.");
     expect(host.textContent).toContain("Failure 409 budget_receipt_conflict: 1");
     expect(clients.rApi.receiptsList).toHaveBeenCalledTimes(4);
 
-    // Merchant group action + Cancel mid-flight stops before item #2.
+    // Clicking NIP 7791011327 group ONLY targets the 2 receipts with that NIP (not 5261040828) + cancel stops before item #2.
     const cancelDeferred = deferred<{ ok: true; receipt: ReceiptDetail }>();
     vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => cancelDeferred.promise);
-    await click(button("Confirm all from: Acme Power"));
+    await click(button("Confirm all from: Acme Power (NIP 7791011327)"));
     const acmeBox = alertBox();
     expect(acmeBox.textContent).toContain("Confirm 2 documents without bank links?");
-    expect(acmeBox.textContent).toContain("Merchants: Acme Power");
+    expect(acmeBox.textContent).toContain("Merchants: Acme Power (NIP 7791011327)");
     expect(acmeBox.textContent).toContain("Excluded 1 needing review");
     await act(async () => {
       button("Start bulk confirm", acmeBox).click();
@@ -1070,7 +1120,7 @@ describe("ReceiptsView", () => {
     });
 
     await renderReceipts({ ...clients }, { actorKey: "alice", onAccessLoss: () => false });
-    await click(button("Confirm all from: Acme Power"));
+    await click(button("Confirm all from: Acme Power (NIP 7791011327)"));
     await act(async () => {
       button("Start bulk confirm", alertBox()).click();
       await Promise.resolve();
@@ -1078,7 +1128,6 @@ describe("ReceiptsView", () => {
     await settle();
     expect(abortCalls).toEqual(["imp-1"]);
 
-    // Switch actor while item #1 is pending -> clears state & prevents item #2 from ever running.
     await renderReceipts(clients, { actorKey: "bob", onAccessLoss: () => false });
     await act(async () => {
       actorDeferred.resolve({ ok: true, data: { ok: true, receipt: receiptDetail({ receipt_id: "imp-1", status: "confirmed", version: 3 }) } });
@@ -1087,10 +1136,9 @@ describe("ReceiptsView", () => {
     await settle();
     expect(abortCalls).toEqual(["imp-1"]);
 
-    // Verify 403 error bucket reporting & abort before item #2 when onAccessLoss does not wipe DOM.
     vi.mocked(clients.rApi.confirmReceipt).mockImplementation(() => fail(403, "budget_forbidden"));
     await renderReceipts(clients, { actorKey: "alice", onAccessLoss: () => false });
-    await click(button("Confirm all from: Acme Power"));
+    await click(button("Confirm all from: Acme Power (NIP 7791011327)"));
     await click(button("Start bulk confirm", alertBox()));
     expect(host.textContent).toContain("Failure 403 budget_forbidden: 1");
     expect(host.textContent).toContain("1 remaining, 1 failed");

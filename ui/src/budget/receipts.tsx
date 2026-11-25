@@ -39,12 +39,14 @@ import {
   hasClientSideFilter,
   hasMatchingFieldsChanged,
   isBulkConfirmable,
+  isExcludedDraftForBulk,
   isRedactedValue,
   isStaleCursorError,
   merchantBulkGroups,
   mergeReceiptRows,
   normalizeDecimalInput,
   receiptAccountLabel,
+  receiptHasRedactedLines,
   receiptMerchantGroupKey,
   reconcileLinkChoice,
   validReceiptDateRange,
@@ -223,6 +225,7 @@ export function ReceiptsView({
   const [bulkConfirmPlan, setBulkConfirmPlan] = useState<{
     targets: ReceiptSummary[];
     excludedNeedsReview: number;
+    excludedDrafts: number;
     merchants: string[];
   } | null>(null);
   const [bulkProgress, setBulkProgress] = useState<{ total: number; done: number } | null>(null);
@@ -232,6 +235,7 @@ export function ReceiptsView({
     remaining: number;
     cancelled: boolean;
     excludedNeedsReview: number;
+    excludedDrafts: number;
     errors: [string, number][];
   } | null>(null);
 
@@ -327,6 +331,7 @@ export function ReceiptsView({
   const runBulkConfirm = useCallback(async (plan: {
     targets: ReceiptSummary[];
     excludedNeedsReview: number;
+    excludedDrafts: number;
     merchants: string[];
   }) => {
     const runToken = ++bulkRunGenRef.current;
@@ -459,6 +464,7 @@ export function ReceiptsView({
       remaining: Math.max(0, plan.targets.length - processed),
       cancelled: cancelled || aborted,
       excludedNeedsReview: plan.excludedNeedsReview,
+      excludedDrafts: plan.excludedDrafts,
       errors: [...errors.entries()],
     });
     if (!aborted) {
@@ -665,16 +671,23 @@ export function ReceiptsView({
 
   const shownRows = listState.kind === "ready" ? filterReceiptRows(listState.rows, filter, searchMode) : [];
   const clientFiltered = hasClientSideFilter(filter);
+  const formatWithNip = (merchant: string | null, nip: string): string => (
+    merchant === null
+      ? `NIP ${nip}`
+      : t("budget.receipts.merchantWithNip", { merchant, nip })
+  );
   const confirmableRows = shownRows.filter(isBulkConfirmable);
   const shownNeedsReviewCount = shownRows.filter((row) => row.status === "needs_review").length;
+  const shownExcludedDraftsCount = shownRows.filter(isExcludedDraftForBulk).length;
   const allConfirmableSelected = confirmableRows.length > 0
     && confirmableRows.every((row) => selectedForBulk.has(row.receipt_id));
   const selectionPlan = buildBulkSelectionPlan(
     shownRows,
     selectedForBulk,
     t("budget.receipts.unknownMerchant"),
+    formatWithNip,
   );
-  const merchantGroups = merchantBulkGroups(shownRows);
+  const merchantGroups = merchantBulkGroups(shownRows, formatWithNip);
   const visibleMerchantActions = merchantGroups.length === 1
     ? merchantGroups
     : merchantGroups.filter((group) => group.confirmableIds.length >= 2 || merchantGroups.length <= 3);
@@ -850,6 +863,9 @@ export function ReceiptsView({
           {bulkReport.excludedNeedsReview > 0 ? (
             <p className="budget-muted">{t("budget.receipts.bulkExcludedReview", { count: bulkReport.excludedNeedsReview })}</p>
           ) : null}
+          {bulkReport.excludedDrafts > 0 ? (
+            <p className="budget-muted">{t("budget.receipts.bulkExcludedDrafts", { count: bulkReport.excludedDrafts })}</p>
+          ) : null}
           {bulkReport.errors.length === 0 ? null : (
             <ul className="budget-entry-facts">
               {bulkReport.errors.map(([code, count]) => (
@@ -873,6 +889,11 @@ export function ReceiptsView({
           {bulkConfirmPlan.excludedNeedsReview > 0 ? (
             <p className="budget-warn" role="note">
               {t("budget.receipts.bulkExcludedReview", { count: bulkConfirmPlan.excludedNeedsReview })}
+            </p>
+          ) : null}
+          {bulkConfirmPlan.excludedDrafts > 0 ? (
+            <p className="budget-warn" role="note">
+              {t("budget.receipts.bulkExcludedDrafts", { count: bulkConfirmPlan.excludedDrafts })}
             </p>
           ) : null}
           <p className="budget-muted">{t("budget.receipts.linkChoiceNone")}</p>
@@ -941,6 +962,7 @@ export function ReceiptsView({
                     setBulkConfirmPlan({
                       targets: selectionPlan.confirmable,
                       excludedNeedsReview: selectionPlan.excludedNeedsReview,
+                      excludedDrafts: selectionPlan.excludedDrafts,
                       merchants: selectionPlan.merchants,
                     });
                   }}
@@ -960,7 +982,7 @@ export function ReceiptsView({
                 ) : null}
                 {visibleMerchantActions.map((group) => (
                   <button
-                    key={group.merchant}
+                    key={group.key}
                     type="button"
                     disabled={bulkBusy}
                     onClick={() => {
@@ -968,6 +990,7 @@ export function ReceiptsView({
                       setBulkConfirmPlan({
                         targets: shownRows.filter((row) => groupSet.has(row.receipt_id)),
                         excludedNeedsReview: group.excludedNeedsReview,
+                        excludedDrafts: group.excludedDrafts,
                         merchants: [group.merchant],
                       });
                     }}
@@ -976,9 +999,14 @@ export function ReceiptsView({
                   </button>
                 ))}
               </div>
-              {shownNeedsReviewCount > 0 && (selectedForBulk.size > 0 || confirmableRows.length > 0) ? (
+              {shownNeedsReviewCount > 0 ? (
                 <p className="budget-muted" role="note">
                   {t("budget.receipts.bulkExcludedReview", { count: shownNeedsReviewCount })}
+                </p>
+              ) : null}
+              {shownExcludedDraftsCount > 0 ? (
+                <p className="budget-muted" role="note">
+                  {t("budget.receipts.bulkExcludedDrafts", { count: shownExcludedDraftsCount })}
                 </p>
               ) : null}
               <p className="budget-muted">{t("budget.receipts.shownCount", { count: shownRows.length })}</p>
@@ -986,7 +1014,7 @@ export function ReceiptsView({
                 {shownRows.map((row) => {
                   const rowPending = pendingMap.get(row.receipt_id) ?? null;
                   const rowConfirmable = isBulkConfirmable(row);
-                  const rowMerchantText = receiptMerchantGroupKey(row) ?? t("budget.receipts.unknownMerchant");
+                  const rowMerchantText = receiptMerchantGroupKey(row, formatWithNip) ?? t("budget.receipts.unknownMerchant");
                   return (
                     <li key={row.receipt_id} className="budget-entry budget-receipt-row">
                       <div className="budget-receipt-row-main">
@@ -1290,15 +1318,17 @@ function ReceiptDetailDrawer({
   };
 
   const addSummaryLine = (detail: ReceiptDetail, draft: ReceiptConfirmDraft) => {
+    if (receiptHasRedactedLines(detail.lines)) return;
     const normalizedTotal = normalizeDecimalInput(draft.totalAmount) ?? draft.totalAmount.trim();
     const defaultName = detail.invoice_number !== null && !isRedactedValue(detail.invoice_number)
       ? detail.invoice_number
       : (draft.rawShopName.trim() !== "" && !isRedactedValue(draft.rawShopName.trim())
         ? draft.rawShopName.trim()
         : t("budget.receipts.summaryLineDefault"));
+    const safeName = isRedactedValue(defaultName) ? "Document" : defaultName;
     const nextLine: ReceiptLineInput = {
       line_kind: "other",
-      raw_name: defaultName,
+      raw_name: safeName,
       ptu_code: null,
       quantity: "1",
       raw_unit: null,
@@ -1310,7 +1340,8 @@ function ReceiptDetailDrawer({
     setConfirmDraft({ ...draft, lines: [...draft.lines, nextLine] });
   };
 
-  const updateLine = (index: number, field: ReceiptLineEditField, value: string) => {
+  const updateLine = (detail: ReceiptDetail, index: number, field: ReceiptLineEditField, value: string) => {
+    if (receiptHasRedactedLines(detail.lines)) return;
     setConfirmDraft((current) => {
       if (current === null) return null;
       return {
@@ -1320,7 +1351,8 @@ function ReceiptDetailDrawer({
     });
   };
 
-  const removeLine = (index: number) => {
+  const removeLine = (detail: ReceiptDetail, index: number) => {
+    if (receiptHasRedactedLines(detail.lines)) return;
     setConfirmDraft((current) => (current === null
       ? null
       : { ...current, lines: current.lines.filter((_, idx) => idx !== index) }));
@@ -1350,6 +1382,7 @@ function ReceiptDetailDrawer({
           </div>
         ) : (() => {
           const { detail, candidates } = detailState;
+          const hasRedactedLines = receiptHasRedactedLines(detail.lines);
           const draftMethod: ReceiptPaymentMethod = confirmDraft?.paymentMethod ?? "unknown";
           const matchingChanged = confirmDraft !== null && hasMatchingFieldsChanged(detail, confirmDraft);
           const linkOptions = availableLinkOptions(detail, candidates, draftMethod, matchingChanged);
@@ -1675,7 +1708,7 @@ function ReceiptDetailDrawer({
                         {confirmDraft.lines.length === 0 ? (
                           <button
                             type="button"
-                            disabled={actionBusy !== null}
+                            disabled={actionBusy !== null || hasRedactedLines}
                             onClick={() => { addSummaryLine(detail, confirmDraft); }}
                           >
                             {t("budget.receipts.addSummaryLine")}
@@ -1683,7 +1716,7 @@ function ReceiptDetailDrawer({
                         ) : (
                           <button
                             type="button"
-                            disabled={actionBusy !== null}
+                            disabled={actionBusy !== null || hasRedactedLines}
                             onClick={() => { addSummaryLine(detail, confirmDraft); }}
                           >
                             {t("budget.receipts.addLine")}
@@ -1691,6 +1724,9 @@ function ReceiptDetailDrawer({
                         )}
                       </div>
                     </div>
+                    {hasRedactedLines ? (
+                      <p className="budget-warn" role="note">{t("budget.receipts.redactedLinesEditBlocked")}</p>
+                    ) : null}
                     {lineDeltaDisplay === null ? null : (
                       <p className="budget-warn">
                         {t("budget.receipts.mathDelta")}: {lineDeltaDisplay}
@@ -1704,9 +1740,9 @@ function ReceiptDetailDrawer({
                             name="line_name"
                             type="text"
                             maxLength={128}
-                            disabled={actionBusy !== null}
+                            disabled={actionBusy !== null || hasRedactedLines}
                             value={line.raw_name}
-                            onChange={(event) => { updateLine(idx, "raw_name", event.currentTarget.value); }}
+                            onChange={(event) => { updateLine(detail, idx, "raw_name", event.currentTarget.value); }}
                           />
                         </label>
                         <label>
@@ -1715,9 +1751,9 @@ function ReceiptDetailDrawer({
                             name="line_gross"
                             type="text"
                             inputMode="decimal"
-                            disabled={actionBusy !== null}
+                            disabled={actionBusy !== null || hasRedactedLines}
                             value={line.gross_line_total}
-                            onChange={(event) => { updateLine(idx, "gross_line_total", event.currentTarget.value); }}
+                            onChange={(event) => { updateLine(detail, idx, "gross_line_total", event.currentTarget.value); }}
                           />
                         </label>
                         {line.line_kind === "item" ? (
@@ -1727,9 +1763,9 @@ function ReceiptDetailDrawer({
                               name="line_discount"
                               type="text"
                               inputMode="decimal"
-                              disabled={actionBusy !== null}
+                              disabled={actionBusy !== null || hasRedactedLines}
                               value={line.discount_amount}
-                              onChange={(event) => { updateLine(idx, "discount_amount", event.currentTarget.value); }}
+                              onChange={(event) => { updateLine(detail, idx, "discount_amount", event.currentTarget.value); }}
                             />
                           </label>
                         ) : null}
@@ -1739,12 +1775,16 @@ function ReceiptDetailDrawer({
                             name="line_net"
                             type="text"
                             inputMode="decimal"
-                            disabled={actionBusy !== null}
+                            disabled={actionBusy !== null || hasRedactedLines}
                             value={line.net_line_total}
-                            onChange={(event) => { updateLine(idx, "net_line_total", event.currentTarget.value); }}
+                            onChange={(event) => { updateLine(detail, idx, "net_line_total", event.currentTarget.value); }}
                           />
                         </label>
-                        <button type="button" disabled={actionBusy !== null} onClick={() => { removeLine(idx); }}>
+                        <button
+                          type="button"
+                          disabled={actionBusy !== null || hasRedactedLines}
+                          onClick={() => { removeLine(detail, idx); }}
+                        >
                           {t("budget.receipts.removeLine")}
                         </button>
                       </div>

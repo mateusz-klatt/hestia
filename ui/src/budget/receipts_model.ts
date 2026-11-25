@@ -557,6 +557,39 @@ export function computeLinesDelta(lines: readonly ReceiptLineInput[], totalAmoun
   return subtractDecimals(netSum, total);
 }
 
+export function receiptHasRedactedLines(
+  lines: readonly Pick<ReceiptLineInput, "raw_name" | "raw_unit">[],
+): boolean {
+  return lines.some((line) => isRedactedValue(line.raw_name) || isRedactedValue(line.raw_unit));
+}
+
+/** True when normalized confirmable line values differ from stored detail lines (pure decimal reformatting counts as unchanged). */
+export function haveConfirmLinesChanged(
+  detailLines: readonly ReceiptLine[],
+  draftLines: readonly ReceiptLineInput[],
+): boolean {
+  if (detailLines.length !== draftLines.length) return true;
+  for (let i = 0; i < detailLines.length; i += 1) {
+    const orig = detailLines[i];
+    const next = draftLines[i];
+    if (orig === undefined || next === undefined) return true;
+    if (orig.line_kind !== next.line_kind) return true;
+    if (orig.raw_name.trim() !== next.raw_name.trim()) return true;
+    if (orig.ptu_code !== next.ptu_code) return true;
+    const origUnit = orig.raw_unit === null ? null : (orig.raw_unit.trim() || null);
+    const nextUnit = next.raw_unit === null ? null : (next.raw_unit.trim() || null);
+    if (origUnit !== nextUnit) return true;
+    if (normalizeDecimalInput(orig.quantity) !== normalizeDecimalInput(next.quantity)) return true;
+    const origUnitPrice = orig.unit_price_raw === null ? null : normalizeDecimalInput(orig.unit_price_raw);
+    const nextUnitPrice = next.unit_price_raw === null ? null : normalizeDecimalInput(next.unit_price_raw);
+    if (origUnitPrice !== nextUnitPrice) return true;
+    if (normalizeDecimalInput(orig.gross_line_total) !== normalizeDecimalInput(next.gross_line_total)) return true;
+    if (normalizeDecimalInput(orig.discount_amount) !== normalizeDecimalInput(next.discount_amount)) return true;
+    if (normalizeDecimalInput(orig.net_line_total) !== normalizeDecimalInput(next.net_line_total)) return true;
+  }
+  return false;
+}
+
 export function buildConfirmRequest(
   detail: ReceiptDetail,
   draft: ReceiptConfirmDraft,
@@ -578,6 +611,11 @@ export function buildConfirmRequest(
     return { ok: false, errorKey: "budget.receipts.invalidForm" };
   }
   if (draft.lines.length > 300) return { ok: false, errorKey: "budget.receipts.invalidForm" };
+
+  const linesChanged = haveConfirmLinesChanged(detail.lines, draft.lines);
+  if (linesChanged && receiptHasRedactedLines(detail.lines)) {
+    return { ok: false, errorKey: "budget.receipts.redactedLinesEditBlocked" };
+  }
 
   const cleanLines: ReceiptLineInput[] = [];
   for (const line of draft.lines) {
@@ -616,6 +654,9 @@ export function buildConfirmRequest(
     }
     const unit = line.raw_unit === null ? null : (line.raw_unit.trim() || null);
     if (unit !== null && unit.length > 16) return { ok: false, errorKey: "budget.receipts.invalidForm" };
+    if (linesChanged && (isRedactedValue(rawName) || isRedactedValue(unit))) {
+      return { ok: false, errorKey: "budget.receipts.redactedLinesEditBlocked" };
+    }
     cleanLines.push({
       line_kind: line.line_kind,
       raw_name: rawName,
@@ -667,73 +708,133 @@ export function buildConfirmRequest(
     return { ok: false, errorKey: "budget.receipts.invalidForm" };
   }
 
-  return {
-    ok: true,
-    request: {
-      receipt_id: detail.receipt_id,
-      expected_version: detail.version,
-      raw_shop_name: shopName === "" ? null : shopName,
-      raw_nip: nip === "" ? null : nip,
-      receipt_kind: draft.receiptKind,
-      receipt_date: draft.receiptDate,
-      receipt_time: time === "" ? null : time,
-      total_amount: total,
-      currency,
-      payment_method: draft.paymentMethod,
-      lines: cleanLines,
-      link,
-    },
+  const request: ReceiptConfirmRequest = {
+    receipt_id: detail.receipt_id,
+    expected_version: detail.version,
+    raw_shop_name: shopName === "" ? null : shopName,
+    raw_nip: nip === "" ? null : nip,
+    receipt_kind: draft.receiptKind,
+    receipt_date: draft.receiptDate,
+    receipt_time: time === "" ? null : time,
+    total_amount: total,
+    currency,
+    payment_method: draft.paymentMethod,
+    link,
   };
-}
-
-// ---- Bulk confirm eligibility, merchant grouping, and plain confirm builder ----
-
-/** Only unlinked `imported` or `draft` receipts support a plain confirm without candidate choices. */
-export function isBulkConfirmable(receipt: Pick<ReceiptSummary, "status" | "linked">): boolean {
-  return (receipt.status === "imported" || receipt.status === "draft") && !receipt.linked;
-}
-
-/** Safe display merchant key for grouping; never surfaces privacy redaction sentinels as group names. */
-export function receiptMerchantGroupKey(
-  receipt: Pick<ReceiptSummary, "raw_shop_name" | "forwarded_sender_domain">,
-): string | null {
-  if (receipt.raw_shop_name !== null && !isRedactedValue(receipt.raw_shop_name) && receipt.raw_shop_name.trim() !== "") {
-    return receipt.raw_shop_name.trim();
+  if (linesChanged) {
+    request.lines = cleanLines;
   }
-  if (receipt.forwarded_sender_domain !== null && receipt.forwarded_sender_domain.trim() !== "") {
-    return receipt.forwarded_sender_domain.trim();
+  return { ok: true, request };
+}
+
+// ---- Bulk confirm eligibility, merchant/NIP grouping, and plain confirm builder ----
+
+export function isGmailImportSource(sourceKind: ReceiptSourceKind): boolean {
+  return sourceKind === "email" || sourceKind === "attachment";
+}
+
+/** Only unlinked Gmail imports (`email` / `attachment` with `imported` status) support bulk confirm. */
+export function isBulkConfirmable(
+  receipt: Pick<ReceiptSummary, "status" | "source_kind" | "linked">,
+): boolean {
+  return !receipt.linked && receipt.status === "imported" && isGmailImportSource(receipt.source_kind);
+}
+
+/** True for OCR / paste / live-text drafts and non-Gmail items excluded from bulk confirm (distinct from `needs_review`). */
+export function isExcludedDraftForBulk(
+  receipt: Pick<ReceiptSummary, "status" | "source_kind" | "linked">,
+): boolean {
+  return !isBulkConfirmable(receipt) && receipt.status !== "needs_review" && receipt.status !== "confirmed";
+}
+
+export interface MerchantBulkIdentity {
+  key: string;
+  label: string;
+}
+
+export function normalizeMerchantGroupName(name: string): string {
+  return name.normalize("NFC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** Groups by trimmed NIP when present (avoiding merging distinct sellers with identical names), else normalized merchant name or sender domain. */
+export function receiptMerchantGroupIdentity(
+  receipt: Pick<ReceiptSummary, "raw_shop_name" | "raw_nip" | "forwarded_sender_domain">,
+  formatWithNip: (merchant: string | null, nip: string) => string = (merchant, nip) =>
+    (merchant === null ? `NIP ${nip}` : `${merchant} (NIP ${nip})`),
+): MerchantBulkIdentity | null {
+  const shop = receipt.raw_shop_name !== null
+    && !isRedactedValue(receipt.raw_shop_name)
+    && receipt.raw_shop_name.trim() !== ""
+    ? receipt.raw_shop_name.trim()
+    : null;
+  const domain = receipt.forwarded_sender_domain !== null && receipt.forwarded_sender_domain.trim() !== ""
+    ? receipt.forwarded_sender_domain.trim()
+    : null;
+  const merchant = shop ?? domain;
+  const rawNip = receipt.raw_nip?.trim() ?? "";
+  const nip = rawNip !== "" && !isRedactedValue(rawNip) ? rawNip : null;
+  if (nip !== null) {
+    return { key: `nip:${nip}`, label: formatWithNip(merchant, nip) };
+  }
+  if (shop !== null) {
+    return { key: `name:${normalizeMerchantGroupName(shop)}`, label: shop };
+  }
+  if (domain !== null) {
+    return { key: `domain:${domain.toLowerCase()}`, label: domain };
   }
   return null;
 }
 
+/** Safe display merchant label (including NIP when present); never surfaces privacy redaction sentinels. */
+export function receiptMerchantGroupKey(
+  receipt: Pick<ReceiptSummary, "raw_shop_name" | "raw_nip" | "forwarded_sender_domain">,
+  formatWithNip?: (merchant: string | null, nip: string) => string,
+): string | null {
+  return receiptMerchantGroupIdentity(receipt, formatWithNip)?.label ?? null;
+}
+
 export interface MerchantBulkGroup {
+  key: string;
   merchant: string;
   confirmableIds: string[];
   excludedNeedsReview: number;
+  excludedDrafts: number;
 }
 
-export function merchantBulkGroups(rows: readonly ReceiptSummary[]): MerchantBulkGroup[] {
-  const byMerchant = new Map<string, MerchantBulkGroup>();
+export function merchantBulkGroups(
+  rows: readonly ReceiptSummary[],
+  formatWithNip?: (merchant: string | null, nip: string) => string,
+): MerchantBulkGroup[] {
+  const byGroup = new Map<string, MerchantBulkGroup>();
   for (const row of rows) {
-    const merchant = receiptMerchantGroupKey(row);
-    if (merchant === null) continue;
-    let group = byMerchant.get(merchant);
+    const identity = receiptMerchantGroupIdentity(row, formatWithNip);
+    if (identity === null) continue;
+    let group = byGroup.get(identity.key);
     if (group === undefined) {
-      group = { merchant, confirmableIds: [], excludedNeedsReview: 0 };
-      byMerchant.set(merchant, group);
+      group = {
+        key: identity.key,
+        merchant: identity.label,
+        confirmableIds: [],
+        excludedNeedsReview: 0,
+        excludedDrafts: 0,
+      };
+      byGroup.set(identity.key, group);
     }
     if (isBulkConfirmable(row)) {
       group.confirmableIds.push(row.receipt_id);
     } else if (row.status === "needs_review") {
       group.excludedNeedsReview += 1;
+    } else if (isExcludedDraftForBulk(row)) {
+      group.excludedDrafts += 1;
     }
   }
-  return [...byMerchant.values()].filter((group) => group.confirmableIds.length > 0);
+  return [...byGroup.values()].filter((group) => group.confirmableIds.length > 0);
 }
 
 export interface BulkSelectionPlan {
   confirmable: ReceiptSummary[];
   excludedNeedsReview: number;
+  excludedDrafts: number;
   merchants: string[];
 }
 
@@ -741,37 +842,49 @@ export function buildBulkSelectionPlan(
   rows: readonly ReceiptSummary[],
   selectedIds: ReadonlySet<string>,
   unknownMerchantLabel: string,
+  formatWithNip?: (merchant: string | null, nip: string) => string,
 ): BulkSelectionPlan {
   const confirmable: ReceiptSummary[] = [];
   const merchants: string[] = [];
-  const seenMerchants = new Set<string>();
+  const seenKeys = new Set<string>();
   let excludedNeedsReview = 0;
+  let excludedDrafts = 0;
 
   for (const row of rows) {
     if (selectedIds.has(row.receipt_id) && isBulkConfirmable(row)) {
       confirmable.push(row);
-      const label = receiptMerchantGroupKey(row) ?? unknownMerchantLabel;
-      if (!seenMerchants.has(label)) {
-        seenMerchants.add(label);
+      const identity = receiptMerchantGroupIdentity(row, formatWithNip);
+      const label = identity?.label ?? unknownMerchantLabel;
+      const seenKey = identity?.key ?? `unknown:${unknownMerchantLabel}`;
+      if (!seenKeys.has(seenKey)) {
+        seenKeys.add(seenKey);
         merchants.push(label);
       }
     } else if (row.status === "needs_review") {
       excludedNeedsReview += 1;
+    } else if (isExcludedDraftForBulk(row)) {
+      excludedDrafts += 1;
     }
   }
-  return { confirmable, excludedNeedsReview, merchants };
+  return { confirmable, excludedNeedsReview, excludedDrafts, merchants };
 }
 
-/** Builds a plain confirm payload (`link: null`) for an unlinked `imported`/`draft` receipt detail, synthesizing a summary line when none exist. */
+/** Builds a plain confirm (`link: null`) for an unlinked Gmail import; omits existing lines, synthesizing 1 summary line only for 0-line Gmail invoices. */
 export function buildPlainBulkConfirmRequest(
   detail: ReceiptDetail,
   summaryFallbackName: string,
 ): { ok: true; request: ReceiptConfirmRequest } | { ok: false; errorCode: string } {
-  if ((detail.status !== "imported" && detail.status !== "draft") || detail.linked) {
-    return { ok: false, errorCode: "budget_receipt_conflict" };
+  if (!isBulkConfirmable(detail)) {
+    return {
+      ok: false,
+      errorCode: detail.status === "needs_review" ? "budget_receipt_conflict" : "budget_receipt_invalid_request",
+    };
   }
   const draft = draftFromDetail(detail, []);
-  if (draft.lines.length === 0) {
+  if (detail.lines.length === 0) {
+    if (detail.document_kind !== "invoice") {
+      return { ok: false, errorCode: "budget_receipt_total_mismatch" };
+    }
     const normalizedTotal = detail.total_amount === null ? null : normalizeDecimalInput(detail.total_amount);
     if (normalizedTotal === null) {
       return { ok: false, errorCode: "budget_receipt_invalid_request" };
@@ -782,9 +895,11 @@ export function buildPlainBulkConfirmRequest(
     const shopName = detail.raw_shop_name !== null && !isRedactedValue(detail.raw_shop_name)
       ? detail.raw_shop_name.trim()
       : "";
+    const candidateName = invoiceName || shopName || summaryFallbackName;
+    const rawName = isRedactedValue(candidateName) ? "Document" : candidateName;
     draft.lines.push({
       line_kind: "other",
-      raw_name: invoiceName || shopName || summaryFallbackName,
+      raw_name: rawName,
       ptu_code: null,
       quantity: "1",
       raw_unit: null,

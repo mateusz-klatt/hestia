@@ -20,7 +20,10 @@ import {
   hasActiveReceiptFilter,
   hasClientSideFilter,
   hasMatchingFieldsChanged,
+  haveConfirmLinesChanged,
   isBulkConfirmable,
+  isExcludedDraftForBulk,
+  isGmailImportSource,
   isRedactedValue,
   isStaleCursorError,
   listMonthForFilter,
@@ -28,6 +31,8 @@ import {
   mergeReceiptRows,
   normalizeDecimalInput,
   receiptAccountLabel,
+  receiptHasRedactedLines,
+  receiptMerchantGroupIdentity,
   receiptMerchantGroupKey,
   reconcileLinkChoice,
   subtractDecimals,
@@ -404,16 +409,45 @@ describe("receipts_model", () => {
     expect(editedDiscount.discount_amount).toBe("2.50");
     expect(editedDiscount.net_line_total).toBe("7.5");
 
-    // Confirm payload preserves normalized values when net was purely reformatted.
+    // Confirm omits lines when net was only reformatted (or unedited) so stored/redacted lines never overwrite DB.
     const rec = detailOf({ total_amount: "9.00", lines: [{ ...itemLine, line_no: 1, raw_name_key: "coffee" }] });
+    expect(haveConfirmLinesChanged(rec.lines, [reformatted])).toBe(false);
     const draft = { ...draftFromDetail(rec, []), lines: [reformatted] };
     const built = buildConfirmRequest(rec, draft, []);
     expect(built.ok).toBe(true);
     if (built.ok) {
-      expect(built.request.lines[0]).toMatchObject({
-        gross_line_total: "10",
+      expect("lines" in built.request).toBe(false);
+    }
+
+    // Confirming an unedited receipt with redacted lines keeps stored lines by omitting `lines`;
+    // attempting to submit mutated redacted lines or typing the placeholder is rejected.
+    const redactedRec = detailOf({
+      total_amount: "9.00",
+      lines: [{ ...itemLine, line_no: 1, raw_name: REDACTED_VALUE, raw_name_key: "[usunieto]", raw_unit: REDACTED_VALUE }],
+    });
+    expect(receiptHasRedactedLines(redactedRec.lines)).toBe(true);
+    const builtRedacted = buildConfirmRequest(redactedRec, draftFromDetail(redactedRec, []), []);
+    expect(builtRedacted.ok).toBe(true);
+    if (builtRedacted.ok) {
+      expect("lines" in builtRedacted.request).toBe(false);
+    }
+    expect(buildConfirmRequest(redactedRec, {
+      ...draftFromDetail(redactedRec, []),
+      lines: [{ ...itemLine, raw_name: "Edited" }],
+    }, [])).toEqual({ ok: false, errorKey: "budget.receipts.redactedLinesEditBlocked" });
+    expect(buildConfirmRequest(rec, {
+      ...draftFromDetail(rec, []),
+      lines: [{ ...itemLine, raw_name: REDACTED_VALUE }],
+    }, [])).toEqual({ ok: false, errorKey: "budget.receipts.redactedLinesEditBlocked" });
+
+    // True edit sends normalized `lines`.
+    const builtEdited = buildConfirmRequest(rec, { ...draftFromDetail(rec, []), totalAmount: "11.00", lines: [editedGross] }, []);
+    expect(builtEdited.ok).toBe(true);
+    if (builtEdited.ok) {
+      expect(builtEdited.request.lines?.[0]).toMatchObject({
+        gross_line_total: "12",
         discount_amount: "1",
-        net_line_total: "9",
+        net_line_total: "11",
       });
     }
 
@@ -425,34 +459,54 @@ describe("receipts_model", () => {
     expect(editedOther.net_line_total).toBe("15.00");
   });
 
-  it("plans bulk selections, excludes needs_review/confirmed/linked rows, and builds plain confirms", () => {
+  it("restricts bulk confirm to Gmail imports, groups by NIP or normalized name, and omits lines on confirm", () => {
+    expect(isGmailImportSource("email")).toBe(true);
+    expect(isGmailImportSource("attachment")).toBe(true);
+    expect(isGmailImportSource("local_ocr")).toBe(false);
+    expect(isGmailImportSource("paste")).toBe(false);
+    expect(isGmailImportSource("live_text")).toBe(false);
+
     const rows = [
-      summary({ receipt_id: "r-imp-inv", status: "imported", document_kind: "invoice", raw_shop_name: "Alpha Ltd", linked: false }),
-      summary({ receipt_id: "r-imp-pay", status: "imported", document_kind: "payment_confirmation", raw_shop_name: "Alpha Ltd", linked: false }),
-      summary({ receipt_id: "r-rev", status: "needs_review", raw_shop_name: "Alpha Ltd", linked: false }),
-      summary({ receipt_id: "r-draft", status: "draft", raw_shop_name: REDACTED_VALUE, forwarded_sender_domain: "billing.example", linked: false }),
-      summary({ receipt_id: "r-conf", status: "confirmed", raw_shop_name: "Alpha Ltd", linked: true }),
+      summary({ receipt_id: "r-imp-inv", status: "imported", source_kind: "attachment", document_kind: "invoice", raw_shop_name: "Alpha Ltd", raw_nip: "7791011327", linked: false }),
+      summary({ receipt_id: "r-imp-pay", status: "imported", source_kind: "email", document_kind: "payment_confirmation", raw_shop_name: "Alpha Ltd", raw_nip: "7791011327", linked: false }),
+      summary({ receipt_id: "r-imp-other-nip", status: "imported", source_kind: "email", document_kind: "payment_confirmation", raw_shop_name: "Alpha Ltd", raw_nip: "5261040828", linked: false }),
+      summary({ receipt_id: "r-imp-nonip-1", status: "imported", source_kind: "email", document_kind: "payment_confirmation", raw_shop_name: "  Cafe   Noir ", raw_nip: null, linked: false }),
+      summary({ receipt_id: "r-imp-nonip-2", status: "imported", source_kind: "email", document_kind: "payment_confirmation", raw_shop_name: "cafe noir", raw_nip: null, linked: false }),
+      summary({ receipt_id: "r-rev", status: "needs_review", source_kind: "email", raw_shop_name: "Alpha Ltd", raw_nip: "7791011327", linked: false }),
+      summary({ receipt_id: "r-draft-ocr", status: "draft", source_kind: "local_ocr", raw_shop_name: "OCR Draft", raw_nip: null, linked: false }),
+      summary({ receipt_id: "r-draft-paste", status: "draft", source_kind: "paste", raw_shop_name: "Paste Draft", raw_nip: null, linked: false }),
+      summary({ receipt_id: "r-draft-live", status: "draft", source_kind: "live_text", raw_shop_name: "Live Draft", raw_nip: null, linked: false }),
+      summary({ receipt_id: "r-conf", status: "confirmed", source_kind: "email", raw_shop_name: "Alpha Ltd", raw_nip: "7791011327", linked: true }),
     ];
 
-    expect(rows.map((r) => isBulkConfirmable(r))).toEqual([true, true, false, true, false]);
-    expect(receiptMerchantGroupKey(rows[3] ?? summary())).toBe("billing.example");
-    expect(receiptMerchantGroupKey(summary({ raw_shop_name: REDACTED_VALUE, forwarded_sender_domain: null }))).toBeNull();
+    expect(rows.map((r) => isBulkConfirmable(r))).toEqual([true, true, true, true, true, false, false, false, false, false]);
+    expect(rows.map((r) => isExcludedDraftForBulk(r))).toEqual([false, false, false, false, false, false, true, true, true, false]);
+    expect(receiptMerchantGroupKey(summary({ raw_shop_name: REDACTED_VALUE, raw_nip: null, forwarded_sender_domain: "billing.example" }))).toBe("billing.example");
+    expect(receiptMerchantGroupKey(summary({ raw_shop_name: REDACTED_VALUE, raw_nip: null, forwarded_sender_domain: null }))).toBeNull();
+    expect(receiptMerchantGroupIdentity(summary({ raw_shop_name: REDACTED_VALUE, raw_nip: "7791011327", forwarded_sender_domain: null }))).toEqual({
+      key: "nip:7791011327",
+      label: "NIP 7791011327",
+    });
 
+    // Two sellers with the same name but different NIPs never merge; same normalized name without NIP merges.
     expect(merchantBulkGroups(rows)).toEqual([
-      { merchant: "Alpha Ltd", confirmableIds: ["r-imp-inv", "r-imp-pay"], excludedNeedsReview: 1 },
-      { merchant: "billing.example", confirmableIds: ["r-draft"], excludedNeedsReview: 0 },
+      { key: "nip:7791011327", merchant: "Alpha Ltd (NIP 7791011327)", confirmableIds: ["r-imp-inv", "r-imp-pay"], excludedNeedsReview: 1, excludedDrafts: 0 },
+      { key: "nip:5261040828", merchant: "Alpha Ltd (NIP 5261040828)", confirmableIds: ["r-imp-other-nip"], excludedNeedsReview: 0, excludedDrafts: 0 },
+      { key: "name:cafe noir", merchant: "Cafe   Noir".replace("   ", "   "), confirmableIds: ["r-imp-nonip-1", "r-imp-nonip-2"], excludedNeedsReview: 0, excludedDrafts: 0 },
     ]);
 
-    const plan = buildBulkSelectionPlan(rows, new Set(["r-imp-inv", "r-rev", "r-draft", "r-conf"]), "Unknown");
-    expect(plan.confirmable.map((r) => r.receipt_id)).toEqual(["r-imp-inv", "r-draft"]);
+    const plan = buildBulkSelectionPlan(rows, new Set(["r-imp-inv", "r-imp-other-nip", "r-rev", "r-draft-ocr", "r-draft-paste", "r-draft-live", "r-conf"]), "Unknown");
+    expect(plan.confirmable.map((r) => r.receipt_id)).toEqual(["r-imp-inv", "r-imp-other-nip"]);
     expect(plan.excludedNeedsReview).toBe(1);
-    expect(plan.merchants).toEqual(["Alpha Ltd", "billing.example"]);
+    expect(plan.excludedDrafts).toBe(3);
+    expect(plan.merchants).toEqual(["Alpha Ltd (NIP 7791011327)", "Alpha Ltd (NIP 5261040828)"]);
     expect(formatBulkErrorBucket(409, "budget_receipt_conflict")).toBe("409 budget_receipt_conflict");
 
-    // Invoice with 0 lines gets a single matching summary line and link: null.
+    // Gmail invoice with 0 lines gets 1 summary line and link: null.
     const invoiceDetail = detailOf({
       receipt_id: "r-imp-inv",
       status: "imported",
+      source_kind: "attachment",
       document_kind: "invoice",
       invoice_number: "FV/2026/05",
       payment_method: null,
@@ -480,8 +534,46 @@ describe("receipts_model", () => {
       }) as unknown,
     });
 
-    // Rejects needs_review cleanly.
-    expect(buildPlainBulkConfirmRequest(detailOf({ status: "needs_review" }), "Summary")).toEqual({
+    // Gmail payment_confirmation (even with redacted line) omits `lines` cleanly on confirm.
+    const paymentDetail = detailOf({
+      receipt_id: "r-imp-pay",
+      status: "imported",
+      source_kind: "email",
+      document_kind: "payment_confirmation",
+      payment_method: null,
+      total_amount: "30.00",
+      lines: [{
+        line_no: 1,
+        line_kind: "other",
+        raw_name: REDACTED_VALUE,
+        raw_name_key: "[usunieto]",
+        ptu_code: null,
+        quantity: "1",
+        raw_unit: null,
+        unit_price_raw: null,
+        gross_line_total: "30.00",
+        discount_amount: "0",
+        net_line_total: "30.00",
+      }],
+      linked: false,
+      version: 2,
+    });
+    const builtPay = buildPlainBulkConfirmRequest(paymentDetail, "Summary");
+    expect(builtPay.ok).toBe(true);
+    if (builtPay.ok) {
+      expect("lines" in builtPay.request).toBe(false);
+    }
+
+    // Zero-line OCR draft & needs_review are rejected (never synthesize lines for non-invoices).
+    expect(buildPlainBulkConfirmRequest(detailOf({ status: "draft", source_kind: "local_ocr", document_kind: "receipt", lines: [] }), "Summary")).toEqual({
+      ok: false,
+      errorCode: "budget_receipt_invalid_request",
+    });
+    expect(buildPlainBulkConfirmRequest(detailOf({ status: "imported", source_kind: "email", document_kind: "payment_confirmation", lines: [] }), "Summary")).toEqual({
+      ok: false,
+      errorCode: "budget_receipt_total_mismatch",
+    });
+    expect(buildPlainBulkConfirmRequest(detailOf({ status: "needs_review", source_kind: "email" }), "Summary")).toEqual({
       ok: false,
       errorCode: "budget_receipt_conflict",
     });
