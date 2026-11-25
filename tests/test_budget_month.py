@@ -1758,6 +1758,70 @@ class CardExposureTests(unittest.TestCase):
             "accounts": [{"account_id": "card-a", "debt": "800", "limit": "5000", "available": "4200", "currency": "PLN", "as_of": None}],
         })
 
+    def test_future_reference_date_rejected_as_unusable_in_warsaw_tz(self):
+        # Fetch on Nov 25 (12:00Z = 13:00 CET) with bank reference_date Nov 26 -> unusable & partial.
+        nov25_day = _utc_ts("2026-11-25T12:00:00Z")
+        single_future = _eval(
+            evaluated_at=nov25_day,
+            account_kinds={"card-future": "credit_card"},
+            account_balances={"card-future": [self._bal("ITAV", "4000", reference_date="2026-11-26")]},
+            account_credit_limits={"card-future": self._lim("5000")},
+            account_balance_timestamps={"card-future": nov25_day - 60},
+        )
+        self.assertEqual(single_future["card_debt"], {
+            "status": "partial",
+            "amount": None,
+            "currency": "PLN",
+            "as_of_date": None,
+            "accounts": [],
+        })
+
+        # Mixed with a valid Nov 25 card: future card excluded, valid card kept, status partial.
+        mixed_future = _eval(
+            evaluated_at=nov25_day,
+            account_kinds={"card-future": "credit_card", "card-ok": "credit_card"},
+            account_balances={
+                "card-future": [self._bal("ITAV", "4000", reference_date="2026-11-26")],
+                "card-ok": [self._bal("ITAV", "9000", reference_date="2026-11-25")],
+            },
+            account_credit_limits={"card-future": self._lim("5000"), "card-ok": self._lim("10000")},
+            account_balance_timestamps={"card-future": nov25_day - 60, "card-ok": nov25_day - 60},
+        )
+        self.assertEqual(mixed_future["card_debt"], {
+            "status": "partial",
+            "amount": "1000",
+            "currency": "PLN",
+            "as_of_date": "2026-11-25",
+            "accounts": [{"account_id": "card-ok", "debt": "1000", "limit": "10000", "available": "9000", "currency": "PLN", "as_of": "2026-11-25"}],
+        })
+
+        # Europe/Warsaw (UTC+1 in November): 22:30Z on Nov 25 is still Nov 25 Warsaw -> Nov 26 rejected;
+        # 23:30Z on Nov 25 is 00:30 Nov 26 Warsaw -> Nov 26 accepted as available.
+        kwargs = dict(
+            account_kinds={"card-tz": "credit_card"},
+            account_balances={"card-tz": [self._bal("ITAV", "4000", reference_date="2026-11-26")]},
+            account_credit_limits={"card-tz": self._lim("5000")},
+        )
+        before_warsaw_midnight = _utc_ts("2026-11-25T22:30:00Z")
+        res_before = _eval(
+            evaluated_at=before_warsaw_midnight,
+            account_balance_timestamps={"card-tz": before_warsaw_midnight - 60},
+            **kwargs,
+        )
+        self.assertEqual(res_before["card_debt"]["status"], "partial")
+        self.assertIsNone(res_before["card_debt"]["amount"])
+        self.assertIsNone(res_before["card_debt"]["as_of_date"])
+
+        after_warsaw_midnight = _utc_ts("2026-11-25T23:30:00Z")
+        res_after = _eval(
+            evaluated_at=after_warsaw_midnight,
+            account_balance_timestamps={"card-tz": after_warsaw_midnight - 60},
+            **kwargs,
+        )
+        self.assertEqual(res_after["card_debt"]["status"], "available")
+        self.assertEqual(res_after["card_debt"]["amount"], "1000")
+        self.assertEqual(res_after["card_debt"]["as_of_date"], "2026-11-26")
+
     def test_missing_limit_missing_balance_no_cards_and_mixed_currencies(self):
         evaluated_at = _utc_ts("2026-11-22T12:00:00Z")
         fresh_ts = evaluated_at - 60

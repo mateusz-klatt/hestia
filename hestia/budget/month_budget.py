@@ -446,6 +446,10 @@ def _compute_card_debt(
             has_partial = True
             continue
         available, ref_date = matching[0]
+        # Reject future-dated bank balances (> Warsaw evaluation_date) as unusable and mark partial.
+        if ref_date is not None and ref_date > evaluation_date:
+            has_partial = True
+            continue
         # Prefer bank's reference_date when present; otherwise use fetch date in Europe/Warsaw.
         card_as_of = ref_date if ref_date is not None else (warsaw_date(fetch_ts)[0] if fetch_ts is not None else None)
         if _is_card_balance_stale(fetch_ts, card_as_of, evaluation_date, evaluated_at):

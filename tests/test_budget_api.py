@@ -315,6 +315,7 @@ class BudgetAPITests(unittest.IsolatedAsyncioTestCase):
                 {"account_id": self.alice_id, "credit_limit": {"amount": "0", "currency": "PLN"}, "expected_version": card_version},
                 {"account_id": self.alice_id, "credit_limit": {"amount": "10000000.01", "currency": "PLN"}, "expected_version": card_version},
                 {"account_id": self.alice_id, "credit_limit": {"amount": "1000", "currency": "pln"}, "expected_version": card_version},
+                {"account_id": self.alice_id, "credit_limit": {"amount": "1000", "currency": "EUR"}, "expected_version": card_version},
                 {"account_id": self.alice_id, "credit_limit": "10000", "expected_version": card_version},
             ):
                 bad_limit = await self.post("account-credit-limit", bad_body)

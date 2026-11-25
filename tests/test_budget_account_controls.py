@@ -240,18 +240,68 @@ class BudgetAccountControlTests(AdvancingTime, unittest.TestCase):
             self.assertEqual(load_credit_limits(session, [account_id]), {})
         self.store.confirm_account_kind("owner", account_id, "credit_card", actor="operator")
 
-        # Orphan credit limit entries for non-existent accounts are cleaned up on configure/prune.
+        # Orphan credit limit entries for deleted valid UUID accounts are cleaned up on configure/prune,
+        # without touching wildcard-like hyphens, non-UUID custom suffixes, empty suffixes, or active accounts.
+        deleted_uuid = "00000000-0000-4000-8000-000000000099"
+        deleted_key = f"budget_account_credit_limit:{deleted_uuid}"
+        hyphen_key = f"budget-account-credit-limit:{deleted_uuid}"
+        custom_hyphen_key = "budget-account-credit-limit:custom"
+        non_uuid_key = "budget_account_credit_limit:custom"
+        empty_suffix_key = "budget_account_credit_limit:"
         with self.sessions.begin() as session:
-            session.add(db.AppMeta(key="budget_account_credit_limit:deleted-acct", value='{"amount":"100","currency":"PLN"}'))
-            session.add(db.AppMeta(key=f"budget_account_credit_limit:{account_id}", value='{"amount":"100","currency":"PLN"}'))
+            session.add_all([
+                db.AppMeta(key=deleted_key, value='{"amount":"100","currency":"PLN"}'),
+                db.AppMeta(key=hyphen_key, value='{"amount":"100","currency":"PLN"}'),
+                db.AppMeta(key=custom_hyphen_key, value="unrelated"),
+                db.AppMeta(key=non_uuid_key, value="unrelated"),
+                db.AppMeta(key=empty_suffix_key, value="unrelated"),
+                db.AppMeta(key=f"budget_account_credit_limit:{account_id}", value='{"amount":"100","currency":"PLN"}'),
+            ])
         self.store.configure(fixtures.configuration())
         with self.sessions.begin() as session:
-            self.assertIsNone(session.get(db.AppMeta, "budget_account_credit_limit:deleted-acct"))
-            self.assertIsNotNone(session.get(db.AppMeta, f"budget_account_credit_limit:{account_id}"))
+            self.assertIsNone(session.get(db.AppMeta, deleted_key))
+            for preserved in (hyphen_key, custom_hyphen_key, non_uuid_key, empty_suffix_key,
+                              f"budget_account_credit_limit:{account_id}"):
+                self.assertIsNotNone(session.get(db.AppMeta, preserved))
             self.assertEqual(prune_orphan_credit_limits(session), 0)
 
+        # Observed balance currencies restrict set_account_credit_limit inside the write transaction;
+        # clearing stays allowed, and multi-currency cards accept any observed currency.
+        with self.sessions.begin() as session:
+            session.get(db.BudgetAccount, account_id).balances_json = json.dumps([
+                {"name": "Available", "balance_type": "ITAV", "balance_amount": {"amount": "900", "currency": "PLN"},
+                 "reference_date": "2026-11-22"},
+            ])
+        with self.assertRaises(BudgetStoreError):
+            self.store.set_account_credit_limit(
+                "owner", account_id, {"amount": "1000", "currency": "EUR"}, actor="operator",
+            )
+        pln_ok = self.store.set_account_credit_limit(
+            "owner", account_id, {"amount": "1000", "currency": "PLN"}, actor="operator",
+        )
+        self.assertEqual(pln_ok["credit_limit"], {"amount": "1000", "currency": "PLN"})
+        self.assertIsNone(self.store.set_account_credit_limit("owner", account_id, None, actor="operator")["credit_limit"])
+        with self.sessions.begin() as session:
+            session.get(db.BudgetAccount, account_id).balances_json = json.dumps([
+                {"name": "PLN", "balance_type": "ITAV", "balance_amount": {"amount": "900", "currency": "PLN"},
+                 "reference_date": "2026-11-22"},
+                {"name": "EUR", "balance_type": "ITAV", "balance_amount": {"amount": "200", "currency": "EUR"},
+                 "reference_date": "2026-11-22"},
+            ])
+        self.assertEqual(
+            self.store.set_account_credit_limit(
+                "owner", account_id, {"amount": "1000", "currency": "EUR"}, actor="operator",
+            )["credit_limit"],
+            {"amount": "1000", "currency": "EUR"},
+        )
+        with self.assertRaises(BudgetStoreError):
+            self.store.set_account_credit_limit(
+                "owner", account_id, {"amount": "1000", "currency": "USD"}, actor="operator",
+            )
+        self.assertIsNone(self.store.set_account_credit_limit("owner", account_id, None, actor="operator")["credit_limit"])
+
         audits = [row for row in self.rows(db.BudgetAccountAudit) if row.field == "credit_limit"]
-        self.assertEqual(len(audits), 4)
+        self.assertEqual(len(audits), 8)
         for row in audits:
             self.assertNotIn("10000", row.old_value_json + row.new_value_json)
             self.assertNotIn("12500", row.old_value_json + row.new_value_json)

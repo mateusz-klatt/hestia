@@ -31,6 +31,7 @@ STALE_AFTER = {"transactions": 129600, "balances": 86400}
 MAX_CREDIT_LIMIT = "10000000"
 MAX_CREDIT_LIMIT_CHARS = 80
 CREDIT_LIMIT_META_PREFIX = "budget_account_credit_limit:"
+_ACCOUNT_ID_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z", re.ASCII)
 _CREDIT_LIMIT_RE = re.compile(r"[0-9]+(?:\.[0-9]+)?\Z", re.ASCII)
 _CREDIT_LIMIT_CURRENCY_RE = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 # Failures that stop unattended acquisition until an explicit owner refresh verifies the session.
@@ -119,12 +120,21 @@ def load_credit_limits(session, account_ids) -> dict[str, dict[str, str]]:
     return {keys[row.key]: _decode_credit_limit_meta(row.value) for row in rows}
 
 
+def observed_balance_currencies(account: Account) -> list[str]:
+    """Return sorted distinct currency codes present in an account's stored balances."""
+    return sorted({value["balance_amount"]["currency"] for value in json.loads(account.balances_json)})
+
+
 def prune_orphan_credit_limits(session) -> int:
-    """Remove persisted AppMeta credit limit entries whose account row no longer exists."""
+    """Remove persisted AppMeta credit limit entries whose valid account ID no longer exists."""
     active_ids = set(session.scalars(select(Account.id)))
     removed = 0
-    for row in session.scalars(select(AppMeta).where(AppMeta.key.startswith(CREDIT_LIMIT_META_PREFIX))):
-        if row.key.removeprefix(CREDIT_LIMIT_META_PREFIX) not in active_ids:
+    prefix_rows = session.scalars(
+        select(AppMeta).where(func.substr(AppMeta.key, 1, len(CREDIT_LIMIT_META_PREFIX)) == CREDIT_LIMIT_META_PREFIX)
+    )
+    for row in prefix_rows:
+        account_id = row.key[len(CREDIT_LIMIT_META_PREFIX):]
+        if _ACCOUNT_ID_RE.fullmatch(account_id) and account_id not in active_ids:
             session.delete(row)
             removed += 1
     return removed
@@ -372,6 +382,10 @@ class BudgetStore:
                                 self._account_dict(account, connection, session=session), origin)
             if account.kind != "credit_card" or account.kind_confirmed_at is None:
                 raise BudgetStoreError("Credit limit requires a confirmed credit card account")
+            if canonical is not None:
+                observed = observed_balance_currencies(account)
+                if observed and canonical["currency"] not in observed:
+                    raise BudgetStoreError("Credit limit currency does not match observed balance currencies")
             if changed:
                 self._audit(session, account, actor, origin, "credit_limit",
                             {"configured": current is not None}, {"configured": canonical is not None})
