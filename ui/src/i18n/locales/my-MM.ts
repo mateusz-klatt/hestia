@@ -244,6 +244,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "ဘတ်ဂျက်",
   "budget.main.subtitle": "သင့်အိမ်ထောင်စု၏ ကိုယ်ပိုင်ငွေကြေးစီမံမှု။",
   "budget.main.reload": "ပြန်တင်ရန်",
+  "budget.main.serverChanged": "ဆာဗာပြောင်းလဲသွားပါပြီ — စာမျက်နှာကို ပြန်လည်တင်ပါ",
   "budget.main.loading": "ဘတ်ဂျက်ကို တင်နေသည်…",
   "budget.main.viewsLabel": "ဘတ်ဂျက်မြင်ကွင်း",
   "budget.main.views.monthly_budget": "လစဉ်ဘတ်ဂျက်",

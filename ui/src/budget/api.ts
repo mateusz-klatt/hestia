@@ -45,7 +45,7 @@ function url(path: string, query: Query = {}): URL {
   return target;
 }
 
-async function call<T>(target: URL, init: RequestInit = {}): Promise<BudgetResult<T>> {
+async function request<T>(target: URL, init: RequestInit = {}): Promise<BudgetResult<T>> {
   let response: Response;
   try {
     response = await fetch(target, { credentials: "same-origin", cache: "no-store", ...init });
@@ -60,21 +60,119 @@ async function call<T>(target: URL, init: RequestInit = {}): Promise<BudgetResul
     return { ok: false, status: response.status, error: "budget_uncertain" };
   }
   const record = (body ?? {}) as { error?: unknown; current?: unknown };
-  const error = typeof record.error === "string" ? record.error : `budget_http_${String(response.status)}`;
+  const nested = typeof record.error === "object" && record.error !== null
+    ? (record.error as { code?: unknown }).code : undefined;
+  const error = typeof record.error === "string" ? record.error
+    : typeof nested === "string" ? nested : `budget_http_${String(response.status)}`;
   return { ok: false, status: response.status, error, current: record.current };
-}
-
-function post<T>(path: string, body: object, headers: Record<string, string> = {}): Promise<BudgetResult<T>> {
-  return call<T>(url(path), {
-    method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body),
-  });
 }
 
 export interface ConnectionsData { connections: BudgetConnection[]; capabilities: BudgetCapabilities }
 
-export const budgetApi = {
-  /** The cookie's current principal; another tab may have signed out or in as someone else. */
-  whoami: () => call<{ user: string | null; role: string | null }>(apiUrl("whoami")),
+export interface OwnBudgetAuthorization {
+  permissions: string[]; can_view: boolean; can_use_receipts: boolean; can_manage_devices: boolean;
+}
+export interface AuthorizationCapabilities {
+  user: string | null;
+  actor_tag: string | null;
+  installation_permissions: string[];
+  own_budget: OwnBudgetAuthorization | null;
+  delegated_receipts: { permissions: string[]; can_use: boolean } | null;
+  household_available: boolean;
+}
+
+export function createBudgetApi(expectedActor: string | null = null) {
+  let authorizationLocked = false;
+  let lockGeneration = 0;
+  let verificationGeneration = 0;
+  let capabilitiesInFlight: Promise<BudgetResult<AuthorizationCapabilities>> | null = null;
+  let verified = false;
+  let snapshotUser: string | null | undefined;
+  let snapshotTag: string | null | undefined;
+  let denialError = "budget_server_changed";
+  const pendingReads = new Set<AbortController>();
+
+  function denial(error = denialError): BudgetResult<never> {
+    return { ok: false, status: error === "budget_actor_changed" ? 409 : 503, error };
+  }
+
+  function unverify(error: string): void {
+    verified = false;
+    denialError = error;
+    verificationGeneration += 1;
+    for (const controller of pendingReads) controller.abort();
+  }
+
+  function capabilities(): Promise<BudgetResult<AuthorizationCapabilities>> {
+    if (capabilitiesInFlight !== null) return capabilitiesInFlight;
+    const pending = (async () => {
+      const result = await request<AuthorizationCapabilities>(apiUrl("me/capabilities"));
+      if (!result.ok) {
+        unverify("budget_server_changed");
+        return result;
+      }
+      const { user, actor_tag: tag } = result.data;
+      const validTag = user === null ? tag === null : typeof tag === "string" && /^[A-Za-z0-9_-]{43}$/.test(tag);
+      const expected = expectedActor === null || user === expectedActor;
+      const sameActor = snapshotUser === undefined || (snapshotUser === user && snapshotTag === tag);
+      if (!validTag || !expected || !sameActor) {
+        unverify("budget_actor_changed");
+        return denial();
+      }
+      snapshotUser = user;
+      snapshotTag = tag;
+      verified = true;
+      denialError = "budget_server_changed";
+      return result;
+    })();
+    capabilitiesInFlight = pending;
+    const clear = () => { if (capabilitiesInFlight === pending) capabilitiesInFlight = null; };
+    void pending.then(clear, clear);
+    return pending;
+  }
+
+  async function call<T>(target: URL, init: RequestInit = {}, mutation = false): Promise<BudgetResult<T>> {
+    if (!verified) return denial();
+    const verification = verificationGeneration;
+    const lock = lockGeneration;
+    const controller = mutation ? null : new AbortController();
+    if (controller !== null) {
+      pendingReads.add(controller);
+      init = { ...init, signal: controller.signal };
+    }
+    if (snapshotTag != null) {
+      const headers = new Headers(init.headers);
+      headers.set("X-Hestia-Expected-Actor", snapshotTag);
+      init = { ...init, headers };
+    }
+    if (mutation && (authorizationLocked || lock !== lockGeneration)) return denial("budget_server_changed");
+    try {
+      const result = await request<T>(target, init);
+      if (verification !== verificationGeneration) return denial();
+      if (mutation && lock !== lockGeneration) return denial("budget_server_changed");
+      return result;
+    } finally {
+      if (controller !== null) pendingReads.delete(controller);
+    }
+  }
+
+  function post<T>(path: string, body: object, headers: Record<string, string> = {},
+    mutation = true): Promise<BudgetResult<T>> {
+    if (mutation && authorizationLocked) {
+      return Promise.resolve({ ok: false, status: 503, error: "budget_server_changed" });
+    }
+    return call<T>(url(path), {
+      method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body),
+    }, mutation);
+  }
+  return {
+  setAuthorizationLocked: (value: boolean) => {
+    if (authorizationLocked !== value) {
+      authorizationLocked = value;
+      lockGeneration += 1;
+    }
+  },
+  capabilities,
   connections: () => call<ConnectionsData>(url("connections")),
   accounts: (connectionId?: string) =>
     call<{ accounts: BudgetAccount[] }>(url("accounts", { connection_id: connectionId })),
@@ -110,7 +208,7 @@ export const budgetApi = {
     })),
   /** One server-bounded page matching 1..500 exact row keys across periods via JSON POST. */
   analyticsTransactionsByKeys: (request: AnalyticsTransactionsByKeysRequest) =>
-    post<AnalyticsTransactions>("analytics/transactions-by-keys", request),
+    post<AnalyticsTransactions>("analytics/transactions-by-keys", request, {}, false),
   categories: () => call<{ categories: AnalyticsCategory[] }>(url("analytics/categories")),
   /** The owner's explicit category/kind decision for one entry, versioned against concurrent edits. */
   annotate: (request: AnnotationRequest) => post<{ annotation: AnnotationSaved }>("analytics/annotation", request),
@@ -158,7 +256,7 @@ export const budgetApi = {
   markInbox: (request: AnalyticsInboxMarkRequest) =>
     post<{ inbox: AnalyticsInboxMarkSaved }>("analytics/inbox-mark", request),
   /** Unrevoked receipts devices. A 404 means the receipts flag is off. */
-  receiptDevices: () => post<ReceiptDevice[]>("receipts/device-token/list", {}),
+  receiptDevices: () => post<ReceiptDevice[]>("receipts/device-token/list", {}, {}, false),
   pairReceiptDevice: () => post<ReceiptPair>("receipts/device-token/pair-code", {}),
   cancelReceiptPairCode: (codeId: string) =>
     post<{ ok: true }>("receipts/device-token/pair-code-cancel", { code_id: codeId }),
@@ -195,6 +293,8 @@ export const budgetApi = {
     }
     return { ok: true, data: { job: job as BudgetJob & { created: boolean } } };
   },
-};
+  };
+}
 
-export type BudgetApi = typeof budgetApi;
+export const budgetApi = createBudgetApi();
+export type BudgetApi = ReturnType<typeof createBudgetApi>;

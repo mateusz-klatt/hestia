@@ -1,10 +1,10 @@
 // Owner-private budget view (2C). Reads only the stored-data API; the "refresh" action queues a server job
 // under the server's quotas and never talks to a bank from the browser. Data live only in component state.
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { currentLocale, t, tPlural } from "../i18n";
-import { budgetApi } from "./api";
-import type { BudgetApi, BudgetResult } from "./api";
+import { budgetApi, createBudgetApi } from "./api";
+import type { AuthorizationCapabilities, BudgetApi, BudgetResult } from "./api";
 import { ACTIVE_JOB, KINDS, accountLabel, defaultCreditLimitCurrency, effectiveState, formatAmount, freshness,
   hasActiveJob, idempotencyKey, isAccessLoss, isComponentLimit, latestJob, limitState, newer,
   normalizeCreditCurrencyInput, normalizeCreditLimitInput, otherObservedCurrencies, presetRange, OPEN_FLOW, READY_FLOW,
@@ -46,7 +46,7 @@ function serverMonthToToday(month: string): (() => Date) | undefined {
   return () => new Date(year, monthIndex, 15, 12);
 }
 
-type Load = "loading" | "ready" | "disabled" | "denied" | "error";
+type Load = "loading" | "ready" | "disabled" | "denied" | "error" | "serverChanged";
 
 function failureText(error: string): string {
   switch (error) {
@@ -83,12 +83,21 @@ export interface BudgetProps {
   completeUrl?: string;
 }
 
-export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
+export function Budget({ active, api: providedApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
+  const api = useMemo<BudgetApi>(
+    () => providedApi ?? (principal === undefined || principal === null ? budgetApi : createBudgetApi(principal)),
+    [providedApi, principal],
+  );
   const locale = currentLocale();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
   const [capabilities, setCapabilities] = useState<BudgetCapabilities | null>(null);
+  const [authorization, setAuthorization] = useState<AuthorizationCapabilities | null>(null);
+  const [authorizationLocked, setAuthorizationLocked] = useState(true);
+  const [deviceAccess, setDeviceAccess] = useState(true);
+  const [deviceUnavailable, setDeviceUnavailable] = useState(false);
+  const deviceCapabilityKey = useRef("");
   const [accounts, setAccounts] = useState<BudgetAccount[]>([]);
   const [jobs, setJobs] = useState<BudgetJob[]>([]);
   const [showLimits, setShowLimits] = useState(false);
@@ -132,20 +141,32 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
     alive.current = true;
     return () => { alive.current = false; generation.current += 1; };
   }, []);
+  useEffect(() => {
+    const next = authorization === null ? "" : [
+      authorization.user, authorization.own_budget?.can_view,
+      authorization.own_budget?.can_use_receipts, authorization.own_budget?.can_manage_devices,
+    ].join(":");
+    if (next !== deviceCapabilityKey.current) {
+      deviceCapabilityKey.current = next;
+      setDeviceUnavailable(false);
+    }
+  }, [authorization]);
 
   /** The single access barrier: any endpoint reporting a lost principal or a disabled feature clears every
    *  private value at once and invalidates all pending loads, polls and saves. */
-  const invalidate = useCallback((disabled: boolean) => {
+  const invalidate = useCallback((disabled: boolean, next?: Load) => {
     epoch.current += 1;
     generation.current += 1;
     setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
+    api.setAuthorizationLocked(true);
+    setAuthorization(null); setAuthorizationLocked(true); setDeviceAccess(true); setDeviceUnavailable(false);
     setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
     setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined); setView("accounts");
     setDevicesFocus(0);
-    setLoad(disabled ? "disabled" : "denied");
-  }, []);
+    setLoad(next ?? (disabled ? "disabled" : "denied"));
+  }, [api]);
   const barrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
-    if (!isAccessLoss(result)) return false;
+    if (!isAccessLoss(result) && !(!result.ok && result.error === "budget_actor_changed")) return false;
     if (alive.current) invalidate(!result.ok && result.error === "budget_disabled");
     return true;
   }, [invalidate]);
@@ -158,17 +179,30 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
       barrier(result);
       return result;
     });
-    // A successful whoami naming someone else, or the owner without the admin role, is also a loss of access
-    // and clears at once, without waiting for the other responses.
-    const identity = principal === undefined ? Promise.resolve(null) : watch(api.whoami()).then((result) => {
-      if (result.ok && (result.data.user !== principal || result.data.role !== "admin")
-          && alive.current) invalidate(false);
-      return result;
-    });
-    const [connected, listed, queued, me] = await Promise.all([watch(api.connections()), watch(api.accounts()),
-      watch(api.jobs()), identity]);
+    const me = await watch(api.capabilities());
     if (!alive.current || token !== generation.current) return;
-    if (!connected.ok || !listed.ok || (me !== null && !me.ok)) {
+    if (!me.ok) {
+      if (me.status === 404) invalidate(false, "serverChanged");
+      else {
+        api.setAuthorizationLocked(true);
+        setAuthorizationLocked(true);
+        setLoad("error");
+      }
+      return;
+    }
+    if ((principal !== undefined && me.data.user !== principal) || me.data.own_budget?.can_view !== true) {
+      invalidate(false);
+      return;
+    }
+    setAuthorization(me.data);
+    api.setAuthorizationLocked(false);
+    setAuthorizationLocked(false);
+    setDeviceAccess(me.data.own_budget.can_manage_devices);
+    const [connected, listed, queued] = await Promise.all([
+      watch(api.connections()), watch(api.accounts()), watch(api.jobs()),
+    ]);
+    if (token !== generation.current) return;
+    if (!connected.ok || !listed.ok) {
       setLoad("error");
       return;
     }
@@ -183,6 +217,56 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   useEffect(() => {
     if (active) void reload();
   }, [active, reload]);
+
+  const refreshAuthorization = useCallback(async (): Promise<boolean> => {
+    const result = await api.capabilities();
+    if (!alive.current || barrier(result)) return false;
+    if (!result.ok) {
+      if (result.status === 404) invalidate(false, "serverChanged");
+      else {
+        api.setAuthorizationLocked(true);
+        setAuthorizationLocked(true);
+      }
+      return false;
+    }
+    if ((principal !== undefined && result.data.user !== principal)
+        || result.data.own_budget?.can_view !== true) {
+      invalidate(false);
+      return false;
+    }
+    setAuthorization(result.data);
+    api.setAuthorizationLocked(false);
+    setAuthorizationLocked(false);
+    setDeviceAccess(result.data.own_budget.can_manage_devices);
+    return true;
+  }, [api, principal, barrier, invalidate]);
+
+  const authorizeView = useCallback((action: () => void) => {
+    void refreshAuthorization().then((allowed) => { if (allowed) action(); });
+  }, [refreshAuthorization]);
+
+  useEffect(() => {
+    if (!active) return undefined;
+    const focused = () => { void refreshAuthorization(); };
+    const visible = () => { if (document.visibilityState === "visible") focused(); };
+    window.addEventListener("focus", focused);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      window.removeEventListener("focus", focused);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, [active, refreshAuthorization]);
+
+  const deviceBarrier = useCallback((result: { ok: boolean; status?: number; error?: string }, listing = false): boolean => {
+    if (!result.ok && (result.status === 403 || result.status === 404) && result.error !== "budget_disabled") {
+      if (result.status === 404 || listing) setDeviceUnavailable(true);
+      setDeviceAccess(false);
+      void refreshAuthorization();
+      return true;
+    }
+    return barrier(result);
+  }, [barrier, refreshAuthorization]);
+  const canManageDevices = deviceAccess && !deviceUnavailable && authorization?.own_budget?.can_manage_devices === true;
 
   // Poll only while a job is queued/running and the view is visible; reload stored data once it settles.
   // A failed poll re-arms the timer; an authorization failure goes through reload, which clears data.
@@ -207,6 +291,10 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
 
   /** Runs one mutation; null when the view was unmounted or its data cleared while it was in flight. */
   const run = useCallback(async <T,>(key: string, action: () => Promise<BudgetResult<T>>): Promise<BudgetResult<T> | null> => {
+    if (authorizationLocked) {
+      setNotice(t("budget.main.serverChanged"));
+      return { ok: false, status: 503, error: "budget_server_changed" };
+    }
     const started = epoch.current;
     setBusy((current) => new Set(current).add(key));
     setNotice(null);
@@ -218,7 +306,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
       if (result.error === "budget_version_conflict") await reload();
     }
     return result;
-  }, [reload, barrier]);
+  }, [reload, barrier, authorizationLocked]);
 
   const refresh = useCallback(async (connection: BudgetConnection) => {
     // Reuse the key only to retry a request whose outcome is unknown (network failure).
@@ -318,22 +406,27 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
   }, [active, showLimits, revision, api, barrier]);
 
   if (!active) return null;
+  if (load === "serverChanged") {
+    return <section className="budget-app"><p className="budget-notice" role="alert">{t("budget.main.serverChanged")}</p></section>;
+  }
   const header = (
     <header className="budget-header">
       <div><h2>{t("budget.main.title")}</h2><p>{t("budget.main.subtitle")}</p></div>
       <div className="budget-actions">
         {load === "ready" && consentEnabled ? (
-          <button type="button" aria-pressed={showConsentHealth} onClick={() => { setShowConsentHealth((current) => !current); }}>
+          <button type="button" aria-pressed={showConsentHealth}
+            onClick={() => { authorizeView(() => { setShowConsentHealth((current) => !current); }); }}>
             {showConsentHealth ? t("budget.main.consentHealthHide") : t("budget.main.consentHealth")}
           </button>
         ) : null}
-        {load === "ready" ? (
-          <button type="button" onClick={() => { setView("accounts"); setDevicesFocus((current) => current + 1); }}>
+        {load === "ready" && canManageDevices ? (
+          <button type="button" onClick={() => { authorizeView(() => { setView("accounts"); setDevicesFocus((current) => current + 1); }); }}>
             {t("budget.main.devices")}
           </button>
         ) : null}
         {load === "ready" ? (
-          <button type="button" aria-pressed={showLimits} onClick={() => { setShowLimits((current) => !current); }}>
+          <button type="button" aria-pressed={showLimits}
+            onClick={() => { authorizeView(() => { setShowLimits((current) => !current); }); }}>
             {showLimits ? t("budget.main.limitsHide") : t("budget.main.limits")}
           </button>
         ) : null}
@@ -379,32 +472,36 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
         <div className="budget-views" role="group" aria-label={t("budget.main.viewsLabel")}>
           {(["monthly_budget", "accounts", "inbox", "month", "year", "limits", "recurring", "mortgages", "forecast", "quarantine", "rules"] as const).map((item) => (
             <button type="button" key={item} aria-pressed={shownView === item}
-              onClick={() => { setView(item); if (item === "month") { setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); } if (item === "rules") setFocusRule(undefined); }}>{labelOf(MAIN_VIEW_KEYS, item)}</button>
+              onClick={() => { authorizeView(() => { setView(item); if (item === "month") { setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); } if (item === "rules") setFocusRule(undefined); }); }}>{labelOf(MAIN_VIEW_KEYS, item)}</button>
           ))}
         </div>
       ) : null}
       {shownView === "monthly_budget" ? (
         <MonthBudgetView api={api} accounts={accounts} locale={locale} revision={revision}
           onAccessLoss={barrier} onOpenMonth={(month, serverCurrentMonth, options) => {
-            setFocusMonth(month);
-            setFocusToday(() => serverMonthToToday(serverCurrentMonth));
-            setFocusCurrency(options?.currency);
-            setFocusProvisional(options?.provisionalKeys === undefined ? undefined : {
-              keys: options.provisionalKeys,
-              total: options.provisionalTotal ?? options.provisionalKeys.length,
-              truncated: options.provisionalTruncated === true,
+            authorizeView(() => {
+              setFocusMonth(month);
+              setFocusToday(() => serverMonthToToday(serverCurrentMonth));
+              setFocusCurrency(options?.currency);
+              setFocusProvisional(options?.provisionalKeys === undefined ? undefined : {
+                keys: options.provisionalKeys,
+                total: options.provisionalTotal ?? options.provisionalKeys.length,
+                truncated: options.provisionalTruncated === true,
+              });
+              setView("month");
             });
-            setView("month");
           }} />
       ) : shownView === "inbox" ? (
         <InboxView api={api} connections={connections} consentEnabled={consentEnabled} locale={locale}
           revision={revision} onAccessLoss={barrier}
           onOpenAccounts={(openConsentHealth) => {
-            setView("accounts");
-            if (openConsentHealth && consentEnabled) setShowConsentHealth(true);
+            authorizeView(() => {
+              setView("accounts");
+              if (openConsentHealth && consentEnabled) setShowConsentHealth(true);
+            });
           }}
-          onOpenMortgages={() => { setView("mortgages"); }}
-          onOpenLimits={() => { setView("limits"); }} />
+          onOpenMortgages={() => { authorizeView(() => { setView("mortgages"); }); }}
+          onOpenLimits={() => { authorizeView(() => { setView("limits"); }); }} />
       ) : shownView === "month" ? (
         <MonthView key={`${focusMonth ?? "current"}-${focusCurrency ?? "all"}-${focusProvisional === undefined ? "full" : `provisional:${String(focusProvisional.keys.length)}:${focusProvisional.truncated ? "1" : "0"}`}`}
           api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
@@ -413,13 +510,17 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
           initialProvisionalTotal={focusProvisional?.total}
           initialProvisionalTruncated={focusProvisional?.truncated}
           {...(focusToday === undefined ? {} : { today: focusToday })}
-          onCreateRule={(candidate) => { setFocusRule(candidate); setView("rules"); }} />
+          onCreateRule={(candidate) => { authorizeView(() => { setFocusRule(candidate); setView("rules"); }); }} />
       ) : shownView === "year" ? (
         <YearView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision} onAccessLoss={barrier}
-          onOpenMonth={(month) => { setFocusMonth(month); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setView("month"); }} />
+          onOpenMonth={(month) => {
+            authorizeView(() => {
+              setFocusMonth(month); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setView("month");
+            });
+          }} />
       ) : shownView === "limits" ? (
         <SpendingLimitsView api={api} accounts={accounts} locale={locale} revision={revision}
-          onAccessLoss={barrier} onOpenRules={() => { setView("rules"); }} />
+          onAccessLoss={barrier} onOpenRules={() => { authorizeView(() => { setView("rules"); }); }} />
       ) : shownView === "recurring" ? (
         <RecurringView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} />
@@ -428,7 +529,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
           onAccessLoss={barrier} />
       ) : shownView === "forecast" ? (
         <ForecastView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
-          onAccessLoss={barrier} onOpenMortgages={() => { setView("mortgages"); }} />
+          onAccessLoss={barrier} onOpenMortgages={() => { authorizeView(() => { setView("mortgages"); }); }} />
       ) : shownView === "quarantine" ? (
         <QuarantineView api={api} accounts={accounts} connections={connections} revision={revision}
           onAccessLoss={barrier} />
@@ -437,8 +538,8 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
           onAccessLoss={barrier} initialRule={focusRule ?? null} />
       ) : (
         <>
-        <ReceiptDevices key={principal ?? ""} api={api} locale={locale} revision={revision} onAccessLoss={barrier}
-          focusRevision={devicesFocus} />
+        {canManageDevices ? <ReceiptDevices key={principal ?? ""} api={api} locale={locale} revision={revision}
+          onAccessLoss={deviceBarrier} focusRevision={devicesFocus} /> : null}
         {connections.length === 0 ? <p className="budget-status">{t("budget.main.empty")}</p> : null}
         {connections.map((connection) => {
           const job = latestJob(jobs, connection.id);
@@ -489,7 +590,7 @@ export function Budget({ active, api = budgetApi, pollMs = 2000, principal,
               <ul className="budget-accounts">
                 {owned.map((account, index) => (
                   <AccountRow key={account.id} account={account} index={index} busy={busy}
-                    onOpen={() => { setDetail(account.id); }}
+                    onOpen={() => { authorizeView(() => { setDetail(account.id); }); }}
                     onSelect={(selected) => { void saveAccount(`select:${account.id}`, () => api.setSelected(account, selected)); }}
                     onKind={(kind) => { void saveAccount(`kind:${account.id}`, () => api.setKind(account, kind)); }}
                     onCreditLimit={(limit) => { void saveAccount(`credit-limit:${account.id}`, () => api.setCreditLimit(account, limit)); }} />

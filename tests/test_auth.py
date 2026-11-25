@@ -517,7 +517,7 @@ class CliSqliteTests(unittest.TestCase):
         import io
         engine, _ = db.init_db(self.db)
         with engine.begin() as conn:
-            conn.exec_driver_sql("INSERT INTO app_meta (key, value) VALUES ('authz_policy_phase', 'catalog_custom')")
+            conn.exec_driver_sql("INSERT INTO app_meta (key, value) VALUES ('authz_policy_phase', 'future_phase')")
         engine.dispose()
         with mock.patch.dict(os.environ, {"HESTIA_SESSION_SECRET": "secret"}):
             for argv, kw in (

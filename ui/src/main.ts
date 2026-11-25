@@ -73,12 +73,13 @@ let onRoomsNav: (inRoom: boolean) => void = () => undefined;
 // Set in startApp once the view switcher exists; the settings-menu "edit icons" entry calls it.
 let triggerIconEdit: () => void = () => undefined;
 let roomIcons: Record<string, string> = {};
-// The current user's capabilities, resolved from /api/whoami BEFORE startApp. Default to the most
+// Role and capability gates are resolved from /api/whoami and /api/me/capabilities BEFORE startApp. Default to the most
 // restrictive until known; auth-off resolves both to true (loopback/dev = fully open). `canControl` =
 // operator/admin (room controls + scenes + IR/klima panels); `isAdmin` = admin (the 🔧 Advanced view).
 // The server is the real boundary (#73) — this gating is convenience, never the security check.
 let canControl = false;
 let isAdmin = false;
+let canViewBudget = false;
 let currentUsername: string | null = null; // the signed-in user (null when auth is off); the admin Users panel marks/guards this row
 
 // Audit feed: the live discovery map feeds the display-time humanizers (Codex/Copilot: read-time,
@@ -181,8 +182,8 @@ const live = new LiveController(
 /** Wire up the live app (events, intervals, initial fetch). Called only once authenticated. */
 function startApp(): void {
   const calendar = mountCalendar(el("calendar-root"), canControl);
-  // Owner-private budget: mounted only for admins; the server decides ownership and whether it is enabled.
-  const budget = isAdmin ? mountBudget(el("budget-root"), currentUsername) : null;
+  // Budget visibility follows live own-ledger capability, not the legacy role projection.
+  const budget = canViewBudget ? mountBudget(el("budget-root"), currentUsername) : null;
   const audit = renderAuditFeed(el("audit-feed"), fetchAudit, () => latestDevices);
   const rf433 = renderRf433(el("rf433"), fetchRf433);
   const dbStats = renderDbStats(el("dbstats"), fetchDbStats);
@@ -228,8 +229,7 @@ function startApp(): void {
     { showAdmin: isAdmin }, // a non-admin gets only 🏠 Rooms + 📜 Activity (no engineer view)
   );
   if (budget !== null) {
-    // 404 (disabled), 401/403 (not this owner) or 409 (no SQLite users) keep the budget tab hidden.
-    void budgetApi.connections().then((result) => { switcher.setBudgetAvailable(result.ok); });
+    switcher.setBudgetAvailable(true);
   }
   // The "← Rooms" back label only reflects nav while the rooms view is the active one — a background
   // refresh re-rendering the hidden room detail must not flip the tab while Advanced is showing.
@@ -379,12 +379,14 @@ void (async () => {
     return;
   }
   roomIcons = (await fetchRoomIcons()) ?? {};
-  // Resolve capabilities from the role before the first render. Auth-off (me.user === null) = loopback/dev
+  // Resolve capabilities before the first render. Auth-off (me.user === null) = loopback/dev
   // → full access. The server enforces these for real (#73); this only shapes what the UI offers.
   const authOff = me.user === null;
   currentUsername = me.user;
   isAdmin = authOff || me.role === "admin";
   canControl = authOff || me.role === "operator" || me.role === "admin";
+  const discovered = await budgetApi.capabilities();
+  canViewBudget = discovered.ok ? discovered.data.own_budget?.can_view === true : discovered.status === 404;
   // Always render the user/settings chip; auth-off (me.user === null) shows a settings-only menu
   // (language + temperature scale, no logout — see renderUser).
   const userOpts = {

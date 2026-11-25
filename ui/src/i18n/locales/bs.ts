@@ -243,6 +243,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Budžet",
   "budget.main.subtitle": "Vaše privatne kućne financije.",
   "budget.main.reload": "Ponovo učitaj",
+  "budget.main.serverChanged": "Server je promijenjen — osvježi stranicu",
   "budget.main.loading": "Učitavanje budžeta…",
   "budget.main.viewsLabel": "Prikaz budžeta",
   "budget.main.views.monthly_budget": "Mjesečni budžet",

@@ -901,11 +901,11 @@ class ConsentAPITests(unittest.IsolatedAsyncioTestCase):
 
         # Unsupported custom phase propagates out of lifetime, create_service, and auth_transition.
         with self.sessions.begin() as session:
-            session.add(db.AppMeta(key="authz_policy_phase", value="catalog_custom"))
+            session.add(db.AppMeta(key="authz_policy_phase", value="future_phase"))
         with mock.patch.object(module, "load_config", return_value=self.config):
             with self.assertRaises(authz.PolicyPhaseUnsupported):
                 REAL_CREATE(auth_enabled=lambda: True, session_secret=lambda: SECRET, secure_cookie=lambda: True)
-        with mock.patch.object(module, "create_service", side_effect=authz.PolicyPhaseUnsupported("catalog_custom")):
+        with mock.patch.object(module, "create_service", side_effect=authz.PolicyPhaseUnsupported("future_phase")):
             app = web.web.Application()
             module.register(app, web._read_json_body, auth_enabled=lambda: True, session_secret=lambda: SECRET, secure_cookie=lambda: True)
             app.freeze()

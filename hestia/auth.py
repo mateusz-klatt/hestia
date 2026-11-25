@@ -329,6 +329,7 @@ def save_user_json(username: str, password_hash: str, path: "Path | None" = None
 _USAGE = ("usage: python -m hestia.auth add <username> [--role admin|operator|viewer]\n"
           "       python -m hestia.auth role <username> <admin|operator|viewer>\n"
           "       python -m hestia.auth disable|enable <username>\n"
+          "       python -m hestia.auth activate-authz-compat\n"
           "       python -m hestia.auth activate-sessions-v2\n"
           "       python -m hestia.auth budget-owner <username>")
 _PHASE_INCOMPATIBLE_ERROR = "refused: incompatible authorization bridge phase in database"
@@ -352,6 +353,8 @@ def _cli(argv: list, *, prompt=getpass.getpass, path: "Path | None" = None) -> i
         return _cli_role(argv[1:])
     if cmd == ["disable"] or cmd == ["enable"]:
         return _cli_disable(argv[0], argv[1:])
+    if cmd == ["activate-authz-compat"]:
+        return _cli_activate_authz_compat(argv[1:])
     if cmd == ["activate-sessions-v2"]:
         return _cli_activate_sessions_v2(argv[1:])
     if cmd == ["budget-owner"]:
@@ -433,6 +436,9 @@ def _cli_add(args: list, *, prompt, path: "Path | None") -> int:
                 print(f"invalid role {role!r} (use admin, operator or viewer)", file=sys.stderr)
                 return 2
             effective = store_sql.set_user_db(username, password_hash, role)
+            if effective == "legacy_role_changes_disabled":
+                print("legacy role changes are disabled in custom authorization mode", file=sys.stderr)
+                return 1
             print(f"saved user {username!r} (role {effective!r}) to the SQLite DB")
             return 0
 
@@ -469,7 +475,35 @@ def _cli_role(args: list) -> int:
             print(f"refused: {username!r} is the only enabled admin (demoting it would lock everyone out)",
                   file=sys.stderr)
             return 1
+        if outcome == "legacy_role_changes_disabled":
+            print("legacy role changes are disabled in custom authorization mode", file=sys.stderr)
+            return 1
         print(f"set {username!r} role to {role!r}")
+        return 0
+
+    return _call_sqlite_cli(_run)
+
+
+def _cli_activate_authz_compat(args: list) -> int:
+    """``activate-authz-compat`` — run PR 2's local backfill before v2 activation."""
+    if args:
+        print("usage: python -m hestia.auth activate-authz-compat", file=sys.stderr)
+        return 2
+    if os.environ.get("HESTIA_PERSIST", "json").lower() != "sqlite":
+        print("activate-authz-compat requires the SQLite backend (HESTIA_PERSIST=sqlite)", file=sys.stderr)
+        return 1
+
+    def _run(store_sql) -> int:
+        outcome = store_sql.activate_catalog_compat()
+        if outcome == "users_not_authoritative":
+            print("activate-authz-compat requires the SQLite users store (users not yet cut over)",
+                  file=sys.stderr)
+            return 1
+        if outcome == "already_custom":
+            print("authorization catalog is already in custom mode", file=sys.stderr)
+            return 1
+        print("authorization catalog compatibility already active"
+              if outcome == "already_active" else "activated authorization catalog compatibility")
         return 0
 
     return _call_sqlite_cli(_run)

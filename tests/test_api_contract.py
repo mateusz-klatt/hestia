@@ -59,7 +59,22 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.49.0")
+        self.assertEqual(document["info"]["version"], "0.50.0")
+        credit_limit_post = document["paths"]["/api/budget/account-credit-limit"]["post"]
+        self.assertEqual(credit_limit_post["x-required-permission"], "owner_only")
+        instances_get = document["paths"]["/api/calendars/instances"]["get"]
+        self.assertEqual(instances_get["x-required-role"], "viewer")
+        self.assertEqual(instances_get["x-required-permission"], "calendar.view")
+        document["paths"].pop("/api/me/capabilities")
+        document["paths"].pop("/api/auth/features")
+        for name in (
+            "OwnBudgetCapabilities", "DelegatedReceiptCapabilities", "MeCapabilities", "AuthFeatures",
+        ):
+            schemas.pop(name)
+        for operations in document["paths"].values():
+            for operation in operations.values():
+                operation.pop("x-required-permission")
+        document["info"]["version"] = "0.49.0"
         document["paths"].pop("/api/budget/account-credit-limit")
         schemas.pop("BudgetCreditLimitRequest")
         schemas.pop("BudgetCreditLimitValue")
@@ -78,8 +93,6 @@ class OpenApiArtifactTests(unittest.TestCase):
             "Makes no bank requests and no database writes."
         )
         document["info"]["version"] = "0.48.0"
-        instances_get = document["paths"]["/api/calendars/instances"]["get"]
-        self.assertEqual(instances_get["x-required-role"], "viewer")
         del document["paths"]["/api/calendars/instances"]
         for name in ("CalendarInstances", "CalendarExpandedInstance"):
             del schemas[name]
@@ -680,6 +693,32 @@ class RoleAndBindingContractTests(unittest.TestCase):
                 # public route mislabelled with a role (or vice-versa) fails, not just a wrong floor.
                 expected = "public" if web._is_public_route(m, path) else web._required_role(m, path)
                 self.assertEqual(op["x-required-role"], expected, f"{m} {path}")
+
+    def test_x_required_permission_matches_the_server_catalog(self):
+        from hestia import web
+        for path, ops in api_contract.build_openapi()["paths"].items():
+            for method, op in ops.items():
+                upper = method.upper()
+                expected = "public" if web._is_public_route(upper, path) else web._required_permission(upper, path)
+                self.assertEqual(op["x-required-permission"], expected, f"{upper} {path}")
+
+    def test_pr2_discovery_contract_shapes(self):
+        paths = api_contract.build_openapi()["paths"]
+        self.assertEqual(paths["/api/auth/features"]["get"]["x-required-permission"], "public")
+        self.assertEqual(
+            paths["/api/me/capabilities"]["get"]["x-required-permission"], "authenticated",
+        )
+        self.assertEqual(api_contract.CONTRACT_VERSION, "0.50.0")
+        capabilities = api_contract.MeCapabilities.model_validate({
+            "user": "viewer", "actor_tag": "A" * 43, "installation_permissions": ["ioc.view"], "own_budget": None,
+            "delegated_receipts": None, "household_available": True,
+        })
+        self.assertEqual(capabilities.actor_tag, "A" * 43)
+        self.assertIsNone(capabilities.own_budget)
+        features = api_contract.AuthFeatures.model_validate({
+            "auth_contract": 2, "features": ["capabilities"], "qr_origin": None,
+        })
+        self.assertEqual(features.features, ["capabilities"])
 
     def test_settings_update_agrees_with_validator(self):
         from hestia.web import _settings_error

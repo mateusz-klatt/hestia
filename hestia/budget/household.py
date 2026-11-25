@@ -59,7 +59,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from .. import authz, store_sql
-from ..db import AppMeta, BudgetHouseholdMember, User, _alembic_config, make_engine
+from ..db import AppMeta, BudgetHouseholdMember, PermissionGrant, User, _alembic_config, make_engine
 
 log = logging.getLogger("hestia.budget.household")
 
@@ -133,13 +133,20 @@ def authorize_household(session, member, *, header, require_header):
     if session.get(AppMeta, _USERS_MARKER) is None:
         from .views import BudgetUsersBackendRequired
         raise BudgetUsersBackendRequired()
-    if _active(session, member, *_MEMBER_ROLES) is None:
-        raise HouseholdAuthError(403, "budget_forbidden")
     grant = session.get(BudgetHouseholdMember, member)
     if grant is None or grant.member_username != member or grant.owner == member:
         raise HouseholdAuthError(403, "budget_forbidden")
-    owner = _active(session, grant.owner, "admin", check_budget_owner=(phase == authz.POLICY_PHASE_COMPAT))
-    if owner is None or (phase == authz.POLICY_PHASE_COMPAT and not owner.budget_owner):
+    if phase == authz.POLICY_PHASE_LEGACY:
+        member_active = _active(session, member, *_MEMBER_ROLES) is not None
+        owner_active = _active(session, grant.owner, "admin") is not None
+        permitted = member_active and owner_active
+    else:
+        permitted = (
+            _active(session, member, *store_sql.ROLE_RANK) is not None
+            and authz.is_active_budget_owner(session, grant.owner)
+            and authz.authorize(session, member, "household.view", owner=grant.owner)
+        )
+    if not permitted:
         raise HouseholdAuthError(403, "budget_forbidden")
     if require_header and not hmac.compare_digest(header, grant.grant_id):
         raise HouseholdAuthError(403, "budget_forbidden")
@@ -205,11 +212,29 @@ def _active(session, username, *roles, check_budget_owner=False):
 
 def _grant(session, member, owner):
     phase = authz.require_supported_policy_phase(session)
-    if _active(session, member, *_MEMBER_ROLES) is None or member == owner:
+    member_roles = store_sql.ROLE_RANK if phase == authz.POLICY_PHASE_CUSTOM else _MEMBER_ROLES
+    if _active(session, member, *member_roles) is None or member == owner:
         raise HouseholdCommandError("household_member_invalid")
-    owner_row = _active(session, owner, "admin", check_budget_owner=(phase == authz.POLICY_PHASE_COMPAT))
-    if owner_row is None or (phase == authz.POLICY_PHASE_COMPAT and not owner_row.budget_owner):
+    if phase == authz.POLICY_PHASE_CUSTOM:
+        owner_valid = authz.is_active_budget_owner(session, owner)
+    else:
+        owner_row = _active(session, owner, "admin", check_budget_owner=(phase == authz.POLICY_PHASE_COMPAT))
+        owner_valid = owner_row is not None and (
+            phase != authz.POLICY_PHASE_COMPAT or owner_row.budget_owner
+        )
+    if not owner_valid:
         raise HouseholdCommandError("household_owner_invalid")
+    if phase == authz.POLICY_PHASE_CUSTOM:
+        member_row = session.get(User, member)
+        if member_row.budget_owner:
+            raise HouseholdCommandError("household_member_invalid")
+        targets = session.execute(select(PermissionGrant.target_owner).where(
+            PermissionGrant.username == member,
+            PermissionGrant.target_owner.is_not(None),
+            PermissionGrant.target_owner != owner,
+        ).distinct()).scalars()
+        if next(iter(targets), None) is not None:
+            raise HouseholdCommandError("household_member_invalid")
     existing = session.get(BudgetHouseholdMember, member)
     if existing is not None:
         if existing.owner != owner:
@@ -221,17 +246,32 @@ def _grant(session, member, owner):
         session.flush()
     except IntegrityError:
         raise HouseholdCommandError("household_grant_conflict") from None
-    store_sql.sync_legacy_grants(session)
+    if phase == authz.POLICY_PHASE_CUSTOM:
+        session.add(PermissionGrant(
+            username=member, permission_id="household.view", target_owner=owner,
+        ))
+    else:
+        store_sql.sync_legacy_grants(session)
     return {"ok": True, "status": "granted", "grant_id": grant_id}
 
 
 def _revoke(session, member, owner, grant_id):
+    phase = authz.require_supported_policy_phase(session)
     row = session.get(BudgetHouseholdMember, member) if isinstance(member, str) and member else None
     if (row is None or row.owner != owner or not isinstance(grant_id, str)
             or not hmac.compare_digest(row.grant_id, grant_id)):
         raise HouseholdCommandError("household_grant_mismatch")
     session.delete(row)
-    store_sql.sync_legacy_grants(session)
+    if phase == authz.POLICY_PHASE_CUSTOM:
+        permission = session.scalar(select(PermissionGrant).where(
+            PermissionGrant.username == member,
+            PermissionGrant.permission_id == "household.view",
+            PermissionGrant.target_owner == owner,
+        ))
+        if permission is not None:
+            session.delete(permission)
+    else:
+        store_sql.sync_legacy_grants(session)
     return {"ok": True, "status": "revoked"}
 
 

@@ -1028,7 +1028,7 @@ class AuthorizationBridgeTests(unittest.TestCase):
             self.assertTrue(fallback.enabled)
             self.assertEqual(fallback.role, "admin")
 
-            self._set_meta("authz_policy_phase", "catalog_custom")
+            self._set_meta("authz_policy_phase", "future_phase")
             with self.assertRaises(authz.PolicyPhaseUnsupported):
                 store_sql.load_auth_state("tata")
             self._set_meta("authz_policy_phase", "catalog_compat")
@@ -1342,8 +1342,8 @@ class AuthorizationBridgeTests(unittest.TestCase):
             self.assertIsNone(s.get(db.User, "json_only"))
             self.assertIn(("budget.view", "sqlite_only"), self._grants_of("sqlite_only"))
 
-        # Setting catalog_custom causes all PR 1 bridge entry points and mirrors to refuse cleanly.
-        self._set_meta("authz_policy_phase", "catalog_custom")
+        # Setting future_phase causes all PR 1 bridge entry points and mirrors to refuse cleanly.
+        self._set_meta("authz_policy_phase", "future_phase")
         reg.nodes = {"9": dict(RICH_NODE)}
         self.assertFalse(store_sql.shadow_import(reg, store, {"json_only": "h-j"}, path=self.db))
         with Session(engine) as s:

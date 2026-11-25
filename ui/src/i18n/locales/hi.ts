@@ -244,6 +244,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "बजट",
   "budget.main.subtitle": "आपके घर का निजी वित्तीय प्रबंधन।",
   "budget.main.reload": "फिर से लोड करें",
+  "budget.main.serverChanged": "सर्वर बदल गया है — पेज रीफ्रेश करें",
   "budget.main.loading": "बजट लोड हो रहा है…",
   "budget.main.viewsLabel": "बजट दृश्य",
   "budget.main.views.monthly_budget": "मासिक बजट",

@@ -682,7 +682,7 @@ class GmailPollLifecycleTests(IsolatedAsyncioTestCase):
             self.assertIn("RuntimeError", logs.output[0])
             self.assertNotIn("synthetic-PII", logs.output[0])
 
-    def test_custom_policy_phase_blocks_store_and_poll_before_secrets(self):
+    def test_unknown_policy_phase_blocks_store_and_poll_before_secrets(self):
         import tempfile
         from hestia import authz
 
@@ -691,7 +691,7 @@ class GmailPollLifecycleTests(IsolatedAsyncioTestCase):
             self.addCleanup(db.reset_engine_cache)
             engine, sessions = db.init_db(db_file)
             with sessions.begin() as s:
-                s.add(db.AppMeta(key="authz_policy_phase", value="catalog_custom"))
+                s.add(db.AppMeta(key="authz_policy_phase", value="future_phase"))
             engine.dispose()
             flags = {gmail_api.FLAG: "1", "HESTIA_BUDGET_HTTP_ENABLED": "1", receipt_api.FLAG: "1",
                      "HESTIA_PERSIST": "sqlite", "HESTIA_DB": str(db_file)}

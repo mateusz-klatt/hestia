@@ -1,10 +1,26 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { forecastOf, monthlyBudgetChartsOf, monthlyBudgetOf } from "./analytics/fixtures";
-import { budgetApi } from "./api";
+import { createBudgetApi } from "./api";
+import type { BudgetApi, BudgetResult } from "./api";
 import { account, connection } from "./fixtures";
 
+const OWNER_TAG = "ZYtoux-yHqo-dVxLUe_uXkgvKgk2LWgJCV6VODecrlo";
+
+function capabilitiesFor(user: string | null = "owner", tag = OWNER_TAG) {
+  return {
+    user, actor_tag: user === null ? null : tag, installation_permissions: [], own_budget: {
+      permissions: ["budget.view"], can_view: true, can_use_receipts: true, can_manage_devices: true,
+    }, delegated_receipts: null, household_available: false,
+  };
+}
+
 function respond(status: number, body: unknown) {
-  const fetchMock = vi.fn(() => Promise.resolve(new Response(body === undefined ? "" : JSON.stringify(body), { status })));
+  const fetchMock = vi.fn((input: unknown) => {
+    if ((input as URL).pathname.endsWith("/api/me/capabilities")) {
+      return Promise.resolve(new Response(JSON.stringify(capabilitiesFor()), { status: 200 }));
+    }
+    return Promise.resolve(new Response(body === undefined ? "" : JSON.stringify(body), { status }));
+  });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -14,9 +30,40 @@ function sent(fetchMock: ReturnType<typeof respond>, index = 0): { url: URL; ini
   return { url, init };
 }
 
+let budgetApi: BudgetApi;
+beforeEach(async () => {
+  budgetApi = createBudgetApi();
+  respond(200, {});
+  await budgetApi.capabilities();
+});
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("budget api", () => {
+  it("echoes the server actor tag only on owner-budget requests", async () => {
+    const fetchMock = respond(200, {});
+    const scoped = createBudgetApi("owner");
+    await scoped.capabilities();
+    await scoped.accounts();
+    await scoped.receiptDevices();
+    expect(new Headers(sent(fetchMock, 0).init.headers).has("X-Hestia-Expected-Actor")).toBe(false);
+    for (const index of [1, 2]) {
+      expect(new Headers(sent(fetchMock, index).init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
+    }
+    for (const [actor, tag] of [
+      ["Ági", "HLS-1f2FaYa82fa78nYm4ZQVdbWlCUOrqzBQ912Nfjw"],
+      ["Łukasz", "5731GtQ6bT3BSlT8lkN8teIo4nASJDab5UivdlVnUCM"],
+      ["😀".repeat(65), "wBIGWiX_jbx05eeaf39UUKfxurtuA6X9qYXtXk8vC4c"],
+    ] as const) {
+      const index = fetchMock.mock.calls.length;
+      fetchMock.mockImplementationOnce(() => Promise.resolve(new Response(JSON.stringify(capabilitiesFor(actor, tag)), { status: 200 })));
+      const bound = createBudgetApi(actor);
+      await bound.capabilities();
+      await bound.accounts();
+      expect(new Headers(sent(fetchMock, index).init.headers).has("X-Hestia-Expected-Actor")).toBe(false);
+      expect(new Headers(sent(fetchMock, index + 1).init.headers).get("X-Hestia-Expected-Actor")).toBe(tag);
+    }
+  });
+
   it("reads with the same-origin cookie and builds bounded queries", async () => {
     const fetchMock = respond(200, { account_id: "a", transactions: [], account_total: 0, uncertain_total: 0, next_cursor: null });
     const result = await budgetApi.transactions("local-a", { cursor: "opaque", dateFrom: "2026-11-01", dateTo: "" });
@@ -43,10 +90,13 @@ describe("budget api", () => {
     requests.forEach(({ path, body }, index) => {
       const { url, init } = sent(fetchMock, index);
       expect(url.pathname).toBe(`/api/budget/receipts/device-token/${path}`);
-      expect(init).toEqual({
-        credentials: "same-origin", cache: "no-store", method: "POST",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      expect(init).toMatchObject({
+        credentials: "same-origin", cache: "no-store", method: "POST", body: JSON.stringify(body),
       });
+      expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+      expect(new Headers(init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
+      if (path === "list") expect(init.signal).toBeInstanceOf(AbortSignal);
+      else expect(init.signal).toBeUndefined();
     });
   });
 
@@ -55,10 +105,9 @@ describe("budget api", () => {
     await budgetApi.spreadCategoryColors();
     const { url, init } = sent(fetchMock);
     expect(url.pathname).toBe("/api/budget/analytics/category-colors-spread");
-    expect(init).toEqual({
-      credentials: "same-origin", cache: "no-store", method: "POST",
-      headers: { "Content-Type": "application/json" }, body: "{}",
-    });
+    expect(init).toMatchObject({ credentials: "same-origin", cache: "no-store", method: "POST", body: "{}" });
+    expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
+    expect(new Headers(init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
   });
 
   it("passes an analytics page limit only when one is given", async () => {
@@ -150,10 +199,11 @@ describe("budget api", () => {
     await budgetApi.refresh(connection, { accountId: "local-a", operation: "balances" }, "synthetic-key-0000001");
     const { url, init } = sent(fetchMock);
     expect(url.pathname).toMatch(/\/api\/budget\/refresh$/);
-    const headers = init.headers as Record<string, string>;
-    expect(headers["Idempotency-Key"]).toBe("synthetic-key-0000001");
-    expect(headers["Content-Type"]).toBe("application/json");
-    expect(Object.keys(headers)).not.toContain("Authorization");
+    const headers = new Headers(init.headers);
+    expect(headers.get("Idempotency-Key")).toBe("synthetic-key-0000001");
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(headers.get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
+    expect(headers.has("Authorization")).toBe(false);
     expect(JSON.parse(init.body as string)).toEqual({ connection_id: "bank", expected_version: 4,
       account_id: "local-a", operation: "balances" });
     await budgetApi.refresh(connection);
@@ -167,7 +217,8 @@ describe("budget api", () => {
     const { url, init } = sent(fetchMock);
     expect(url.pathname).toMatch(/\/api\/budget\/analytics\/forecast$/);
     expect(url.search).toBe("");
-    expect(init).toEqual({ credentials: "same-origin", cache: "no-store" });
+    expect(init).toMatchObject({ credentials: "same-origin", cache: "no-store" });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
 
     await budgetApi.forecast(6, "EUR");
     expect(Object.fromEntries(sent(fetchMock, 1).url.searchParams)).toEqual({ months: "6", currency: "EUR" });
@@ -184,7 +235,8 @@ describe("budget api", () => {
     const { url, init } = sent(fetchMock);
     expect(url.pathname).toMatch(/\/api\/budget\/analytics\/monthly-budget$/);
     expect(url.search).toBe("");
-    expect(init).toEqual({ credentials: "same-origin", cache: "no-store" });
+    expect(init).toMatchObject({ credentials: "same-origin", cache: "no-store" });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
 
     await budgetApi.monthlyBudget("2026-10", "EUR");
     expect(Object.fromEntries(sent(fetchMock, 1).url.searchParams)).toEqual({ period: "2026-10", currency: "EUR" });
@@ -201,7 +253,8 @@ describe("budget api", () => {
     const { url, init } = sent(fetchMock);
     expect(url.pathname).toMatch(/\/api\/budget\/analytics\/monthly-budget\/charts$/);
     expect(url.search).toBe("");
-    expect(init).toEqual({ credentials: "same-origin", cache: "no-store" });
+    expect(init).toMatchObject({ credentials: "same-origin", cache: "no-store" });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
 
     await budgetApi.monthlyBudgetCharts("2026-10", "EUR", 12);
     expect(Object.fromEntries(sent(fetchMock, 1).url.searchParams)).toEqual({
@@ -262,9 +315,117 @@ describe("budget api", () => {
     expect(await budgetApi.refresh(connection)).toMatchObject({ ok: false, status: 409 });
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response("not json", { status: 202 }))));
     expect(await budgetApi.refresh(connection)).toEqual({ ok: false, status: 202, error: "budget_uncertain" });
-    const fetchMock = respond(200, { user: "owner", role: "admin" });
-    expect(await budgetApi.whoami()).toEqual({ ok: true, data: { user: "owner", role: "admin" } });
-    expect(sent(fetchMock).url.pathname).toMatch(/\/api\/whoami$/);
+    const fetchMock = respond(200, {
+      user: "owner", installation_permissions: [], own_budget: {
+        permissions: ["budget.view"], can_view: true, can_use_receipts: true, can_manage_devices: true,
+      }, delegated_receipts: null, household_available: false,
+    });
+    expect((await budgetApi.capabilities()).ok).toBe(true);
+    expect(sent(fetchMock).url.pathname).toMatch(/\/api\/me\/capabilities$/);
+  });
+
+  it("parses nested actor errors", async () => {
+    respond(409, { error: { code: "budget_actor_changed" } });
+    expect(await budgetApi.connections()).toEqual({
+      ok: false, status: 409, error: "budget_actor_changed", current: undefined,
+    });
+  });
+
+  it("coalesces concurrent capabilities checks without caching the next one", async () => {
+    let resolveCapabilities!: (response: Response) => void;
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { resolveCapabilities = resolve; }));
+    vi.stubGlobal("fetch", fetchMock);
+    const scoped = createBudgetApi("owner");
+    const first = scoped.capabilities();
+    const second = scoped.capabilities();
+    expect(second).toBe(first);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    resolveCapabilities(new Response(JSON.stringify(capabilitiesFor()), { status: 200 }));
+    expect((await Promise.all([first, second])).every((result) => result.ok)).toBe(true);
+    fetchMock.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(capabilitiesFor()), { status: 200 })));
+    expect((await scoped.capabilities()).ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("works when crypto.subtle is undefined", async () => {
+    const fetchMock = respond(200, {});
+    vi.stubGlobal("crypto", {});
+    const scoped = createBudgetApi("owner");
+    expect((await scoped.capabilities()).ok).toBe(true);
+    expect((await scoped.accounts()).ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("locks every mutation without blocking read-only POST queries", async () => {
+    const scoped = createBudgetApi("owner");
+    const fetchMock = respond(200, {});
+    await scoped.capabilities();
+    fetchMock.mockClear();
+    scoped.setAuthorizationLocked(true);
+    expect(await scoped.setPaused(connection, true)).toEqual({
+      ok: false, status: 503, error: "budget_server_changed",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await scoped.receiptDevices()).ok).toBe(true);
+    expect((await scoped.analyticsTransactionsByKeys({ row_keys: [], currency: "PLN" })).ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    scoped.setAuthorizationLocked(false);
+    await scoped.setPaused(connection, true);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("aborts and discards a pending read when capabilities return 404", async () => {
+    const fetchMock = respond(200, {});
+    const scoped = createBudgetApi("owner");
+    await scoped.capabilities();
+    let resolveRules!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveRules = resolve; }));
+    const pending = scoped.rules();
+    const signal = sent(fetchMock, 1).init.signal;
+    fetchMock.mockImplementationOnce(() => Promise.resolve(new Response("", { status: 404 })));
+    expect(await scoped.capabilities()).toMatchObject({ ok: false, status: 404 });
+    resolveRules(new Response(JSON.stringify({ rules: [{ value: "other actor" }] }), { status: 200 }));
+    expect(await pending).toEqual({ ok: false, status: 503, error: "budget_server_changed" });
+    expect(signal?.aborted).toBe(true);
+    const calls = fetchMock.mock.calls.length;
+    expect(await scoped.rules()).toEqual({ ok: false, status: 503, error: "budget_server_changed" });
+    expect(fetchMock).toHaveBeenCalledTimes(calls);
+  });
+
+  it("refuses every exported Budget read while unverified", async () => {
+    const fetchMock = respond(200, {});
+    const api = createBudgetApi("owner");
+    const reads: Array<[string, () => Promise<BudgetResult<unknown>>]> = [
+      ["connections", () => api.connections()],
+      ["accounts", () => api.accounts()],
+      ["transactions", () => api.transactions("account")],
+      ["balances", () => api.balances("account")],
+      ["limits", () => api.limits()],
+      ["consentStatus", () => api.consentStatus()],
+      ["consentPending", () => api.consentPending()],
+      ["consentRenewalReminders", () => api.consentRenewalReminders()],
+      ["consentReconcile", () => api.consentReconcile()],
+      ["jobs", () => api.jobs()],
+      ["overview", () => api.overview("2026-11")],
+      ["analyticsTransactions", () => api.analyticsTransactions("2026-11", {} as never)],
+      ["analyticsTransactionsByKeys", () => api.analyticsTransactionsByKeys({ row_keys: [], currency: "PLN" })],
+      ["categories", () => api.categories()],
+      ["transfers", () => api.transfers("2026-11", "pending" as never)],
+      ["rules", () => api.rules()],
+      ["recurring", () => api.recurring()],
+      ["quarantine", () => api.quarantine()],
+      ["spendingLimits", () => api.spendingLimits("2026-11")],
+      ["mortgages", () => api.mortgages()],
+      ["forecast", () => api.forecast()],
+      ["monthlyBudget", () => api.monthlyBudget()],
+      ["monthlyBudgetCharts", () => api.monthlyBudgetCharts()],
+      ["inbox", () => api.inbox()],
+      ["receiptDevices", () => api.receiptDevices()],
+    ];
+    for (const [name, read] of reads) {
+      expect(await read(), name).toEqual({ ok: false, status: 503, error: "budget_server_changed" });
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("maps refusals, empty middleware bodies and network loss without throwing", async () => {

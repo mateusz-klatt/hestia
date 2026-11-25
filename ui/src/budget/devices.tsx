@@ -4,7 +4,7 @@ import type { BudgetApi, BudgetResult, ReceiptDevice, ReceiptPair } from "./api"
 import { qrMatrix } from "./qr";
 
 type DeviceApi = Pick<BudgetApi, "receiptDevices" | "pairReceiptDevice" | "cancelReceiptPairCode" | "revokeReceiptDevice">;
-type AccessBarrier = (result: { ok: boolean; status?: number; error?: string }) => boolean;
+type AccessBarrier = (result: { ok: boolean; status?: number; error?: string }, listing?: boolean) => boolean;
 
 function formatExpiry(expiresAt: number, now: number, locale: string): string {
   const expiry = new Date(expiresAt);
@@ -62,7 +62,7 @@ export function ReceiptDevices({ api, locale, revision, onAccessLoss, focusRevis
   useEffect(() => {
     const generation = ++listGeneration.current;
     void api.receiptDevices().then((result) => {
-      if (onAccessLoss(result) || generation !== listGeneration.current) return;
+      if (onAccessLoss(result, true) || generation !== listGeneration.current) return;
       if (!result.ok && result.status === 404) {
         hide();
         return;

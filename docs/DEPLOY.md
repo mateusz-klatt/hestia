@@ -57,6 +57,8 @@ init_db("/tmp/hestia-shadow.db")
 
 **Production rollback runbook:** roll back the schema only with `hestia.db.downgrade_db(path, revision)`, never with the bare `alembic downgrade` CLI. The runner applies the FK-off transaction and the post-migration `PRAGMA foreign_key_check`. A bare CLI connection keeps the production pragmas, so a batch rebuild can fail with `FOREIGN KEY constraint failed` or leave the database half-migrated.
 
+After rolling back from authz PR 2+ to PR 1, ask users to reload open Budget tabs; a stale PR 2 tab may show another user's ledger on view switch until reload.
+
 ## Batch migrations on referenced tables
 
 SQLite `batch_alter_table` rebuilds a table by copying it and dropping the original. Child foreign keys reject that `DROP` while `PRAGMA foreign_keys=ON`, and SQLite ignores a change to that pragma inside a transaction. A batch migration on a table that other tables reference has to go through this path (`init_db` / `downgrade_db`), not a bare engine.

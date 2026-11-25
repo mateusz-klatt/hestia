@@ -160,6 +160,40 @@
         "title": "AuditFeed",
         "type": "object"
       },
+      "AuthFeatures": {
+        "properties": {
+          "auth_contract": {
+            "minimum": 2,
+            "title": "Auth Contract",
+            "type": "integer"
+          },
+          "features": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Features",
+            "type": "array"
+          },
+          "qr_origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qr Origin"
+          }
+        },
+        "required": [
+          "auth_contract",
+          "features",
+          "qr_origin"
+        ],
+        "title": "AuthFeatures",
+        "type": "object"
+      },
       "AutomationDeleted": {
         "description": "200 from POST /api/automations/delete: `deleted` is false (200, not 404) for an absent id.",
         "properties": {
@@ -14027,6 +14061,27 @@
         "title": "DbStats",
         "type": "object"
       },
+      "DelegatedReceiptCapabilities": {
+        "properties": {
+          "can_use": {
+            "title": "Can Use",
+            "type": "boolean"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Permissions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "permissions",
+          "can_use"
+        ],
+        "title": "DelegatedReceiptCapabilities",
+        "type": "object"
+      },
       "DeviceInfo": {
         "description": "One device, merged from the classifier + the user registry (``proxy._discovery_entry``). The base\n+ live-state fields are ALWAYS present (required), null when unseen \u2014 so `0`/`false` are never lost.\nThe registry labels (``name``/``room``/``endpoint_names``) are OPTIONAL \u2014 absent until set, never null.\n``confidence`` is usually a string but a legacy/hand-edited registry node (a ``type`` without a\n``confidence``) can surface null, so the contract admits it. NOTE: the whole-home scene opt-out\n(``exclude_from_all``) is deliberately NOT exposed here \u2014 it lives only on the dedicated\n``/api/whole-home`` surface, so adding it never changes this (client-decoded) response shape.",
         "properties": {
@@ -14860,6 +14915,77 @@
         "title": "LoginSuccess",
         "type": "object"
       },
+      "MeCapabilities": {
+        "description": "Effective permissions for the authenticated actor; delegated responses never name an owner.",
+        "properties": {
+          "actor_tag": {
+            "anyOf": [
+              {
+                "maxLength": 43,
+                "minLength": 43,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Tag"
+          },
+          "delegated_receipts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DelegatedReceiptCapabilities"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "household_available": {
+            "title": "Household Available",
+            "type": "boolean"
+          },
+          "installation_permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Installation Permissions",
+            "type": "array"
+          },
+          "own_budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OwnBudgetCapabilities"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User"
+          }
+        },
+        "required": [
+          "user",
+          "actor_tag",
+          "installation_permissions",
+          "own_budget",
+          "delegated_receipts",
+          "household_available"
+        ],
+        "title": "MeCapabilities",
+        "type": "object"
+      },
       "NameRequest": {
         "additionalProperties": false,
         "description": "POST /api/name \u2014 set a device's registry labels. ``node`` is required; at least one of\nname/room/type must be present (server-enforced cross-field, not expressible here). name/room\naccept null (clear); type is a DeviceType; ep is a multi-gang channel label. Unknown keys \u2192 400.",
@@ -14950,6 +15076,37 @@
           "ok"
         ],
         "title": "OkResult",
+        "type": "object"
+      },
+      "OwnBudgetCapabilities": {
+        "properties": {
+          "can_manage_devices": {
+            "title": "Can Manage Devices",
+            "type": "boolean"
+          },
+          "can_use_receipts": {
+            "title": "Can Use Receipts",
+            "type": "boolean"
+          },
+          "can_view": {
+            "title": "Can View",
+            "type": "boolean"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Permissions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "permissions",
+          "can_view",
+          "can_use_receipts",
+          "can_manage_devices"
+        ],
+        "title": "OwnBudgetCapabilities",
         "type": "object"
       },
       "ResetPasswordRequest": {
@@ -16207,7 +16364,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.49.0"
+    "version": "0.50.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16228,7 +16385,37 @@
           }
         },
         "summary": "Recent audit-log rows (newest first, capped 200)",
+        "x-required-permission": "system.audit.view",
         "x-required-role": "viewer"
+      }
+    },
+    "/api/auth/features": {
+      "get": {
+        "description": "Public and Cache-Control: no-store. Only actually registered features are listed.",
+        "operationId": "authFeatures",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthFeatures"
+                }
+              }
+            },
+            "description": "the authentication contract and feature strings",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Public authentication contract and available features",
+        "x-required-permission": "public",
+        "x-required-role": "public"
       }
     },
     "/api/automations": {
@@ -16248,6 +16435,7 @@
           }
         },
         "summary": "List every saved automation rule",
+        "x-required-permission": "ioc.configure",
         "x-required-role": "admin"
       },
       "post": {
@@ -16296,6 +16484,7 @@
           }
         },
         "summary": "Create or replace a rule (the body IS the rule; id is client-supplied)",
+        "x-required-permission": "ioc.configure",
         "x-required-role": "admin"
       }
     },
@@ -16355,6 +16544,7 @@
           }
         },
         "summary": "Delete a rule by id (deleted=false, still 200, for an absent id)",
+        "x-required-permission": "ioc.configure",
         "x-required-role": "admin"
       }
     },
@@ -16462,6 +16652,7 @@
           }
         },
         "summary": "Set or clear one owned card account's credit limit",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -16569,6 +16760,7 @@
           }
         },
         "summary": "Explicitly confirm one owned account's kind",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -16676,6 +16868,7 @@
           }
         },
         "summary": "Select or deselect one owned account",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -16779,6 +16972,7 @@
           }
         },
         "summary": "Stored accounts and versioned owner controls",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -16889,6 +17083,7 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -16989,6 +17184,7 @@
           }
         },
         "summary": "Read owner-private local budget analytics",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -17099,6 +17295,7 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -17209,6 +17406,7 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -17319,6 +17517,7 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -17429,6 +17628,7 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -17539,6 +17739,7 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -17662,6 +17863,7 @@
           }
         },
         "summary": "Read the owner-private upcoming commitments estimate",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -17763,6 +17965,7 @@
           }
         },
         "summary": "Read owner-private live active alerts inbox (pure read-only)",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -17873,6 +18076,7 @@
           }
         },
         "summary": "Mark or unmark owner-private inbox alerts (atomic anti-ABA CAS)",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -17983,6 +18187,7 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -18093,6 +18298,7 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -18216,6 +18422,7 @@
           }
         },
         "summary": "Read the owner-private monthly budget dashboard",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -18353,6 +18560,7 @@
           }
         },
         "summary": "Read the owner-private monthly budget dashboard and chart series",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -18463,6 +18671,7 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -18573,6 +18782,7 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -18673,6 +18883,7 @@
           }
         },
         "summary": "Read owner-private local budget analytics",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -18794,6 +19005,7 @@
           }
         },
         "summary": "Read owner-private local budget analytics",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -18907,6 +19119,7 @@
           }
         },
         "summary": "Read owner-private quarantine counts and safe entry metadata (read-only)",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -19018,6 +19231,7 @@
           }
         },
         "summary": "Read owner-private local budget analytics",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -19128,6 +19342,7 @@
           }
         },
         "summary": "Preview up to 100 owner-private rules against one snapshot",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -19238,6 +19453,7 @@
           }
         },
         "summary": "Save a batch rule preview atomically",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -19348,6 +19564,7 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -19458,6 +19675,7 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -19558,6 +19776,7 @@
           }
         },
         "summary": "Read owner-private local budget analytics",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -19668,6 +19887,7 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -19789,6 +20009,7 @@
           }
         },
         "summary": "Read owner-private local budget analytics",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -19966,6 +20187,7 @@
           }
         },
         "summary": "Read owner-private local budget analytics",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -20076,6 +20298,7 @@
           }
         },
         "summary": "Read owner-private transactions matching exact row keys (pure read-only)",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -20186,6 +20409,7 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -20348,6 +20572,7 @@
           }
         },
         "summary": "Read owner-private local budget analytics",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -20458,6 +20683,7 @@
           }
         },
         "summary": "Save an owner-private local classification",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },
@@ -20565,6 +20791,7 @@
           }
         },
         "summary": "Opt one owned connection in or out of unattended acquisition",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -20668,6 +20895,7 @@
           }
         },
         "summary": "Live stored balances and separate archived import metadata",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -20775,6 +21003,7 @@
           }
         },
         "summary": "Pause or resume one owned connection locally",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -20866,6 +21095,7 @@
           }
         },
         "summary": "Stored connections and implemented capabilities",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -20976,6 +21206,7 @@
           }
         },
         "summary": "Browser-bound bank consent: cancel",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -21096,6 +21327,7 @@
           }
         },
         "summary": "Browser-bound bank consent: complete",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -21196,6 +21428,7 @@
           }
         },
         "summary": "Browser-bound bank consent: pending",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -21306,6 +21539,7 @@
           }
         },
         "summary": "Browser-bound bank consent: reconcile",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -21416,6 +21650,7 @@
           }
         },
         "summary": "Browser-bound bank consent: renewal-reminders",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -21526,6 +21761,7 @@
           }
         },
         "summary": "Browser-bound bank consent: start",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -21626,6 +21862,7 @@
           }
         },
         "summary": "Browser-bound bank consent: status",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -21685,6 +21922,7 @@
           }
         },
         "summary": "Stage a browser-bound one-time bank code",
+        "x-required-permission": "public",
         "x-required-role": "public"
       }
     },
@@ -21786,6 +22024,7 @@
           }
         },
         "summary": "Discover the caller's household grant id",
+        "x-required-permission": "household.view",
         "x-required-role": "viewer"
       }
     },
@@ -21898,6 +22137,7 @@
           }
         },
         "summary": "Household category aliases and safe labels",
+        "x-required-permission": "household.view",
         "x-required-role": "viewer"
       }
     },
@@ -22010,6 +22250,7 @@
           }
         },
         "summary": "Household mortgage and spending-limit inbox",
+        "x-required-permission": "household.view",
         "x-required-role": "viewer"
       }
     },
@@ -22143,6 +22384,7 @@
           }
         },
         "summary": "Household monthly budget and series",
+        "x-required-permission": "household.view",
         "x-required-role": "viewer"
       }
     },
@@ -22255,6 +22497,7 @@
           }
         },
         "summary": "Bootstrap monthly-budget settings with grant-scoped category ids",
+        "x-required-permission": "household.view",
         "x-required-role": "viewer"
       }
     },
@@ -22367,6 +22610,7 @@
           }
         },
         "summary": "Household mortgage schedules without labels",
+        "x-required-permission": "household.view",
         "x-required-role": "viewer"
       }
     },
@@ -22499,6 +22743,7 @@
           }
         },
         "summary": "Household selected-account totals",
+        "x-required-permission": "household.view",
         "x-required-role": "viewer"
       }
     },
@@ -22611,6 +22856,7 @@
           }
         },
         "summary": "Household quarantine counts over selected accounts",
+        "x-required-permission": "household.view",
         "x-required-role": "viewer"
       }
     },
@@ -22733,6 +22979,7 @@
           }
         },
         "summary": "Household recurring hints with generic ordinals",
+        "x-required-permission": "household.view",
         "x-required-role": "viewer"
       }
     },
@@ -22845,6 +23092,7 @@
           }
         },
         "summary": "Selected accounts as grant-scoped aliases and ordinals",
+        "x-required-permission": "household.view",
         "x-required-role": "viewer"
       }
     },
@@ -22957,6 +23205,7 @@
           }
         },
         "summary": "Household rules without literal operands",
+        "x-required-permission": "household.view",
         "x-required-role": "viewer"
       }
     },
@@ -23089,6 +23338,7 @@
           }
         },
         "summary": "Enabled household spending limits",
+        "x-required-permission": "household.view",
         "x-required-role": "viewer"
       }
     },
@@ -23283,6 +23533,7 @@
           }
         },
         "summary": "Household transactions without bank text",
+        "x-required-permission": "household.view",
         "x-required-role": "viewer"
       }
     },
@@ -23456,6 +23707,7 @@
           }
         },
         "summary": "Household transfer pairs whose both legs are selected",
+        "x-required-permission": "household.view",
         "x-required-role": "viewer"
       }
     },
@@ -23559,6 +23811,7 @@
           }
         },
         "summary": "Recent owner refresh jobs, newest first, at most 20",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -23650,6 +23903,7 @@
           }
         },
         "summary": "Sanitized stored limits without provider or application keys",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -23792,6 +24046,7 @@
           }
         },
         "summary": "Validate exact line and total identities, review an optional bank link; JSON body cap 128 KiB.",
+        "x-required-permission": "legacy_receipts",
         "x-required-role": "admin"
       }
     },
@@ -23922,6 +24177,7 @@
           }
         },
         "summary": "Delete receipt lines before their owned receipt using expected_version CAS.",
+        "x-required-permission": "legacy_receipts",
         "x-required-role": "admin"
       }
     },
@@ -24034,6 +24290,7 @@
           }
         },
         "summary": "Read one owned receipt and its structured lines.",
+        "x-required-permission": "legacy_receipts",
         "x-required-role": "admin"
       }
     },
@@ -24167,6 +24424,7 @@
           }
         },
         "summary": "List the owner's unrevoked receipts device tokens.",
+        "x-required-permission": "device_admin",
         "x-required-role": "admin"
       }
     },
@@ -24316,6 +24574,7 @@
           }
         },
         "summary": "Issue a receipts-scoped device token using an enabled budget owner's password.",
+        "x-required-permission": "public",
         "x-required-role": "public"
       }
     },
@@ -24446,6 +24705,7 @@
           }
         },
         "summary": "Issue one 5-minute pairing code for the signed-in admin owner.",
+        "x-required-permission": "legacy_receipts",
         "x-required-role": "admin"
       }
     },
@@ -24576,6 +24836,7 @@
           }
         },
         "summary": "Cancel an unused pairing code by its server-issued ID.",
+        "x-required-permission": "device_admin",
         "x-required-role": "admin"
       }
     },
@@ -24659,6 +24920,7 @@
           }
         },
         "summary": "Exchange a pairing code for a receipts-scoped bearer, once.",
+        "x-required-permission": "public",
         "x-required-role": "public"
       }
     },
@@ -24789,6 +25051,7 @@
           }
         },
         "summary": "Revoke one receipts device token.",
+        "x-required-permission": "device_admin",
         "x-required-role": "admin"
       }
     },
@@ -24929,6 +25192,7 @@
           }
         },
         "summary": "Enable or disable the local Gmail grant",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -25059,6 +25323,7 @@
           }
         },
         "summary": "Revoke the local grant and purge unconfirmed imports",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -25149,6 +25414,7 @@
           }
         },
         "summary": "Read safe Gmail import state",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -25289,6 +25555,7 @@
           }
         },
         "summary": "Schedule one Gmail import for the background poller",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -25392,6 +25659,7 @@
           }
         },
         "summary": "Read one owned WebP image; v1a has no stored images and therefore returns 404.",
+        "x-required-permission": "legacy_receipts",
         "x-required-role": "admin"
       }
     },
@@ -25534,6 +25802,7 @@
           }
         },
         "summary": "Keyset-page owner receipts with filters in the JSON body, never URL query parameters.",
+        "x-required-permission": "legacy_receipts",
         "x-required-role": "admin"
       }
     },
@@ -25686,6 +25955,7 @@
           }
         },
         "summary": "Paste Live Text, redact PAN data and create a 48-hour draft; JSON body cap 48 KiB.",
+        "x-required-permission": "legacy_receipts",
         "x-required-role": "admin"
       }
     },
@@ -25828,6 +26098,7 @@
           }
         },
         "summary": "Search owner receipts with the query in the JSON body, never reverse-proxy URL logs.",
+        "x-required-permission": "legacy_receipts",
         "x-required-role": "admin"
       }
     },
@@ -25947,6 +26218,7 @@
           }
         },
         "summary": "Queue one owner refresh under existing quotas",
+        "x-required-permission": "owner_only",
         "x-required-role": "admin"
       }
     },
@@ -26038,6 +26310,7 @@
           }
         },
         "summary": "Stored component freshness and acquisition health",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -26186,6 +26459,7 @@
           }
         },
         "summary": "Stored canonical booked transactions",
+        "x-required-permission": "budget.view",
         "x-required-role": "admin"
       }
     },
@@ -26236,6 +26510,7 @@
           }
         },
         "summary": "Selected local calendar events and synchronization health",
+        "x-required-permission": "calendar.view",
         "x-required-role": "viewer"
       }
     },
@@ -26303,6 +26578,7 @@
           }
         },
         "summary": "Create or edit a local calendar event and enqueue synchronization",
+        "x-required-permission": "calendar.edit",
         "x-required-role": "operator"
       }
     },
@@ -26363,6 +26639,7 @@
           }
         },
         "summary": "Permanently tombstone an event and enqueue deletion of remote copies",
+        "x-required-permission": "calendar.edit",
         "x-required-role": "operator"
       }
     },
@@ -26442,6 +26719,7 @@
           }
         },
         "summary": "Concrete calendar occurrences in a half-open date window",
+        "x-required-permission": "calendar.view",
         "x-required-role": "viewer"
       }
     },
@@ -26492,6 +26770,7 @@
           }
         },
         "summary": "Issue a device control command",
+        "x-required-permission": "ioc.control",
         "x-required-role": "operator"
       }
     },
@@ -26512,6 +26791,7 @@
           }
         },
         "summary": "SQLite file size + per-table row counts",
+        "x-required-permission": "ioc.configure",
         "x-required-role": "admin"
       }
     },
@@ -26532,6 +26812,7 @@
           }
         },
         "summary": "The full dashboard snapshot (devices + globals + klima + rule grammar)",
+        "x-required-permission": "ioc.view",
         "x-required-role": "viewer"
       }
     },
@@ -26552,6 +26833,7 @@
           }
         },
         "summary": "Live updates (Server-Sent Events)",
+        "x-required-permission": "ioc.view",
         "x-required-role": "viewer"
       }
     },
@@ -26602,6 +26884,7 @@
           }
         },
         "summary": "Transmit a saved IR signal via the Flipper",
+        "x-required-permission": "ioc.control",
         "x-required-role": "operator"
       }
     },
@@ -26661,6 +26944,7 @@
           }
         },
         "summary": "Exchange credentials for a session (cookie + optional bearer token)",
+        "x-required-permission": "public",
         "x-required-role": "public"
       }
     },
@@ -26681,7 +26965,37 @@
           }
         },
         "summary": "Clear the session cookie",
+        "x-required-permission": "public",
         "x-required-role": "public"
+      }
+    },
+    "/api/me/capabilities": {
+      "get": {
+        "description": "Authenticated. Cache-Control: no-store. Delegated responses never identify an owner.",
+        "operationId": "meCapabilities",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeCapabilities"
+                }
+              }
+            },
+            "description": "the current actor's effective capabilities",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Effective installation and own-Budget capabilities",
+        "x-required-permission": "authenticated",
+        "x-required-role": "viewer"
       }
     },
     "/api/me/password": {
@@ -26751,6 +27065,7 @@
           }
         },
         "summary": "Change your own password (verifies the current one)",
+        "x-required-permission": "authenticated",
         "x-required-role": "viewer"
       }
     },
@@ -26801,6 +27116,7 @@
           }
         },
         "summary": "Set a device's registry labels (name / room / type / endpoint)",
+        "x-required-permission": "ioc.configure",
         "x-required-role": "admin"
       }
     },
@@ -26821,6 +27137,7 @@
           }
         },
         "summary": "Discovered 433 MHz devices (newest-seen first)",
+        "x-required-permission": "ioc.configure",
         "x-required-role": "admin"
       }
     },
@@ -26844,6 +27161,7 @@
           }
         },
         "summary": "Shared room\u2192emoji map",
+        "x-required-permission": "ioc.view",
         "x-required-role": "viewer"
       },
       "post": {
@@ -26882,6 +27200,7 @@
           }
         },
         "summary": "Set one room's emoji (send icon=\"\" to clear)",
+        "x-required-permission": "ioc.configure",
         "x-required-role": "admin"
       }
     },
@@ -26922,6 +27241,7 @@
           }
         },
         "summary": "Run a house-wide scene (all lights/blinds on/off)",
+        "x-required-permission": "ioc.control",
         "x-required-role": "operator"
       }
     },
@@ -26942,6 +27262,7 @@
           }
         },
         "summary": "The logged-in user's UI preferences",
+        "x-required-permission": "authenticated",
         "x-required-role": "viewer"
       },
       "post": {
@@ -26980,6 +27301,7 @@
           }
         },
         "summary": "Update UI preferences (partial \u2014 only the keys sent are persisted)",
+        "x-required-permission": "authenticated",
         "x-required-role": "viewer"
       }
     },
@@ -27010,6 +27332,7 @@
           }
         },
         "summary": "List every account (username / role / disabled \u2014 never the password hash)",
+        "x-required-permission": "system.manage_users",
         "x-required-role": "admin"
       },
       "post": {
@@ -27058,6 +27381,7 @@
           }
         },
         "summary": "Create a new account",
+        "x-required-permission": "system.manage_users",
         "x-required-role": "admin"
       }
     },
@@ -27128,6 +27452,7 @@
           }
         },
         "summary": "Enable or disable another account",
+        "x-required-permission": "system.manage_users",
         "x-required-role": "admin"
       }
     },
@@ -27198,6 +27523,7 @@
           }
         },
         "summary": "Reset another user's password (admin reset \u2014 no current-password check)",
+        "x-required-permission": "system.manage_users",
         "x-required-role": "admin"
       }
     },
@@ -27268,6 +27594,7 @@
           }
         },
         "summary": "Change another user's role",
+        "x-required-permission": "system.manage_users",
         "x-required-role": "admin"
       }
     },
@@ -27288,6 +27615,7 @@
           }
         },
         "summary": "The caller's identity + RBAC role",
+        "x-required-permission": "authenticated",
         "x-required-role": "viewer"
       }
     },
@@ -27308,6 +27636,7 @@
           }
         },
         "summary": "Which devices are opted out of the house-wide \"all\" sweeps",
+        "x-required-permission": "ioc.configure",
         "x-required-role": "admin"
       },
       "post": {
@@ -27356,6 +27685,7 @@
           }
         },
         "summary": "Opt one device in/out of the house-wide \"all\" sweeps",
+        "x-required-permission": "ioc.configure",
         "x-required-role": "admin"
       }
     }

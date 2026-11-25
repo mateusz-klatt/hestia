@@ -243,6 +243,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Rozpočet",
   "budget.main.subtitle": "Vaše soukromé finance domácnosti.",
   "budget.main.reload": "Znovu načíst",
+  "budget.main.serverChanged": "Server byl změněn — obnovte stránku",
   "budget.main.loading": "Načítání rozpočtu…",
   "budget.main.viewsLabel": "Zobrazení rozpočtu",
   "budget.main.views.monthly_budget": "Měsíční rozpočet",

@@ -243,6 +243,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "תקציב",
   "budget.main.subtitle": "הכספים הפרטיים של משק הבית שלך.",
   "budget.main.reload": "טעינה מחדש",
+  "budget.main.serverChanged": "השרת השתנה — רעננו את הדף",
   "budget.main.loading": "התקציב נטען…",
   "budget.main.viewsLabel": "תצוגת תקציב",
   "budget.main.views.monthly_budget": "תקציב חודשי",

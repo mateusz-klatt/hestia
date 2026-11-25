@@ -218,7 +218,7 @@ The rollback artifact is a **legacy-behavior image built with `0030` and the com
 
 Replace role floors in `web.py` and `api_contract.py` with explicit operation requirements. Backfill `viewer` to `ioc.view` and `calendar.view`, `operator` to those plus `ioc.control` and `calendar.edit`, and `admin` to the full existing IOC and Calendar set, installation administration, and its own Budget permissions. Preserve `system.audit.view` for every legacy role. Seed legacy owner markers and compatible household grants. Bind existing tokens to actor-equals-owner with unchanged digests, IDs, expiry, and revocation state. Reconcile once under the write lock and set `authz_policy_phase=catalog_compat`. Keep legacy roles and grant projection mirrored while PR 1 remains the rollback floor.
 
-Move duplicate role checks out of the Budget and household adapters, preserve resource scoping, wire protected browser mutations to core Origin checking, and recheck SSE periodically. Add the exhaustive route matrix, Calendar classification including instances when registered, pinned Vesta decode tests, and offline production-copy parity. Activate v2 sessions only after the bridge is verified. **Rollback image:** PR 1 bridge. **Accept when** the spouse retains IOC and Calendar operation plus her household view, admins retain old pairing, and no viewer or operator gains a full ledger. [Current route matrix test](../tests/test_web.py:2139) · [Budget view gate](../hestia/budget/views.py:73)
+Move duplicate role checks out of the Budget and household adapters, preserve resource scoping, wire protected browser mutations to core Origin checking, and recheck SSE periodically. Add the exhaustive route matrix, Calendar classification including instances when registered, pinned Vesta decode tests, and offline production-copy parity. Activate v2 sessions only after the bridge is verified. **Rollback image:** PR 1 bridge. **Accept when** the spouse retains IOC and Calendar operation plus her household view, admins retain old pairing, and no viewer or operator gains a full ledger. After rolling back from authz PR 2+ to PR 1, ask users to reload open Budget tabs; a stale PR 2 tab may show another user's ledger on view switch until reload. [Current route matrix test](../tests/test_web.py:2139) · [Budget view gate](../hestia/budget/views.py:73)
 
 ### PR 3 · QR, receipt exchange, and capability UI · Medium
 
@@ -408,12 +408,13 @@ These details complete Parts A and B for client implementers. Each field below i
 1. **`GET /api/me/capabilities`** (PR 2) is authenticated and `Cache-Control: no-store`. It returns:
    ```json
    {"user": "…"|null,
+    "actor_tag": "…"|null,
     "installation_permissions": ["ioc.view", "…"],
     "own_budget": {"permissions": ["…"], "can_view": true, "can_use_receipts": true, "can_manage_devices": true} | null,
     "delegated_receipts": {"permissions": ["budget.receipts.add"], "can_use": true} | null,
     "household_available": false}
    ```
-   - A delegate never sees the owner's username.
+   - A delegate never sees the owner's username. `actor_tag` is the 43-character base64url SHA-256 digest of `hestia/actor/v1\0` plus the UTF-8 username; it identifies the session actor, never a Budget owner. It is `null` in auth-off mode.
    - In auth-off mode, `user` is `null` and `installation_permissions` lists the full ordinary catalog.
    - A client that gets 404 (an older server) falls back to the legacy `whoami.role` mapping.
 2. **`POST /api/auth/device-token`** (PR 3):

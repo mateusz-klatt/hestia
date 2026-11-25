@@ -162,9 +162,12 @@ class AuthzEvaluationTests(unittest.TestCase):
             self.assertEqual(authz.require_supported_policy_phase(session), "catalog_compat")
             session.get(db.AppMeta, "authz_policy_phase").value = "catalog_custom"
             session.commit()
+            self.assertEqual(authz.require_supported_policy_phase(session), "catalog_custom")
+            session.get(db.AppMeta, "authz_policy_phase").value = "future_phase"
+            session.commit()
             with self.assertRaises(authz.PolicyPhaseUnsupported) as exc_info:
                 authz.require_supported_policy_phase(session)
-            self.assertEqual(exc_info.exception.phase, "catalog_custom")
+            self.assertEqual(exc_info.exception.phase, "future_phase")
 
     def test_installation_closure_without_direct_view_and_diamond_overlap(self):
         with Session(self.engine) as session, session.begin():
@@ -204,7 +207,7 @@ class AuthzEvaluationTests(unittest.TestCase):
             # Self-only receipts.match implies delegable receipts.view for owner.
             _add_grant(session, "owner", "budget.receipts.match", "owner")
             _add_grant(session, "owner", "budget.edit", "owner")
-            # Delegate gets receipts.edit (implies add + view) plus household.view, while a rogue self-only row is ignored.
+            # PR 2 retains delegated receipt rows as dormant data; only household.view is effective.
             _add_grant(session, "spouse", "budget.receipts.edit", "owner")
             _add_grant(session, "spouse", "household.view", "owner")
             _add_grant(session, "spouse", "budget.view", "owner")
@@ -217,10 +220,10 @@ class AuthzEvaluationTests(unittest.TestCase):
             self.assertEqual(authz.resolve_budget_target(session, "owner"), "owner")
             self.assertEqual(
                 authz.effective_permissions(session, "spouse", owner="owner"),
-                frozenset({"budget.receipts.edit", "budget.receipts.add", "budget.receipts.view", "household.view"}),
+                frozenset({"household.view"}),
             )
             self.assertFalse(authz.authorize(session, "spouse", "budget.view", owner="owner"))
-            self.assertTrue(authz.authorize(session, "spouse", "budget.receipts.add", owner="owner"))
+            self.assertFalse(authz.authorize(session, "spouse", "budget.receipts.add", owner="owner"))
             self.assertEqual(authz.resolve_budget_target(session, "spouse"), "owner")
 
     def test_disabled_missing_unprovisioned_and_demoted_owner_rejected(self):
@@ -253,6 +256,38 @@ class AuthzEvaluationTests(unittest.TestCase):
             self.assertIsNone(authz.resolve_budget_target(session, "ghost"))
             self.assertIsNone(authz.resolve_budget_target(session, "disabled_actor"))
             self.assertIsNone(authz.resolve_budget_target(session, "spouse"))
+
+    def test_custom_owner_and_legacy_role_projection_are_independent_of_stored_role(self):
+        with Session(self.engine) as session, session.begin():
+            session.add(db.AppMeta(key="authz_policy_phase", value="catalog_custom"))
+            _add_user(session, "owner", role="viewer", budget_owner=True)
+            _add_user(session, "operator", role="admin")
+            _add_user(session, "plain", role="admin")
+            _add_user(session, "disabled", role="viewer", disabled=True, budget_owner=True)
+            for pid in authz.LEGACY_RECEIPT_PERMISSIONS | {"budget.view", "budget.edit"}:
+                _add_grant(session, "owner", pid, "owner")
+                _add_grant(session, "disabled", pid, "disabled")
+            for pid in ("system.manage_users", "ioc.control"):
+                _add_grant(session, "owner", pid)
+                _add_grant(session, "disabled", pid)
+            _add_grant(session, "operator", "ioc.control")
+
+        with Session(self.engine) as session:
+            self.assertTrue(authz.is_active_budget_owner(session, "owner"))
+            self.assertTrue(authz.has_legacy_receipt_profile(session, "owner"))
+            self.assertEqual(authz.resolve_budget_target(session, "owner"), "owner")
+            self.assertEqual(authz.project_legacy_role(session, "owner"), "admin")
+            self.assertEqual(authz.project_legacy_role(session, "operator"), "operator")
+            self.assertEqual(authz.project_legacy_role(session, "plain"), "viewer")
+            self.assertIsNone(authz.project_legacy_role(session, "disabled"))
+            self.assertEqual(
+                authz.project_legacy_role(session, "disabled", include_disabled=True), "admin",
+            )
+            self.assertIsNone(authz.project_legacy_role(session, "ghost"))
+            self.assertFalse(authz.is_active_budget_owner(session, ""))
+            self.assertFalse(authz.has_legacy_receipt_profile(session, "owner", owner="other"))
+            session.get(db.User, "owner").role = "admin"
+            self.assertEqual(authz.project_legacy_role(session, "owner"), "admin")
 
     def test_resolve_budget_target_denies_multiple_active_owners(self):
         with Session(self.engine) as session, session.begin():

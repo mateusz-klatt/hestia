@@ -243,6 +243,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "الميزانية",
   "budget.main.subtitle": "الشؤون المالية الخاصة بأسرتك.",
   "budget.main.reload": "إعادة التحميل",
+  "budget.main.serverChanged": "تغيّر الخادم — أعد تحميل الصفحة",
   "budget.main.loading": "جارٍ تحميل الميزانية…",
   "budget.main.viewsLabel": "عرض الميزانية",
   "budget.main.views.monthly_budget": "الميزانية الشهرية",

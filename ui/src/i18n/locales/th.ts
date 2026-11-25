@@ -244,6 +244,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "งบประมาณ",
   "budget.main.subtitle": "การเงินครัวเรือนส่วนตัวของคุณ",
   "budget.main.reload": "โหลดใหม่",
+  "budget.main.serverChanged": "เซิร์ฟเวอร์มีการเปลี่ยนแปลง — โหลดหน้านี้ใหม่",
   "budget.main.loading": "กำลังโหลดงบประมาณ…",
   "budget.main.viewsLabel": "มุมมองงบประมาณ",
   "budget.main.views.monthly_budget": "งบประมาณรายเดือน",

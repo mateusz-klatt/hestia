@@ -243,6 +243,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Bajeti",
   "budget.main.subtitle": "Fedha binafsi za kaya yako.",
   "budget.main.reload": "Pakia upya",
+  "budget.main.serverChanged": "Seva imebadilika — pakia upya ukurasa",
   "budget.main.loading": "Inapakia bajeti…",
   "budget.main.viewsLabel": "Mwonekano wa bajeti",
   "budget.main.views.monthly_budget": "Bajeti ya mwezi",

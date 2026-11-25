@@ -243,6 +243,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Költségvetés",
   "budget.main.subtitle": "A háztartás személyes pénzügyei.",
   "budget.main.reload": "Újratöltés",
+  "budget.main.serverChanged": "A kiszolgáló megváltozott — frissítse az oldalt",
   "budget.main.loading": "Költségvetés betöltése…",
   "budget.main.viewsLabel": "Költségvetési nézet",
   "budget.main.views.monthly_budget": "Havi költségvetés",

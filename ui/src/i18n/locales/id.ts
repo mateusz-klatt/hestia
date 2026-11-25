@@ -244,6 +244,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Anggaran",
   "budget.main.subtitle": "Keuangan pribadi rumah tangga Anda.",
   "budget.main.reload": "Muat ulang",
+  "budget.main.serverChanged": "Server telah berubah — muat ulang halaman",
   "budget.main.loading": "Memuat anggaran…",
   "budget.main.viewsLabel": "Tampilan anggaran",
   "budget.main.views.monthly_budget": "Anggaran bulanan",

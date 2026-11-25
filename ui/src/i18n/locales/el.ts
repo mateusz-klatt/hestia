@@ -244,6 +244,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Προϋπολογισμός",
   "budget.main.subtitle": "Τα προσωπικά οικονομικά του νοικοκυριού σας.",
   "budget.main.reload": "Επαναφόρτωση",
+  "budget.main.serverChanged": "Ο διακομιστής άλλαξε — ανανεώστε τη σελίδα",
   "budget.main.loading": "Φόρτωση προϋπολογισμού…",
   "budget.main.viewsLabel": "Προβολή προϋπολογισμού",
   "budget.main.views.monthly_budget": "Μηνιαίος προϋπολογισμός",

@@ -314,7 +314,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
     def create_category(self, owner, name, parent_id=None):
         name = " ".join(_text(name).split())
         key = _name_key(name)
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             prior = session.scalar(select(Category).where(Category.owner == owner, Category.name_key == key))
             if prior is not None:
@@ -350,7 +350,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             raise AnalyticsError()
         if color_hue is not _UNSET:
             self._validate_category_hue(color_hue)
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             row = self._owned(session, Category, owner, identifier)
             _version(row.version, expected_version)
@@ -392,7 +392,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             return {**result, "changed": True}
 
     def spread_category_colors(self, owner):
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             rows = list(session.scalars(select(Category).where(
                 Category.owner == owner, Category.parent_id.is_(None), Category.archived.is_(False))
@@ -446,13 +446,13 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         return {"category_id": category_id, "lang": lang, "name": name, "changed": changed}
 
     def set_category_translation(self, owner, *, category_id, lang, name):
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             return self._set_category_translation(session, owner, category_id, lang, name)
 
     def delete_category_translation(self, owner, *, category_id, lang):
         lang = self._translation_language(lang)
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             self._owned(session, Category, owner, category_id)
             row = session.get(CategoryTranslation, (category_id, lang))
@@ -483,13 +483,13 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 "label": label, "changed": changed}
 
     def set_label_translation(self, owner, *, account_id, entry_reference, lang, label):
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             return self._set_label_translation(session, owner, account_id, entry_reference, lang, label)
 
     def delete_label_translation(self, owner, *, account_id, entry_reference, lang):
         lang = self._translation_language(lang)
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             self._owned_label(session, owner, account_id, entry_reference, require_label=False)
             row = session.get(LabelTranslation, (account_id, entry_reference, lang))
@@ -502,7 +502,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         if not isinstance(entries, list) or not 1 <= len(entries) <= 500:
             raise AnalyticsError()
         results = []
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             for index, entry in enumerate(entries):
                 try:
@@ -542,7 +542,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         """Atomically create or update one owner-private monthly category spending limit."""
         canonical = self._validate_limit_write(category_id, currency, monthly_limit, warning_percent,
                                                enabled, expected_version)
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             category = self._owned(session, Category, owner, category_id)
             row = session.scalar(select(CategoryLimitRow).where(
@@ -632,7 +632,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         clean_label, canonical_amount, start_iso, end_iso = self._validate_mortgage_write(
             schedule_id, label, amount, currency, due_day, start_date, end_date,
             remind_days_before, destination_kind, enabled, expected_version)
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             if schedule_id is None:
                 _version(0, expected_version)
@@ -680,7 +680,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             clean_month = _parse_mortgage_month(month)
         except MortgageInputError:
             raise AnalyticsError() from None
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             row = self._owned(session, MortgageScheduleRow, owner, schedule_id)
             _version(row.version, expected_version)
@@ -719,7 +719,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             raise AnalyticsError()
         # An omitted label is left alone. Null and blank clear. Failures use a fixed code and never echo the text.
         clean_label = _KEEP_LABEL if label is _KEEP_LABEL else clean_one_off_label(label)
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             _, payload, fingerprint = self._transaction(session, owner, account_id, entry_reference)
             _fingerprint(fingerprint, expected_fingerprint)
@@ -925,7 +925,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         return snapshot, affected, examples, now
 
     def preview_rule(self, owner, candidate):
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             staged = self._stage_candidates(session, owner, [candidate])
             snapshot, affected, examples, now = self._preview_candidates(session, owner, staged)
@@ -937,7 +937,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
 
     def preview_rules(self, owner, candidates):
         """One snapshot and one digest for up to 100 rules. Nothing is stored if any candidate is invalid."""
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             staged = self._stage_candidates(session, owner, candidates)
             snapshot, affected, examples, now = self._preview_candidates(session, owner, staged)
@@ -991,7 +991,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         return {"rules": rules, "changed": False}
 
     def save_rule(self, owner, preview_id):
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             preview = self._owned(session, Preview, owner, preview_id)
             if preview.saved_rule_id is not None:
@@ -1018,7 +1018,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
 
     def save_rules(self, owner, preview_id):
         """Apply every candidate in one transaction or leave the rule set unchanged."""
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             preview = self._owned(session, Preview, owner, preview_id)
             payload = json.loads(preview.candidate_json)
@@ -1090,7 +1090,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                         expected_debit_fingerprint=None, expected_credit_fingerprint=None, source="manual"):
         if action not in ("accept", "reject", "undo") or source not in ("account_identity", "heuristic", "manual"):
             raise AnalyticsError()
-        with self.transaction() as session:
+        with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             row = None if decision_id is None else self._owned(session, Decision, owner, decision_id)
             if row is None:

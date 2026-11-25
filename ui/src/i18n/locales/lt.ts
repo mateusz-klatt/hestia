@@ -243,6 +243,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Biudžetas",
   "budget.main.subtitle": "Jūsų asmeniniai namų ūkio finansai.",
   "budget.main.reload": "Įkelti iš naujo",
+  "budget.main.serverChanged": "Serveris pasikeitė — atnaujinkite puslapį",
   "budget.main.loading": "Įkeliamas biudžetas…",
   "budget.main.viewsLabel": "Biudžeto rodinys",
   "budget.main.views.monthly_budget": "Mėnesio biudžetas",

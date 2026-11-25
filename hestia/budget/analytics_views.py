@@ -1357,7 +1357,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
         """Pure read-only live active alerts inbox evaluated in one SQLite read snapshot."""
         evaluated_at = float(self._now())
         evaluation_date = datetime.fromtimestamp(evaluated_at, timezone.utc).date().isoformat()
-        with _read_lock, self._read(owner) as session:
+        with _read_lock, self._read(owner, permission=None) as session:
             _, reads_revision, read_rows, tuples, reads_version = self._inbox_read_state(session, owner)
             active = self._evaluate_active_inbox(session, owner, evaluated_at, evaluation_date, use_cache=True)
             read_map = {(kind, subject_id, milestone): read_at for kind, subject_id, milestone, read_at in tuples}
@@ -1418,7 +1418,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 or not inbox_mod._HEX64.fullmatch(expected_reads_version)):
             raise AnalyticsError()
         keys = inbox_mod.validate_mark_items(items)
-        with self.transaction() as session:
+        with self.transaction(owner) as session:
             self._owner(session, owner)
             state, reads_revision, read_rows, tuples, current_version = self._inbox_read_state(session, owner)
             if not hmac.compare_digest(current_version, expected_reads_version):

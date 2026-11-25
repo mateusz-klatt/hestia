@@ -243,6 +243,7 @@ const messages: Partial<Messages> = {
   "budget.main.title": "Bütçe",
   "budget.main.subtitle": "Özel hane mali durumunuz.",
   "budget.main.reload": "Yeniden yükle",
+  "budget.main.serverChanged": "Sunucu değişti — sayfayı yenileyin",
   "budget.main.loading": "Bütçe yükleniyor…",
   "budget.main.viewsLabel": "Bütçe görünümü",
   "budget.main.views.monthly_budget": "Aylık bütçe",

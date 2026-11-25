@@ -80,14 +80,21 @@ class BudgetHTTPStore(BudgetJobStore):
         user = session.get(User, username)
         if user is None or user.disabled:
             raise BudgetAccessDenied(401)
-        if user.role != "admin" or (phase == authz.POLICY_PHASE_COMPAT and not user.budget_owner):
+        if (
+            (phase == authz.POLICY_PHASE_LEGACY and user.role != "admin")
+            or (phase == authz.POLICY_PHASE_COMPAT and (user.role != "admin" or not user.budget_owner))
+            or (phase == authz.POLICY_PHASE_CUSTOM and not user.budget_owner)
+        ):
             raise BudgetAccessDenied(403)
 
     @contextmanager
-    def _read(self, owner):
+    def _read(self, owner, permission="budget.view"):
         with self.sessions() as session:
             session.execute(text("BEGIN"))
+            phase = authz.require_supported_policy_phase(session)
             self._owner(session, owner)
+            if permission is not None:
+                self._authorize_operation(session, owner, permission, phase=phase)
             yield session
 
     def _account_dict(self, account, connection, *, session=None):

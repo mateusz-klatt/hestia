@@ -568,13 +568,32 @@ class BudgetGuardTests(unittest.TestCase):
                 with self.assertRaises(api._Rejected) as caught:
                     api._principal({"hestia_user": principal, "hestia_role": "admin"}, lambda: True)
                 self.assertEqual(caught.exception.status, 401)
+            self.assertEqual(
+                api._principal({"hestia_user": "alice", "hestia_role": "viewer"}, lambda: True),
+                "alice",
+            )
+            request = SimpleNamespace(
+                headers=MultiDict({"X-Hestia-Expected-Actor": "previous-owner"}),
+                get=lambda key: "alice" if key == "hestia_user" else None,
+            )
             with self.assertRaises(api._Rejected) as caught:
-                api._principal({"hestia_user": "alice", "hestia_role": "viewer"}, lambda: True)
-            self.assertEqual(caught.exception.status, 403)
+                api._principal(request, lambda: True)
+            self.assertEqual((caught.exception.status, caught.exception.code), (409, "budget_actor_changed"))
         for secret in (None, "PRIVATE", b""):
             with self.assertRaises(BudgetConfigError) as caught:
                 api._secret(lambda: secret)
             self.assertNotIn("PRIVATE", str(caught.exception))
+
+    def test_expected_actor_rejects_duplicate_malformed_and_noncanonical_headers(self):
+        request = SimpleNamespace(headers=MultiDict())
+        for values in (
+            ["one", "two"], [""], ["A" * 43], ["A" * 257], ["Ági"], ["AB"], ["/w=="],
+        ):
+            with self.subTest(values=values):
+                request.headers = MultiDict()
+                for value in values:
+                    request.headers.add("X-Hestia-Expected-Actor", value)
+                self.assertFalse(api.expected_actor_matches(request, "alice"))
 
     def test_config_errors_stay_unavailable_without_a_forecast_conflict_code(self):
         consent = api._failure(ConsentFilesError(), "consent_start")
@@ -702,11 +721,24 @@ class BudgetAuthorizationBridgeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(BudgetStoreError):
             self.store.accounts("unprov")
 
-    def test_custom_policy_phase_blocks_stores_jobs_runtime_and_resolve_mode(self):
+    async def test_expected_actor_mismatch_precedes_owner_lookup(self):
+        token = auth.make_session(
+            "alice", now=web._now(), secret=SECRET, generation=0, purpose="browser",
+        )
+        with mock.patch.object(api, "_store", side_effect=AssertionError("owner lookup")) as store:
+            response = await self.client.get(
+                api.PREFIX + "/accounts",
+                headers={"Cookie": f"hestia_session={token}", "X-Hestia-Expected-Actor": "someone-else"},
+            )
+        self.assertEqual(response.status, 409)
+        self.assertEqual(await response.json(), {"ok": False, "error": "budget_actor_changed"})
+        store.assert_not_called()
+
+    def test_unknown_policy_phase_blocks_stores_jobs_runtime_and_resolve_mode(self):
         from hestia.__main__ import resolve_mode
         from hestia.budget import analytics_api, household_api, jobs, job_store, receipt_api
 
-        self._set_phase("catalog_custom")
+        self._set_phase("future_phase")
         with self.assertRaises(authz.PolicyPhaseUnsupported):
             api._store(SECRET)
         with self.assertRaises(authz.PolicyPhaseUnsupported):
