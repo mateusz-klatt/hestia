@@ -160,6 +160,116 @@
         "title": "AuditFeed",
         "type": "object"
       },
+      "AuthDeviceTokenRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "device_name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Device Name",
+            "type": "string"
+          },
+          "prior_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Token"
+          }
+        },
+        "required": [
+          "device_name"
+        ],
+        "title": "AuthDeviceTokenRequest",
+        "type": "object"
+      },
+      "AuthDeviceTokenResult": {
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "issued_permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Issued Permissions",
+            "type": "array"
+          },
+          "owner": {
+            "title": "Owner",
+            "type": "string"
+          },
+          "owner_key": {
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Owner Key",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "receipts",
+              "device"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          },
+          "token_id": {
+            "title": "Token Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "token_id",
+          "scope",
+          "actor",
+          "owner",
+          "owner_key",
+          "issued_permissions",
+          "expires_at"
+        ],
+        "title": "AuthDeviceTokenResult",
+        "type": "object"
+      },
+      "AuthError": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/AuthErrorDetail"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "AuthError",
+        "type": "object"
+      },
+      "AuthErrorDetail": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "AuthErrorDetail",
+        "type": "object"
+      },
       "AuthFeatures": {
         "properties": {
           "auth_contract": {
@@ -14949,6 +15059,97 @@
         "title": "GlobalsPatch",
         "type": "object"
       },
+      "GrantCatalogEntry": {
+        "properties": {
+          "delegation": {
+            "anyOf": [
+              {
+                "enum": [
+                  "self_only",
+                  "delegable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delegation"
+          },
+          "device_eligible": {
+            "title": "Device Eligible",
+            "type": "boolean"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "permission_id": {
+            "title": "Permission Id",
+            "type": "string"
+          },
+          "protected": {
+            "title": "Protected",
+            "type": "boolean"
+          },
+          "requires": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Requires",
+            "type": "array"
+          },
+          "storage_scope": {
+            "enum": [
+              "installation",
+              "owner"
+            ],
+            "title": "Storage Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "permission_id",
+          "domain",
+          "storage_scope",
+          "delegation",
+          "requires",
+          "device_eligible",
+          "label",
+          "protected"
+        ],
+        "title": "GrantCatalogEntry",
+        "type": "object"
+      },
+      "GrantSelection": {
+        "properties": {
+          "permission_id": {
+            "title": "Permission Id",
+            "type": "string"
+          },
+          "target_owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Owner"
+          }
+        },
+        "required": [
+          "permission_id",
+          "target_owner"
+        ],
+        "title": "GrantSelection",
+        "type": "object"
+      },
       "IrButton": {
         "description": "A configured one-tap IR button (``HESTIA_IR_BUTTONS``) \u2192 transmits a saved Flipper signal.",
         "properties": {
@@ -15358,6 +15559,77 @@
           "can_manage_devices"
         ],
         "title": "OwnBudgetCapabilities",
+        "type": "object"
+      },
+      "QrCodeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin"
+        ],
+        "title": "QrCodeRequest",
+        "type": "object"
+      },
+      "QrCodeResult": {
+        "properties": {
+          "qr_payload": {
+            "title": "Qr Payload",
+            "type": "string"
+          }
+        },
+        "required": [
+          "qr_payload"
+        ],
+        "title": "QrCodeResult",
+        "type": "object"
+      },
+      "QrRedeemRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "pattern": "^[A-Za-z0-9_-]{19}$",
+            "title": "Code",
+            "type": "string"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin",
+          "code"
+        ],
+        "title": "QrRedeemRequest",
+        "type": "object"
+      },
+      "QrRedeemSuccess": {
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "user",
+          "token"
+        ],
+        "title": "QrRedeemSuccess",
         "type": "object"
       },
       "ResetPasswordRequest": {
@@ -16467,6 +16739,102 @@
         "title": "TriggerTime",
         "type": "object"
       },
+      "UpdateUserGrantsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/GrantSelection"
+            },
+            "title": "Grants",
+            "type": "array"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "grants"
+        ],
+        "title": "UpdateUserGrantsRequest",
+        "type": "object"
+      },
+      "UpdateUserGrantsResult": {
+        "properties": {
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "phase"
+        ],
+        "title": "UpdateUserGrantsResult",
+        "type": "object"
+      },
+      "UserGrantsResult": {
+        "properties": {
+          "budget_owner": {
+            "title": "Budget Owner",
+            "type": "boolean"
+          },
+          "budget_owners": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Budget Owners",
+            "type": "array"
+          },
+          "catalog": {
+            "items": {
+              "$ref": "#/components/schemas/GrantCatalogEntry"
+            },
+            "title": "Catalog",
+            "type": "array"
+          },
+          "direct": {
+            "items": {
+              "$ref": "#/components/schemas/GrantSelection"
+            },
+            "title": "Direct",
+            "type": "array"
+          },
+          "effective": {
+            "items": {
+              "$ref": "#/components/schemas/GrantSelection"
+            },
+            "title": "Effective",
+            "type": "array"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "phase",
+          "username",
+          "budget_owner",
+          "budget_owners",
+          "catalog",
+          "direct",
+          "effective"
+        ],
+        "title": "UserGrantsResult",
+        "type": "object"
+      },
       "UserRow": {
         "description": "One account in the admin user list (``store_sql.list_users``) \u2014 username / role / disabled,\nNEVER the password hash.",
         "properties": {
@@ -16615,7 +16983,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.52.0"
+    "version": "0.54.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16637,6 +17005,77 @@
         },
         "summary": "Recent audit-log rows (newest first, capped 200)",
         "x-required-permission": "system.audit.view",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/auth/device-token": {
+      "post": {
+        "description": "Allowed on HTTP LAN. prior_token rotates or migrates a credential without widening its permission ceiling.",
+        "operationId": "exchangeNativeSession",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthDeviceTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthDeviceTokenResult"
+                }
+              }
+            },
+            "description": "device credential issued"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            },
+            "description": "invalid device name or request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            },
+            "description": "missing, stale, or non-native session"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            },
+            "description": "no eligible live receipt/device target"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            },
+            "description": "active slot limit or rejected prior_token proof"
+          }
+        },
+        "summary": "Exchange a v2 native session for a narrowed receipt/device token",
+        "x-required-permission": "authenticated",
         "x-required-role": "viewer"
       }
     },
@@ -16665,6 +17104,155 @@
           }
         },
         "summary": "Public authentication contract and available features",
+        "x-required-permission": "public",
+        "x-required-role": "public"
+      }
+    },
+    "/api/auth/qr-code": {
+      "post": {
+        "description": "Requires a v2 browser cookie, the configured HTTPS public origin, and a matching Origin header.",
+        "operationId": "issueQrLoginCode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QrCodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QrCodeResult"
+                }
+              }
+            },
+            "description": "the QR payload"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            },
+            "description": "origin mismatch or an origin over 45 bytes"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            },
+            "description": "browser session missing or requiring upgrade"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            },
+            "description": "native bearer is not a browser session"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            },
+            "description": "HTTPS public origin unavailable"
+          }
+        },
+        "summary": "Issue an origin-bound, single-use native login QR payload",
+        "x-required-permission": "authenticated",
+        "x-required-role": "viewer"
+      }
+    },
+    "/api/auth/qr-redeem": {
+      "post": {
+        "description": "Public but HTTPS-origin-bound. Cookie and Authorization credentials are forbidden; no cookie is set.",
+        "operationId": "redeemQrLoginCode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QrRedeemRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QrRedeemSuccess"
+                }
+              }
+            },
+            "description": "native session issued"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            },
+            "description": "ambiguous credentials or origin mismatch"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            },
+            "description": "invalid, expired, consumed, or stale code"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            },
+            "description": "redemption throttled",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            },
+            "description": "HTTPS public origin unavailable"
+          }
+        },
+        "summary": "Redeem a single-use QR code for a native session",
         "x-required-permission": "public",
         "x-required-role": "public"
       }
@@ -27703,6 +28291,137 @@
           }
         },
         "summary": "Enable or disable another account",
+        "x-required-permission": "system.manage_users",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/users/grants": {
+      "get": {
+        "description": "Requires account management. Delegated target rules and implication closures are resolved server-side.",
+        "operationId": "getUserGrants",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "username",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserGrantsResult"
+                }
+              }
+            },
+            "description": "catalog and grants"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "missing username"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "no such user"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "user management requires the SQLite backend"
+          }
+        },
+        "summary": "Read the permission catalog and one account's direct/effective grants",
+        "x-required-permission": "system.manage_users",
+        "x-required-role": "admin"
+      },
+      "post": {
+        "description": "Requires a v2 browser session and Origin. The server preserves unchanged grant IDs and protects administration.",
+        "operationId": "updateUserGrants",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserGrantsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateUserGrantsResult"
+                }
+              }
+            },
+            "description": "grants saved"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "invalid, duplicate, or out-of-scope grants"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "cannot remove your own administration grant"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "no such user"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlError"
+                }
+              }
+            },
+            "description": "last administrator, target conflict, or SQLite backend inactive"
+          }
+        },
+        "summary": "Replace direct grants and activate the custom catalog on the first edit",
         "x-required-permission": "system.manage_users",
         "x-required-role": "admin"
       }

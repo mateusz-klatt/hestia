@@ -117,7 +117,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.50.0: additive authorization capabilities, public feature detection, and per-operation catalog requirements.
 # 0.51.0: optional/nullable lines and optional raw_shop_name/raw_nip on BudgetReceiptConfirmRequest to keep stored values unchanged.
 # 0.52.0: gateway payment evidence — receipt gateway/status/fee/payee_host/evidence fields, payment_evidence on detail, and the evidence list filter.
-CONTRACT_VERSION = "0.52.0"
+# 0.54.0: origin-bound QR login, native device exchange/budget reads, delegated receipts, and grant editing.
+CONTRACT_VERSION = "0.54.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -829,6 +830,57 @@ class AuthFeatures(BaseModel):
     qr_origin: str | None
 
 
+class AuthErrorDetail(BaseModel):
+    model_config = _READ
+    code: str
+
+
+class AuthError(BaseModel):
+    model_config = _READ
+    error: AuthErrorDetail
+
+
+class QrCodeRequest(BaseModel):
+    model_config = _STRICT
+    origin: str
+
+
+class QrCodeResult(BaseModel):
+    model_config = _READ
+    qr_payload: str
+
+
+class QrRedeemRequest(BaseModel):
+    model_config = _STRICT
+    origin: str
+    code: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{19}$")]
+
+
+class QrRedeemSuccess(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    user: str
+    token: str
+
+
+class AuthDeviceTokenRequest(BaseModel):
+    model_config = _STRICT
+    device_name: Annotated[str, Field(min_length=1, max_length=64)]
+    prior_token: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+class AuthDeviceTokenResult(BaseModel):
+    model_config = _READ
+    token: str
+    token_id: str
+    scope: Literal["receipts", "device"]
+    actor: str
+    owner: str
+    owner_key: Annotated[str, Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]+$")]
+    issued_permissions: list[str]
+    expires_at: str
+
+
 class OkResult(BaseModel):
     """A bare ``{ok: true}`` acknowledgement (e.g. /api/logout)."""
 
@@ -838,7 +890,8 @@ class OkResult(BaseModel):
 
 _AUTH_MODELS = (
     LoginRequest, LoginSuccess, WhoAmI, OwnBudgetCapabilities, DelegatedReceiptCapabilities,
-    MeCapabilities, AuthFeatures, OkResult,
+    MeCapabilities, AuthFeatures, AuthErrorDetail, AuthError, QrCodeRequest, QrCodeResult,
+    QrRedeemRequest, QrRedeemSuccess, AuthDeviceTokenRequest, AuthDeviceTokenResult, OkResult,
 )
 
 
@@ -948,8 +1001,51 @@ class DbStats(BaseModel):
     tables: dict[str, int]
 
 
+class GrantSelection(BaseModel):
+    model_config = _STRICT
+    permission_id: str
+    target_owner: str | None
+
+
+class GrantCatalogEntry(BaseModel):
+    model_config = _READ
+    permission_id: str
+    domain: str
+    storage_scope: Literal["installation", "owner"]
+    delegation: Literal["self_only", "delegable"] | None
+    requires: list[str]
+    device_eligible: bool
+    label: str
+    protected: bool
+
+
+class UserGrantsResult(BaseModel):
+    model_config = _READ
+    phase: str
+    username: str
+    budget_owner: bool
+    budget_owners: list[str]
+    catalog: list[GrantCatalogEntry]
+    direct: list[GrantSelection]
+    effective: list[GrantSelection]
+
+
+class UpdateUserGrantsRequest(BaseModel):
+    model_config = _STRICT
+    username: str
+    grants: list[GrantSelection]
+
+
+class UpdateUserGrantsResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    phase: str
+
+
 _USER_MODELS = (AddUserRequest, SetRoleRequest, SetDisabledRequest, ResetPasswordRequest,
-                ChangePasswordRequest, UserRow, UsersList, Rf433Device, Rf433Feed, DbStats)
+                ChangePasswordRequest, UserRow, UsersList, Rf433Device, Rf433Feed, DbStats,
+                GrantSelection, GrantCatalogEntry, UserGrantsResult, UpdateUserGrantsRequest,
+                UpdateUserGrantsResult)
 
 
 class CalendarDate(BaseModel):
@@ -3731,6 +3827,9 @@ _PATH_ROLES = {
     ("POST", "/api/login"): "public",
     ("POST", "/api/logout"): "public",
     ("GET", "/api/auth/features"): "public",
+    ("POST", "/api/auth/qr-code"): "viewer",
+    ("POST", "/api/auth/qr-redeem"): "public",
+    ("POST", "/api/auth/device-token"): "viewer",
     ("GET", "/api/whoami"): "viewer",
     ("GET", "/api/me/capabilities"): "viewer",
     ("GET", "/api/discovery"): "viewer",
@@ -3741,6 +3840,8 @@ _PATH_ROLES = {
     ("GET", "/api/events"): "viewer",
     ("GET", _P_USERS): "admin",
     ("POST", _P_USERS): "admin",
+    ("GET", "/api/users/grants"): "admin",
+    ("POST", "/api/users/grants"): "admin",
     ("POST", "/api/users/role"): "admin",
     ("POST", "/api/users/disabled"): "admin",
     ("POST", "/api/users/reset-password"): "admin",
@@ -3805,6 +3906,7 @@ def build_openapi() -> dict:
     """Assemble the OpenAPI 3.1 document for the current contract slice. Deterministic (no clock/host),
     so the checked-in ``docs/api/openapi.json`` stays byte-stable across regenerations."""
     err = {"content": {_APP_JSON: {"schema": _ref("ControlError")}}}
+    auth_err = {"content": {_APP_JSON: {"schema": _ref("AuthError")}}}
     doc = {
         "openapi": "3.1.0",
         "info": {
@@ -4057,6 +4159,58 @@ def build_openapi() -> dict:
                     },
                 }
             },
+            "/api/auth/qr-code": {
+                "post": {
+                    "operationId": "issueQrLoginCode",
+                    "summary": "Issue an origin-bound, single-use native login QR payload",
+                    "description": "Requires a v2 browser cookie, the configured HTTPS public origin, and a matching Origin header.",
+                    "requestBody": {"required": True,
+                                    "content": {_APP_JSON: {"schema": _ref("QrCodeRequest")}}},
+                    "responses": {
+                        "200": {"description": "the QR payload",
+                                "content": {_APP_JSON: {"schema": _ref("QrCodeResult")}}},
+                        "400": {"description": "origin mismatch or an origin over 45 bytes", **auth_err},
+                        "401": {"description": "browser session missing or requiring upgrade", **auth_err},
+                        "403": {"description": "native bearer is not a browser session", **auth_err},
+                        "503": {"description": "HTTPS public origin unavailable", **auth_err},
+                    },
+                },
+            },
+            "/api/auth/qr-redeem": {
+                "post": {
+                    "operationId": "redeemQrLoginCode",
+                    "summary": "Redeem a single-use QR code for a native session",
+                    "description": "Public but HTTPS-origin-bound. Cookie and Authorization credentials are forbidden; no cookie is set.",
+                    "requestBody": {"required": True,
+                                    "content": {_APP_JSON: {"schema": _ref("QrRedeemRequest")}}},
+                    "responses": {
+                        "200": {"description": "native session issued",
+                                "content": {_APP_JSON: {"schema": _ref("QrRedeemSuccess")}}},
+                        "400": {"description": "ambiguous credentials or origin mismatch", **auth_err},
+                        "401": {"description": "invalid, expired, consumed, or stale code", **auth_err},
+                        "429": {"description": "redemption throttled", **auth_err,
+                                "headers": {"Retry-After": {"schema": {"type": "string"}}}},
+                        "503": {"description": "HTTPS public origin unavailable", **auth_err},
+                    },
+                },
+            },
+            "/api/auth/device-token": {
+                "post": {
+                    "operationId": "exchangeNativeSession",
+                    "summary": "Exchange a v2 native session for a narrowed receipt/device token",
+                    "description": "Allowed on HTTP LAN. prior_token rotates or migrates a credential without widening its permission ceiling.",
+                    "requestBody": {"required": True,
+                                    "content": {_APP_JSON: {"schema": _ref("AuthDeviceTokenRequest")}}},
+                    "responses": {
+                        "200": {"description": "device credential issued",
+                                "content": {_APP_JSON: {"schema": _ref("AuthDeviceTokenResult")}}},
+                        "400": {"description": "invalid device name or request", **auth_err},
+                        "401": {"description": "missing, stale, or non-native session", **auth_err},
+                        "403": {"description": "no eligible live receipt/device target", **auth_err},
+                        "409": {"description": "active slot limit or rejected prior_token proof", **auth_err},
+                    },
+                },
+            },
             "/api/discovery": {
                 "get": {
                     "operationId": "discovery",
@@ -4135,6 +4289,37 @@ def build_openapi() -> dict:
                                 "content": {_APP_JSON: {"schema": _ref("OkResult")}}},
                         "400": {"description": "invalid username / password / role", **err},
                         "409": {"description": "duplicate username (or SQLite backend inactive)", **err},
+                    },
+                },
+            },
+            "/api/users/grants": {
+                "get": {
+                    "operationId": "getUserGrants",
+                    "summary": "Read the permission catalog and one account's direct/effective grants",
+                    "description": "Requires account management. Delegated target rules and implication closures are resolved server-side.",
+                    "parameters": [{"name": "username", "in": "query", "required": True,
+                                    "schema": {"type": "string", "minLength": 1}}],
+                    "responses": {
+                        "200": {"description": "catalog and grants",
+                                "content": {_APP_JSON: {"schema": _ref("UserGrantsResult")}}},
+                        "400": {"description": "missing username", **err},
+                        "404": {"description": _NO_SUCH_USER, **err},
+                        "409": {"description": "user management requires the SQLite backend", **err},
+                    },
+                },
+                "post": {
+                    "operationId": "updateUserGrants",
+                    "summary": "Replace direct grants and activate the custom catalog on the first edit",
+                    "description": "Requires a v2 browser session and Origin. The server preserves unchanged grant IDs and protects administration.",
+                    "requestBody": {"required": True,
+                                    "content": {_APP_JSON: {"schema": _ref("UpdateUserGrantsRequest")}}},
+                    "responses": {
+                        "200": {"description": "grants saved",
+                                "content": {_APP_JSON: {"schema": _ref("UpdateUserGrantsResult")}}},
+                        "400": {"description": "invalid, duplicate, or out-of-scope grants", **err},
+                        "403": {"description": "cannot remove your own administration grant", **err},
+                        "404": {"description": _NO_SUCH_USER, **err},
+                        "409": {"description": "last administrator, target conflict, or SQLite backend inactive", **err},
                     },
                 },
             },
