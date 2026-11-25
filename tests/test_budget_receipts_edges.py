@@ -108,8 +108,21 @@ class ParserEdgeTests(unittest.TestCase):
 
         self.assertEqual(merchant_tokens(None, None), frozenset())
         self.assertEqual(merchant_match_groups("LIDLBERG", None), (frozenset({"lidlberg"}),))
-        self.assertEqual(merchant_score_groups("GROCERY", None), ((), "grocery"))
-        self.assertEqual(merchant_score_groups("POLAND ENERGY GROUP", None), ((), None))
+        self.assertEqual(
+            merchant_match_groups("BIEDRONKA", None),
+            (frozenset({"biedronka"}), frozenset({"jeronimo", "martins"})),
+        )
+        self.assertEqual(
+            merchant_score_groups("BIEDRONKA", None),
+            (((frozenset({"biedronka"}), frozenset({"jeronimo", "martins"})),), ()),
+        )
+        self.assertEqual(
+            merchant_score_groups("BIEDRONKA EXPRESS", None),
+            (((frozenset({"biedronka"}), frozenset({"jeronimo", "martins"})), (frozenset({"express"}),)), ()),
+        )
+        self.assertEqual(merchant_score_groups("ACME GROCERY", None), (((frozenset({"acme"}),),), ("grocery",)))
+        self.assertEqual(merchant_score_groups("GROCERY", None), ((), ("grocery",)))
+        self.assertEqual(merchant_score_groups("POLAND ENERGY GROUP", None), ((), ("energy", "group", "poland")))
         self.assertIsNone(chain_for("LIDLBERG", None))
         self.assertIsNone(chain_for("MARTINS AUTO", None))
         self.assertEqual(chain_for("JERONIMO MARTINS POLSKA", None), "biedronka")

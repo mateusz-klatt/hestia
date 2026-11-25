@@ -474,20 +474,19 @@ def merchant_word_tokens(value):
 
 
 def merchant_match_groups(shop_name, nip):
-    return merchant_score_groups(shop_name, nip)[0]
+    groups, _generic = merchant_score_groups(shop_name, nip)
+    return tuple(alias for group in groups for alias in group)
 
 
 def merchant_score_groups(shop_name, nip):
     words = [token for token in merchant_word_tokens(shop_name) if len(token) >= 4]
     distinctive = sorted({token for token in words if token not in _STOP_TOKENS})
+    generic = tuple(sorted({token for token in words if token in _GENERIC_MERCHANT_TOKENS}))
     chain = chain_for(shop_name, nip)
     if chain is not None:
         extra = [token for token in distinctive if token not in _CHAIN_WORDS[chain]]
-        return _CHAIN_ALIAS_GROUPS[chain] + tuple(frozenset((token,)) for token in extra), None
-    if distinctive:
-        return tuple(frozenset((token,)) for token in distinctive), None
-    generic = {token for token in words if token not in _NON_MERCHANT_TOKENS}
-    return (), next(iter(generic)) if len(generic) == 1 else None
+        return (_CHAIN_ALIAS_GROUPS[chain],) + tuple((frozenset((token,)),) for token in extra), generic
+    return tuple((frozenset((token,)),) for token in distinctive), generic
 
 
 def merchant_tokens(shop_name, nip):

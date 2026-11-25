@@ -356,7 +356,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             return []
         direction = "CRDT" if row.receipt_kind == "refund" else "DBIT"
         shop_name = normalize_shop_name(row.raw_shop_name)
-        groups, fallback_token = merchant_score_groups(row.raw_shop_name, row.raw_nip)
+        groups, generic_tokens = merchant_score_groups(row.raw_shop_name, row.raw_nip)
+        linked_key = (getattr(row, "linked_account_id", None), getattr(row, "linked_entry_ref", None))
         ranked = []
         for transaction, tx_row_id in self._candidate_rows(session, owner, include_receipt_id=include_receipt_id):
             try:
@@ -394,9 +395,13 @@ class BudgetReceiptStore(BudgetHTTPStore):
             haystack = fold_for_match(description + " " + (creditor or ""))
             haystack_words = frozenset(merchant_word_tokens(haystack))
             nip_hit = _nip_in_text(row.raw_nip, haystack)
-            distinctive_score = sum(1 for group in groups if group.issubset(haystack_words))
-            generic_score = 1 if fallback_token is not None and fallback_token in haystack_words else 0
-            hit = nip_hit or distinctive_score > 0 or generic_score > 0
+            distinctive_score = sum(
+                1 for group in groups if any(alias.issubset(haystack_words) for alias in group)
+            )
+            generic_score = sum(1 for token in generic_tokens if token in haystack_words)
+            sole_generic_hit = not groups and len(generic_tokens) == 1 and generic_score > 0
+            hit = nip_hit or distinctive_score > 0 or sole_generic_hit
+            is_current_link = (transaction.account_id, transaction.entry_reference) == linked_key
             candidate = {
                 "account_id": transaction.account_id,
                 "entry_reference": entry_reference_digest(transaction.entry_reference),
@@ -408,11 +413,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 "candidate_token": token,
             }
             ranked.append((
-                not nip_hit, -distinctive_score, -generic_score, distance,
+                not is_current_link, not nip_hit, -distinctive_score, -generic_score, distance,
                 transaction.entry_reference, transaction.account_id, candidate,
             ))
-        # Rank across all matching rows before slicing MAX_CANDIDATES so hits survive the cap.
-        ranked.sort(key=lambda item: item[:6])
+        # Rank across all matching rows before slicing MAX_CANDIDATES so hits and current link survive the cap.
+        ranked.sort(key=lambda item: item[:7])
         return [item[-1] for item in ranked[:MAX_CANDIDATES]]
 
     @staticmethod
@@ -759,6 +764,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 payment_method=row.payment_method, receipt_kind=row.receipt_kind,
                 raw_shop_name=row.raw_shop_name, raw_nip=row.raw_nip,
                 document_kind=row.document_kind, due_date=row.due_date, id=row.id,
+                linked_account_id=row.linked_account_id, linked_entry_ref=row.linked_entry_ref,
             )
         if preview is None:
             return {"receipt": receipt}

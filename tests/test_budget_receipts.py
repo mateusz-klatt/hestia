@@ -1928,9 +1928,9 @@ NR KARTY ****5555
             reference_digest("nip-tail-alpha"): False,
         })
 
-        # 4. Graded ranking before MAX_CANDIDATES (100) cap:
+        # 4. Graded ranking before MAX_CANDIDATES (>= 50, currently 100) cap:
         #    77 PLN "ACME GROCERY" receipt + next-day "ACME" debit + 100 same-day "OTHER GROCERY" 77 PLN decoys.
-        #    Generic "grocery" scores 0 because "acme" is present, so "ACME" ranks 1st above all 100 decoys.
+        #    Distinctive "acme" ranks 1st above all 100 generic-only decoys.
         for decoy in range(100):
             self.add_transaction("a", f"aaa-decoy-{decoy:03d}", amount="77.00", booking_date="2026-11-10",
                                  value_date=None, remittance_information=[f"OTHER GROCERY {decoy}"])
@@ -1940,11 +1940,81 @@ NR KARTY ****5555
             document_kind="payment_confirmation", issue_date="2026-11-10", due_date=None,
             total="77.00", shop="ACME GROCERY", nip=None, with_line=True,
         )
-        capped = self.receipts.detail("owner", cap_id)["candidates"]
+        cap_detail = self.receipts.detail("owner", cap_id)
+        api_contract.BudgetReceiptDetailResult.model_validate(cap_detail)
+        capped = cap_detail["candidates"]
         self.assertEqual(len(capped), 100)
         self.assertEqual(capped[0]["entry_reference"], reference_digest("zzz-acme-winner"))
         self.assertTrue(capped[0]["merchant_token_hit"])
         self.assertEqual(capped[0]["date_distance"], 1)
+
+        # 5. Codex (b): generic tokens tie-break equal distinctive scores, so "ACME GROCERY" beats 100 "ACME FUEL" debits.
+        for decoy in range(100):
+            self.add_transaction("a", f"aaa-acme-fuel-{decoy:03d}", amount="79.00", booking_date="2026-11-10",
+                                 value_date=None, remittance_information=[f"ACME FUEL {decoy}"])
+        self.add_transaction("a", "zzz-acme-grocery", amount="79.00", booking_date="2026-11-11", value_date=None,
+                             remittance_information=["ACME GROCERY"])
+        tiebreak_id = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-10", due_date=None,
+            total="79.00", shop="ACME GROCERY", nip=None, with_line=True,
+        )
+        tiebreak_cands = self.receipts.detail("owner", tiebreak_id)["candidates"]
+        self.assertEqual(len(tiebreak_cands), 100)
+        self.assertEqual(tiebreak_cands[0]["entry_reference"], reference_digest("zzz-acme-grocery"))
+        self.assertEqual(tiebreak_cands[0]["date_distance"], 1)
+
+        # 6. Codex (a): alias group counts at most once (so "JERONIMO MARTINS BIEDRONKA" ties with "BIEDRONKA")
+        #    AND the currently linked transaction is pinned first before MAX_CANDIDATES so Keep never disappears.
+        from hestia.budget.receipt_reconcile import reconcile_receipt_links
+
+        self.add_transaction("a", "zzz-biedronka-keep", amount="81.00", booking_date="2026-11-11", value_date=None,
+                             remittance_information=["BIEDRONKA"])
+        biedronka_id = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-10", due_date=None,
+            total="81.00", shop="BIEDRONKA", nip=None, with_line=True,
+        )
+        keep_cand = self.receipts.detail("owner", biedronka_id)["candidates"][0]
+        confirmed_keep = self.receipts.confirm("owner", {
+            "receipt_id": biedronka_id, "expected_version": 1, "receipt_kind": "purchase",
+            "receipt_date": "2026-11-10", "receipt_time": None, "total_amount": "81.00",
+            "currency": "PLN", "payment_method": "card", "lines": None,
+            "link": {
+                "account_id": keep_cand["account_id"], "entry_reference": keep_cand["entry_reference"],
+                "candidate_token": keep_cand["candidate_token"],
+            },
+        })["receipt"]
+        self.add_transaction("a", "000-biedronka-only", amount="81.00", booking_date="2026-11-10", value_date=None,
+                             remittance_information=["BIEDRONKA WARSZAWA"])
+        for decoy in range(100):
+            self.add_transaction("a", f"aaa-jm-biedronka-{decoy:03d}", amount="81.00", booking_date="2026-11-10",
+                                 value_date=None, remittance_information=[f"JERONIMO MARTINS BIEDRONKA {decoy}"])
+        unlinked_biedronka = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-10", due_date=None,
+            total="81.00", shop="BIEDRONKA", nip=None, with_line=True,
+        )
+        self.assertEqual(
+            self.receipts.detail("owner", unlinked_biedronka)["candidates"][0]["entry_reference"],
+            reference_digest("000-biedronka-only"),
+        )
+        self.change_transaction("a", "zzz-biedronka-keep", remittance_information=["CHANGED POS DESCRIPTION"])
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 30), 1)
+        review_detail = self.receipts.detail("owner", biedronka_id)
+        self.assertEqual(review_detail["receipt"]["status"], "needs_review")
+        self.assertEqual(len(review_detail["candidates"]), 100)
+        pinned = review_detail["candidates"][0]
+        self.assertEqual(pinned["entry_reference"], reference_digest("zzz-biedronka-keep"))
+        kept = self.receipts.confirm("owner", {
+            "receipt_id": biedronka_id, "expected_version": confirmed_keep["version"] + 1, "receipt_kind": "purchase",
+            "receipt_date": "2026-11-10", "receipt_time": None, "total_amount": "81.00",
+            "currency": "PLN", "payment_method": "card", "lines": None,
+            "link": {
+                "account_id": pinned["account_id"], "entry_reference": pinned["entry_reference"],
+                "candidate_token": pinned["candidate_token"],
+            },
+        })["receipt"]
+        self.assertEqual((kept["status"], kept["linked"], kept["linked_entry_ref"]),
+                         ("confirmed", True, reference_digest("zzz-biedronka-keep")))
 
     def test_unedited_double_space_linked_draft_and_raw_transition_survive_reconcile(self):
         from hestia.budget.receipt_reconcile import evidence_json, link_evidence, reconcile_receipt_links
