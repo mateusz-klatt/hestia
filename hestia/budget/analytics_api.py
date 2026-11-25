@@ -122,7 +122,7 @@ def _encode_bounded(payload, limit):
 def _read(owner, operation, query, secret):
     store = _store(secret)
     result = getattr(store, operation.replace("-", "_").replace("/", "_"))(owner, **query)
-    with store._read(owner) as session:
+    with store._read(owner, permission=None if operation == "inbox" else "budget.view") as session:
         result = DisplayResolver(session, owner, owner).decorate(
             result, include_category_translations=operation == "categories")
     if operation in _BOUNDED_READ_CAPS:

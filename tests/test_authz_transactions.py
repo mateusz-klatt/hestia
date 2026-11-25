@@ -76,6 +76,20 @@ class TransactionAuthorizationTests(unittest.IsolatedAsyncioTestCase):
                 analytics_api._read("alice", "categories", {}, budget_fixture.SECRET)
         self.assertEqual(denied.exception.status, 403)
 
+    def test_inbox_decoration_rechecks_owner_without_requiring_ledger_view(self):
+        original = type(self.store).inbox
+
+        def disable_before_decoration(owner):
+            result = original(self.store, owner)
+            with self.sessions.begin() as session:
+                session.get(db.User, owner).disabled = True
+            return result
+
+        with mock.patch.object(type(self.store), "inbox", side_effect=disable_before_decoration):
+            with self.assertRaises(BudgetAccessDenied) as denied:
+                analytics_api._read("alice", "inbox", {}, budget_fixture.SECRET)
+        self.assertEqual(denied.exception.status, 401)
+
     def test_receipt_profile_does_not_require_full_ledger_view(self):
         with self.sessions.begin() as session:
             session.execute(delete(db.PermissionGrant).where(

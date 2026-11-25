@@ -521,7 +521,10 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
             headers={**self._cookie("viewer"), "X-Hestia-Expected-Actor": _actor_header("admin")},
         )
         self.assertEqual(response.status, 409)
-        self.assertEqual(await response.json(), {"error": {"code": "budget_actor_changed"}})
+        self.assertEqual(await response.json(), {"ok": False, "error": "budget_actor_changed"})
+        denied = await self.client.get("/api/budget/accounts", headers=self._cookie("viewer"))
+        self.assertEqual(denied.status, 403)
+        self.assertEqual(await denied.read(), b"")
 
     async def test_public_feature_probe_ignores_all_credentials(self):
         for headers in (
