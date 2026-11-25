@@ -1772,7 +1772,8 @@ describe("receipts tab & capability gate", () => {
     expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(true);
     expect(host.textContent).toContain("Tab Integration Market");
 
-    // 3. Listing 403 when capabilities still report can_use_receipts=true marks receipts unavailable without retrying in a loop.
+    // 3. Transient listing 403 when capabilities still report can_use_receipts=true marks receipts unavailable without looping,
+    //    then Reload (confirming can_use_receipts=true even with unchanged capabilities) clears receiptUnavailable & remounts panel.
     await click(button("Accounts"));
     const callsBeforeForbiddenLoop = vi.mocked(rApi.receiptsList).mock.calls.length;
     vi.mocked(rApi.receiptsList).mockImplementationOnce(() => fail(403, "budget_origin_required"));
@@ -1783,19 +1784,62 @@ describe("receipts tab & capability gate", () => {
     expect(host.textContent).not.toContain("Tab Integration Market");
     expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(false);
 
-    // Changing capability tuple clears receiptUnavailable and restores Receipts when allowed again.
-    api.capabilities.mockImplementation(() => ok({
-      ...authorization,
-      own_budget: { ...authorization.own_budget, can_use_receipts: false },
-    }));
-    await click(button("Reload"));
-    api.capabilities.mockImplementation(() => ok(authorization));
+    // Reload with unchanged can_use_receipts=true clears receiptUnavailable and remounts Receipts panel immediately.
     await click(button("Reload"));
     expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(true);
+    expect(host.textContent).toContain("Tab Integration Market");
 
-    // 4. Non-listing receipt 403 (confirm) keeps Receipts accessible if refreshed capabilities still allow can_use_receipts=true,
+    // Search 403 is recovered by focus capability refresh with unchanged can_use_receipts=true too.
+    const setSearchInput = (text: string) => {
+      const searchQuery = host.querySelector<HTMLInputElement>('input[name="query"]');
+      if (searchQuery === null) throw new Error("receipt search input missing");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(searchQuery, text);
+      searchQuery.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    vi.mocked(rApi.receiptsSearch).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    await act(async () => {
+      setSearchInput("Tab");
+      await Promise.resolve();
+    });
+    await click(button("Apply filters"));
+    expect(rApi.receiptsSearch).toHaveBeenCalledTimes(1);
+    expect(host.textContent).not.toContain("Tab Integration Market");
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).toContain("Tab Integration Market");
+
+    // 4. Delayed 403 from an earlier receipt panel epoch is ignored after the panel recovers.
+    const delayedOldRead = deferred<Loaded<ReceiptsApi["receiptDetail"]>>();
+    vi.mocked(rApi.receiptDetail).mockImplementationOnce(() => delayedOldRead.promise);
+    await click(button("Details"));
+    // Trigger search 403 -> focus recovery while delayedOldRead is still in flight.
+    vi.mocked(rApi.receiptsSearch).mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    await act(async () => {
+      setSearchInput("Tab");
+      await Promise.resolve();
+    });
+    await click(button("Apply filters"));
+    expect(rApi.receiptsSearch).toHaveBeenCalledTimes(2);
+    expect(host.textContent).not.toContain("Tab Integration Market");
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).toContain("Tab Integration Market");
+    await act(async () => {
+      delayedOldRead.settle({ ok: false, status: 403, error: "budget_forbidden" });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).toContain("Tab Integration Market");
+    expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(true);
+
+    // 5. Non-listing receipt 403 (confirm) keeps Receipts accessible if refreshed capabilities still allow can_use_receipts=true,
     //    and clears the entire ledger if refreshed capabilities now deny can_view / return 401.
-    await click(button("Receipts and documents"));
     await click(button("Details"));
     vi.mocked(rApi.confirmReceipt).mockImplementationOnce(() => fail(403, "budget_forbidden"));
     await click(button("Confirm receipt"));
