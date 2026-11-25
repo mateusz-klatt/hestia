@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 import os
 from email.message import EmailMessage
@@ -281,7 +282,7 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
                     self.assertEqual(receipt.get("invoice_number"), "FV/123" if native else None)
                     self.assertEqual(receipt.get("due_date"), "2026-11-25" if native else None)
 
-    async def test_gateway_evidence_is_only_on_the_current_receipt_contract(self):
+    async def test_gateway_evidence_requires_contract_0_52_or_later(self):
         shared = dict(owner="alice", status="imported", source_kind="email", version=1,
                       created_at=self.clock.now, updated_at=self.clock.now, receipt_date="2026-11-02",
                       currency="PLN", import_expires_at=self.clock.now + 60)
@@ -297,7 +298,8 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
             "gateway": "Example Pay", "gateway_status": "paid", "fee_amount": "1",
             "payee_host": "shop.example.test", "evidence_for_receipt_id": _RECEIPT_ID, "has_document": True,
         }
-        for version in (None, "0.40.0", "0.51.0", api_contract.CONTRACT_VERSION):
+        gateway_contracts = ("0.52.0", "0.53.0", api_contract.CONTRACT_VERSION)
+        for version in (None, "0.40.0", "0.51.0", *gateway_contracts):
             with self.subTest(version=version):
                 headers = self.headers()
                 if version is not None:
@@ -313,7 +315,7 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
                     self.assertEqual(response.status, 200, await response.text())
                     details.append((await response.json())["receipt"])
                 payment, document = details
-                if version == api_contract.CONTRACT_VERSION:
+                if version in gateway_contracts:
                     for receipt in (payment_summary, payment):
                         self.assertEqual({key: receipt[key] for key in gateway_fields}, gateway_fields)
                     self.assertNotIn("payment_evidence", payment_summary)
@@ -339,21 +341,33 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
             newest = db.BudgetReceipt(id=_RECEIPT_ID, receipt_date="2026-11-03", **shared)
             older = db.BudgetReceipt(id=_GATEWAY_RECEIPT_ID, receipt_date="2026-11-02", **shared)
             session.add_all((newest, older))
-            cursor = store._encode_cursor("alice", legacy_context, newest)
+        legacy_payload = json.dumps(
+            {"owner": "alice", "context": legacy_context, "last_date": "2026-11-03",
+             "last_id": _RECEIPT_ID, "expires_at": self.clock.now + 60},
+            sort_keys=True, separators=(",", ":"),
+        ).encode("ascii")
+        legacy_mac = hmac.digest(store._receipt_cursor_key, legacy_payload, "sha256")
+        legacy_cursor = ".".join(
+            base64.urlsafe_b64encode(part).rstrip(b"=").decode("ascii") for part in (legacy_payload, legacy_mac)
+        )
 
         headers = self.headers() | {"X-Hestia-Contract-Version": api_contract.CONTRACT_VERSION}
         path = receipt_api.PREFIX + "/list"
         first = await self.client.post(path, json={**filters, "limit": 1}, headers=headers)
         self.assertEqual(first.status, 200, await first.text())
-        self.assertEqual((await first.json())["next_cursor"], cursor)
-        second = await self.client.post(path, json={**filters, "cursor": cursor}, headers=headers)
-        self.assertEqual(second.status, 200, await second.text())
-        self.assertEqual([row["receipt_id"] for row in (await second.json())["receipts"]], [_GATEWAY_RECEIPT_ID])
-        for evidence in ("only", "include"):
-            with self.subTest(evidence=evidence):
-                wrong_scope = await self.client.post(
-                    path, json={**filters, "evidence": evidence, "cursor": cursor}, headers=headers)
-                self.assertEqual(wrong_scope.status, 400)
+        current_cursor = (await first.json())["next_cursor"]
+        self.assertIsInstance(current_cursor, str)
+        self.assertNotEqual(current_cursor, legacy_cursor)
+        for cursor_format, cursor in (("legacy", legacy_cursor), ("current", current_cursor)):
+            with self.subTest(cursor_format=cursor_format):
+                second = await self.client.post(path, json={**filters, "cursor": cursor}, headers=headers)
+                self.assertEqual(second.status, 200, await second.text())
+                self.assertEqual([row["receipt_id"] for row in (await second.json())["receipts"]], [_GATEWAY_RECEIPT_ID])
+                for evidence in ("only", "include"):
+                    with self.subTest(evidence=evidence):
+                        wrong_scope = await self.client.post(
+                            path, json={**filters, "evidence": evidence, "cursor": cursor}, headers=headers)
+                        self.assertEqual(wrong_scope.status, 400)
 
     async def test_manual_forward_review_metadata_never_exposes_the_inner_address(self):
         with self.sessions.begin() as session:

@@ -325,6 +325,75 @@ class DelegatedReceiptHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         })
         self.assertNotIn("alice", json.dumps(payload))
 
+    async def test_view_only_delegate_sees_versioned_evidence_for_the_authorized_ledger(self):
+        document_id, evidence_id, foreign_document_id, foreign_evidence_id = (str(uuid.uuid4()) for _ in range(4))
+        now = web._now()
+        shared = {"source_kind": "email", "version": 1, "created_at": now, "updated_at": now,
+                  "currency": "PLN", "total_amount": "85", "payment_method": "card"}
+        with self.sessions.begin() as session:
+            session.add(db.PermissionGrant(username="operator", permission_id="budget.receipts.view",
+                                           target_owner="alice"))
+            session.add_all((
+                db.BudgetReceipt(
+                    id=document_id, owner="alice", status="needs_review", document_kind="invoice",
+                    receipt_date="2026-11-10", linked_account_id=self.alice_id, linked_entry_ref="alice-entry",
+                    linked_fingerprint="a" * 64, linked_evidence="{}", **shared,
+                ),
+                db.BudgetReceipt(id=foreign_document_id, owner="bob", status="imported", document_kind="invoice",
+                                 receipt_date="2026-11-11", **shared),
+            ))
+            session.flush()
+            for owner, payment_id, target_id in (("alice", evidence_id, document_id),
+                                                 ("bob", foreign_evidence_id, foreign_document_id)):
+                session.add(db.BudgetReceipt(
+                    id=payment_id, owner=owner, status="imported", document_kind="payment_confirmation",
+                    receipt_date="2026-11-12", gateway="Example Pay", gateway_status="paid", fee_amount="1",
+                    evidence_for_receipt_id=target_id, **shared,
+                ))
+
+        def headers(user="operator", version="0.52.0"):
+            return {**self.headers(user, origin=True), "X-Hestia-Contract-Version": version}
+
+        async def listing(values, *, user="operator", version="0.52.0"):
+            return await self.client.post(receipt_api.PREFIX + "/list", json=values, headers=headers(user, version))
+
+        async def detail(receipt_id):
+            return await self.client.get(receipt_api.PREFIX + "/detail", params={"receipt_id": receipt_id},
+                                         headers=headers())
+
+        for values, expected in (({}, [document_id]), ({"evidence": "only"}, [evidence_id]),
+                                 ({"evidence": "include"}, [evidence_id, document_id])):
+            with self.subTest(values=values):
+                response = await listing(values)
+                self.assertEqual(response.status, 200, await response.text())
+                self.assertEqual([receipt["receipt_id"] for receipt in (await response.json())["receipts"]], expected)
+
+        for version, expected in (("0.51.0", {}), ("0.52.0", {"evidence_for_receipt_id": document_id})):
+            response = await listing({"evidence": "only"}, version=version)
+            self.assertEqual(response.status, 200, await response.text())
+            (payment,) = (await response.json())["receipts"]
+            self.assertEqual({key: payment[key] for key in payment.keys() & {"evidence_for_receipt_id"}}, expected)
+
+        response = await detail(document_id)
+        self.assertEqual(response.status, 200, await response.text())
+        body = await response.json()
+        self.assertEqual([item["receipt_id"] for item in body["receipt"]["payment_evidence"]], [evidence_id])
+        self.assertTrue(body["receipt"]["linked"])
+        self.assertIsNone(body["receipt"]["linked_account_id"])
+        self.assertIsNone(body["receipt"]["linked_entry_ref"])
+        self.assertNotIn("candidates", body)
+        self.assertEqual((await detail(foreign_evidence_id)).status, 404)
+
+        first = await listing({"evidence": "include", "limit": 1})
+        self.assertEqual(first.status, 200, await first.text())
+        cursor = (await first.json())["next_cursor"]
+        self.assertIsNotNone(cursor)
+        following = await listing({"evidence": "include", "limit": 1, "cursor": cursor})
+        self.assertEqual(following.status, 200, await following.text())
+        self.assertEqual([receipt["receipt_id"] for receipt in (await following.json())["receipts"]], [document_id])
+        self.assertEqual((await listing({"evidence": "only", "cursor": cursor})).status, 400)
+        self.assertEqual((await listing({"evidence": "include", "cursor": cursor}, user="alice")).status, 400)
+
 
 if __name__ == "__main__":
     unittest.main()
