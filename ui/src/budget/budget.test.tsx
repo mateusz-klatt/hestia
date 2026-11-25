@@ -53,6 +53,7 @@ const balancesData = {
 function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
   return {
     capabilities: vi.fn<BudgetApi["capabilities"]>(() => ok(authorization)),
+    whoami: vi.fn<BudgetApi["whoami"]>(() => ok({ user: "owner", role: "admin" })),
     connections: vi.fn<BudgetApi["connections"]>(() => ok({ connections: [connection], capabilities })),
     accounts: vi.fn<BudgetApi["accounts"]>(() => ok({ accounts })),
     jobs: vi.fn<BudgetApi["jobs"]>(() => ok({ jobs: [] })),
@@ -201,11 +202,34 @@ describe("budget view states", () => {
     const api = fakeApi();
     await render(api, true, "owner");
     api.receiptDevices.mockImplementation(() => fail(403, "budget_forbidden"));
+    api.capabilities.mockImplementationOnce(() => ok(authorization)).mockImplementation(() => ok({
+      ...authorization,
+      own_budget: { ...authorization.own_budget, can_manage_devices: false },
+    }));
     await click(button("Reload"));
     expect(host.querySelector(".budget-devices")).toBeNull();
     expect(host.textContent).toContain("Synthetic Current");
     expect(host.textContent).not.toContain("Only the budget's owner");
     expect(api.capabilities.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps device administration when refreshed capabilities still allow it", async () => {
+    const api = fakeApi();
+    await render(api, true, "owner");
+    api.pairReceiptDevice.mockImplementation(() => fail(403, "budget_forbidden"));
+    await click(button("Add device"));
+    expect(host.querySelector(".budget-devices")).not.toBeNull();
+    expect(host.textContent).toContain("Synthetic Current");
+    expect(host.textContent).not.toContain("Only the budget's owner");
+  });
+
+  it("falls back to the legacy admin role only when capabilities are absent", async () => {
+    const api = fakeApi();
+    api.capabilities.mockImplementation(() => fail(404, "budget_http_404"));
+    await render(api, true, "owner");
+    expect(host.textContent).toContain("Synthetic Current");
+    expect(host.textContent).not.toContain("Only the budget's owner");
+    expect(api.whoami).toHaveBeenCalled();
   });
 
   it("clears the ledger when an owner request reports an actor change", async () => {

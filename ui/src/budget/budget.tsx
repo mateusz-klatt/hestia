@@ -48,6 +48,21 @@ function serverMonthToToday(month: string): (() => Date) | undefined {
 
 type Load = "loading" | "ready" | "disabled" | "denied" | "error";
 
+async function loadAuthorization(api: BudgetApi): Promise<BudgetResult<AuthorizationCapabilities>> {
+  const result = await api.capabilities();
+  if (result.ok || result.status !== 404) return result;
+  const legacy = await api.whoami();
+  if (!legacy.ok) return { ok: false, status: legacy.status, error: legacy.error };
+  const owner = legacy.data.role === "admin";
+  return { ok: true, data: {
+    user: legacy.data.user, installation_permissions: [],
+    own_budget: owner ? {
+      permissions: [], can_view: true, can_use_receipts: true, can_manage_devices: true,
+    } : null,
+    delegated_receipts: null, household_available: false,
+  } };
+}
+
 function failureText(error: string): string {
   switch (error) {
     case "budget_version_conflict": return t("budget.main.conflict");
@@ -166,7 +181,7 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
       return result;
     });
     // Capabilities, not the legacy role projection, decide whether this actor still owns ledger access.
-    const identity = watch(api.capabilities()).then((result) => {
+    const identity = watch(loadAuthorization(api)).then((result) => {
       if (result.ok && ((principal !== undefined && result.data.user !== principal)
           || result.data.own_budget?.can_view !== true) && alive.current) invalidate(false);
       return result;
@@ -193,7 +208,7 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
   }, [active, reload]);
 
   const refreshAuthorization = useCallback(async () => {
-    const result = await api.capabilities();
+    const result = await loadAuthorization(api);
     if (!alive.current || barrier(result)) return;
     if (!result.ok) return;
     if ((principal !== undefined && result.data.user !== principal)
@@ -202,6 +217,7 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
       return;
     }
     setAuthorization(result.data);
+    setDeviceAccess(result.data.own_budget?.can_manage_devices === true);
   }, [api, principal, barrier, invalidate]);
 
   const deviceBarrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {

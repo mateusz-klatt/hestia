@@ -98,6 +98,7 @@ export function createBudgetApi(expectedActor: string | null = null) {
   }
   return {
   capabilities: () => call<AuthorizationCapabilities>(apiUrl("me/capabilities")),
+  whoami: () => call<{ user: string | null; role: string | null }>(apiUrl("whoami")),
   connections: () => call<ConnectionsData>(url("connections")),
   accounts: (connectionId?: string) =>
     call<{ accounts: BudgetAccount[] }>(url("accounts", { connection_id: connectionId })),
