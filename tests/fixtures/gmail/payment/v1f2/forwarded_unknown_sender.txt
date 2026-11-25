@@ -1,0 +1,10 @@
+Nieznany sklep.
+
+Begin forwarded message:
+From: Unknown Corner Shop <orders@unknown-shop.example>
+Subject: Potwierdzenie zamówienia nr 111222333
+Message-ID: <unknown-fwd-1@unknown-shop.example>
+To: spouse@gmail.com
+
+Dziękujemy za zakup.
+Łącznie: 33,00 PLN

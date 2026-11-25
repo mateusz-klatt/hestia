@@ -16,9 +16,9 @@ from hestia import db
 from hestia.budget import gmail_message
 from hestia.budget.gmail_invoice import extract_invoice
 from hestia.budget.gmail_payment import ImportedPayment, inspect_payment
-from hestia.budget.gmail_store import (DAY as SECONDS_PER_DAY, GATEWAY_REF_DOMAIN, PAYMENT_SENDER_DOMAIN,
-                                       PROVENANCE_TTL, GmailStore, PendingMessage, PendingPayment,
-                                       _failed_gateway_key, digest, retain_imports)
+from hestia.budget.gmail_store import (DAY as SECONDS_PER_DAY, GATEWAY_REF_DOMAIN, ORDER_REFERENCE_DOMAIN,
+                                       PAYMENT_SENDER_DOMAIN, PROVENANCE_TTL, RFC_MESSAGE_DOMAIN, GmailStore,
+                                       PendingMessage, PendingPayment, _failed_gateway_key, digest, retain_imports)
 from hestia.budget.gmail_trust import PaymentSender
 from hestia.budget.receipt_parser import ReceiptError
 from hestia.budget.receipt_store import BudgetReceiptStore
@@ -1001,3 +1001,220 @@ class V1fMessageTests(unittest.TestCase):
                 (row,) = session.scalars(select(db.BudgetReceipt)).all()
                 self.assertEqual((row.gateway_status, row.raw_shop_name, row.total_amount),
                                  ("paid", "SKLEP PRZYKŁADOWY SP. Z O.O.", "49.99"))
+
+
+_V1F2_FIXTURES = Path(__file__).parent / "fixtures" / "gmail" / "payment" / "v1f2"
+
+
+class V1f2ForwardedPaymentTests(unittest.TestCase):
+    def setUp(self):
+        self.settings = SimpleNamespace(
+            sender_allowlist=("billing@respectenergy.pl",),
+            spouse_forward_senders=("spouse@gmail.com",),
+            owner_mailbox="owner@gmail.com",
+            hmac_secret=_SECRET,
+            payment_senders=(
+                PaymentSender("@przelewy24.pl", "Przelewy24", gateway=True),
+                PaymentSender("@payu.com", "PayU", gateway=True),
+                PaymentSender("@paynow.pl", "Paynow", gateway=True),
+                PaymentSender("@shop.example.test", "Example Shop"),
+            ),
+        )
+        self.worker = Mock()
+        self.worker.ready.return_value = True
+        self.worker.parse.side_effect = lambda _kind, source: source.decode("utf-8")
+        self.processor = gmail_message.GmailMessageProcessor(self.settings, self.worker)
+
+    @staticmethod
+    def _email(sender, body, *, subject="Fwd: payment", rfc_id="<outer@gmail.com>"):
+        domain = sender.rpartition("@")[2]
+        message = EmailMessage()
+        message["From"] = sender
+        message["Subject"] = subject
+        if rfc_id is not None:
+            message["Message-ID"] = rfc_id
+        message["Authentication-Results"] = (
+            f"mx.google.com; dkim=pass header.d={domain}; dmarc=pass header.from={domain}"
+        )
+        message.set_content(body)
+        return message
+
+    def _process(self, message, gmail_id="msg-1", internal_date="1795566945123"):
+        metadata = {"id": gmail_id, "internalDate": internal_date, "sizeEstimate": 512,
+                    "payload": {"headers": [{"name": name, "value": value}
+                                            for name, value in message.raw_items()]}}
+        run = Mock()
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii").rstrip("=")
+        run.message.side_effect = [metadata, {"id": gmail_id, "raw": raw}]
+        return self.processor.process(run, gmail_id, digest(_SECRET, b"test", gmail_id))
+
+    def _new_store(self):
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.addCleanup(db.reset_engine_cache)
+        _engine, sessions = db.init_db(Path(directory.name) / "v1f2.db")
+        with sessions.begin() as session:
+            session.add(db.AppMeta(key="users_authoritative", value="1"))
+            session.add(db.User(username="owner", password_hash="synthetic", role="admin"))
+        clock = FakeClock()
+        store = GmailStore(sessions, clock=clock.wall)
+        store.transition("owner", 1, "active")
+        return store, sessions
+
+    def test_forwarded_p24_registered_fixture_parses_and_merges_with_paid(self):
+        body = (_V1F2_FIXTURES / "forwarded_p24_registered.txt").read_text(encoding="utf-8")
+        forwarded = self._email("spouse@gmail.com", body, rfc_id="<spouse-fwd-p24@gmail.com>")
+        pending = self._process(forwarded, gmail_id="fwd-p24")
+        self.assertEqual((pending.trust_path, pending.outcome, pending.forwarded_manually, pending.source_kind),
+                         ("spouse_forward", "imported", False, "email"))
+        self.assertEqual(pending.rfc_message_id_hmac,
+                         digest(_SECRET, RFC_MESSAGE_DOMAIN, "p24-fwd-1@przelewy24.example.test"))
+        self.assertEqual((pending.payment.gateway, pending.payment.gateway_name, pending.payment.status,
+                          pending.payment.gateway_ref_hmac),
+                         (True, "Przelewy24", "registered", digest(_SECRET, GATEWAY_REF_DOMAIN, "P24-FWD-123-XYZ")))
+        self.assertEqual((pending.payment.fields.merchant, pending.payment.fields.total_amount,
+                          pending.payment.fields.currency, pending.payment.fields.fee_amount),
+                         ("SKLEP PRZYKŁADOWY SP. Z O.O.", "120", "PLN", "0"))
+        # A subsequent paid P24 email with the same gateway ref upgrades the forwarded registration in place.
+        paid_msg = self._email(
+            "noreply@przelewy24.pl",
+            "Potwierdzeniu realizacji płatności\nOdbiorca wpłaty: SKLEP PRZYKŁADOWY SP. Z O.O. 4500000000\n"
+            "Kwota transakcji: 120,00 PLN\nDodatkowe opłaty: 1,50 PLN\nDo zapłaty: 121,50 PLN",
+            subject="Potwierdzenie (P24-FWD-123-XYZ)", rfc_id="<p24-paid-1@przelewy24.example.test>",
+        )
+        paid_pending = self._process(paid_msg, gmail_id="direct-p24-paid")
+        store, sessions = self._new_store()
+        self.assertEqual(store.commit("owner", 1, {}, (pending, paid_pending)), (1, 1, True))
+        with sessions() as session:
+            (row,) = session.scalars(select(db.BudgetReceipt)).all()
+            self.assertEqual((row.gateway, row.gateway_status, row.total_amount, row.fee_amount,
+                              row.forwarded_manually),
+                             ("Przelewy24", "paid", "121.5", "1.5", 0))
+            prov = session.get(db.BudgetGmailMessage, ("owner", pending.gmail_id_hmac))
+            self.assertEqual((prov.trust_path, prov.outcome), ("spouse_forward", "imported"))
+
+    def test_forwarded_payu_fixture_parses_under_owner_forward(self):
+        body = (_V1F2_FIXTURES / "forwarded_payu_registered.txt").read_text(encoding="utf-8")
+        forwarded = self._email("owner@gmail.com", body, rfc_id="<owner-fwd-payu@gmail.com>")
+        pending = self._process(forwarded, gmail_id="fwd-payu")
+        self.assertEqual((pending.trust_path, pending.outcome, pending.forwarded_manually),
+                         ("owner_forward", "imported", False))
+        self.assertEqual(pending.rfc_message_id_hmac,
+                         digest(_SECRET, RFC_MESSAGE_DOMAIN, "payu-fwd-1@payu.example.test"))
+        self.assertEqual((pending.payment.gateway_name, pending.payment.status, pending.payment.gateway_ref_hmac),
+                         ("PayU", "registered", digest(_SECRET, GATEWAY_REF_DOMAIN, "987654321")))
+        self.assertEqual((pending.payment.fields.merchant, pending.payment.fields.total_amount,
+                          pending.payment.fields.payee_host),
+                         ("FUNDACJA EXAMPLE", "45", "example.test"))
+
+    def test_forwarded_shop_order_fixture_parses_and_attaches_gateway_evidence(self):
+        body = (_V1F2_FIXTURES / "forwarded_shop_order.txt").read_text(encoding="utf-8")
+        forwarded = self._email("spouse@gmail.com", body, rfc_id="<spouse-fwd-shop@gmail.com>")
+        shop_pending = self._process(forwarded, gmail_id="fwd-shop")
+        self.assertEqual((shop_pending.trust_path, shop_pending.outcome, shop_pending.forwarded_manually),
+                         ("spouse_forward", "imported", False))
+        self.assertEqual((shop_pending.payment.gateway, shop_pending.payment.gateway_name, shop_pending.payment.status),
+                         (False, None, None))
+        self.assertEqual((shop_pending.payment.fields.merchant, shop_pending.payment.fields.total_amount,
+                          shop_pending.payment.order_reference_hmac),
+                         ("Example Shop", "89.5", digest(_SECRET, ORDER_REFERENCE_DOMAIN, "880900100")))
+        self.assertEqual(shop_pending.rfc_message_id_hmac,
+                         digest(_SECRET, RFC_MESSAGE_DOMAIN, "shop-fwd-1@shop.example.test"))
+        # Matching gateway payment attaches to the forwarded shop receipt as evidence.
+        gw_msg = self._email(
+            "noreply@przelewy24.pl",
+            "Odbiorca wpłaty: Example Shop\nKwota transakcji: 89,50 PLN\nDodatkowe opłaty: 0,50 PLN\nDo zapłaty: 90,00 PLN",
+            subject="Potwierdzenie (P24-SHP-880-AAA)", rfc_id="<p24-shop@przelewy24.example.test>",
+        )
+        gw_pending = self._process(gw_msg, gmail_id="gw-for-shop")
+        store, sessions = self._new_store()
+        self.assertEqual(store.commit("owner", 1, {}, (gw_pending, shop_pending)), (2, 0, True))
+        with sessions() as session:
+            rows = session.scalars(select(db.BudgetReceipt)).all()
+            shop_row = next(row for row in rows if row.gateway is None)
+            gw_row = next(row for row in rows if row.gateway is not None)
+            self.assertEqual(gw_row.evidence_for_receipt_id, shop_row.id)
+
+    def test_forwarded_unknown_sender_and_rejected_payment_fall_back_to_manual(self):
+        unknown_body = (_V1F2_FIXTURES / "forwarded_unknown_sender.txt").read_text(encoding="utf-8")
+        unknown_msg = self._email("spouse@gmail.com", unknown_body, rfc_id="<spouse-fwd-unknown@gmail.com>")
+        pending = self._process(unknown_msg, gmail_id="fwd-unknown")
+        self.assertEqual((pending.trust_path, pending.outcome, pending.forwarded_manually,
+                          pending.sender_domain, pending.payment, pending.rfc_message_id_hmac),
+                         ("spouse_forward", "imported", True, "unknown-shop.example", None, None))
+        store, sessions = self._new_store()
+        self.assertEqual(store.commit("owner", 1, {}, (pending,)), (1, 0, True))
+        with sessions() as session:
+            (row,) = session.scalars(select(db.BudgetReceipt)).all()
+            self.assertEqual((row.status, row.forwarded_manually, row.forwarded_sender_domain, row.total_amount),
+                             ("needs_review", 1, "unknown-shop.example", None))
+
+        # Matched gateway sender whose body rejects (card verification / failed / no total) also falls back to manual.
+        for label, sender, subject, inner_body in (
+            ("card_verification", "noreply@przelewy24.pl", "Rejestracja karty",
+             "Rejestracja karty w aplikacji mobilnej.\nTransakacja zostanie anulowana.\nKwota transakcji: 0,01 PLN"),
+            ("failed", "powiadomienia@paynow.pl", "Transakcja straciła ważność",
+             "Status transakcji: straciła ważność\nIdentyfikator transakcji: AB12-CDE-FGH-IJK\nKwota transakcji: 75 PLN"),
+            ("no_total", "orders@shop.example.test", "Informacja o koncie", "Witaj w naszym sklepie."),
+        ):
+            with self.subTest(case=label):
+                inner = self._email(sender, inner_body, subject=subject, rfc_id=f"<{label}@example.test>")
+                outer = self._email("owner@gmail.com", "Forwarding", rfc_id=f"<outer-{label}@gmail.com>")
+                outer.add_attachment(inner)
+                fallback = self._process(outer, gmail_id=f"fwd-{label}")
+                self.assertEqual((fallback.trust_path, fallback.outcome, fallback.forwarded_manually,
+                                  fallback.payment, fallback.failed_gateway, fallback.rfc_message_id_hmac),
+                                 ("owner_forward", "imported", True, None, None, None))
+
+    def test_forwarded_and_direct_copy_dedupe_in_both_orders_via_inner_rfc_message_id(self):
+        inner_rfc_id = "<orig-p24-dedupe@przelewy24.example.test>"
+        direct_body = (
+            "Potwierdzamy zarejestrowaniu nowej transakcji.\n"
+            "Odbiorca wpłaty: SKLEP PRZYKŁADOWY SP. Z O.O. 4500000000\n"
+            "Tytuł: Zamówienie 710200300\n"
+            "Kwota transakcji: 120,00 PLN\n"
+            "Dodatkowe opłaty: 0,00 PLN\n"
+        )
+        direct_msg = self._email("noreply@przelewy24.pl", direct_body,
+                                 subject="Nowa transakcja płatnicza (P24-DED-111-222)", rfc_id=inner_rfc_id)
+        attached_fwd = self._email("spouse@gmail.com", "Przesyłam", rfc_id="<spouse-cover-1@gmail.com>")
+        attached_fwd.add_attachment(direct_msg)
+        inline_fwd = self._email(
+            "owner@gmail.com",
+            "---------- Forwarded message ---------\n"
+            "From: Przelewy24 <noreply@przelewy24.pl>\n"
+            "Subject: Nowa transakcja płatnicza (P24-DED-111-222)\n"
+            f"Message-ID: {inner_rfc_id}\n\n"
+            f"{direct_body}",
+            rfc_id="<owner-cover-2@gmail.com>",
+        )
+        direct_shop = self._email("orders@shop.example.test", "Łącznie: 89,50 PLN\n",
+                                  subject="Potwierdzenie zamówienia nr 880900100",
+                                  rfc_id="<orig-shop-dedupe@shop.example.test>")
+        attached_shop_fwd = self._email("spouse@gmail.com", "Przesyłam sklep", rfc_id="<spouse-shop-cover@gmail.com>")
+        attached_shop_fwd.add_attachment(direct_shop)
+
+        for label, direct_pair, fwd_pair in (
+            ("p24-attached", ("direct-p24", direct_msg), ("fwd-p24-att", attached_fwd)),
+            ("p24-inline", ("direct-p24", direct_msg), ("fwd-p24-inl", inline_fwd)),
+            ("shop-attached", ("direct-shop", direct_shop), ("fwd-shop-att", attached_shop_fwd)),
+        ):
+            direct_pending = self._process(direct_pair[1], gmail_id=direct_pair[0])
+            fwd_pending = self._process(fwd_pair[1], gmail_id=fwd_pair[0])
+            self.assertIsNotNone(direct_pending.rfc_message_id_hmac)
+            self.assertEqual(fwd_pending.rfc_message_id_hmac, direct_pending.rfc_message_id_hmac)
+            for order_name, pair in (("direct_then_forward", (direct_pending, fwd_pending)),
+                                     ("forward_then_direct", (fwd_pending, direct_pending))):
+                with self.subTest(case=label, order=order_name):
+                    store, sessions = self._new_store()
+                    self.assertEqual(store.commit("owner", 1, {}, (pair[0],)), (1, 0, True))
+                    self.assertEqual(store.commit("owner", 1, {}, (pair[1],)), (0, 1, True))
+                    with sessions() as session:
+                        receipts = session.scalars(select(db.BudgetReceipt)).all()
+                        self.assertEqual(len(receipts), 1)
+                        self.assertEqual(receipts[0].forwarded_manually, 0)
+                        first_row = session.get(db.BudgetGmailMessage, ("owner", pair[0].gmail_id_hmac))
+                        second_row = session.get(db.BudgetGmailMessage, ("owner", pair[1].gmail_id_hmac))
+                        self.assertEqual((first_row.outcome, second_row.outcome), ("imported", "skipped_duplicate"))
+                        self.assertEqual(first_row.receipt_id, receipts[0].id)
+                        self.assertIsNone(second_row.receipt_id)

@@ -248,14 +248,34 @@ class GmailMessageProcessorTests(unittest.TestCase):
         invoice_parser.assert_not_called()
         self.assertEqual((pending.outcome, pending.invoice), ("imported", None))
 
-    def test_payment_rules_do_not_extract_forwarded_payment_bodies(self):
-        original = self._payment_email("Amount paid: 123 PLN")
-        message = _email(SPOUSE, "Synthetic cover note")
-        message.add_attachment(original)
-        pending = self._process(_metadata(message), _raw(message))
-        self.assertEqual((pending.trust_path, pending.forwarded_manually, pending.payment),
-                         ("spouse_forward", True, None))
-        self.worker.parse.assert_not_called()
+    def test_forwarded_payment_parses_inner_message_and_falls_back_to_manual_on_reject_or_missing_total(self):
+        inner_id = "<inner-shop-42@shop.example.test>"
+        outer_id = "<outer-forward-99@gmail.com>"
+        original = self._payment_email("Amount paid: 123 PLN", rfc_id=inner_id)
+        original["Subject"] = "Order #800100200"
+        for forwarder, expected_trust in ((SPOUSE, "spouse_forward"), (OWNER, "owner_forward")):
+            with self.subTest(trust_path=expected_trust):
+                message = _email(forwarder, "Synthetic cover note", rfc_id=outer_id)
+                message.add_attachment(original)
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual((pending.trust_path, pending.outcome, pending.forwarded_manually,
+                                  pending.source_kind, pending.invoice),
+                                 (expected_trust, "imported", False, "email", None))
+                self.assertEqual((pending.payment.fields.merchant, pending.payment.fields.total_amount),
+                                 ("Example Shop", "123"))
+                self.assertEqual(pending.rfc_message_id_hmac,
+                                 digest(SECRET, RFC_MESSAGE_DOMAIN, "inner-shop-42@shop.example.test"))
+
+        # Missing total or explicit rejection on a matched payment sender falls back to manual review.
+        for body in ("No amount in this message", "Payment failed\nAmount paid: 123 PLN"):
+            with self.subTest(fallback_body=body):
+                inner = self._payment_email(body, rfc_id=inner_id)
+                message = _email(SPOUSE, "Synthetic cover note", rfc_id=outer_id)
+                message.add_attachment(inner)
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual((pending.trust_path, pending.outcome, pending.forwarded_manually,
+                                  pending.sender_domain, pending.payment, pending.rfc_message_id_hmac),
+                                 ("spouse_forward", "imported", True, "billing.shop.example.test", None, None))
 
     def test_direct_invoice_accepts_its_provider_domains(self):
         for name, issuer, domains in (
