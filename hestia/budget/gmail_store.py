@@ -562,6 +562,7 @@ class GmailStore(BudgetStore):
             BudgetReceipt.owner == owner, BudgetReceipt.gateway.is_(None),
             BudgetReceipt.evidence_for_receipt_id.is_(None), BudgetReceipt.status != "draft",
             BudgetReceipt.document_kind.in_(("invoice", "receipt", "payment_confirmation")),
+            BudgetReceipt.receipt_kind == gateway_row.receipt_kind,
             BudgetReceipt.currency == gateway_row.currency,
         )).all()
         qualified = [document for document in documents if self._evidence_match(gateway_row, document)]
@@ -574,7 +575,7 @@ class GmailStore(BudgetStore):
     def _attach_evidence(self, session, owner, gateway_row, *, revalidate=False):
         """Attach a gateway row to its shop document only when exactly one qualifies."""
         if gateway_row.evidence_for_receipt_id is not None:
-            if not revalidate or session.get(BudgetReceipt, gateway_row.evidence_for_receipt_id).status == "confirmed":
+            if not revalidate or session.get(BudgetReceipt, gateway_row.evidence_for_receipt_id).status != "imported":
                 return
         candidates = self._evidence_candidates(session, owner, gateway_row)
         gateway_row.evidence_for_receipt_id = candidates[0].id if len(candidates) == 1 else None
@@ -586,6 +587,7 @@ class GmailStore(BudgetStore):
         gateway_rows = session.scalars(select(BudgetReceipt).where(
             BudgetReceipt.owner == owner, BudgetReceipt.gateway.is_not(None),
             BudgetReceipt.evidence_for_receipt_id.is_(None), BudgetReceipt.status == "imported",
+            BudgetReceipt.receipt_kind == document.receipt_kind,
             BudgetReceipt.currency == document.currency,
         )).all()
         for gateway_row in gateway_rows:
@@ -646,8 +648,7 @@ class GmailStore(BudgetStore):
         session.flush()
         return receipt.id
 
-    def commit(self, owner, generation, changes, pending=(), *, starting_recovery=False, starting_incremental=False,
-               backfill_days=365):
+    def commit(self, owner, generation, changes, pending=(), *, starting_recovery=False, starting_incremental=False):
         """Commit up to one chunk; never advance a page past an uncommitted message."""
         imported = skipped = 0
         drained = True
@@ -669,7 +670,7 @@ class GmailStore(BudgetStore):
                     outcome = "skipped_duplicate"
                 elif item.failed_gateway is not None:
                     outcome = self._failed_gateway(session, owner, item.failed_gateway, now=now,
-                                                   expires_at=item.internal_date + backfill_days * DAY)
+                                                   expires_at=item.internal_date + PROVENANCE_TTL)
                 elif item.payment is not None:
                     if item.payment.gateway_ref_hmac is not None:
                         outcome = self._merge_gateway(session, owner, item.payment, now) or outcome

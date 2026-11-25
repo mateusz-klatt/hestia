@@ -1,0 +1,12 @@
+Przekazuję płatność PayU.
+
+Przekazana wiadomość:
+Od: PayU <powiadomienia@payu.com>
+Data: 25 listopada 2026
+Temat: Zlecenie płatności (987654321) dla FUNDACJA EXAMPLE
+Message-ID: <payu-fwd-1@payu.example.test>
+Do: owner@gmail.com
+
+Zarejestrowaliśmy zlecenie płatności dla FUNDACJA EXAMPLE (http://www.example.test).
+
+Kwota transakcji: 45,00 PLN

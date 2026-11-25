@@ -1,0 +1,17 @@
+Przesyłam potwierdzenie z bramki.
+
+---------- Forwarded message ---------
+From: Przelewy24 <noreply@przelewy24.pl>
+Date: Wed, 25 Nov 2026 at 10:00
+Subject: Nowa transakcja płatnicza (P24-FWD-123-XYZ)
+Message-ID: <p24-fwd-1@przelewy24.example.test>
+To: spouse@gmail.com
+
+Dzień dobry,
+
+Potwierdzamy zarejestrowaniu nowej transakcji.
+Odbiorca wpłaty: SKLEP PRZYKŁADOWY SP. Z O.O. 4500000000
+Tytuł: Zamówienie 710200300
+Kwota transakcji: 120,00 PLN
+Dodatkowe opłaty:
+0,00 PLN

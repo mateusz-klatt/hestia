@@ -341,17 +341,26 @@ class GmailTrustTests(unittest.TestCase):
                 original, manual = unwrap_trusted_forward(outer, sender_allowlist=DIRECT)
                 self.assertFalse(manual)
                 self.assertEqual(original["From"], MERCHANT)
+                self.assertEqual(original["Subject"], "Invoice")
                 self.assertEqual(original["Message-ID"], "<fixture-42@merchant.example>")
                 self.assertEqual(original.get_content().lstrip("\n"), INVOICE)
+        polish, manual = unwrap_trusted_forward(
+            _message(SPOUSE, f"Przekazana wiadomość:\nOd: {MERCHANT}\nTemat: Faktura 42\n\n{INVOICE}"),
+            sender_allowlist=DIRECT,
+        )
+        self.assertFalse(manual)
+        self.assertEqual((polish["From"], polish["Subject"]), (MERCHANT, "Faktura 42"))
         original, manual = unwrap_trusted_forward(
             _message(SPOUSE, f"Przekazana wiadomość:\nOd: {MERCHANT}\n{INVOICE}"), sender_allowlist=DIRECT)
         self.assertFalse(manual)
+        self.assertIsNone(original["Subject"])
         self.assertEqual(original.get_content(), INVOICE)
 
     def test_malformed_inline_headers_and_overlong_input_fail_closed(self):
         for text in (
             "No forward at all", "Begin forwarded message:\n", "Begin forwarded message:\n\nBody",
             f"Begin forwarded message:\nFrom: {MERCHANT}\nOd: {SPOUSE}\n\n{INVOICE}",
+            f"Begin forwarded message:\nFrom: {MERCHANT}\nSubject: A\nTemat: B\n\n{INVOICE}",
             f"Begin forwarded message:\nFrom: {MERCHANT}\nDate: " + "x" * 4096 + f"\n\n{INVOICE}",
             "Begin forwarded message:\n" + "\n" * 32 + f"From: {MERCHANT}\n{INVOICE}",
             _inline() + _inline(), "x" * (1024 * 1024 + 1),

@@ -340,6 +340,8 @@ def _inline_forward(text):
             return _INVALID_FORWARD
         if name == "od":
             name = "from"
+        elif name == "temat":
+            name = "subject"
         if name in fields:
             return _INVALID_FORWARD
         fields[name] = value.strip()
@@ -350,6 +352,8 @@ def _inline_forward(text):
         return _INVALID_FORWARD
     original = EmailMessage()
     original["From"] = address
+    if fields.get("subject"):
+        original["Subject"] = fields["subject"]
     if fields.get("message-id"):
         original["Message-ID"] = fields["message-id"]
     original.set_content("\n".join(lines[index:]))

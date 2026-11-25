@@ -1,0 +1,10 @@
+Faktura/zamówienie ze sklepu.
+
+Begin forwarded message:
+From: Example Shop <orders@shop.example.test>
+Subject: Potwierdzenie zamówienia nr 880900100
+Message-ID: <shop-fwd-1@shop.example.test>
+To: spouse@gmail.com
+
+Dziękujemy za zamówienie nr 880900100.
+Łącznie: 89,50 PLN

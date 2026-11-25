@@ -138,12 +138,19 @@ _GATEWAY_REFS = {
     "p24": re.compile(r"(?<![\w-])(P24(?:-[A-Z0-9]{3}){3})(?![\w-])", re.IGNORECASE),
     "tpay": re.compile(r"(?<![\w-])(TR-[A-Z0-9]+-[A-Z0-9]+)(?![\w-])", re.IGNORECASE),
     "autopay": re.compile(
-        r"^(?:[-*•]\s+)?Identyfikator[ \t]+transakcji(?:[ \t]+Autopay)?[ \t]*:[ \t]*"
+        r"^(?:[-*•]\s+)?Identyfikator[ \t]+transakcji(?:[ \t]+Autopay)?[ \t]*"
+        r"(?::[ \t]*|:?[ \t]*\n+(?=[A-Z-]*+[0-9][A-Z0-9-]*+[ \t]*+$))"
         r"([A-Z0-9]+(?:-[A-Z0-9]+)*)(?![\w-])",
         re.IGNORECASE | re.MULTILINE,
     ),
     "paynow": re.compile(rf"(?<![\w-])({_PAYNOW_ID})(?![\w-])", re.IGNORECASE),
 }
+_REF_AUTOPAY_PAYMENT_NO = re.compile(
+    r"^(?:[-*•]\s+)?Numer[ \t]+płatności[ \t]*"
+    r"(?::[ \t]*|:?[ \t]*\n+(?=[A-Z._/-]*+[0-9][A-Z0-9._/-]*+[ \t]*+$))"
+    r"([A-Z0-9]++(?:[-_/.][A-Z0-9]++)*+)(?![\w-])",
+    re.IGNORECASE | re.MULTILINE,
+)
 _REF_PAYU_SUBJECT = re.compile(r"\(([0-9]+)\)")
 _REF_PAYU_LINK = re.compile(
     r"https?://[^\s?#]+\?(?:[^\s#]*?&(?:amp;)?)?transId=([A-Z0-9]+)(?=$|[&#)\]\s])",
@@ -205,6 +212,7 @@ _PAYEE_LABEL = re.compile(
     re.IGNORECASE,
 )
 _PAYEE_HOST = re.compile(r"(?P<scheme>https?://)?(?P<domain>[a-z0-9.-]+)(?:[/:?#]\S*)?", re.IGNORECASE)
+_ON_BEHALF_OF = re.compile(r"^.{1,80}?\s+w\s+imieniu\s+(.+)$", re.IGNORECASE)
 _RECEIPT_SUFFIX = re.compile(r"\s++(?:Receipt\s++#|\(\s*+invoice\s++illustration\s++\[)", re.IGNORECASE)
 _SUBJECT_RECEIPT_ID = r"[0-9]++(?:-[0-9]++)*+"
 _SUBJECT_PAYEES = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
@@ -338,11 +346,11 @@ def _gateway_payment_total(lines: list[str], following: list[str], summary_rows:
     charged = _single_amount(due)
     if base is None and charged is None:
         return None
-    if fee is not None and any(value is not None and value[1] != fee[1] for value in (base, charged)):
+    if len({value[1] for value in (base, charged, fee) if value is not None}) > 1:
         raise _RejectedPayment
     if charged is not None:
         total = charged
-        if base is not None and fee is not None and charged[0] != base[0] + fee[0]:
+        if fee is not None and (fee[0] > charged[0] or (base is not None and charged[0] != base[0] + fee[0])):
             raise _RejectedPayment
     else:
         total = (base[0] + fee[0], base[1]) if fee is not None else base
@@ -372,6 +380,9 @@ def _gateway_ref(provider: PaymentProvider | None, subjects: tuple[str, ...], li
                  raw_text: str) -> str | None:
     if provider == "payu":
         match = _REF_PAYU_SUBJECT.search("\n".join(subjects)) or _REF_PAYU_LINK.search(raw_text)
+    elif provider == "autopay":
+        joined = "\n".join((*subjects, *lines))
+        match = _REF_AUTOPAY_PAYMENT_NO.search(joined) or _GATEWAY_REFS["autopay"].search(joined)
     else:
         pattern = _GATEWAY_REFS.get(provider)
         match = pattern.search("\n".join((*subjects, *lines))) if pattern else None
@@ -379,7 +390,7 @@ def _gateway_ref(provider: PaymentProvider | None, subjects: tuple[str, ...], li
 
 
 def _candidate_host(value: str) -> tuple[bool, str | None]:
-    match = _PAYEE_HOST.fullmatch(value.strip(" ()[]"))
+    match = _PAYEE_HOST.fullmatch(value.strip(" ()[]").removesuffix("."))
     if match and (match["scheme"] or "." in match["domain"]):
         domain = match["domain"].lower().removeprefix("www.")
         return True, canonical_domain(domain)
@@ -483,7 +494,10 @@ def _payee_candidates(line: str, next_line: str):
         value = line[label.end():end].rstrip(" ;|")
         kind = label.lastgroup
         if kind == "recipient" and not value:
-            if end == len(line) and not (_BODY_FIELD.match(next_line) or _TOTAL.match(next_line)):
+            if end == len(line) and not (
+                _BULLET.match(next_line) or _BODY_FIELD.match(next_line)
+                or _TOTAL.match(next_line) or _FEE.match(next_line)
+            ):
                 yield kind, next_line
         elif kind == "payment":
             name, _, amount = value.rpartition(":")
@@ -506,6 +520,8 @@ def _resolve_payee(candidates, address_host):
     labelled = {}
     fallback = host = None
     for kind, value in candidates:
+        if kind == "recipient" and (behalf := _ON_BEHALF_OF.match(value.strip())):
+            value = behalf[1]
         host_like, candidate_host = _candidate_host(value)
         if host_like or kind == "host":
             host = host or candidate_host

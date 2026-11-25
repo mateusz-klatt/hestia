@@ -281,3 +281,27 @@ Add regression tests for:
 - the cursor compatibility rule;
 - a cross-owner pointer rejection;
 - reset CLI dry-run and real runs: counts, invoices untouched, confirmed/linked rows untouched, grant fencing.
+
+## Revision 3 — forwarded payment emails
+
+This revision adds v1f.2 (parsing forwarded payment emails) and records the v1f.1 review and prod-validation refinements.
+
+### Forwarded payment emails (v1f.2)
+
+For `trust_path` in `("spouse_forward", "owner_forward")`, after `unwrap_trusted_forward` returns the inner original message:
+
+1. If the inner chain qualified for automatic issuer-invoice parsing (`not manual`) and `_invoice` matches an allowlisted issuer template and number pattern, keep the existing invoice import.
+2. Otherwise, check the inner message headers against `payment_senders` using `payment_sender_for` semantics (exact mailbox first, then most specific domain). Inline forwards preserve `Subject`/`Temat` onto the unwrapped inner message alongside `From` and `Message-ID`, so provider-scoped subjects and references work identically for MIME `message/rfc822` and inline forwards.
+3. When a `payment_senders` rule matches, run the same `_payment` path on the inner message: provider-scoped status and gateway transaction id extraction, gateway merge and fee/payee/host extraction, order reference hashing, and evidence attachment.
+   - `trust_path` stays `spouse_forward` or `owner_forward`.
+   - `forwarded_manually` stays `0` when payment parsing produces an `imported` payment.
+   - `rfc_message_id_hmac` is computed from the **inner** message's `Message-ID`, so a forwarded copy and a direct copy of the same original email dedupe against each other in either arrival order without creating two receipts.
+4. If payment parsing finds no total, rejects (including failed/refund/card-verification/date mismatch), or hits an unparseable part, fall back to the existing `_manual_forward` behaviour (`status='needs_review'`, `forwarded_manually=1`, `forwarded_sender_domain` from the inner sender, no amount or payment provenance). Unknown inner senders likewise fall back to `_manual_forward`.
+
+### Review and real-data refinements (v1f.1)
+
+- **Failed-gateway provenance TTL:** `budget_gmail_gateway_failed:*` AppMeta entries expire at `internal_date + PROVENANCE_TTL` (400 days), matching `budget_gmail_messages` provenance retention rather than `internal_date + backfill_days`.
+- **Gateway total/currency checks:** `_gateway_payment_total` rejects any currency disagreement across base, charged, and fee (even when fee is absent) and rejects `fee > charged` even when base is absent.
+- **Trailing dot host detection:** `_candidate_host` strips one trailing `.` before host detection, so sentence-final merchant names (`"Allegro."`) remain payees while sentence-final domains (`"4parents.pl."`) resolve to `payee_host="4parents.pl"`.
+- **Evidence integrity & migration 0032:** `_evidence_candidates` and reverse attachment require `document.receipt_kind == gateway.receipt_kind`; revalidation on paid upgrade protects any target whose `status != 'imported'` (not only `'confirmed'`). Additive migration `0032` recreates the SQLite evidence triggers to reject self-references (`evidence_for_receipt_id = id`) while leaving deployed migration `0031` untouched; downgrade restores the `0031` triggers.
+- **Autopay extraction:** Autopay prefers `Numer płatności` (inline or next line) as its gateway ref and falls back to `Identyfikator transakcji` (inline or next line for HTML table cells); labelled payees strip leading `<gateway> w imieniu ` prefixes so registered and paid emails share the same normalized payee key; bulleted and fee lines immediately after an empty `Odbiorca:` are ignored as payee values.

@@ -258,6 +258,7 @@ class GmailMessageProcessor:
             return replace(pending, trust_path="untrusted", outcome="skipped_untrusted_sender")
         if message.defects:
             return _parse_failed(pending, "message_defects")
+        payment_senders = getattr(self.settings, "payment_senders", ())
         if pending.trust_path in ("spouse_forward", "owner_forward"):
             selected = unwrap_trusted_forward(
                 message,
@@ -273,8 +274,12 @@ class GmailMessageProcessor:
                 if (imported.outcome == "imported" and pattern is not None
                         and pattern.fullmatch(imported.invoice.invoice_number)):
                     return imported
+            sender = payment_sender_for(inner.raw_items(), payment_senders)
+            if sender is not None:
+                imported = self._payment(inner, pending, sender)
+                if imported.outcome == "imported":
+                    return imported
             return self._manual_forward(message, inner, pending)
-        payment_senders = getattr(self.settings, "payment_senders", ())
         sender = payment_sender_for(message.raw_items(), payment_senders)
         if sender is not None:
             return self._payment(message, pending, sender)
