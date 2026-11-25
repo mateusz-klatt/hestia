@@ -1096,7 +1096,9 @@ describe("ReceiptsView", () => {
 
     await click(button("Confirm selected (3)"));
     const confirmBox = alertBox();
-    expect(confirmBox.textContent).toContain("Confirm 3 documents without bank links?");
+    expect(confirmBox.textContent).toContain("Confirm 3 documents?");
+    expect(inputByName("bulk_auto_link", confirmBox).checked).toBe(true);
+    expect(inputByName("bulk_confirm_unlinked", confirmBox).checked).toBe(true);
     expect(confirmBox.textContent).toContain("Merchants: Acme Power (NIP 7791011327), Acme Power (NIP 5261040828)");
     expect(confirmBox.textContent).toContain("Excluded 1 needing review");
     expect(confirmBox.textContent).toContain("Excluded 3 OCR, pasted or live-text drafts");
@@ -1137,7 +1139,7 @@ describe("ReceiptsView", () => {
     expect("raw_shop_name" in (secondPayload ?? {})).toBe(false);
     expect("raw_nip" in (secondPayload ?? {})).toBe(false);
     expect("lines" in (thirdPayload ?? {})).toBe(false);
-    expect(host.textContent).toContain("Bulk confirm finished: 2 confirmed, 1 failed.");
+    expect(host.textContent).toContain("Bulk confirm finished: 0 linked, 2 unlinked, 0 skipped, 1 failed.");
     expect(host.textContent).toContain("Failure 409 budget_receipt_conflict: 1");
     expect(clients.rApi.receiptsList).toHaveBeenCalledTimes(4);
 
@@ -1146,7 +1148,7 @@ describe("ReceiptsView", () => {
     vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => cancelDeferred.promise);
     await click(button("Confirm all from: Acme Power (NIP 7791011327)"));
     const acmeBox = alertBox();
-    expect(acmeBox.textContent).toContain("Confirm 2 documents without bank links?");
+    expect(acmeBox.textContent).toContain("Confirm 2 documents?");
     expect(acmeBox.textContent).toContain("Merchants: Acme Power (NIP 7791011327)");
     expect(acmeBox.textContent).toContain("Excluded 1 needing review");
     await act(async () => {
@@ -1160,7 +1162,7 @@ describe("ReceiptsView", () => {
       await Promise.resolve();
     });
     await settle();
-    expect(host.textContent).toContain("Bulk confirm cancelled after 1 confirmed (1 remaining, 0 failed).");
+    expect(host.textContent).toContain("Bulk confirm cancelled: 0 linked, 1 unlinked, 0 skipped (1 remaining, 0 failed).");
 
     // 403 error reports failure count cleanly & aborts rest, and actor switch aborts immediately.
     const abortCalls: string[] = [];
@@ -1213,7 +1215,7 @@ describe("ReceiptsView", () => {
     await click(button("Start bulk confirm", alertBox()));
     expect(lockedClients.rApi.receiptDetail).toHaveBeenCalledTimes(1);
     expect(lockedClients.rApi.confirmReceipt).toHaveBeenCalledTimes(1);
-    expect(host.textContent).toContain("Bulk confirm cancelled after 1 confirmed (1 remaining, 0 failed).");
+    expect(host.textContent).toContain("Bulk confirm cancelled: 0 linked, 1 unlinked, 0 skipped (1 remaining, 0 failed).");
 
     // Gate lock flips true while item 1 detail is pending -> aborts before item 1 confirmReceipt.
     let midLocked = false;
@@ -1235,7 +1237,7 @@ describe("ReceiptsView", () => {
     });
     await settle();
     expect(midClients.rApi.confirmReceipt).not.toHaveBeenCalled();
-    expect(host.textContent).toContain("Bulk confirm cancelled after 0 confirmed (2 remaining, 0 failed).");
+    expect(host.textContent).toContain("Bulk confirm cancelled: 0 linked, 0 unlinked, 0 skipped (2 remaining, 0 failed).");
 
     // 409 budget_actor_changed aborts bulk confirm immediately without attempting remaining items.
     const changedClients = fakeClients(rows.slice(0, 2));
@@ -1280,5 +1282,155 @@ describe("ReceiptsView", () => {
     expect(vi.mocked(clients.rApi.receiptsList).mock.calls.length).toBeGreaterThan(listCallsBeforeDelete);
     await click(button("Close", dialog()));
     expect(host.querySelector(".budget-receipts")?.textContent).not.toContain("Synthetic Grocery");
+  });
+
+  it("shows candidates in the detail drawer for imported receipts and links on confirm", async () => {
+    const candA = receiptCandidate({ entry_reference: "a".repeat(64), candidate_token: "tok-imp-a", date_distance: 23, merchant_token_hit: true });
+    const candB = receiptCandidate({ entry_reference: "b".repeat(64), candidate_token: "tok-imp-b", date_distance: 25, merchant_token_hit: false });
+    const clients = fakeClients([
+      receiptSummary({
+        receipt_id: "imp-drawer",
+        status: "imported",
+        source_kind: "email",
+        document_kind: "invoice",
+        raw_shop_name: "Orange",
+        due_date: "2026-11-30",
+        payment_method: null,
+        total_amount: "88.10",
+      }),
+    ]);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
+      receipt: receiptDetail({
+        receipt_id: "imp-drawer",
+        status: "imported",
+        source_kind: "email",
+        document_kind: "invoice",
+        raw_shop_name: "Orange",
+        due_date: "2026-11-30",
+        payment_method: null,
+        total_amount: "88.10",
+        lines: [{
+          line_no: 1,
+          line_kind: "other",
+          raw_name: "Invoice summary",
+          raw_name_key: "invoice summary",
+          ptu_code: null,
+          quantity: "1",
+          raw_unit: null,
+          unit_price_raw: null,
+          gross_line_total: "88.10",
+          discount_amount: "0",
+          net_line_total: "88.10",
+        }],
+      }),
+      candidates: [candA, candB],
+    }));
+
+    await renderReceipts(clients);
+    await click(openDetailButton(0));
+    const drawer = dialog();
+    expect(linkRadio("candidate:0", drawer).checked).toBe(true);
+    expect(linkRadio("candidate:1", drawer).disabled).toBe(false);
+    expect(drawer.textContent).not.toContain("Candidates are only checked on review");
+
+    await click(linkRadio("candidate:1", drawer));
+    await click(button("Confirm receipt", drawer));
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      receipt_id: "imp-drawer",
+      link: { account_id: "local-a", entry_reference: "b".repeat(64), candidate_token: "tok-imp-b" },
+    }));
+  });
+
+  it("bulk auto-links single merchant-hit matches, handles 2/0/no-hit candidates, skips unlinked when unchecked, and reports counts", async () => {
+    const rowOneHit = receiptSummary({ receipt_id: "imp-1hit", status: "imported", source_kind: "email", document_kind: "payment_confirmation", raw_shop_name: "Alpha", total_amount: "10.00", version: 1 });
+    const rowTwoCands = receiptSummary({ receipt_id: "imp-2cands", status: "imported", source_kind: "email", document_kind: "payment_confirmation", raw_shop_name: "Alpha", total_amount: "20.00", version: 1 });
+    const rowZeroCands = receiptSummary({ receipt_id: "imp-0cands", status: "imported", source_kind: "email", document_kind: "payment_confirmation", raw_shop_name: "Alpha", total_amount: "30.00", version: 1 });
+    const rowNoHit = receiptSummary({ receipt_id: "imp-nohit", status: "imported", source_kind: "email", document_kind: "payment_confirmation", raw_shop_name: "Alpha", total_amount: "40.00", version: 1 });
+    const rows = [rowOneHit, rowTwoCands, rowZeroCands, rowNoHit];
+    const clients = fakeClients(rows);
+
+    const candHit1 = receiptCandidate({ entry_reference: "1".repeat(64), candidate_token: "tok-1hit", merchant_token_hit: true });
+    const candHit2 = receiptCandidate({ entry_reference: "2".repeat(64), candidate_token: "tok-2hit", merchant_token_hit: true });
+    const candNoHit = receiptCandidate({ entry_reference: "3".repeat(64), candidate_token: "tok-nohit", merchant_token_hit: false });
+
+    const detailWith = (row: ReceiptSummary, candidates: ReceiptCandidate[]) => ok<ReceiptDetailResult>({
+      receipt: receiptDetail({
+        ...row,
+        payment_method: null,
+        lines: [{
+          line_no: 1,
+          line_kind: "other",
+          raw_name: "Payment",
+          raw_name_key: "payment",
+          ptu_code: null,
+          quantity: "1",
+          raw_unit: null,
+          unit_price_raw: null,
+          gross_line_total: row.total_amount ?? "10.00",
+          discount_amount: "0",
+          net_line_total: row.total_amount ?? "10.00",
+        }],
+      }),
+      candidates,
+    });
+
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      if (id === "imp-1hit") return detailWith(rowOneHit, [candHit1]);
+      if (id === "imp-2cands") return detailWith(rowTwoCands, [candHit1, candHit2]);
+      if (id === "imp-0cands") return detailWith(rowZeroCands, []);
+      return detailWith(rowNoHit, [candNoHit]);
+    });
+
+    // 1. Default options (autoLink=true, confirmUnlinked=true) in Polish locale: 1 linked, 3 unlinked, 0 skipped.
+    await renderReceipts(clients, { locale: "pl" });
+    await click(inputByName("select_all_loaded"));
+    await click(button("Zatwierdź zaznaczone (4)"));
+    const plDialog = alertBox();
+    expect(plDialog.textContent).toContain("Powiąż automatycznie, gdy jest dokładnie jedna pasująca transakcja");
+    expect(plDialog.textContent).toContain("Zatwierdzaj niepowiązane");
+    expect(inputByName("bulk_auto_link", plDialog).checked).toBe(true);
+    expect(inputByName("bulk_confirm_unlinked", plDialog).checked).toBe(true);
+
+    await click(button("Rozpocznij zatwierdzanie", plDialog));
+    expect(vi.mocked(clients.rApi.confirmReceipt)).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(clients.rApi.confirmReceipt)).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      receipt_id: "imp-1hit",
+      link: { account_id: "local-a", entry_reference: "1".repeat(64), candidate_token: "tok-1hit" },
+    }));
+    expect(vi.mocked(clients.rApi.confirmReceipt)).toHaveBeenNthCalledWith(2, expect.objectContaining({ receipt_id: "imp-2cands", link: null }));
+    expect(vi.mocked(clients.rApi.confirmReceipt)).toHaveBeenNthCalledWith(3, expect.objectContaining({ receipt_id: "imp-0cands", link: null }));
+    expect(vi.mocked(clients.rApi.confirmReceipt)).toHaveBeenNthCalledWith(4, expect.objectContaining({ receipt_id: "imp-nohit", link: null }));
+    expect(host.textContent).toContain("Zatwierdzanie zbiorcze zakończone: powiązano 1, bez powiązania 3, pominięto 0, błędów 0.");
+
+    // 2. Uncheck confirmUnlinked -> links imp-1hit and skips the other 3 without calling confirmReceipt for them.
+    vi.mocked(clients.rApi.confirmReceipt).mockClear();
+    await renderReceipts(clients, { locale: "en", revision: 2 });
+    await click(inputByName("select_all_loaded"));
+    await click(button("Confirm selected (4)"));
+    const enDialogSkip = alertBox();
+    await click(inputByName("bulk_confirm_unlinked", enDialogSkip));
+    expect(inputByName("bulk_confirm_unlinked", enDialogSkip).checked).toBe(false);
+    await click(button("Start bulk confirm", enDialogSkip));
+    expect(vi.mocked(clients.rApi.confirmReceipt)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(clients.rApi.confirmReceipt)).toHaveBeenCalledWith(expect.objectContaining({
+      receipt_id: "imp-1hit",
+      link: { account_id: "local-a", entry_reference: "1".repeat(64), candidate_token: "tok-1hit" },
+    }));
+    expect(host.textContent).toContain("Bulk confirm finished: 1 linked, 0 unlinked, 3 skipped, 0 failed.");
+
+    // 3. Uncheck autoLink (confirmUnlinked=true) -> confirms all 4 unlinked.
+    vi.mocked(clients.rApi.confirmReceipt).mockClear();
+    await renderReceipts(clients, { locale: "en", revision: 3 });
+    await click(inputByName("select_all_loaded"));
+    await click(button("Confirm selected (4)"));
+    const enDialogNoAuto = alertBox();
+    await click(inputByName("bulk_auto_link", enDialogNoAuto));
+    expect(inputByName("bulk_auto_link", enDialogNoAuto).checked).toBe(false);
+    await click(button("Start bulk confirm", enDialogNoAuto));
+    expect(vi.mocked(clients.rApi.confirmReceipt)).toHaveBeenCalledTimes(4);
+    for (const call of vi.mocked(clients.rApi.confirmReceipt).mock.calls) {
+      expect(call[0].link).toBeNull();
+    }
+    expect(host.textContent).toContain("Bulk confirm finished: 0 linked, 4 unlinked, 0 skipped, 0 failed.");
   });
 });
