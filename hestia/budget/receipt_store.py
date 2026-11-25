@@ -26,9 +26,9 @@ from ..db import (BudgetAccount as Account, BudgetConnection as Connection, Budg
 from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint, negate_money, sum_money
 from .device_token import DeviceTokenError, _legacy_bearer_allowed, write_device_audit
 from .gmail_store import retain_imports, tombstone_receipt
-from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, LINE_FIELDS, MAX_RECEIPT_LINES,
+from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES,
                              ReceiptError, chain_for, merchant_tokens, normalize_shop_name, parse_receipt,
-                             redact_digit_field, validate_confirm, validate_confirm_lines)
+                             redact_digit_field, validate_confirm, validate_confirm_line_totals)
 from .receipt_reconcile import (audit_payload, creditor_name, entry_reference_digest, evidence_json,
                                 erase_receipt_audit, link_evidence, write_audit)
 from .views import BudgetHTTPStore
@@ -494,8 +494,16 @@ class BudgetReceiptStore(BudgetHTTPStore):
     def _check_stored_lines(session, owner, receipt_id, total_amount):
         stored = list(session.scalars(select(Line).where(
             Line.receipt_id == receipt_id, Line.owner == owner).order_by(Line.line_no)))
-        validate_confirm_lines(
-            [{field: getattr(line, field) for field in LINE_FIELDS} for line in stored],
+        validate_confirm_line_totals(
+            [
+                {
+                    "line_kind": line.line_kind,
+                    "gross_line_total": line.gross_line_total,
+                    "discount_amount": line.discount_amount,
+                    "net_line_total": line.net_line_total,
+                }
+                for line in stored
+            ],
             total_amount,
         )
 

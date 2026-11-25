@@ -1073,6 +1073,20 @@ NR KARTY ****5555
                 self.assertEqual((err_kind.exception.code, err_kind.exception.status),
                                  ("budget_receipt_total_mismatch", 400))
 
+        # Omitted-lines path skips text/case-fold length validation so stored Gmail lines
+        # whose folded key exceeds 128 chars (e.g. 'ß' -> 'ss') still confirm cleanly.
+        with self.sessions.begin() as session:
+            session.execute(delete(db.BudgetReceiptLine).where(db.BudgetReceiptLine.receipt_id == receipt_id))
+            session.add(db.BudgetReceiptLine(
+                receipt_id=receipt_id, owner="owner", line_no=1, line_kind="item", raw_name="ß" * 128,
+                raw_name_key="ss" * 64, ptu_code="A", quantity="1", raw_unit=None, unit_price_raw="10.00",
+                gross_line_total="10.00", discount_amount="0", net_line_total="10.00",
+            ))
+        folded_saved = self.receipts.confirm(
+            "owner", confirm_values(parsed, expected_version=saved_v3["version"], total_amount="10.00", lines=None),
+        )["receipt"]
+        self.assertEqual(folded_saved["lines"][0]["raw_name"], "ß" * 128)
+
         # Omitting raw_shop_name / raw_nip preserves stored (incl. projection-redacted) header values; explicit None clears.
         stored_shop = "SKLEP 123456789012"
         with self.sessions.begin() as session:
@@ -1086,7 +1100,7 @@ NR KARTY ****5555
             session.get(db.BudgetReceipt, receipt_id).raw_nip = "7791011327"
         detail_redacted_shop = self.receipts.detail("owner", receipt_id)["receipt"]
         self.assertEqual(detail_redacted_shop["raw_shop_name"], "[usunięto]")
-        omitted_headers = confirm_values(parsed, expected_version=saved_v3["version"])
+        omitted_headers = confirm_values(parsed, expected_version=folded_saved["version"])
         omitted_headers.pop("raw_shop_name")
         omitted_headers.pop("raw_nip")
         omitted_headers.pop("lines")

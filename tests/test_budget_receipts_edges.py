@@ -198,6 +198,15 @@ class ParserEdgeTests(unittest.TestCase):
         self.assertIsNone(other["lines"][0]["unit_price_raw"])
         blank = validate_confirm({**base, "raw_shop_name": "", "raw_nip": "", "receipt_time": ""})
         self.assertEqual((blank["raw_shop_name"], blank["raw_nip"], blank["receipt_time"]), (None, None, None))
+        # Legacy error precedence: impossible date + total mismatch still raises total_mismatch first.
+        with self.assertRaises(ReceiptError) as precedence:
+            validate_confirm({**base, "receipt_date": "2026-02-30", "total_amount": "99.00"})
+        self.assertEqual((precedence.exception.code, precedence.exception.status),
+                         ("budget_receipt_total_mismatch", 400))
+        with self.assertRaises(ReceiptError) as date_only:
+            validate_confirm({**base, "receipt_date": "2026-02-30"})
+        self.assertEqual((date_only.exception.code, date_only.exception.status),
+                         ("budget_receipt_invalid_request", 400))
 
 
 class ReconcileEdgeTests(AnalyticsCase):
