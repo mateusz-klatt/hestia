@@ -130,6 +130,16 @@ class GmailPaymentDedupeTests(TestCase):
                                                        if entry.order_reference_hmac is not None])
                     self.assertCountEqual(payees, expected_payees)
 
+        # A reference-less mail must not rank unreferenced rows first (SQL `= NULL` is `IS NULL`).
+        ref_a = payment("Example Studio", "20", "USD", reference="111111")
+        plain_b = payment("Example Studio", "20", "USD", days=4)
+        fallback_c = payment("Example Gateway", "20", "USD", days=9, fallback=True)
+        labs_d = payment("Example Labs", "20", "USD", days=9)
+        for index, order in enumerate(((ref_a, plain_b, fallback_c, labs_d), (ref_a, fallback_c, plain_b, labs_d),
+                                       (fallback_c, ref_a, plain_b, labs_d), (labs_d, fallback_c, plain_b, ref_a))):
+            with self.subTest(case="null-ranking", order=index):
+                self._import_payments(f"null-ranking-{index}", order, 2)
+
         legacy = replace(legal_spelling_one, payee_hmac=None)
         for index, order in enumerate(permutations((legacy, legal_spelling_two))):
             with self.subTest(case="legacy-payee", order=index):

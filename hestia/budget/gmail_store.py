@@ -360,6 +360,12 @@ class GmailStore(BudgetStore):
         distance = func.abs(func.julianday(BudgetReceipt.receipt_date) - receipt_day)
         same_sender = sender.value == payment.sender_hmac
         incoming_reference = payment.order_reference_hmac
+        # `column == None` compiles to IS NULL; rank exact matches only for a known value.
+        ranking = [same_sender.desc()]
+        if incoming_reference is not None:
+            ranking.append((order_reference.value == incoming_reference).desc())
+        if payment.payee_hmac is not None:
+            ranking.append((payee.value == payment.payee_hmac).desc())
         candidates = session.execute(select(
             BudgetReceipt.id, sender.value, order_reference.value, payee.value, BudgetReceipt.raw_shop_name,
         ).select_from(BudgetReceipt).join(
@@ -373,8 +379,7 @@ class GmailStore(BudgetStore):
             BudgetReceipt.total_amount == fields.total_amount, BudgetReceipt.currency == fields.currency,
             or_(and_(same_sender, distance <= 7),
                 and_(sender.value.in_(payment.opposite_sender_hmacs), distance <= 2)),
-        ).order_by(same_sender.desc(), (order_reference.value == incoming_reference).desc(),
-                   (payee.value == payment.payee_hmac).desc(), distance, BudgetReceipt.id))
+        ).order_by(*ranking, distance, BudgetReceipt.id))
         for receipt_id, sender_hmac, reference_hmac, payee_hmac, merchant in candidates:
             if sender_hmac != payment.sender_hmac:
                 return "skipped_non_receipt"
