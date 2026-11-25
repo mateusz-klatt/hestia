@@ -167,6 +167,7 @@ const identicalStrings: Partial<Record<MessageKey, IdenticalString>> = {
   "budget.receipts.lineKinds.item": { value: "Item", locales: ["fil", "id", "ms", "pt"] },
   "budget.receipts.nip": { value: "Tax ID (NIP)", locales: ["fil"] },
   "budget.receipts.linkedAccount": { value: "Account: {account}", locales: ["fil"] },
+  "budget.receipts.merchantWithNip": { value: "{merchant} (NIP {nip})", locales: "all" },
 };
 
 function placeholders(message: string): string[] {

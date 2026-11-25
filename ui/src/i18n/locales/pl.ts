@@ -535,6 +535,9 @@ const pl: Partial<Messages> = {
   "budget.receipts.bulkDoneSummary": "Zatwierdzanie zbiorcze zakończone: zatwierdzono {confirmed}, błędów {failed}.",
   "budget.receipts.bulkCancelledSummary": "Zatwierdzanie przerwane po {confirmed} zapisanych (pozostało {remaining}, błędów {failed}).",
   "budget.receipts.bulkErrorEntry": "Błąd {code}: {count}",
+  "budget.receipts.redactedLinesEditBlocked": "Edycja pozycji jest zablokowana, ponieważ co najmniej jedna pozycja zawiera usunięte dane. Przy zatwierdzaniu zachowane zostaną zapisane pozycje.",
+  "budget.receipts.bulkExcludedDrafts": "Pominięto {count} szkiców OCR, wklejonych lub z aparatu (otwórz pojedynczo, aby zatwierdzić).",
+  "budget.receipts.merchantWithNip": "{merchant} (NIP {nip})",
 
   "budget.consent.title": "Stan zgód i przypomnienia o odnowieniu",
   "budget.consent.intro": "Wyłącznie podgląd ważności zgód bankowych oraz zapisanych prób autoryzacji. Nie zamyka sesji w banku, niczego nie usuwa i nie wysyła żądań do banku.",

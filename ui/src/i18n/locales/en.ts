@@ -553,6 +553,9 @@ const en = {
   "budget.receipts.bulkDoneSummary": "Bulk confirm finished: {confirmed} confirmed, {failed} failed.",
   "budget.receipts.bulkCancelledSummary": "Bulk confirm cancelled after {confirmed} confirmed ({remaining} remaining, {failed} failed).",
   "budget.receipts.bulkErrorEntry": "Failure {code}: {count}",
+  "budget.receipts.redactedLinesEditBlocked": "Line editing is disabled because one or more lines contain redacted data. Saved line items are kept unchanged when confirming.",
+  "budget.receipts.bulkExcludedDrafts": "Excluded {count} OCR, pasted or live-text drafts (open individually to confirm).",
+  "budget.receipts.merchantWithNip": "{merchant} (NIP {nip})",
 
   "budget.consent.title": "Consent status & renewal overview",
   "budget.consent.intro": "Read-only summary of bank consent validity and stored authorization records. No remote closure, deletion or bank request runs here.",
