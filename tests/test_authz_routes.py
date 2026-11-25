@@ -497,19 +497,31 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
     async def test_unicode_expected_actor_headers_match_after_decoding(self):
         with self.sessions.begin() as session:
             session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
-            for username in ("Ági", "Łukasz"):
+            for username in ("Ági", "Łukasz", "😀" * 49):
                 session.add(db.User(username=username, password_hash="h", role="viewer", budget_owner=True))
                 session.flush()
                 session.add(db.PermissionGrant(
                     username=username, permission_id="budget.view", target_owner=username,
                 ))
-        for username in ("Ági", "Łukasz"):
+        for username in ("Ági", "Łukasz", "😀" * 49):
             with self.subTest(username=username):
+                encoded = _actor_header(username)
+                self.assertLessEqual(len(encoded), 344)
                 response = await self.client.get(
                     "/api/budget/accounts",
-                    headers={**self._cookie(username), "X-Hestia-Expected-Actor": _actor_header(username)},
+                    headers={**self._cookie(username), "X-Hestia-Expected-Actor": encoded},
                 )
                 self.assertEqual(response.status, 200, await response.text())
+
+    async def test_legacy_actor_mismatch_precedes_role_denial(self):
+        with self.sessions.begin() as session:
+            session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_LEGACY
+        response = await self.client.get(
+            "/api/budget/accounts",
+            headers={**self._cookie("viewer"), "X-Hestia-Expected-Actor": _actor_header("admin")},
+        )
+        self.assertEqual(response.status, 409)
+        self.assertEqual(await response.json(), {"error": {"code": "budget_actor_changed"}})
 
     async def test_public_feature_probe_ignores_all_credentials(self):
         for headers in (

@@ -64,7 +64,7 @@ def expected_actor_matches(request, user):
         return False
     encoded = values[0]
     try:
-        if not encoded or len(encoded) > 256 or not encoded.isascii():
+        if not encoded or len(encoded) > 344 or not encoded.isascii():
             return False
         decoded = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8")
         canonical = base64.urlsafe_b64encode(decoded.encode("utf-8")).rstrip(b"=").decode("ascii")

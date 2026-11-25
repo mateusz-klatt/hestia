@@ -679,6 +679,10 @@ async def _auth_middleware(request, handler):
         policy_phase=auth_state.policy_phase,
         raw_token=raw_token,
     )
+    if request.path.startswith("/api/budget/") and not budget_api.expected_actor_matches(
+        request, envelope.username,
+    ):
+        return _json(HTTPStatus.CONFLICT, {"error": {"code": "budget_actor_changed"}})
     if auth_state.policy_phase == authz.POLICY_PHASE_LEGACY:
         allowed = _role_allows(auth_state.role, _required_role(request.method, request.path))
     else:
@@ -690,8 +694,6 @@ async def _auth_middleware(request, handler):
             return _incompatible_bridge_response()
     if not allowed:
         if auth_state.policy_phase != authz.POLICY_PHASE_LEGACY and request.path.startswith("/api/budget/"):
-            if not budget_api.expected_actor_matches(request, envelope.username):
-                return _json(HTTPStatus.CONFLICT, {"error": {"code": "budget_actor_changed"}})
             return _json(HTTPStatus.FORBIDDEN, {"error": {"code": "budget_forbidden"}})
         return _empty(HTTPStatus.FORBIDDEN)
     if (
