@@ -8269,6 +8269,15 @@ export interface operations {
                     "application/json": components["schemas"]["AuthError"];
                 };
             };
+            /** @description browser session differs from the expected actor (budget_actor_changed) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthError"];
+                };
+            };
             /** @description Content-Length is required */
             411: {
                 headers: {

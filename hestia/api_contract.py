@@ -4181,6 +4181,8 @@ def build_openapi() -> dict:
                                                "over 45 bytes", **auth_err},
                         "401": {"description": "browser session missing or requiring upgrade", **auth_err},
                         "403": {"description": "native bearer is not a browser session", **auth_err},
+                        "409": {"description": "browser session differs from the expected actor (budget_actor_changed)",
+                                **auth_err},
                         "503": {"description": "HTTPS public origin unavailable", **auth_err},
                     },
                 },

@@ -690,7 +690,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
           connections={connections} locale={locale} revision={revision} onAccessLoss={receiptViewBarrier} />
       ) : (
         <>
-        <LoginQr key={`login-qr:${principal ?? ""}`} api={api} />
+        <LoginQr key={`login-qr:${principal ?? ""}`} api={api} onAccessLoss={barrier} />
         {canManageDevices ? <ReceiptDevices key={principal ?? ""} api={api} locale={locale} revision={revision}
           onAccessLoss={deviceBarrier} focusRevision={devicesFocus} /> : null}
         {connections.length === 0 ? <p className="budget-status">{t("budget.main.empty")}</p> : null}

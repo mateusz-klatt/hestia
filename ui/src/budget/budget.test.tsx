@@ -1,3 +1,4 @@
+// @vitest-environment-options {"url":"https://home.example"}
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
@@ -1157,15 +1158,30 @@ describe("analytics views", () => {
     expect(host.querySelector('svg[aria-label="Sign-in QR code"]')).toBeNull();
   });
 
-  it("hides the sign-in control when discovery omits qr_login", async () => {
+  it.each([
+    { auth_contract: 2, features: ["device_exchange"], qr_origin: "https://home.example" },
+    { auth_contract: 2, features: ["qr_login"], qr_origin: "https://alias.example" },
+    { auth_contract: 1, features: ["qr_login"], qr_origin: "https://home.example" },
+  ])("hides the sign-in control without a supported QR origin (%j)", async (features) => {
     const api = fakeApi();
-    api.authFeatures.mockImplementation(() => ok({
-      auth_contract: 2, features: ["device_exchange"], qr_origin: "https://home.example",
-    }));
+    api.authFeatures.mockImplementation(() => ok(features));
     await render(api);
     expect(api.authFeatures).toHaveBeenCalled();
     expect(host.textContent).not.toContain("Show sign-in QR code");
     expect(api.issueQrLoginCode).not.toHaveBeenCalled();
+  });
+
+  it("clears Budget when QR issuance reports a different browser actor", async () => {
+    const api = fakeApi();
+    api.authFeatures.mockImplementation(() => ok({
+      auth_contract: 2, features: ["qr_login"], qr_origin: "https://home.example",
+    }));
+    api.issueQrLoginCode.mockImplementation(() => fail(409, "budget_actor_changed"));
+    await render(api);
+    expect(host.textContent).toContain("Synthetic Current");
+    await click(button("Show sign-in QR code"));
+    expect(host.textContent).not.toContain("Synthetic Current");
+    expect(host.textContent).not.toContain("Show sign-in QR code");
   });
 
   it("gates the quarantine tab on analytics, defaults to Monthly budget, and keeps Quarantine after Forecast", async () => {

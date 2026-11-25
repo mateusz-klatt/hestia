@@ -1018,6 +1018,8 @@ async def _qr_code(request):
         return _qr_error(HTTPStatus.UNAUTHORIZED, "browser_session_required")
     if not _session_credential_current(ctx):
         return _qr_error(HTTPStatus.UNAUTHORIZED, "browser_session_upgrade_required")
+    if not budget_api.expected_actor_matches(request, ctx.username):
+        return _qr_error(HTTPStatus.CONFLICT, "budget_actor_changed")
     try:
         payload = await asyncio.to_thread(
             auth_qr.issue, ctx.username, configured, ctx.generation, now=_now(), secret=_SESSION_SECRET,

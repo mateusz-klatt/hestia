@@ -17224,6 +17224,16 @@
             },
             "description": "request body read timed out"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthError"
+                }
+              }
+            },
+            "description": "browser session differs from the expected actor (budget_actor_changed)"
+          },
           "411": {
             "content": {
               "application/json": {

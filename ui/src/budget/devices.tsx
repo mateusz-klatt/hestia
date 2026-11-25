@@ -36,8 +36,11 @@ function QrCode({ payload, label, unavailable }: { payload: string; label: strin
   );
 }
 
-export function LoginQr({ api }: { api: Pick<BudgetApi, "authFeatures" | "issueQrLoginCode"> }) {
-  const [origin, setOrigin] = useState<string | null>(null);
+export function LoginQr({ api, onAccessLoss }: {
+  api: Pick<BudgetApi, "authFeatures" | "issueQrLoginCode">; onAccessLoss: AccessBarrier;
+}) {
+  const origin = window.location.origin;
+  const [available, setAvailable] = useState(false);
   const [payload, setPayload] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -47,22 +50,22 @@ export function LoginQr({ api }: { api: Pick<BudgetApi, "authFeatures" | "issueQ
     const current = ++generation.current;
     void api.authFeatures().then((result) => {
       if (generation.current !== current) return;
-      setOrigin(result.ok && Array.isArray(result.data.features) && result.data.features.includes("qr_login")
-        && typeof result.data.qr_origin === "string" ? result.data.qr_origin : null);
+      setAvailable(result.ok && result.data.auth_contract >= 2 && result.data.qr_origin === origin
+        && Array.isArray(result.data.features) && result.data.features.includes("qr_login"));
       setPayload(null);
       setBusy(false);
       setFailed(false);
     });
     return () => { generation.current += 1; };
-  }, [api]);
+  }, [api, origin]);
 
-  if (origin === null) return null;
+  if (!available) return null;
   const show = async () => {
     const current = ++generation.current;
     setBusy(true);
     setFailed(false);
     const result = await api.issueQrLoginCode(origin);
-    if (generation.current !== current) return;
+    if (generation.current !== current || onAccessLoss(result)) return;
     setBusy(false);
     if (result.ok && typeof result.data.qr_payload === "string") setPayload(result.data.qr_payload);
     else setFailed(true);

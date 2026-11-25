@@ -326,6 +326,22 @@ class QrLoginWebTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await response.json(), {"error": {"code": "qr_invalid_request"}})
             self.assertEqual(response.headers["Cache-Control"], "no-store")
 
+    async def test_issue_rejects_a_changed_browser_actor(self):
+        origin = "https://hestia.example"
+        headers = self._browser_headers()
+        with mock.patch.object(auth_qr, "issue", wraps=auth_qr.issue) as issue:
+            refused = await self.client.post(auth_qr.CODE_PATH, json={"origin": origin}, headers={
+                **headers, "X-Hestia-Expected-Actor": web.budget_api.actor_digest("previous-user"),
+            })
+            self.assertEqual(refused.status, 409)
+            self.assertEqual(await refused.json(), {"error": {"code": "budget_actor_changed"}})
+            issue.assert_not_called()
+            accepted = await self.client.post(auth_qr.CODE_PATH, json={"origin": origin}, headers={
+                **headers, "X-Hestia-Expected-Actor": web.budget_api.actor_digest("owner"),
+            })
+            self.assertEqual(accepted.status, 200, await accepted.text())
+            issue.assert_called_once()
+
     async def test_expiry_during_upload_and_auth_off_cannot_issue(self):
         now = web._now()
         with mock.patch.object(web, "_now", side_effect=[now, now + auth.SESSION_TTL + 1]):
