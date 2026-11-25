@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "पुष्ट दस्तावेज़ों को संपादित करते समय लिंक रखना या उम्मीदवार चुनना संभव नहीं है; सहेजने के लिए स्पष्ट रूप से लिंक हटाएं चुनें।",
   "budget.receipts.staleSourceEditHint": "व्यापारी, NIP, राशि, तिथि, मुद्रा या प्रकार बदलने से टोकन अमान्य हो जाते हैं — वापस बदलने तक रखना/जोड़ना अक्षम रहता है।",
   "budget.receipts.explicitUnlinkRequired": "पुष्टि करने से पहले स्पष्ट रूप से लिंक हटाएं चुनें या बदले गए फ़ील्ड वापस करें।",
+  "budget.receipts.reviewLinkChoiceRequired": "चुनें कि लिंक को बनाए रखना है, बदलना है या अनलिंक करना है।",
   "budget.receipts.needsReviewNoKeepNote": "इस लिंक के लिए कोई मेल खाने वाला टोकन उपलब्ध नहीं है; नीचे उम्मीदवार चुनें या स्पष्ट रूप से लिंक हटाएं चुनें।",
   "budget.receipts.linkedSummaryNote": "इस खाते से लिंक है; प्रतिपक्ष का विवरण बैंक बही में ही रहता है।",
   "budget.receipts.selectRow": "{merchant} चुनें",

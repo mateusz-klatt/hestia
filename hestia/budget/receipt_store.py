@@ -27,7 +27,7 @@ from .analytics_core import AnalyticsError, canonical_money, financial_fingerpri
 from .device_token import DeviceTokenError, _legacy_bearer_allowed, write_device_audit
 from .gmail_store import retain_imports, tombstone_receipt
 from .receipt_parser import (CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES,
-                             ReceiptError, chain_for, merchant_match_groups, merchant_word_tokens,
+                             ReceiptError, chain_for, merchant_score_groups, merchant_word_tokens,
                              normalize_shop_name, parse_receipt, redact_digit_field, valid_nip, validate_confirm,
                              validate_confirm_line_totals)
 from .receipt_reconcile import (audit_payload, creditor_name, entry_reference_digest, evidence_json,
@@ -356,7 +356,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             return []
         direction = "CRDT" if row.receipt_kind == "refund" else "DBIT"
         shop_name = normalize_shop_name(row.raw_shop_name)
-        groups = merchant_match_groups(row.raw_shop_name, row.raw_nip)
+        groups, fallback_token = merchant_score_groups(row.raw_shop_name, row.raw_nip)
         ranked = []
         for transaction, tx_row_id in self._candidate_rows(session, owner, include_receipt_id=include_receipt_id):
             try:
@@ -393,7 +393,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
             description = " ".join(value for value in remittance if isinstance(value, str))
             haystack = fold_for_match(description + " " + (creditor or ""))
             haystack_words = frozenset(merchant_word_tokens(haystack))
-            hit = _nip_in_text(row.raw_nip, haystack) or any(group.issubset(haystack_words) for group in groups)
+            nip_hit = _nip_in_text(row.raw_nip, haystack)
+            distinctive_score = sum(1 for group in groups if group.issubset(haystack_words))
+            generic_score = 1 if fallback_token is not None and fallback_token in haystack_words else 0
+            hit = nip_hit or distinctive_score > 0 or generic_score > 0
             candidate = {
                 "account_id": transaction.account_id,
                 "entry_reference": entry_reference_digest(transaction.entry_reference),
@@ -404,9 +407,12 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 "merchant_token_hit": hit, "date_distance": distance,
                 "candidate_token": token,
             }
-            ranked.append((not hit, distance, transaction.entry_reference, transaction.account_id, candidate))
+            ranked.append((
+                not nip_hit, -distinctive_score, -generic_score, distance,
+                transaction.entry_reference, transaction.account_id, candidate,
+            ))
         # Rank across all matching rows before slicing MAX_CANDIDATES so hits survive the cap.
-        ranked.sort(key=lambda item: item[:4])
+        ranked.sort(key=lambda item: item[:6])
         return [item[-1] for item in ranked[:MAX_CANDIDATES]]
 
     @staticmethod

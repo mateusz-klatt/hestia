@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Apstiprinātus dokumentus rediģējot nevar saglabāt esošo saiti vai izvēlēties kandidātu; lai saglabātu, skaidri izvēlieties Atsiet.",
   "budget.receipts.staleSourceEditHint": "Tirgotāja, NIP, summas, datuma, valūtas vai veida maiņa padara pilnvaras nederīgas — Paturēt/Saistīt ir atspējoti līdz atcelšanai.",
   "budget.receipts.explicitUnlinkRequired": "Pirms apstiprināšanas skaidri izvēlieties Atsiet darījumu vai atceliet lauku izmaiņas.",
+  "budget.receipts.reviewLinkChoiceRequired": "Izvēlieties, vai saglabāt saisti, to mainīt vai atsaistīt.",
   "budget.receipts.needsReviewNoKeepNote": "Nav pieejama atbilstoša paturēšanas pilnvara; izvēlieties kandidātu vai skaidri Atsiet darījumu.",
   "budget.receipts.linkedSummaryNote": "Sasaistīts ar šo kontu; darījuma partnera ziņas paliek bankas grāmatā.",
   "budget.receipts.selectRow": "Atlasīt {merchant}",

@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "اسناد تأییدشده هنگام ویرایش نمی‌توانند اتصال را نگه دارند یا نامزدی برگزینند؛ برای ذخیره صریحاً لغو پیوند را انتخاب کنید.",
   "budget.receipts.staleSourceEditHint": "تغییر فروشنده، NIP، مبلغ، تاریخ، ارز یا نوع توکن‌ها را باطل می‌کند — گزینه‌های حفظ/پیوند تا بازگردانی غیرفعال می‌شوند.",
   "budget.receipts.explicitUnlinkRequired": "پیش از تأیید صریحاً لغو پیوند تراکنش را انتخاب کنید یا تغییرات فیلدها را برگردانید.",
+  "budget.receipts.reviewLinkChoiceRequired": "انتخاب کنید که پیوند حفظ شود، تغییر کند یا جدا شود.",
   "budget.receipts.needsReviewNoKeepNote": "توکن نگهداری منطبق برای این پیوند موجود نیست؛ نامزدی انتخاب کنید یا صریحاً لغو پیوند را برگزینید.",
   "budget.receipts.linkedSummaryNote": "به این حساب متصل است؛ جزئیات طرف مقابل در دفتر بانک باقی می‌ماند.",
   "budget.receipts.selectRow": "انتخاب {merchant}",

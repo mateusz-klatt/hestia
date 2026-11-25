@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Bekreftede kvitteringer kan ikke beholde eller velge kandidater ved redigering; velg uttrykkelig Koble fra for å lagre.",
   "budget.receipts.staleSourceEditHint": "Endring av brukersted, NIP, beløp, dato, valuta eller type ugyldiggjør tokener — Behold/Koble er deaktivert til endringene tilbakestilles.",
   "budget.receipts.explicitUnlinkRequired": "Velg uttrykkelig Koble fra før bekreftelse eller tilbakestill feltendringer.",
+  "budget.receipts.reviewLinkChoiceRequired": "Velg om du vil beholde koblingen, endre den eller fjerne den.",
   "budget.receipts.needsReviewNoKeepNote": "Ingen matchende behold-token tilgjengelig; velg en kandidat eller uttrykkelig Koble fra.",
   "budget.receipts.linkedSummaryNote": "Koblet til denne kontoen; opplysninger om motpart blir i bankboken.",
   "budget.receipts.selectRow": "Velg {merchant}",

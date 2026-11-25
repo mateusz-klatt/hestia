@@ -512,6 +512,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Recibos confirmados não podem manter ou escolher candidatos ao editar; selecione explicitamente Desvincular para salvar.",
   "budget.receipts.staleSourceEditHint": "Editar comerciante, NIP, valor, data, moeda ou tipo invalida os tokens — Manter/Vincular fica desativado até reverter.",
   "budget.receipts.explicitUnlinkRequired": "Selecione explicitamente Desvincular antes de confirmar ou reverta os campos editados.",
+  "budget.receipts.reviewLinkChoiceRequired": "Escolha se pretende manter a associação, alterá-la ou desassociá-la.",
   "budget.receipts.needsReviewNoKeepNote": "Nenhum token de manutenção disponível; selecione um candidato ou escolha Desvincular explicitamente.",
   "budget.receipts.linkedSummaryNote": "Vinculado a esta conta; os dados da contraparte permanecem no extrato bancário.",
   "budget.receipts.selectRow": "Selecionar {merchant}",

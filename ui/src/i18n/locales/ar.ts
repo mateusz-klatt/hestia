@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "لا يمكن للمستندات المؤكدة الاحتفاظ بالارتباط أو اختيار مرشح عند التعديل؛ حدد إلغاء ربط المعاملة صراحةً للحفظ.",
   "budget.receipts.staleSourceEditHint": "تعديل التاجر أو NIP أو المبلغ أو التاريخ أو العملة أو النوع يُبطل رموز المرشحين — يتم تعطيل خيارات الاحتفاظ/الربط حتى التراجع.",
   "budget.receipts.explicitUnlinkRequired": "حدد إلغاء ربط المعاملة صراحةً قبل التأكيد، أو تراجع عن تعديل الحقول المطابقة.",
+  "budget.receipts.reviewLinkChoiceRequired": "اختر ما إذا كنت تريد الاحتفاظ بالربط أو تغييره أو فصله.",
   "budget.receipts.needsReviewNoKeepNote": "لا يتوفر رمز احتفاظ مطابق لهذا الارتباط؛ اختر مرشحًا أدناه أو حدد إلغاء ربط المعاملة صراحةً.",
   "budget.receipts.linkedSummaryNote": "مرتبط بهذا الحساب؛ تبقى بيانات الطرف المقابل في السجل البنكي.",
   "budget.receipts.selectRow": "تحديد {merchant}",

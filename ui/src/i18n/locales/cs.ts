@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Potvrzené doklady při úpravě neumožňují ponechat ani vybrat kandidáta; pro uložení výslovně zvolte Odpojit transakci.",
   "budget.receipts.staleSourceEditHint": "Úprava obchodníka, NIP, částky, data, měny nebo typu zneplatní tokeny — možnosti Ponechat/Propojit jsou do vrácení vypnuté.",
   "budget.receipts.explicitUnlinkRequired": "Před potvrzením výslovně vyberte Odpojit transakci nebo vraťte změny odpovídajících polí.",
+  "budget.receipts.reviewLinkChoiceRequired": "Vyberte, zda chcete propojení ponechat, změnit, nebo odpojit.",
   "budget.receipts.needsReviewNoKeepNote": "Pro toto propojení není dostupný zachovávací token; vyberte kandidáta nebo výslovně Odpojit transakci.",
   "budget.receipts.linkedSummaryNote": "Propojeno s tímto účtem; údaje protistrany zůstávají v bankovní knize.",
   "budget.receipts.selectRow": "Vybrat {merchant}",

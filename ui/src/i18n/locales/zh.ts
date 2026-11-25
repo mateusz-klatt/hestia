@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "已确认凭证在编辑时无法保留或选择候选交易；请明确选择“取消关联”以保存。",
   "budget.receipts.staleSourceEditHint": "修改商户、NIP、金额、日期、币种或类型会使令牌失效——还原修改前已禁用保留/关联。",
   "budget.receipts.explicitUnlinkRequired": "确认前请明确选择“取消关联”，或还原匹配的字段修改。",
+  "budget.receipts.reviewLinkChoiceRequired": "选择保留关联、更改关联或取消关联。",
   "budget.receipts.needsReviewNoKeepNote": "当前关联缺少可用的保留令牌；请在下方选择候选或明确选择“取消关联”。",
   "budget.receipts.linkedSummaryNote": "已关联到此账户；交易对方详情保留在银行账本中。",
   "budget.receipts.selectRow": "选择 {merchant}",

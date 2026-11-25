@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Dokumen terkonfirmasi tidak dapat mempertahankan atau memilih kandidat saat diedit; pilih Lepas tautan secara eksplisit untuk menyimpan.",
   "budget.receipts.staleSourceEditHint": "Mengubah merchant, NIP, jumlah, tanggal, mata uang, atau jenis membatalkan token — Pertahankan/Tautkan dinonaktifkan hingga dikembalikan.",
   "budget.receipts.explicitUnlinkRequired": "Pilih Lepas tautan secara eksplisit sebelum konfirmasi, atau kembalikan edit bidang.",
+  "budget.receipts.reviewLinkChoiceRequired": "Pilih apakah akan mempertahankan tautan, mengubahnya, atau memutus tautan.",
   "budget.receipts.needsReviewNoKeepNote": "Tidak ada token pertahankan yang cocok untuk tautan ini; pilih kandidat di bawah atau pilih Lepas tautan secara eksplisit.",
   "budget.receipts.linkedSummaryNote": "Tertaut ke rekening ini; detail lawan transaksi tetap berada di buku besar bank.",
   "budget.receipts.selectRow": "Pilih {merchant}",

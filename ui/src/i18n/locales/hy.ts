@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Հաստատված փաստաթղթերը խմբագրելիս չեն կարող պահել կամ ընտրել թեկնածու· պահպանելու համար հստակ ընտրեք Ապակապել գործարքը։",
   "budget.receipts.staleSourceEditHint": "Վաճառողի, NIP-ի, գումարի, ամսաթվի, արժույթի կամ տիպի փոփոխությունը անվավեր է դարձնում թոքենները — Պահել/Կապել տարբերակներն անջատված են մինչև հետարկումը։",
   "budget.receipts.explicitUnlinkRequired": "Հաստատելուց առաջ հստակ ընտրեք Ապակապել կամ հետարկեք դաշտերի փոփոխությունները։",
+  "budget.receipts.reviewLinkChoiceRequired": "Ընտրեք՝ պահպանել կապը, փոխել այն, թե անջատել։",
   "budget.receipts.needsReviewNoKeepNote": "Այս կապի համար համընկնող պահպանման թոքեն չկա· ընտրեք թեկնածու կամ հստակ Ապակապել գործարքը։",
   "budget.receipts.linkedSummaryNote": "Կապված է այս հաշվին․ գործարքի մյուս կողմի տվյալները մնում են բանկային մատյանում։",
   "budget.receipts.selectRow": "Ընտրել {merchant}",

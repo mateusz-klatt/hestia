@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Dokumentet e konfirmuara nuk mund të ruajnë apo zgjedhin kandidatë gjatë redaktimit; zgjidhni shprehimisht Shkëput transaksionin për të ruajtur.",
   "budget.receipts.staleSourceEditHint": "Ndryshimi i tregtarit, NIP-it, shumës, datës, monedhës ose llojit zhvlerëson tokenët — Mbaj/Lidh çaktivizohen derisa të kthehen mbrapsht.",
   "budget.receipts.explicitUnlinkRequired": "Zgjidhni shprehimisht Shkëput transaksionin para konfirmimit ose riktheni fushat e redaktuara.",
+  "budget.receipts.reviewLinkChoiceRequired": "Zgjidhni nëse do ta mbani lidhjen, ta ndryshoni apo ta shkëputni.",
   "budget.receipts.needsReviewNoKeepNote": "Nuk ka token ruajtjeje për këtë lidhje; zgjidhni një kandidat më poshtë ose Shkëput transaksionin shprehimisht.",
   "budget.receipts.linkedSummaryNote": "Lidhur me këtë llogari; të dhënat e kundërpalës mbeten në librin bankar.",
   "budget.receipts.selectRow": "Zgjidh {merchant}",

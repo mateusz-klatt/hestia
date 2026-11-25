@@ -104,10 +104,12 @@ class ParserEdgeTests(unittest.TestCase):
         self.assertFalse(receipt_parser._ascii_word("ł"))
 
     def test_parse_validation_and_defensive_text_checks(self):
-        from hestia.budget.receipt_parser import chain_for, merchant_match_groups
+        from hestia.budget.receipt_parser import chain_for, merchant_match_groups, merchant_score_groups
 
         self.assertEqual(merchant_tokens(None, None), frozenset())
         self.assertEqual(merchant_match_groups("LIDLBERG", None), (frozenset({"lidlberg"}),))
+        self.assertEqual(merchant_score_groups("GROCERY", None), ((), "grocery"))
+        self.assertEqual(merchant_score_groups("POLAND ENERGY GROUP", None), ((), None))
         self.assertIsNone(chain_for("LIDLBERG", None))
         self.assertIsNone(chain_for("MARTINS AUTO", None))
         self.assertEqual(chain_for("JERONIMO MARTINS POLSKA", None), "biedronka")
@@ -115,10 +117,10 @@ class ParserEdgeTests(unittest.TestCase):
         self.assertEqual(merchant_tokens("MARTINS AUTO", None), frozenset({"martins", "auto"}))
         self.assertEqual(merchant_tokens("BIEDRONKA", None), frozenset({"biedronka", "jeronimo", "martins"}))
         self.assertEqual(merchant_tokens("ab polska market piernik", None), frozenset({"piernik"}))
-        for generic in ("energy", "energia", "polska", "poland", "services", "service", "group",
-                        "store", "shop", "sklep", "market", "online", "pay", "payment", "oplata", "opłata",
-                        "sp", "z", "o", "oo", "sa", "spółka", "zoo", "com", "pl", "www", "net", "eu",
-                        "p24", "przelewy24", "payu", "autopay", "tpay", "paynow", "dotpay", "blik", "abc"):
+        for generic in ("grocery", "groceries", "grocer", "energy", "energia", "polska", "poland", "services",
+                        "service", "group", "store", "shop", "sklep", "market", "online", "pay", "payment",
+                        "oplata", "opłata", "sp", "z", "o", "oo", "sa", "spółka", "zoo", "com", "pl", "www",
+                        "net", "eu", "p24", "przelewy24", "payu", "autopay", "tpay", "paynow", "dotpay", "blik", "abc"):
             self.assertEqual(merchant_tokens(generic, None), frozenset(), generic)
         self.assertNotIn("polska", merchant_tokens("ab polska market piernik", None))
         self.assertFalse(valid_nip(None))

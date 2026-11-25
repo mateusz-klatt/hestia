@@ -512,6 +512,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "I documenti confermati non possono mantenere o scegliere candidati; seleziona esplicitamente Scollega per salvare.",
   "budget.receipts.staleSourceEditHint": "La modifica di esercente, NIP, importo, data, valuta o tipo invalida i token — Mantieni/Collega è disabilitato fino al ripristino.",
   "budget.receipts.explicitUnlinkRequired": "Seleziona esplicitamente Scollega prima di confermare oppure ripristina i campi modificati.",
+  "budget.receipts.reviewLinkChoiceRequired": "Scegli se mantenere il collegamento, cambiarlo o scollegarlo.",
   "budget.receipts.needsReviewNoKeepNote": "Nessun token di mantenimento disponibile per questo collegamento; scegli un candidato o Scollega esplicitamente.",
   "budget.receipts.linkedSummaryNote": "Collegata a questo conto; i dettagli della controparte restano nel libro bancario.",
   "budget.receipts.selectRow": "Seleziona {merchant}",

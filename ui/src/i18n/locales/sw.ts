@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Hati zilizothibitishwa haziwezi kuhifadhi au kuchagua wagombea wakati wa kuhariri; chagua wazi Ondoa kiungo ili kuhifadhi.",
   "budget.receipts.staleSourceEditHint": "Kuhariri muuzaji, NIP, kiasi, tarehe, sarafu au aina hubatilisha tokeni — Hifadhi/Unganisha zimezimwa hadi urudishe mabadiliko.",
   "budget.receipts.explicitUnlinkRequired": "Chagua wazi Ondoa kiungo kabla ya kuthibitisha au rudisha sehemu zilizohaririwa.",
+  "budget.receipts.reviewLinkChoiceRequired": "Chagua kama utahifadhi kiungo, ukibadilishe au ukitenganishe.",
   "budget.receipts.needsReviewNoKeepNote": "Hakuna tokeni inayolingana ya kuhifadhi kiungo hiki; chagua mgombea chini au chagua wazi Ondoa kiungo.",
   "budget.receipts.linkedSummaryNote": "Imeunganishwa na akaunti hii; maelezo ya mhusika mwingine yanabaki kwenye daftari la benki.",
   "budget.receipts.selectRow": "Chagua {merchant}",

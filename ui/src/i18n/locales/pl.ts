@@ -517,6 +517,7 @@ const pl: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Zatwierdzone dokumenty nie obsługują zachowania ani zmiany kandydata — wybierz jawnie Odłącz transakcję, aby zapisać.",
   "budget.receipts.staleSourceEditHint": "Zmiana sprzedawcy, NIP, kwoty, daty, waluty lub typu unieważnia tokeny powiązania — opcje Zachowaj/Powiąż są wyłączone do czasu cofnięcia zmian.",
   "budget.receipts.explicitUnlinkRequired": "Wybierz jawnie Odłącz transakcję przed zatwierdzeniem lub cofnij zmiany pól, aby zachować powiązanie.",
+  "budget.receipts.reviewLinkChoiceRequired": "Wybierz: zachowaj powiązanie, zmień je lub odłącz.",
   "budget.receipts.needsReviewNoKeepNote": "Brak pasującego tokenu podtrzymania dla obecnego powiązania — wybierz kandydata poniżej lub jawnie wskaż Odłącz transakcję.",
   "budget.receipts.linkedSummaryNote": "Powiązano z tym kontem; dane kontrahenta pozostają w rejestrze bankowym.",
   "budget.receipts.selectRow": "Zaznacz {merchant}",

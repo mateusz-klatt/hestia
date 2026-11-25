@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Bekræftede bilag kan ikke beholde eller vælge kandidater ved redigering; vælg udtrykkeligt Fjern tilknytning for at gemme.",
   "budget.receipts.staleSourceEditHint": "Ændring af forhandler, NIP, beløb, dato, valuta eller type ugyldiggør tokens — Behold/Tilknyt er deaktiveret indtil fortrydelse.",
   "budget.receipts.explicitUnlinkRequired": "Vælg udtrykkeligt Fjern tilknytning før bekræftelse eller gendan feltændringer.",
+  "budget.receipts.reviewLinkChoiceRequired": "Vælg, om du vil beholde tilknytningen, ændre den eller fjerne den.",
   "budget.receipts.needsReviewNoKeepNote": "Ingen matchende behold-token tilgængelig; vælg en kandidat eller udtrykkeligt Fjern tilknytning.",
   "budget.receipts.linkedSummaryNote": "Koblet til denne konto; modpartens oplysninger bliver i bankbogen.",
   "budget.receipts.selectRow": "Vælg {merchant}",

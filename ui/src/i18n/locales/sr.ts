@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Потврђени рачуни не могу задржати нити бирати кандидате при измени; изричито изаберите Одспоји трансакцију за чување.",
   "budget.receipts.staleSourceEditHint": "Измена трговца, NIP-а, износа, датума, валуте или типа поништава токене — Задржи/Повежи су онемогућени до враћања измена.",
   "budget.receipts.explicitUnlinkRequired": "Изричито изаберите Одспоји трансакцију пре потврде или вратите измењена поља.",
+  "budget.receipts.reviewLinkChoiceRequired": "Изаберите да ли желите да задржите везу, да је промените или да је прекинете.",
   "budget.receipts.needsReviewNoKeepNote": "Нема одговарајућег токена за задржавање везе; изаберите кандидата или изричито Одспоји трансакцију.",
   "budget.receipts.linkedSummaryNote": "Повезано са овим рачуном; подаци друге стране остају у банковној књизи.",
   "budget.receipts.selectRow": "Изабери {merchant}",

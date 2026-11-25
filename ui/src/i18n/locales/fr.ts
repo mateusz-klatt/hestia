@@ -512,6 +512,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Les justificatifs confirmés ne peuvent pas conserver ou choisir un candidat ; sélectionnez explicitement Dissocier pour enregistrer.",
   "budget.receipts.staleSourceEditHint": "Modifier le commerçant, NIP, montant, date, devise ou type invalide les jetons — les options Conserver/Lier sont désactivées tant que non annulées.",
   "budget.receipts.explicitUnlinkRequired": "Sélectionnez explicitement Dissocier avant de confirmer, ou annulez les modifications.",
+  "budget.receipts.reviewLinkChoiceRequired": "Choisissez de conserver le lien, de le modifier ou de le dissocier.",
   "budget.receipts.needsReviewNoKeepNote": "Aucun jeton de maintien correspondant disponible ; choisissez un candidat ou Dissocier explicitement.",
   "budget.receipts.linkedSummaryNote": "Lié à ce compte ; les détails de la contrepartie restent dans le registre bancaire.",
   "budget.receipts.selectRow": "Sélectionner {merchant}",

@@ -113,14 +113,17 @@ _CHAIN_ALIAS_GROUPS = {
     "lidl": (frozenset({"lidl"}),),
 }
 _CHAIN_WORDS = {chain: frozenset().union(*groups) for chain, groups in _CHAIN_ALIAS_GROUPS.items()}
-_STOP_TOKENS = frozenset({
-    "energy", "energia", "polska", "poland", "services", "service", "group",
-    "store", "shop", "sklep", "market", "online", "pay", "payment", "oplata",
+_NON_MERCHANT_TOKENS = frozenset({
     "sp", "z", "o", "oo", "sa", "spolka", "zoo",
     "com", "pl", "www", "net", "eu",
     "p24", "przelewy24", "payu", "autopay", "tpay", "paynow", "dotpay", "blik",
     "fiskalny", "paragon",
 })
+_GENERIC_MERCHANT_TOKENS = frozenset({
+    "grocery", "groceries", "grocer", "energy", "energia", "polska", "poland", "services", "service",
+    "group", "store", "shop", "sklep", "market", "online", "pay", "payment", "oplata",
+})
+_STOP_TOKENS = _NON_MERCHANT_TOKENS | _GENERIC_MERCHANT_TOKENS
 
 
 class ReceiptError(ValueError):
@@ -471,15 +474,20 @@ def merchant_word_tokens(value):
 
 
 def merchant_match_groups(shop_name, nip):
-    distinctive = sorted({
-        token for token in merchant_word_tokens(shop_name)
-        if len(token) >= 4 and token not in _STOP_TOKENS
-    })
+    return merchant_score_groups(shop_name, nip)[0]
+
+
+def merchant_score_groups(shop_name, nip):
+    words = [token for token in merchant_word_tokens(shop_name) if len(token) >= 4]
+    distinctive = sorted({token for token in words if token not in _STOP_TOKENS})
     chain = chain_for(shop_name, nip)
-    if chain is None:
-        return tuple(frozenset((token,)) for token in distinctive)
-    extra = [token for token in distinctive if token not in _CHAIN_WORDS[chain]]
-    return _CHAIN_ALIAS_GROUPS[chain] + tuple(frozenset((token,)) for token in extra)
+    if chain is not None:
+        extra = [token for token in distinctive if token not in _CHAIN_WORDS[chain]]
+        return _CHAIN_ALIAS_GROUPS[chain] + tuple(frozenset((token,)) for token in extra), None
+    if distinctive:
+        return tuple(frozenset((token,)) for token in distinctive), None
+    generic = {token for token in words if token not in _NON_MERCHANT_TOKENS}
+    return (), next(iter(generic)) if len(generic) == 1 else None
 
 
 def merchant_tokens(shop_name, nip):

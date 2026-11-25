@@ -535,6 +535,7 @@ const en = {
   "budget.receipts.confirmedUnlinkNote": "Confirmed receipts cannot keep or choose candidates on edit; explicitly select Unlink transaction to save.",
   "budget.receipts.staleSourceEditHint": "Editing merchant, NIP, amount, date, currency or type invalidates candidate tokens — Keep/Link options are disabled until reverted.",
   "budget.receipts.explicitUnlinkRequired": "Explicitly select Unlink transaction before confirming, or revert matching field edits to keep the link.",
+  "budget.receipts.reviewLinkChoiceRequired": "Choose whether to keep the link, change it or unlink.",
   "budget.receipts.needsReviewNoKeepNote": "No matching keep token is available for this link; select a candidate below or explicitly choose Unlink transaction.",
   "budget.receipts.linkedSummaryNote": "Linked to this account; bank counterparty details stay on the ledger.",
   "budget.receipts.selectRow": "Select {merchant}",

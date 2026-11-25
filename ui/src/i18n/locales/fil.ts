@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Hindi maaaring panatilihin o pumili ng kandidato sa kumpirmadong resibo; hayagang piliin ang Alisin ang link para i-save.",
   "budget.receipts.staleSourceEditHint": "Ang pag-edit sa tindahan, NIP, halaga, petsa, pera o uri ay nagpapawalang-bisa sa token — naka-disable ang Panatilihin/I-link hanggang ibalik.",
   "budget.receipts.explicitUnlinkRequired": "Hayagang piliin ang Alisin ang link bago kumpirmahin, o ibalik ang na-edit na field.",
+  "budget.receipts.reviewLinkChoiceRequired": "Piliin kung pananatilihin ang link, babaguhin ito, o aalisin ang pagkaka-link.",
   "budget.receipts.needsReviewNoKeepNote": "Walang tugmang keep token para sa link na ito; pumili ng kandidato o hayagang Alisin ang link.",
   "budget.receipts.linkedSummaryNote": "Naka-link sa account na ito; nananatili sa ledger ang detalye ng kabilang panig.",
   "budget.receipts.selectRow": "Piliin ang {merchant}",

@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Ní féidir le hadmhálacha deimhnithe nasc a choinneáil ná iarrthóir a roghnú agus iad á gcur in eagar; roghnaigh Dícheangail go sainráiteach le sábháil.",
   "budget.receipts.staleSourceEditHint": "Cuireann athrú ceannaí, NIP, méide, dáta, airgeadra nó cineáil comharthaí ó bhail — tá Coinnigh/Ceangail díchumasaithe go dtí go n-aisiompaítear.",
   "budget.receipts.explicitUnlinkRequired": "Roghnaigh Dícheangail idirbheart go sainráiteach roimh dheimhniú, nó cuir athruithe ar ais.",
+  "budget.receipts.reviewLinkChoiceRequired": "Roghnaigh an nasc a choinneáil, a athrú nó a dhínascadh.",
   "budget.receipts.needsReviewNoKeepNote": "Níl aon chomhartha coimeádta ar fáil don nasc seo; roghnaigh iarrthóir nó Dícheangail go sainráiteach.",
   "budget.receipts.linkedSummaryNote": "Nasctha leis an gcuntas seo; fanann sonraí contrapháirtí ar mhorleabhar an bhainc.",
   "budget.receipts.selectRow": "Roghnaigh {merchant}",

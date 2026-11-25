@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "確認済み書類の編集では紐付け維持や候補選択はできません。保存するには明示的に「紐付け解除」を選択してください。",
   "budget.receipts.staleSourceEditHint": "店舗・NIP・金額・日付・通貨・種別の編集によりトークンが無効になるため、元に戻すまで維持/紐付けは無効です。",
   "budget.receipts.explicitUnlinkRequired": "確定前に「紐付け解除」を明示的に選択するか、項目編集を元に戻してください。",
+  "budget.receipts.reviewLinkChoiceRequired": "リンクを維持するか、変更するか、解除するかを選択してください。",
   "budget.receipts.needsReviewNoKeepNote": "現在の紐付けに対応する維持トークンがありません。候補を選ぶか明示的に「紐付け解除」を選択してください。",
   "budget.receipts.linkedSummaryNote": "この口座に紐付け済みです。取引先の詳細は銀行元帳側に保持されます。",
   "budget.receipts.selectRow": "{merchant} を選択",

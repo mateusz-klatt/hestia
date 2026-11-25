@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "已確認憑證於編輯時無法保留或選擇候選交易；請明確選擇「取消關聯」以儲存。",
   "budget.receipts.staleSourceEditHint": "修改商戶、NIP、金額、日期、幣別或類型會使權杖失效——還原修改前已停用保留/關聯。",
   "budget.receipts.explicitUnlinkRequired": "確認前請明確選擇「取消關聯」，或還原相符欄位修改。",
+  "budget.receipts.reviewLinkChoiceRequired": "選擇要保留連結、變更連結或取消連結。",
   "budget.receipts.needsReviewNoKeepNote": "目前關聯沒有可用的保留權杖；請於下方選擇候選或明確選擇「取消關聯」。",
   "budget.receipts.linkedSummaryNote": "已連結至此帳戶；交易對象明細保留於銀行帳本中。",
   "budget.receipts.selectRow": "選擇 {merchant}",

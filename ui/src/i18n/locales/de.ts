@@ -512,6 +512,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Bestätigte Belege können keine Verknüpfung behalten oder wählen; wählen Sie explizit Verknüpfung aufheben zum Speichern.",
   "budget.receipts.staleSourceEditHint": "Änderungen an Händler, NIP, Betrag, Datum, Währung oder Typ machen Kandidaten-Tokens ungültig — Behalten/Verknüpfen ist bis zum Zurücksetzen deaktiviert.",
   "budget.receipts.explicitUnlinkRequired": "Wählen Sie explizit Verknüpfung aufheben vor der Bestätigung oder setzen Sie geänderte Felder zurück.",
+  "budget.receipts.reviewLinkChoiceRequired": "Wählen Sie, ob die Verknüpfung beibehalten, geändert oder gelöst werden soll.",
   "budget.receipts.needsReviewNoKeepNote": "Kein passendes Behalten-Token verfügbar; wählen Sie einen Kandidaten oder explizit Verknüpfung aufheben.",
   "budget.receipts.linkedSummaryNote": "Mit diesem Konto verknüpft; Angaben zur Gegenpartei bleiben im Kontobuch.",
   "budget.receipts.selectRow": "{merchant} auswählen",

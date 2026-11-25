@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Τα επιβεβαιωμένα παραστατικά δεν διατηρούν ούτε επιλέγουν υποψηφίους κατά την επεξεργασία· επιλέξτε ρητά Αποσύνδεση για αποθήκευση.",
   "budget.receipts.staleSourceEditHint": "Η αλλαγή εμπόρου, NIP, ποσού, ημερομηνίας, νομίσματος ή τύπου ακυρώνει τα tokens — Διατήρηση/Σύνδεση απενεργοποιούνται έως την επαναφορά.",
   "budget.receipts.explicitUnlinkRequired": "Επιλέξτε ρητά Αποσύνδεση συναλλαγής πριν την επιβεβαίωση ή επαναφέρετε τα πεδία.",
+  "budget.receipts.reviewLinkChoiceRequired": "Επιλέξτε αν θέλετε να διατηρήσετε, να αλλάξετε ή να αποσυνδέσετε τη σύνδεση.",
   "budget.receipts.needsReviewNoKeepNote": "Δεν υπάρχει διαθέσιμο token διατήρησης· επιλέξτε υποψήφιο παρακάτω ή ρητά Αποσύνδεση συναλλαγής.",
   "budget.receipts.linkedSummaryNote": "Συνδεδεμένο με αυτόν τον λογαριασμό· τα στοιχεία αντισυμβαλλόμενου μένουν στο καθολικό.",
   "budget.receipts.selectRow": "Επιλογή {merchant}",

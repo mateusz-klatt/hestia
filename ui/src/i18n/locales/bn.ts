@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "নিশ্চিতকৃত নথিতে সম্পাদনার সময় সংযোগ রাখা বা প্রার্থী বাছা যায় না; সংরক্ষণ করতে স্পষ্টভাবে সংযোগ বিচ্ছিন্ন করুন বেছে নিন।",
   "budget.receipts.staleSourceEditHint": "দোকান, NIP, পরিমাণ, তারিখ, মুদ্রা বা ধরন পরিবর্তন করলে টোকেন অকার্যকর হয় — পূর্বাবস্থায় না ফেরা পর্যন্ত রাখা/সংযোগ বন্ধ থাকবে।",
   "budget.receipts.explicitUnlinkRequired": "নিশ্চিত করার আগে স্পষ্টভাবে সংযোগ বিচ্ছিন্ন করুন বেছে নিন বা পরিবর্তনগুলো পূর্বাবস্থায় ফেরান।",
+  "budget.receipts.reviewLinkChoiceRequired": "লিঙ্কটি রাখতে, পরিবর্তন করতে নাকি আনলিঙ্ক করতে চান তা নির্বাচন করুন।",
   "budget.receipts.needsReviewNoKeepNote": "এই সংযোগের জন্য কোনো ম্যাচিং রাখার টোকেন নেই; নিচে একটি প্রার্থী বাছুন বা স্পষ্টভাবে সংযোগ বিচ্ছিন্ন করুন।",
   "budget.receipts.linkedSummaryNote": "এই অ্যাকাউন্টে যুক্ত; ব্যাংকের অপর পক্ষের বিবরণ খতিয়ানেই থাকে।",
   "budget.receipts.selectRow": "{merchant} নির্বাচন করুন",

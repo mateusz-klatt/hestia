@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Staðfest skjöl geta ekki haldið eða valið tengsl við breytingu; veldu Aftengja færslu beinlínis til að vista.",
   "budget.receipts.staleSourceEditHint": "Breyting á verslun, NIP, upphæð, dagsetningu, gjaldmiðli eða tegund ógildir tóka — Halda/Tengja er óvirkt þar til breytingar eru afturkallaðar.",
   "budget.receipts.explicitUnlinkRequired": "Veldu Aftengja færslu beinlínis áður en þú staðfestir eða afturkallaðu breytingar.",
+  "budget.receipts.reviewLinkChoiceRequired": "Veldu hvort eigi að halda tengingunni, breyta henni eða aftengja.",
   "budget.receipts.needsReviewNoKeepNote": "Enginn samsvarandi haldtóki tiltækur fyrir þessa tengingu; veldu frambjóðanda eða Aftengja beinlínis.",
   "budget.receipts.linkedSummaryNote": "Tengt við þennan reikning; upplýsingar um mótaðila haldast í bankabókinni.",
   "budget.receipts.selectRow": "Velja {merchant}",

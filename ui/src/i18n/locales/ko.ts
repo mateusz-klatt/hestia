@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "확인된 문서는 편집 시 기존 연결 유지나 후보 선택이 불가하며, 저장하려면 연결 해제를 명시적으로 선택해야 합니다.",
   "budget.receipts.staleSourceEditHint": "가맹점·NIP·금액·날짜·통화·유형을 수정하면 토큰이 무효화되어 되돌리기 전까지 유지/연결이 비활성화됩니다.",
   "budget.receipts.explicitUnlinkRequired": "확정 전에 연결 해제를 명시적으로 선택하거나 항목 수정을 되돌리세요.",
+  "budget.receipts.reviewLinkChoiceRequired": "연결을 유지할지, 변경할지, 연결을 해제할지 선택하세요.",
   "budget.receipts.needsReviewNoKeepNote": "현재 연결을 유지할 토큰이 없습니다. 아래에서 후보를 선택하거나 연결 해제를 명시적으로 선택하세요.",
   "budget.receipts.linkedSummaryNote": "이 계좌에 연결됨; 거래 상대방 정보는 은행 원장에 유지됩니다.",
   "budget.receipts.selectRow": "{merchant} 선택",

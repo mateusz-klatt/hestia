@@ -1838,20 +1838,40 @@ NR KARTY ****5555
                              remittance_information=["GREEN MARKET KRAKOW"])
         self.add_transaction("a", "no-tokens", amount="44.00", booking_date="2026-11-10", value_date=None,
                              remittance_information=["UNRELATED MARKET KRAKOW"])
-        self.add_transaction("a", "all-tokens", amount="44.00", booking_date="2026-11-11", value_date=None,
+        self.add_transaction("a", "all-tokens", amount="44.00", booking_date="2026-11-12", value_date=None,
                              remittance_information=["GREEN TECH POLAND"])
         multi_id = self._seed_imported(
             document_kind="invoice", issue_date="2026-11-10", due_date="2026-11-15",
             total="44.00", shop="GREEN TECH SERVICES", nip=None,
         )
+        multi_cands = self.receipts.detail("owner", multi_id)["candidates"]
+        # Full match (2 distinctive tokens, distance 2) ranks ABOVE partial match (1 token, distance 0).
         self.assertEqual(
-            {item["entry_reference"]: item["merchant_token_hit"]
-             for item in self.receipts.detail("owner", multi_id)["candidates"]},
-            {
-                reference_digest("all-tokens"): True,
-                reference_digest("partial-tokens"): True,
-                reference_digest("no-tokens"): False,
-            },
+            [(item["entry_reference"], item["merchant_token_hit"]) for item in multi_cands],
+            [
+                (reference_digest("all-tokens"), True),
+                (reference_digest("partial-tokens"), True),
+                (reference_digest("no-tokens"), False),
+            ],
+        )
+        # NIP match ranks above multi-token name match, and sole-token generic "GROCERY" matches only when alone.
+        nip_ranked_id = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-10", due_date="2026-11-15",
+            total="44.00", shop="GREEN TECH SERVICES", nip="5261040828",
+        )
+        self.add_transaction("a", "nip-beats-name", amount="44.00", booking_date="2026-11-13", value_date=None,
+                             remittance_information=["NIP 5261040828"])
+        self.assertEqual(
+            self.receipts.detail("owner", nip_ranked_id)["candidates"][0]["entry_reference"],
+            reference_digest("nip-beats-name"),
+        )
+        sole_generic_id = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-10", due_date="2026-11-15",
+            total="44.00", shop="MARKET", nip=None,
+        )
+        self.assertEqual(
+            [item["merchant_token_hit"] for item in self.receipts.detail("owner", sole_generic_id)["candidates"][:2]],
+            [True, True],
         )
         generic_only_id = self._seed_imported(
             document_kind="invoice", issue_date="2026-11-10", due_date="2026-11-15",
@@ -1908,11 +1928,12 @@ NR KARTY ****5555
             reference_digest("nip-tail-alpha"): False,
         })
 
-        # 4. Ranking puts partial whole-word hit ABOVE date distance over the full set before MAX_CANDIDATES (100) cap:
-        #    77 PLN "ACME GROCERY" receipt + next-day "ACME" debit + 100 same-day 77 PLN decoys.
+        # 4. Graded ranking before MAX_CANDIDATES (100) cap:
+        #    77 PLN "ACME GROCERY" receipt + next-day "ACME" debit + 100 same-day "OTHER GROCERY" 77 PLN decoys.
+        #    Generic "grocery" scores 0 because "acme" is present, so "ACME" ranks 1st above all 100 decoys.
         for decoy in range(100):
             self.add_transaction("a", f"aaa-decoy-{decoy:03d}", amount="77.00", booking_date="2026-11-10",
-                                 value_date=None, remittance_information=[f"DECOY {decoy}"])
+                                 value_date=None, remittance_information=[f"OTHER GROCERY {decoy}"])
         self.add_transaction("a", "zzz-acme-winner", amount="77.00", booking_date="2026-11-11", value_date=None,
                              remittance_information=["ACME"])
         cap_id = self._seed_imported(

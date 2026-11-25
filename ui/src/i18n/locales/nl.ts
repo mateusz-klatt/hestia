@@ -512,6 +512,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Bevestigde bonnen kunnen bij bewerken geen koppeling behouden of kiezen; selecteer expliciet Ontkoppelen om op te slaan.",
   "budget.receipts.staleSourceEditHint": "Wijzigen van handelaar, NIP, bedrag, datum, valuta of type maakt tokens ongeldig — Behouden/Koppelen is uitgeschakeld tot herstel.",
   "budget.receipts.explicitUnlinkRequired": "Selecteer expliciet Ontkoppelen vóór bevestigen of maak veldwijzigingen ongedaan.",
+  "budget.receipts.reviewLinkChoiceRequired": "Kies of u de koppeling wilt behouden, wijzigen of ontkoppelen.",
   "budget.receipts.needsReviewNoKeepNote": "Geen geldig behoud-token beschikbaar; kies een kandidaat of selecteer expliciet Ontkoppelen.",
   "budget.receipts.linkedSummaryNote": "Gekoppeld aan deze rekening; gegevens van de tegenpartij blijven op het bankoverzicht.",
   "budget.receipts.selectRow": "{merchant} selecteren",

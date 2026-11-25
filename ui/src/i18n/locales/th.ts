@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "เอกสารที่ยืนยันแล้วไม่สามารถคงการเชื่อมโยงหรือเลือกผู้สมัครขณะแก้ไขได้ กรุณาเลือก ยกเลิกการเชื่อมโยง อย่างชัดเจนเพื่อบันทึก",
   "budget.receipts.staleSourceEditHint": "การแก้ไขร้านค้า, NIP, ยอดเงิน, วันที่, สกุลเงิน หรือประเภทจะทำให้โทเคนใช้ไม่ได้ — ปุ่มคงไว้/เชื่อมโยงจะถูกปิดจนกว่าจะย้อนกลับ",
   "budget.receipts.explicitUnlinkRequired": "กรุณาเลือก ยกเลิกการเชื่อมโยง อย่างชัดเจนก่อนยืนยัน หรือย้อนกลับการแก้ไขฟิลด์",
+  "budget.receipts.reviewLinkChoiceRequired": "เลือกได้ว่าจะคงการเชื่อมโยง เปลี่ยนแปลง หรือยกเลิกการเชื่อมโยง",
   "budget.receipts.needsReviewNoKeepNote": "ไม่มีโทเคนสำหรับคงการเชื่อมโยงนี้ กรุณาเลือกผู้สมัครด้านล่างหรือเลือก ยกเลิกการเชื่อมโยง อย่างชัดเจน",
   "budget.receipts.linkedSummaryNote": "เชื่อมโยงกับบัญชีนี้แล้ว รายละเอียดคู่ธุรกรรมยังคงอยู่ในสมุดบัญชีธนาคาร",
   "budget.receipts.selectRow": "เลือก {merchant}",

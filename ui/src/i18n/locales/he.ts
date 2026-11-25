@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "מסמכים מאושרים אינם יכולים לשמור או לבחור מועמד בעריכה; בחר במפורש ניתוק עסקה כדי לשמור.",
   "budget.receipts.staleSourceEditHint": "עריכת בית עסק, NIP, סכום, תאריך, מטבע או סוג מבטלת אסימונים — שמור/קשר מושבתים עד להחזרת השינויים.",
   "budget.receipts.explicitUnlinkRequired": "בחר במפורש ניתוק עסקה לפני האישור, או שחזר את השדות ששונו.",
+  "budget.receipts.reviewLinkChoiceRequired": "בחר אם לשמור את הקישור, לשנות אותו או לנתק אותו.",
   "budget.receipts.needsReviewNoKeepNote": "אין אסימון שמירה זמין לקישור זה; בחר מועמד למטה או בחר במפורש ניתוק עסקה.",
   "budget.receipts.linkedSummaryNote": "מקושר לחשבון זה; פרטי הצד הנגדי נשארים ביומן הבנק.",
   "budget.receipts.selectRow": "בחר {merchant}",

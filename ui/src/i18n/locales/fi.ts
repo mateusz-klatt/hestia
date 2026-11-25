@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Vahvistettuja tositteita muokattaessa yhteyttä ei voi säilyttää tai valita; valitse tallentaaksesi erikseen Poista linkitys.",
   "budget.receipts.staleSourceEditHint": "Kauppiaan, NIP:n, summan, päivämäärän, valuutan tai tyypin muutos mitätöi tunnukset — Säilytä/Linkitä on poistettu käytöstä palauttamiseen asti.",
   "budget.receipts.explicitUnlinkRequired": "Valitse erikseen Poista linkitys ennen vahvistusta tai kumoa kenttien muutokset.",
+  "budget.receipts.reviewLinkChoiceRequired": "Valitse, haluatko säilyttää liitoksen, muuttaa sitä vai poistaa sen.",
   "budget.receipts.needsReviewNoKeepNote": "Tälle linkitykselle ei ole säilytystunnusta; valitse ehdokas tai erikseen Poista linkitys.",
   "budget.receipts.linkedSummaryNote": "Linkitetty tälle tilille; vastapuolen tiedot pysyvät tilitapahtumissa.",
   "budget.receipts.selectRow": "Valitse {merchant}",

@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Подтверждённые документы не могут сохранять или выбирать кандидатов при изменении — явно выберите Отвязать для сохранения.",
   "budget.receipts.staleSourceEditHint": "Изменение продавца, NIP, суммы, даты, валюты или типа делает токены недействительными — Сохранить/Связать отключены до отката.",
   "budget.receipts.explicitUnlinkRequired": "Явно выберите Отвязать транзакцию перед подтверждением или отмените правки полей.",
+  "budget.receipts.reviewLinkChoiceRequired": "Выберите: сохранить связь, изменить её или отвязать.",
   "budget.receipts.needsReviewNoKeepNote": "Нет подходящего токена удержания связи; выберите кандидата ниже или явно Отвязать.",
   "budget.receipts.linkedSummaryNote": "Связано с этим счётом; сведения о контрагенте остаются в банковском реестре.",
   "budget.receipts.selectRow": "Выбрать {merchant}",

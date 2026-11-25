@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Jóváhagyott bizonylatoknál szerkesztéskor nem tartható meg vagy választható jelölt; mentéshez válassza kifejezetten a Leválasztást.",
   "budget.receipts.staleSourceEditHint": "A kereskedő, NIP, összeg, dátum, pénznem vagy típus módosítása érvényteleníti a tokeneket — a Megtartás/Társítás visszaállításig le van tiltva.",
   "budget.receipts.explicitUnlinkRequired": "Jóváhagyás előtt válassza kifejezetten a Leválasztást, vagy vonja vissza a mezők módosítását.",
+  "budget.receipts.reviewLinkChoiceRequired": "Válassza ki, hogy megtartja, módosítja vagy leválasztja a kapcsolatot.",
   "budget.receipts.needsReviewNoKeepNote": "Nincs érvényes megtartási token ehhez a kapcsolathoz; válasszon jelöltet vagy kifejezetten a Leválasztást.",
   "budget.receipts.linkedSummaryNote": "Ehhez a számlához kapcsolva; a partner adatai a banki nyilvántartásban maradnak.",
   "budget.receipts.selectRow": "{merchant} kijelölése",

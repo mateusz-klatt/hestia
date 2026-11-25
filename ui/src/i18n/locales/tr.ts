@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Onaylanan belgelerde düzenleme sırasında aday korunamaz veya seçilemez; kaydetmek için açıkça Bağlantıyı kaldır seçin.",
   "budget.receipts.staleSourceEditHint": "Satıcı, NIP, tutar, tarih, para birimi veya tür değişikliği belirteçleri geçersiz kılar — geri alınana kadar Koru/Bağla devre dışıdır.",
   "budget.receipts.explicitUnlinkRequired": "Onaylamadan önce açıkça Bağlantıyı kaldır seçin veya alan düzenlemelerini geri alın.",
+  "budget.receipts.reviewLinkChoiceRequired": "Bağlantıyı korumayı, değiştirmeyi veya bağlantıyı kaldırmayı seçin.",
   "budget.receipts.needsReviewNoKeepNote": "Bu bağlantı için koruma belirteci yok; aşağıdan bir aday veya açıkça Bağlantıyı kaldır seçin.",
   "budget.receipts.linkedSummaryNote": "Bu hesaba bağlı; karşı taraf bilgileri banka defterinde kalır.",
   "budget.receipts.selectRow": "{merchant} seç",

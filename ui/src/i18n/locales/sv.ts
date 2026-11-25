@@ -512,6 +512,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Bekräftade kvitton kan inte behålla eller välja kandidater vid redigering; välj uttryckligen Koppla bort för att spara.",
   "budget.receipts.staleSourceEditHint": "Ändring av handlare, NIP, belopp, datum, valuta eller typ ogiltigförklarar token — Behåll/Koppla är inaktiverat tills du återställer.",
   "budget.receipts.explicitUnlinkRequired": "Välj uttryckligen Koppla bort innan du bekräftar eller återställ fältändringar.",
+  "budget.receipts.reviewLinkChoiceRequired": "Välj om du vill behålla länken, ändra den eller ta bort den.",
   "budget.receipts.needsReviewNoKeepNote": "Ingen matchande behåll-token finns tillgänglig; välj en kandidat nedan eller uttryckligen Koppla bort.",
   "budget.receipts.linkedSummaryNote": "Kopplad till det här kontot; uppgifter om motpart stannar i bankboken.",
   "budget.receipts.selectRow": "Välj {merchant}",

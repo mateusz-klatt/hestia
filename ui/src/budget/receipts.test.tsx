@@ -560,6 +560,7 @@ describe("ReceiptsView", () => {
     await click(button("Details"));
     const d1 = dialog();
     expect(d1.textContent).toContain("No matching keep token is available for this link");
+    expect(d1.textContent).toContain("Explicitly select Unlink transaction before confirming");
     expect(linkRadio("unlink", d1).checked).toBe(false);
     expect(button("Confirm receipt", d1).disabled).toBe(true);
     await submit(d1.querySelector("form.budget-receipt-confirm"));
@@ -607,6 +608,8 @@ describe("ReceiptsView", () => {
     await click(button("Close", dialog()));
     await click(button("Details"));
     const d3 = dialog();
+    expect(d3.textContent).toContain("Choose whether to keep the link, change it or unlink");
+    expect(d3.textContent).not.toContain("Explicitly select Unlink transaction");
     expect(linkRadio("keep", d3).checked).toBe(false);
     expect(linkRadio("unlink", d3).checked).toBe(false);
     expect(button("Confirm receipt", d3).disabled).toBe(true);
@@ -614,6 +617,7 @@ describe("ReceiptsView", () => {
     expect(button("Confirm receipt", d3).disabled).toBe(false);
     await typeInto(inputByName("raw_shop_name", d3), "Edited Store Before Submit");
     expect(d3.textContent).toContain("Editing merchant, NIP, amount, date, currency or type invalidates candidate tokens");
+    expect(d3.textContent).toContain("Explicitly select Unlink transaction");
     expect(linkRadio("keep", d3).disabled).toBe(true);
     expect(linkRadio("keep", d3).checked).toBe(false);
     expect(linkRadio("unlink", d3).checked).toBe(false);

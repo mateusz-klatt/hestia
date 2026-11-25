@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Підтверджені документи не можуть зберігати чи обирати кандидатів під час редагування — явно виберіть Від’єднати для збереження.",
   "budget.receipts.staleSourceEditHint": "Зміна продавця, NIP, суми, дати, валюти чи типу анулює токени зв’язку — Зберегти/Прив’язати вимкнено до скасування змін.",
   "budget.receipts.explicitUnlinkRequired": "Явно виберіть Від’єднати транзакцію перед підтвердженням або скасуйте зміни полів.",
+  "budget.receipts.reviewLinkChoiceRequired": "Виберіть: зберегти зв’язок, змінити його чи від’єднати.",
   "budget.receipts.needsReviewNoKeepNote": "Немає токена збереження для цього зв’язку; виберіть кандидата нижче або явно Від’єднати.",
   "budget.receipts.linkedSummaryNote": "Пов’язано з цим рахунком; реквізити контрагента залишаються в банківській книзі.",
   "budget.receipts.selectRow": "Вибрати {merchant}",

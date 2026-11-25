@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Dokumen yang disahkan tidak boleh mengekalkan atau memilih calon semasa suntingan; pilih Putus pautan secara jelas untuk simpan.",
   "budget.receipts.staleSourceEditHint": "Mengubah peniaga, NIP, jumlah, tarikh, mata wang atau jenis membatalkan token — Kekal/Paut dilumpuhkan sehingga dikembalikan.",
   "budget.receipts.explicitUnlinkRequired": "Pilih Putus pautan secara jelas sebelum pengesahan, atau kembalikan suntingan medan.",
+  "budget.receipts.reviewLinkChoiceRequired": "Pilih sama ada untuk mengekalkan pautan, menukarnya atau menyahpautkannya.",
   "budget.receipts.needsReviewNoKeepNote": "Tiada token kekal yang sepadan untuk pautan ini; pilih calon di bawah atau Putus pautan secara jelas.",
   "budget.receipts.linkedSummaryNote": "Dipautkan ke akaun ini; butiran pihak satu lagi kekal di lejar bank.",
   "budget.receipts.selectRow": "Pilih {merchant}",

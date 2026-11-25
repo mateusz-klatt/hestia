@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Chứng từ đã xác nhận không thể giữ liên kết hoặc chọn ứng viên khi sửa; hãy chọn rõ Hủy liên kết giao dịch để lưu.",
   "budget.receipts.staleSourceEditHint": "Sửa cửa hàng, NIP, số tiền, ngày, tiền tệ hoặc loại sẽ làm mất hiệu lực token — Giữ/Liên kết bị tắt cho đến khi hoàn tác.",
   "budget.receipts.explicitUnlinkRequired": "Hãy chọn rõ Hủy liên kết giao dịch trước khi xác nhận hoặc hoàn tác các trường đã sửa.",
+  "budget.receipts.reviewLinkChoiceRequired": "Chọn giữ nguyên liên kết, thay đổi hoặc hủy liên kết.",
   "budget.receipts.needsReviewNoKeepNote": "Không có token giữ liên kết phù hợp; hãy chọn ứng viên bên dưới hoặc chọn rõ Hủy liên kết.",
   "budget.receipts.linkedSummaryNote": "Đã liên kết với tài khoản này; thông tin đối tác giao dịch vẫn nằm trong sổ ngân hàng.",
   "budget.receipts.selectRow": "Chọn {merchant}",

@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Patvirtintų dokumentų negalima išlaikyti susietų ar keisti kandidato redaguojant; norėdami išsaugoti, aiškiai pasirinkite Atsieti.",
   "budget.receipts.staleSourceEditHint": "Pardavėjo, NIP, sumos, datos, valiutos ar tipo keitimas panaikina žetonus — Laikyti/Susieti išjungta iki atšaukimo.",
   "budget.receipts.explicitUnlinkRequired": "Prieš patvirtindami aiškiai pasirinkite Atsieti arba atšaukite laukų pakeitimus.",
+  "budget.receipts.reviewLinkChoiceRequired": "Pasirinkite, ar palikti susiejimą, jį pakeisti, ar atsieti.",
   "budget.receipts.needsReviewNoKeepNote": "Šiam ryšiui nėra išlaikymo žetono; pasirinkite kandidatą arba aiškiai Atsieti operaciją.",
   "budget.receipts.linkedSummaryNote": "Susieta su šia sąskaita; sandorio šalies duomenys lieka banko žurnale.",
   "budget.receipts.selectRow": "Pasirinkti {merchant}",

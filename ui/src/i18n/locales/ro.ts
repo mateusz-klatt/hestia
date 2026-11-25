@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirmedUnlinkNote": "Documentele confirmate nu pot păstra sau alege candidați la editare; selectați explicit Deconectează pentru a salva.",
   "budget.receipts.staleSourceEditHint": "Editarea comerciantului, NIP, sumei, datei, monedei sau tipului invalidează tokenurile — Păstrează/Leagă sunt dezactivate până la revenire.",
   "budget.receipts.explicitUnlinkRequired": "Selectați explicit Deconectează înainte de confirmare sau anulați editările câmpurilor.",
+  "budget.receipts.reviewLinkChoiceRequired": "Alegeți dacă păstrați asocierea, o schimbați sau o deconectați.",
   "budget.receipts.needsReviewNoKeepNote": "Nu există token de păstrare pentru această legătură; alegeți un candidat sau selectați explicit Deconectează.",
   "budget.receipts.linkedSummaryNote": "Asociat acestui cont; detaliile contrapărții rămân în registrul bancar.",
   "budget.receipts.selectRow": "Selectează {merchant}",
