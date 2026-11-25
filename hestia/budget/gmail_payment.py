@@ -258,7 +258,15 @@ def _following_values(lines: list[str]) -> list[str]:
     return values[::-1]
 
 
+def _strip_emphasis(value: str) -> str:
+    stripped = value.strip()
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in ("*", "_"):
+        return stripped[1:-1]
+    return value
+
+
 def _parse_amount(value: str, *, labelled: bool = False, flattened_cell: bool = False) -> tuple[Decimal, str] | None:
+    value = _strip_emphasis(value)
     match = _AMOUNT.search(value) if labelled else _AMOUNT.match(value)
     if match is None:
         return None

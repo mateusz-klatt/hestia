@@ -1,0 +1,15 @@
+Przekazuję płatność PayU.
+
+---------- Forwarded message ---------
+From: PayU <powiadomienia@payu.com>
+Date: Wed, 25 Nov 2026 at 10:15
+Subject: Zlecenie płatności (246813579) dla SKLEP PRZYKŁADOWY
+Message-ID: <payu-v1f3-1@payu.example.test>
+To: owner@gmail.com
+
+Zarejestrowaliśmy zlecenie płatności dla SKLEP PRZYKŁADOWY (http://www.shop.example.test).
+
+Szczegóły płatności:
+- Numer zamówienia: *246813579*
+- Kwota: *109,00 PLN*
+- Kwota po przewalutowaniu: *-*

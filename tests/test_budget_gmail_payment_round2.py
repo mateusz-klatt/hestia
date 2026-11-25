@@ -283,3 +283,47 @@ class GmailPaymentReviewTests(TestCase):
         self.assertEqual(_inspect("Total: 1 PLN", "Order no. 00000000001").payment.description, "Order no.")
         self.assertEqual(extract_payment("Total: 1 PLN\nOpis płatności: Przykładowy opis", subject="Example subject",
                                          merchant="Example Merchant", gateway=True).description, "Przykładowy opis")
+
+    def test_markdown_emphasis_around_labelled_values_parses_single_pair_only(self):
+        for body, expected_amount, expected_currency in (
+            ("- Kwota: *109,00 PLN*\n- Kwota po przewalutowaniu: *-*", "109", "PLN"),
+            ("Kwota: *109,00 PLN*", "109", "PLN"),
+            ("Kwota: _109,00 PLN_", "109", "PLN"),
+            ("- Total: _$12.34_", "12.34", "USD"),
+            ("Kwota:\n*109,00 PLN*", "109", "PLN"),
+            ("Charged: *8,31 zł* using 1 USD = 4.1550 PLN", "8.31", "PLN"),
+        ):
+            with self.subTest(body=body):
+                payment = _inspect(body, "Example payment").payment
+                self.assertEqual((payment.total_amount, payment.currency), (expected_amount, expected_currency))
+
+        gw = _inspect("- Kwota: *109,00 PLN*\n- Opłata za realizację transakcji: *1,50 PLN*\n"
+                      "- Kwota po przewalutowaniu: *-*", "Potwierdzenie", gateway=True).payment
+        self.assertEqual((gw.total_amount, gw.currency, gw.fee_amount), ("110.5", "PLN", "1.5"))
+
+        for missing_body in (
+            "Kwota: **109,00 PLN**",
+            "Kwota: __109,00 PLN__",
+            "Kwota: *109,00 PLN",
+            "Kwota: 109,00 PLN*",
+            "Kwota: *109,00 PLN_",
+            "Kwota: 1*09,00 PLN",
+            "Kwota: *1*09,00 PLN*",
+            "Kwota: *-*",
+            "Kwota: *",
+            "Kwota: **",
+        ):
+            with self.subTest(missing_body=missing_body):
+                result = _inspect(missing_body, "Example payment")
+                self.assertTrue(result.missing_total)
+                self.assertIsNone(result.payment)
+
+        for rejected_body in (
+            "Kwota: *-109,00 PLN*",
+            "Kwota: *0,00 PLN*",
+            "Kwota: *109,00 PLN* *50,00 PLN*",
+        ):
+            with self.subTest(rejected_body=rejected_body):
+                result = _inspect(rejected_body, "Example payment")
+                self.assertFalse(result.missing_total)
+                self.assertIsNone(result.payment)
