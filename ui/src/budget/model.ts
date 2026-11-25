@@ -106,6 +106,38 @@ export function formatAmount(amount: string, currency: string, locale: string, i
   return `${negative && !zero ? "−" : ""}${grouped}${decimal}${fraction.padEnd(2, "0")} ${currency}`;
 }
 
+/** Round an exact decimal string to signed integer cents (1/100) using half-away-from-zero BigInt arithmetic.
+ *  Returns null when the input is not a valid decimal string. */
+export function roundToCents(amount: string): bigint | null {
+  const match = DECIMAL.exec(amount);
+  if (match === null) return null;
+  const negative = match[1] === "-";
+  const whole = match[2] ?? "0";
+  const fraction = match[3] ?? "";
+  let cents = BigInt(`${whole}${fraction.slice(0, 2).padEnd(2, "0")}`);
+  const nextDigit = fraction[2];
+  // Base-10 remainder is >= 0.5 of a cent iff the third fractional digit is at least '5'.
+  if (nextDigit !== undefined && nextDigit >= "5") {
+    cents += 1n;
+  }
+  return negative ? -cents : cents;
+}
+
+/** Format a signed integer cent count (`value / 100`) as a canonical 2-decimal string without negative zero. */
+export function formatCents(cents: bigint): string {
+  if (cents === 0n) return "0.00";
+  const negative = cents < 0n;
+  const digits = (negative ? -cents : cents).toString().padStart(3, "0");
+  return `${negative ? "-" : ""}${digits.slice(0, -2)}.${digits.slice(-2)}`;
+}
+
+/** Round an exact decimal string to 2 fraction digits, half away from zero, using BigInt arithmetic (never float),
+ *  then format with locale separators like `formatAmount`. Unparseable inputs fall back verbatim. */
+export function formatEstimate(amount: string, currency: string, locale: string): string {
+  const cents = roundToCents(amount);
+  return cents === null ? formatAmount(amount, currency, locale) : formatAmount(formatCents(cents), currency, locale);
+}
+
 /** The owner-facing name: provider product and masked suffix when known, never a full identifier. */
 export function accountLabel(account: BudgetAccount, index: number, fallback: string): string {
   const display = account.display ?? null;

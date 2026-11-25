@@ -213,6 +213,82 @@ describe("ForecastView", () => {
     expect(mergedDetails.textContent).toContain(locale === "pl-PL" ? "Termin raty" : "Instalment due");
   });
 
+  it("renders the owner's forecast example rounded to grosze in Polish and preserves unrounded scheduled amounts", async () => {
+    const api = fakeApi();
+    const base = forecastOf();
+    const scheduledNov = forecastItem({
+      source: "mortgage", confidence: "scheduled", schedule_id: "mtg-1", label: "Kredyt hipoteczny",
+      amount: "10355.74", currency: "PLN", expected_date: "2026-11-10", past_due: false, account_stale: false,
+    });
+    const electricity = forecastItem({
+      source: "category_baseline", confidence: "estimated", schedule_id: null, label: "Prąd",
+      amount: "54.335", currency: "PLN", expected_date: "2026-11-28", past_due: false, account_stale: false,
+    });
+    const groceries = forecastItem({
+      source: "category_baseline", confidence: "estimated", schedule_id: null, label: "Zakupy",
+      amount: "3669.6875", currency: "PLN", expected_date: "2026-11-29", past_due: false, account_stale: false,
+    });
+    const novTotal = forecastCurrencyTotal({
+      currency: "PLN", total: "14079.7625", scheduled_total: "10355.74", estimated_total: "3724.0225",
+    });
+    const scheduledDec = forecastItem({
+      source: "mortgage", confidence: "scheduled", schedule_id: "mtg-2", label: "Exact Schedule",
+      amount: "1234.567", currency: "PLN", expected_date: "2026-12-10", past_due: false, account_stale: false,
+    });
+    const decTotal = forecastCurrencyTotal({
+      currency: "PLN", total: "1234.567", scheduled_total: "1234.567", estimated_total: "0",
+    });
+    const mixedPrecisionJan = forecastItem({
+      source: "mortgage", confidence: "scheduled", schedule_id: "mtg-3", label: "Scheduled Part",
+      amount: "100.004", currency: "PLN", expected_date: "2027-01-10", past_due: false, account_stale: false,
+    });
+    const estimatedJan = forecastItem({
+      source: "category_baseline", confidence: "estimated", schedule_id: null, label: "Estimated Part",
+      amount: "50.004", currency: "PLN", expected_date: "2027-01-20", past_due: false, account_stale: false,
+    });
+    const janTotal = forecastCurrencyTotal({
+      currency: "PLN", total: "150.008", scheduled_total: "100.004", estimated_total: "50.004",
+    });
+    api.forecast.mockResolvedValue(ok({
+      ...base,
+      totals: [novTotal],
+      months: [
+        { month: "2026-11", currencies: [novTotal], items: [scheduledNov, electricity, groceries] },
+        { month: "2026-12", currencies: [decTotal], items: [scheduledDec] },
+        { month: "2027-01", currencies: [janTotal], items: [mixedPrecisionJan, estimatedJan] },
+      ],
+    }));
+    await show(api, "pl-PL");
+
+    const normalize = (value: string | null | undefined) => (value ?? "").replace(/\s+/g, " ");
+    const sections = [...host.querySelectorAll("section.budget-month")];
+    const novSection = normalize(sections[0]?.textContent);
+    expect(novSection).toContain("Razem14 079,76 PLN");
+    expect(novSection).toContain("Zaplanowane10 355,74 PLN");
+    expect(novSection).toContain("Szacowane3 724,02 PLN");
+    expect(novSection).toContain("Prąd54,34 PLN");
+    expect(novSection).toContain("≈ szacowane");
+    expect(novSection).not.toContain("14 079,7625");
+    expect(novSection).not.toContain("3 724,0225");
+    expect(novSection).not.toContain("54,335");
+
+    // Purely scheduled month preserves every fractional digit.
+    const decSection = normalize(sections[1]?.textContent);
+    expect(decSection).toContain("Razem1 234,567 PLN");
+    expect(decSection).toContain("Zaplanowane1 234,567 PLN");
+    expect(decSection).toContain("Exact Schedule1 234,567 PLN");
+
+    // Mixed total sums the rounded parts (100.00 + 50.00 = 150.00, not 150.01).
+    const janSection = normalize(sections[2]?.textContent);
+    expect(janSection).toContain("Razem150,00 PLN");
+    expect(janSection).toContain("Szacowane50,00 PLN");
+    expect(janSection).toContain("Estimated Part50,00 PLN");
+
+    const table = requireElement(host.querySelector("table"), "monthly totals table");
+    const rowCells = [...table.querySelectorAll("tbody td")].map((cell) => normalize(cell.textContent));
+    expect(rowCells).toEqual(["14 079,76 PLN", "1 234,567 PLN", "150,00 PLN"]);
+  });
+
   it("labels each currency chart and shows exact monthly totals in text tables", async () => {
     const api = fakeApi();
     api.forecast.mockResolvedValue(ok(populatedForecast()));
