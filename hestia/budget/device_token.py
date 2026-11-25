@@ -42,6 +42,7 @@ PREFIX = "/api/budget/receipts"
 COOKIE = "hestia_session"
 REQUEST_KEY = "hestia_device_token"
 ACTOR_REQUEST_KEY = "hestia_device_actor"
+PROOF_REQUEST_KEY = "hestia_device_proof"
 PAIR_PATH = PREFIX + "/device-token/pair-code"
 PAIR_CANCEL_PATH = PREFIX + "/device-token/pair-code-cancel"
 REDEEM_PATH = PREFIX + "/device-token/redeem"
@@ -426,7 +427,7 @@ def decide(method, path, headers, cookies, secret, moment):
 
     receipts = receipts_path(path)
     try:
-        has_cookie = COOKIE in cookies
+        has_cookie = "Cookie" in headers or COOKIE in cookies
         has_authorization = "Authorization" in headers
     except TypeError:
         return {"action": "pass"}
@@ -474,6 +475,7 @@ def decide(method, path, headers, cookies, secret, moment):
     return {
         "action": "accept", "owner": found["owner"], "actor": found["actor"],
         "token_id": found["token_id"], "permissions": found.get("permissions", ()),
+        "credential_hmac": found.get("credential_hmac"),
     }
 
 
@@ -710,7 +712,7 @@ class DeviceTokenStore:
                     raise DeviceTokenError(409, "device_token_prior_invalid")
                 ceiling = _issued_mask(previous)
                 if previous.actor is None and previous.owner == actor:
-                    ceiling = authz.LEGACY_RECEIPT_PERMISSIONS
+                    ceiling = authz.DEVICE_ELIGIBLE_PERMISSIONS
                 issued &= ceiling
                 if not issued:
                     raise DeviceTokenError(403, "budget_forbidden")
@@ -785,7 +787,7 @@ class DeviceTokenStore:
         if row.revoked_at is not None:
             return {
                 "status": "revoked", "owner": row.owner, "actor": row.actor or row.owner,
-                "token_id": row.id,
+                "token_id": row.id, "credential_hmac": digest,
             }, False
         moment = self._moment()
         actor = row.actor or row.owner
@@ -827,6 +829,7 @@ class DeviceTokenStore:
         return {
             "status": "ok", "owner": row.owner, "actor": actor,
             "token_id": row.id, "expires_at": row.expires_at, "permissions": permissions,
+            "credential_hmac": digest,
         }, (needs_slide or needs_narrow) and not write
 
     def list_tokens(self, owner):
@@ -840,7 +843,7 @@ class DeviceTokenStore:
                 "last_used_at": row.last_used_at, "expires_at": row.expires_at,
             } for row in rows]
 
-    def revoke(self, owner, token_id, *, actor_token_id=None):
+    def revoke(self, owner, token_id, *, actor_token_id=None, actor_token_proof=None):
         if actor_token_id is not None:
             if not ids_match(actor_token_id, token_id):
                 raise DeviceTokenError(403, "budget_forbidden")
@@ -856,6 +859,11 @@ class DeviceTokenStore:
                 if actor_token_id is not None:
                     raise DeviceTokenError(403, "budget_forbidden")
                 return {"ok": True}
+            if (
+                actor_token_id is not None and actor_token_proof is not None
+                and not ids_match(row.token_hmac, actor_token_proof)
+            ):
+                raise DeviceTokenError(403, "budget_forbidden")
             if row.revoked_at is None:
                 moment = self._moment()
                 if actor_token_id is not None:

@@ -134,6 +134,24 @@ class DeviceExchangeStoreTests(unittest.TestCase):
             self.exchange("other", "No grants")
         self.assertEqual(caught.exception.code, "budget_forbidden")
 
+    def test_stale_self_revoke_proof_cannot_revoke_rotation_replacement(self):
+        original = self.exchange(name="Before")
+        with self.sessions() as session:
+            old_proof = session.get(db.BudgetReceiptDeviceToken, original["token_id"]).token_hmac
+        rotated = self.exchange(name="After", prior=original["token"])
+        with self.assertRaises(device_token.DeviceTokenError) as stale:
+            self.store.revoke(
+                "owner", original["token_id"], actor_token_id=original["token_id"], actor_token_proof=old_proof,
+            )
+        self.assertEqual(stale.exception.status, 403)
+        with self.sessions() as session:
+            current = session.get(db.BudgetReceiptDeviceToken, rotated["token_id"])
+            self.assertIsNone(current.revoked_at)
+            proof = current.token_hmac
+        self.assertEqual(self.store.revoke(
+            "owner", rotated["token_id"], actor_token_id=rotated["token_id"], actor_token_proof=proof,
+        ), {"ok": True})
+
     def test_legacy_migration_and_read_allowlist(self):
         legacy = base64.urlsafe_b64encode(bytes(range(32))).rstrip(b"=").decode("ascii")
         with self.sessions.begin() as session:
@@ -145,13 +163,29 @@ class DeviceExchangeStoreTests(unittest.TestCase):
             ))
         migrated = self.exchange(prior=legacy)
         self.assertEqual(migrated["token_id"], "11111111-1111-4111-8111-111111111111")
-        self.assertEqual(migrated["scope"], "receipts")
-        self.assertNotIn("budget.view", migrated["issued_permissions"])
+        self.assertEqual(migrated["scope"], "device")
+        self.assertIn("budget.view", migrated["issued_permissions"])
         self.assertEqual(self.store.identify(legacy, slide=False)["status"], "unknown")
         with mock.patch.object(device_token, "_rule_key", side_effect=device_token.BudgetConfigError("missing")):
             with self.assertRaises(device_token.DeviceTokenError) as caught:
                 self.exchange(prior=legacy)
             self.assertEqual(caught.exception.code, "device_token_prior_invalid")
+        view_only_legacy = base64.urlsafe_b64encode(bytes(reversed(range(32)))).rstrip(b"=").decode("ascii")
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceiptDeviceToken(
+                id="22222222-2222-4222-8222-222222222222", owner="other", actor=None,
+                device_name="View only", token_hmac=device_token._mac(
+                    bytes(range(32)), device_token._TOKEN_DOMAIN, view_only_legacy,
+                ), created_at=self.moment, expires_at=self.moment + 1000,
+                hard_expires_at=self.moment + 2000, sliding_written_at=self.moment,
+            ))
+            session.execute(db.PermissionGrant.__table__.delete().where(
+                db.PermissionGrant.username == "other", db.PermissionGrant.target_owner == "other",
+                db.PermissionGrant.permission_id != "budget.view",
+            ))
+        view_only = self.exchange("other", "View only", view_only_legacy)
+        self.assertEqual(view_only["scope"], "device")
+        self.assertEqual(view_only["issued_permissions"], ["budget.view"])
         native = self.exchange(name="Native")
         with self.sessions.begin() as session:
             session.get(db.BudgetReceiptDeviceToken, native["token_id"]).issued_permissions = "[]"
@@ -162,13 +196,25 @@ class DeviceExchangeStoreTests(unittest.TestCase):
             session.get(db.BudgetReceiptDeviceToken, native["token_id"]).issued_permissions = json.dumps(
                 native["issued_permissions"],
             )
+        with self.sessions.begin() as session:
+            session.add(db.PermissionGrant(
+                username="other", permission_id="budget.receipts.add", target_owner="other",
+            ))
+            session.execute(db.PermissionGrant.__table__.delete().where(
+                db.PermissionGrant.username == "other", db.PermissionGrant.target_owner == "other",
+                db.PermissionGrant.permission_id == "budget.view",
+            ))
+        receipt_only = self.exchange("other", "Receipt only")
         with mock.patch.dict(os.environ, {"HESTIA_SESSION_SECRET": self.secret.decode()}):
             for route in sorted(device_token.NATIVE_READ_ALLOWED):
                 with self.subTest(route=route):
                     allowed = device_token.decide(*route, {"Authorization": "Bearer " + native["token"]},
                         {}, self.secret, self.moment)
                     self.assertEqual(allowed["action"], "accept")
-            denied = device_token.decide("GET", "/api/budget/status", {"Authorization": "Bearer " + migrated["token"]},
+            migrated_read = device_token.decide("GET", "/api/budget/status", {"Authorization": "Bearer " + migrated["token"]},
+                {}, self.secret, self.moment)
+            self.assertEqual(migrated_read["action"], "accept")
+            denied = device_token.decide("GET", "/api/budget/status", {"Authorization": "Bearer " + receipt_only["token"]},
                 {}, self.secret, self.moment)
             self.assertEqual((denied["action"], denied["code"]), ("response", "budget_forbidden"))
             forbidden = device_token.decide("POST", "/api/budget/refresh", {"Authorization": "Bearer " + migrated["token"]},
@@ -261,6 +307,15 @@ class DeviceExchangeWebTests(unittest.IsolatedAsyncioTestCase):
             "Authorization": "Bearer " + result["token"], "Cookie": "hestia_session=invalid",
         })
         self.assertEqual(ambiguous.status, 400)
+        unrelated_cookie = await self.client.get("/api/budget/status", headers={
+            "Authorization": "Bearer " + result["token"], "Cookie": "unrelated=1",
+        })
+        self.assertEqual(unrelated_cookie.status, 400)
+        legacy_login = await self.client.post(device_token.LOGIN_PATH, json={
+            "username": "owner", "password": "owner password", "device_name": "Other",
+        }, headers={"Authorization": "Bearer " + result["token"]})
+        self.assertEqual(legacy_login.status, 403)
+        self.assertEqual(await legacy_login.json(), {"ok": False, "error": "budget_forbidden"})
 
     async def test_native_requirement_input_flags_and_forbidden_actor(self):
         browser = await self.client.post("/api/login", json={"user": "owner", "password": "owner password"})

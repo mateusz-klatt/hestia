@@ -295,7 +295,10 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
                     return store.cancel_code(owner, code_id)
                 if operation == "list":
                     return store.list_tokens(owner)
-                return store.revoke(owner, token_id, actor_token_id=device_id)
+                return store.revoke(
+                    owner, token_id, actor_token_id=device_id,
+                    actor_token_proof=request.get(device_token.PROOF_REQUEST_KEY),
+                )
 
             result = await api._settled_thread(run)
             return web.json_response(result, headers=api.PRIVATE_HEADERS)

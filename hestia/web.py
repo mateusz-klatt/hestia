@@ -647,8 +647,13 @@ async def _auth_middleware(request, handler):
     if device_token.receipts_path(request.path) and not device_token.receipts_enabled():
         return device_token.disabled_response()
     authorization = request.headers.get("Authorization", "")
-    if (_AUTH_ENABLED and "Authorization" in request.headers
-            and (request.method, request.path) != ("POST", device_token.LOGIN_PATH)):
+    if (
+        _AUTH_ENABLED and "Authorization" in request.headers
+        and (
+            (request.method, request.path) != ("POST", device_token.LOGIN_PATH)
+            or device_token._modern_bearer(authorization.removeprefix(_BEARER_PREFIX)) is not None
+        )
+    ):
         target = request.raw_path.partition("?")[0]
         decision = await asyncio.to_thread(
             device_token.decide,
@@ -660,12 +665,14 @@ async def _auth_middleware(request, handler):
         if decision["action"] == "accept":
             request[device_token.REQUEST_KEY] = decision["token_id"]
             request[device_token.ACTOR_REQUEST_KEY] = decision["actor"]
+            request[device_token.PROOF_REQUEST_KEY] = decision["credential_hmac"]
             request[_USER_KEY] = decision["owner"]
             request[_ROLE_KEY] = _ADMIN
             return await handler(request)
         if (request.path.startswith("/api/budget/")
                 and (request.method, target) not in (
-                    ("POST", device_token.REDEEM_PATH), ("GET", consent_api.CALLBACK),
+                    ("POST", device_token.REDEEM_PATH), ("POST", device_token.LOGIN_PATH),
+                    ("GET", consent_api.CALLBACK),
                 )
                 and authorization.startswith(_BEARER_PREFIX)
                 and auth.decode_session(
