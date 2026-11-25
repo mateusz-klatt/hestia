@@ -74,6 +74,13 @@ class PaymentFixtureTests(unittest.TestCase):
             ("food_description", "Potwierdzenie zamówienia nr 00000000001", False, ImportedPayment(
                 _MERCHANT, "Przykładowa Restauracja", "26.42", "PLN", (), "00000000001",
             )),
+            ("saas_gateway_charged", "Receipt #1111-2222", True, ImportedPayment(
+                "Example Studio", "Receipt #1111-2222", "96.77", "PLN", (date(2026, 11, 5),),
+            )),
+            ("sports_shop_html_order", "Potwierdzenie zamówienia nr 00000000003", False, ImportedPayment(
+                _MERCHANT, "Potwierdzenie zamówienia nr", "248.36", "PLN", (), "00000000003",
+            )),
+            ("zero_dual_currency", "Example invoice notice", False, None),
         )
         self.assertEqual({path.stem for path in _FIXTURES.glob("*.txt")}, {case[0] for case in cases})
         for fixture, subject, gateway, expected in cases:

@@ -1,9 +1,10 @@
 """Synthetic parser regressions from the payment mail review."""
 
 from datetime import date
+from decimal import Decimal
 from unittest import TestCase
 
-from hestia.budget.gmail_payment import extract_payment, inspect_payment
+from hestia.budget.gmail_payment import _parse_amount, extract_payment, inspect_payment
 
 
 def _inspect(body, *subjects, gateway=False):
@@ -63,16 +64,64 @@ class GmailPaymentReviewTests(TestCase):
                            "dla - ?\nTotal: 1 PLN", gateway=True).payment
         self.assertEqual(payment.merchant, "Example Merchant")
 
-    def test_flattened_summary_uses_only_the_final_total_and_paid_cells(self):
-        payment = _inspect("Receipt #ABCD Total excluding tax $1.00 Total   : $2.00 Amount paid $2.00").payment
-        self.assertEqual(payment.total_amount, "2")
+    def test_flattened_summary_reads_independent_total_cells(self):
         for body in (
-            "Receipt #ABCD " + "Total " * 60 + "Amount paid not a value",
+            "Receipt #ABCD Total excluding tax $1.00 Total   : $2.00 Amount paid $2.00",
             "Receipt #ABCD Total $2.00 Amount paid not a value",
             "Receipt #ABCD Amount paid $2.00",
+            "Receipt #ABCD Total $2.00 ... Total $2 USD",
+            "Receipt #ABCD Total $2.00 VAT $1.00 Tax $1.00 Discount $0.50",
+        ):
+            with self.subTest(body=body):
+                payment = _inspect(body).payment
+                self.assertEqual((payment.total_amount, payment.currency), ("2", "USD"))
+        for body in (
+            "Receipt #ABCD " + "Total " * 60 + "Amount paid not a value",
+            "Receipt #ABCD Example Plan with no totals",
+            "Receipt #ABCD Subtotal $1.00 Total excluding tax $2.00 VAT $3.00",
+            "Receipt #ABCD Total estimate $2.00 Amount paid not a value",
         ):
             with self.subTest(body=body):
                 self.assertTrue(_inspect(body).missing_total)
+
+    def test_charged_takes_priority_and_exchange_rate_is_not_an_amount(self):
+        for body in (
+            "Receipt #ABCD Total $2.00 Amount paid $2.00 Charged 8.31zł using 1 USD = 4.1550 PLN",
+            "Amount paid: $2.00\nCharged: PLN 8.31 using 1 USD = 4.1550 PLN. Questions?",
+            "Total: $2.00\nCharged\n8.31 PLN",
+        ):
+            with self.subTest(body=body):
+                payment = _inspect(body).payment
+                self.assertEqual((payment.total_amount, payment.currency), ("8.31", "PLN"))
+
+    def test_flattened_totals_reject_conflicts_and_truly_unlabelled_amounts(self):
+        for body in (
+            "Receipt #ABCD Total $2.00 ... Total $3.00 Charged 8.31 PLN",
+            "Receipt #ABCD Total $2.00 / $3.00 Charged 8.31 PLN",
+            "Receipt #ABCD Total $2.00 Total £2.00 Amount paid $2.00",
+            "Receipt #ABCD Total $2.00 Amount paid -$2.00 Charged 8.31 PLN",
+            "Receipt #ABCD Amount paid $2.00 Charged 8.31 PLN Charged 9.31 PLN",
+            "Receipt #ABCD Charged 8.31 PLN using 1 USD = 4.1550 PLN including 2 PLN",
+            "Charged 8.31 PLN using coupon 2 PLN",
+        ):
+            with self.subTest(body=body):
+                result = _inspect(body)
+                self.assertIsNone(result.payment)
+                self.assertFalse(result.missing_total)
+
+    def test_order_total_ignores_fee_and_table_header_without_an_amount_value(self):
+        for table_entry in ("Synthetic Product -1 EUR and 2 EUR", "(16.31 PLN)", "(-16.31 PLN)"):
+            with self.subTest(table_entry=table_entry):
+                payment = _inspect(f"Wartość zamówienia\n16.31 PLN\nKoszt dostawy: -1 PLN\nRAZEM\n{table_entry}").payment
+                self.assertEqual((payment.total_amount, payment.currency), ("16.31", "PLN"))
+                self.assertTrue(_inspect(f"RAZEM\n{table_entry}").missing_total)
+
+    def test_zero_with_symbol_and_equivalent_code_is_an_explicit_rejection(self):
+        value = "0,00 € EUR"
+        self.assertEqual(_parse_amount(value), (Decimal("0.00"), "EUR"))
+        result = _inspect(f"Amount paid: {value}")
+        self.assertIsNone(result.payment)
+        self.assertFalse(result.missing_total)
 
     def test_second_amount_on_a_labelled_total_is_an_explicit_rejection(self):
         for body in (

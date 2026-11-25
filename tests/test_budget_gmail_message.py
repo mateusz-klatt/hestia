@@ -122,6 +122,28 @@ class GmailMessageProcessorTests(unittest.TestCase):
                          (digest(SECRET, PAYMENT_SENDER_DOMAIN, "@gateway.example.test"),))
         self.assertIsNone(pending.payment.order_reference_hmac)
 
+    def test_gateway_summary_uses_card_charge_and_cross_checks_paid_heading_date(self):
+        body = (Path(__file__).parent / "fixtures" / "gmail" / "payment" / "saas_gateway_charged.txt").read_text(
+            encoding="utf-8",
+        )
+        self.settings.payment_senders = (PaymentSender("@gateway.example.test", "Example Gateway", gateway=True),)
+        message = _email("receipts@gateway.example.test", body)
+        message["Subject"] = "Receipt #1111-2222"
+
+        def process_on(day):
+            internal_date = datetime(2026, 11, day, tzinfo=UTC)
+            metadata = {**_metadata(message), "internalDate": str(int(internal_date.timestamp() * 1000))}
+            return self._process(metadata, _raw(message))
+
+        pending = process_on(8)
+        self.assertEqual(pending.outcome, "imported")
+        self.assertEqual(pending.payment.receipt_date, date(2026, 11, 8))
+        fields = pending.payment.fields
+        self.assertEqual((fields.merchant, fields.total_amount, fields.currency, fields.body_dates),
+                         ("Example Studio", "96.77", "PLN", (date(2026, 11, 5),)))
+        pending = process_on(9)
+        self.assertEqual((pending.outcome, pending.payment), ("skipped_non_receipt", None))
+
     def test_payment_order_reference_crosses_processing_boundary_only_as_hmac(self):
         message = self._payment_email("Amount paid: 123 PLN\nTytuł: Example purchase")
         message["Subject"] = "Potwierdzenie zamówienia nr 00000000001"
@@ -150,7 +172,7 @@ class GmailMessageProcessorTests(unittest.TestCase):
                 self.assertEqual((pending.outcome, pending.payment), ("skipped_non_receipt", None))
 
     def test_explicit_plain_payment_rejection_takes_precedence_over_html(self):
-        for body in ("Payment failed", "Total: -5 PLN", "Total: 1 PLN\nDo zapłaty: 2 PLN"):
+        for body in ("Payment failed", "Total: -5 PLN", "Total: 1 PLN\nDo zapłaty: 2 PLN", "Amount paid: 0,00 € EUR"):
             with self.subTest(body=body):
                 self.worker.parse.reset_mock()
                 message = self._payment_email(body)

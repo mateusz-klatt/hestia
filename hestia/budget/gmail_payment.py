@@ -52,14 +52,15 @@ _INLINE_TAG = re.compile(
     r"</?(?:p|b|strong|span|div|br|td|tr|th|table|tbody|font)(?: [^<>]*+)?/?>", re.IGNORECASE,
 )
 _FEE = re.compile(
-    r"(?:Dodatkowe\s+opłaty|Opłata\s+za\s+(?:realizację\s+transakcji|usługę)|Dostawa)(?=$|[:\s])",
+    r"(?:Dodatkowe\s+opłaty|Opłata\s+za\s+(?:realizację\s+transakcji|usługę)"
+    r"|Koszt\s++dostawy|Dostawa)(?=$|[:\s])",
     re.IGNORECASE,
 )
 _BULLET = re.compile(r"^[-*•]\s+")
 _TOTAL = re.compile(
-    r"(?:(?P<paid>Amount\s+paid|Kwota\s+zapłacona|Zapłacono(?:\s++łącznie)?|Paid)"
+    r"(?:(?P<charged>Charged)|(?P<paid>Amount\s+paid|Kwota\s+zapłacona|Zapłacono(?:\s++łącznie)?|Paid)"
     r"|(?P<total>Do\s+zapłaty|Łącznie|Razem\s+do\s+zapłaty"
-    r"|Suma\s+do\s+zapłaty|Total|Cena\s+z\s+dostawą)"
+    r"|Suma\s+do\s+zapłaty|Total|Cena\s+z\s+dostawą|Wartość\s++zamówienia)"
     r"|(?P<sum>Razem|Suma|Kwota(?:\s++(?:zamówienia|transakcji))?))(?=$|[:\s])\s*+:?\s*+",
     re.IGNORECASE,
 )
@@ -79,16 +80,20 @@ _AMOUNT = re.compile(
     rf"|(?P<suffix_number>{_MONEY_NUMBER})\s*+(?P<suffix>{_CURRENCY})){_AMOUNT_END}",
     re.IGNORECASE,
 )
-_MONEY_TOKEN = rf"{_SIGN}(?:{_CURRENCY}\s*+{_SIGN}{_MONEY_NUMBER}|{_MONEY_NUMBER}\s*+{_CURRENCY})"
 _TRAILING_WORDS = re.compile(r"[.,;]?\s++[^\W\d_]")
 _LABEL_DELIMITER = r"(?:\s*+:\s*+|\s++)"
-# Some rendered tables flatten the summary into one row. Split only the
-# adjacent Total/Amount paid cells so redaction still sees the receipt header
-# and its identifiers separately from the totals.
+_FX_NUMBER = r"[0-9]++(?:[.,][0-9]++)?"
+_FX_NOTE = re.compile(
+    rf"\s++using\s++{_FX_NUMBER}\s++{_CURRENCY}\s*+=\s*+{_FX_NUMBER}\s++{_CURRENCY}(?!\w)",
+    re.IGNORECASE,
+)
+# Accounting labels delimit flattened cells. Only the payment totals are candidates.
 _RECEIPT_HEADER = re.compile(r"Receipt\s++#\S++", re.IGNORECASE)
-_SUMMARY_LABEL = re.compile(r"(?<!\S)(?:Total|Amount\s++paid)(?=[:\s])", re.IGNORECASE)
-_SUMMARY_TOTAL = re.compile(rf"Total{_LABEL_DELIMITER}{_MONEY_TOKEN}", re.IGNORECASE)
-_SUMMARY_PAID = re.compile(rf"Amount\s++paid{_LABEL_DELIMITER}{_MONEY_TOKEN}", re.IGNORECASE)
+_SUMMARY_LABEL = re.compile(
+    r"(?<!\S)(?:(?P<component>Subtotal|Total\s++excluding\s++tax|VAT|Tax|Discount)"
+    r"|Total|Amount\s++paid|Charged)(?=$|[:\s])",
+    re.IGNORECASE,
+)
 _DECIMAL = re.compile(r"[.,][0-9]{2}$")
 _SEPARATORS = str.maketrans("", "", " .,")
 _CURRENCIES = {"zł": "PLN", "€": "EUR", "$": "USD", "£": "GBP"}
@@ -154,14 +159,14 @@ def _following_values(lines: list[str]) -> list[str]:
     return values[::-1]
 
 
-def _parse_amount(value: str, *, labelled: bool = False) -> tuple[Decimal, str] | None:
+def _parse_amount(value: str, *, labelled: bool = False, flattened_cell: bool = False) -> tuple[Decimal, str] | None:
     match = _AMOUNT.search(value) if labelled else _AMOUNT.match(value)
     if match is None:
         return None
     trailing = value[match.end():]
     if match["sign"] or match["inner_sign"] or _AMOUNT.search(trailing):
         raise _RejectedPayment
-    if match.start() or (trailing and not _TRAILING_WORDS.match(trailing)):
+    if match.start() or (trailing and not flattened_cell and not _TRAILING_WORDS.match(trailing)):
         return None
     number = match["prefix_number"] or match["suffix_number"]
     currency = (match["prefix"] or match["suffix"]).casefold()
@@ -171,18 +176,26 @@ def _parse_amount(value: str, *, labelled: bool = False) -> tuple[Decimal, str] 
     return Decimal(digits), _CURRENCIES.get(currency, currency.upper())
 
 
-def _payment_total(lines: list[str], following: list[str]) -> tuple[str, str] | None:
-    totals: dict[str, set[tuple[Decimal, str]]] = {key: set() for key in ("paid", "total", "sum", "card")}
-    for (line, adjacent), next_value in zip(_line_pairs(lines), following):
+def _payment_total(lines: list[str], following: list[str], summary_rows: dict[int, int]) -> tuple[str, str] | None:
+    totals: dict[str, set[tuple[Decimal, str]]] = {key: set() for key in ("charged", "paid", "total", "sum", "card")}
+    summary_totals: dict[tuple[int, str], tuple[Decimal, str]] = {}
+    for index, ((line, adjacent), next_value) in enumerate(zip(_line_pairs(lines), following)):
         label_line = _BULLET.sub("", line)
         if _FEE.match(label_line):
             continue
+        row = summary_rows.get(index)
         if label := _TOTAL.match(label_line):
-            value = label_line[label.end():] or next_value
-            if parsed := _parse_amount(value, labelled=True):
-                totals[label.lastgroup].add(parsed)
+            level = label.lastgroup
+            inline = label_line[label.end():]
+            value = inline if row is not None else inline or next_value
+            if level == "charged":
+                value = _FX_NOTE.sub("", value).strip()
+            if parsed := _parse_amount(value, labelled=bool(inline), flattened_cell=row is not None):
+                if row is not None and summary_totals.setdefault((row, level), parsed) != parsed:
+                    raise _RejectedPayment
+                totals[level].add(parsed)
                 continue
-        if _CARD.search(line) and (parsed := _parse_amount(adjacent)):
+        if row is None and _CARD.search(line) and (parsed := _parse_amount(adjacent)):
             totals["card"].add(parsed)
     for values in totals.values():
         if values:
@@ -354,12 +367,11 @@ def _order_reference(fields: list[str]) -> str | None:
 def _flatten_summary(line: str) -> tuple[str, ...]:
     if header := _RECEIPT_HEADER.match(line):
         labels = list(_SUMMARY_LABEL.finditer(line, header.end()))
-        if len(labels) >= 2:
-            total_start, paid_start = (label.start() for label in labels[-2:])
-            total = line[total_start:paid_start].rstrip()
-            paid = line[paid_start:]
-            if _SUMMARY_TOTAL.fullmatch(total) and _SUMMARY_PAID.fullmatch(paid):
-                return line[:total_start].rstrip(), total, paid
+        if labels:
+            ends = [label.start() for label in labels[1:]] + [len(line)]
+            cells = (line[label.start():end].rstrip() for label, end in zip(labels, ends) if not label["component"])
+            # Separate the receipt identifier from the totals before redacting.
+            return (line[:labels[0].start()].rstrip(), *cells)
     return (line,)
 
 
@@ -392,12 +404,20 @@ def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gate
             _body_marker(line) for line in raw
         ):
             return PaymentInspection()
-        expanded = [part for line in raw for part in _flatten_summary(line)]
+        expanded = []
+        summary_rows = {}
+        for line in raw:
+            header, *cells = _flatten_summary(line)
+            row = len(expanded)
+            expanded.append(header)
+            for cell in cells:
+                summary_rows[len(expanded)] = row
+                expanded.append(cell)
         joined = "\n".join(expanded)
         clean = redact_pan(joined).split("\n") if joined else expanded
         lines = [_SKIPPED_LINE if line == _SKIPPED_LINE else value for line, value in zip(expanded, clean)]
         following = _following_values(lines)
-        if (total := _payment_total(lines, following)) is None:
+        if (total := _payment_total(lines, following, summary_rows)) is None:
             return PaymentInspection(missing_total=True)
         safe_subjects = tuple(redact_pan(subject) if subject else "" for subject in subjects)
         fields = _receipt_fields(lines, safe_subjects, merchant, gateway)

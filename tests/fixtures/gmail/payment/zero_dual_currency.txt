@@ -1,0 +1,2 @@
+Example invoice notice
+Amount: 0,00 € EUR

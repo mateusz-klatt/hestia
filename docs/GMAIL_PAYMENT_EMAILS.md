@@ -97,23 +97,25 @@ Body markers apply to lines of at most 120 chars that contain neither an amount 
 
 Collect *labelled totals*. A label matches a whole line, or a line prefix followed by `:` or whitespace. The value sits on the same line or on the next non-empty line. The labels, from highest priority to lowest:
 
+0. `Charged` records the amount debited from the card. Use it even when the invoice total has a different currency.
 1. `Amount paid`, `Kwota zapłacona`, `Zapłacono łącznie`, `Zapłacono`, `Paid` (only as a whole-line label or directly before a value)
-2. `Do zapłaty`, `Łącznie`, `Razem do zapłaty`, `Suma do zapłaty`, `Total`, `Cena z dostawą`
+2. `Do zapłaty`, `Łącznie`, `Razem do zapłaty`, `Suma do zapłaty`, `Total`, `Cena z dostawą`, `Wartość zamówienia`
 3. `Razem`, `Suma`, `Kwota transakcji`, `Kwota zamówienia`, `Kwota`
 4. A *card-charge line* is an amount on the line right after a masked card (`•••• 1234`, `**** 1234`, `- 1234`, `xxxx 1234`). A total label with an unparseable value still allows this check. A masked PAN such as `654321******0099` is never itself an amount.
 
 - **Value grammar.** An amount with currency `zł` / `PLN` / `EUR` / `€` / `USD` / `$` / `GBP` / `£`, the symbol before or after.
   - Decimal comma or dot, optional thousands separators (space, NBSP or the other separator), exactly 0 or 2 decimals. The first group of a thousands-formatted value starts with a nonzero digit, so `0.005` is invalid.
-  - Values must be > 0 and ≤ 1 000 000. A negative value rejects the whole message.
+  - A trailing symbol and its matching currency code identify one amount. For a recognized total label, `0,00 € EUR` parses as EUR zero and is rejected as non-positive. Values must be > 0 and ≤ 1 000 000. A negative value rejects the whole message.
   - Trailing words such as `miesięcznie` or `brutto` are allowed after the amount on the same line.
+  - A whole-line label such as `RAZEM` contributes a value only when the next non-empty line starts with an amount. A standalone parenthesized amount is ignored.
 - **Multiple values.**
   - A second currency amount on a labelled total's value line is ambiguous and rejects the message. A negative total rejects even at a lower priority.
   - Use the highest-priority level that has any value.
   - All values at that level must agree in amount and currency; if they disagree, reject.
   - Lower levels are ignored.
-  - "Fees" lines (`Dodatkowe opłaty`, `Opłata za realizację transakcji`, `Opłata za usługę`, `Dostawa`) are never totals.
+  - Fee lines (`Dodatkowe opłaty`, `Opłata za realizację transakcji`, `Opłata za usługę`, `Dostawa`, `Koszt dostawy`) are never totals.
 - **Legal footers.** Lines containing `kapitał`, `KRS` or `zakładowego` are ignored entirely.
-- The extractor recognizes adjacent `Total` and `Amount paid` cells in a flattened `Receipt #…` summary. It scans the bounded row and label separators without quadratic backtracking.
+- **Flattened receipt summaries.** Split a `Receipt #…` row at the labels `Subtotal`, `Total excluding tax`, `VAT`, `Tax`, `Discount`, `Total`, `Amount paid`, and `Charged`. `Subtotal`, `Total excluding tax`, `VAT`, `Tax`, and `Discount` are informational. A total segment contributes the amount immediately after its own label. An exchange-rate note such as `using 1 USD = 3.9498 PLN` in a `Charged` segment contributes no amount. Amounts in separate labelled segments are evaluated independently. Repeated conflicting values at the same priority within the row reject the message even when a higher-priority amount is available.
 - With no labelled total and no card-charge line, the body yields no total. A newsletter with prices therefore yields `None` when no other body has a total.
 
 ### Merchant and description
@@ -126,9 +128,9 @@ Collect *labelled totals*. A label matches a whole line, or a line prefix follow
 
   Skip generic single-word descriptions (`Płatność`, `Payment`, `Zamówienie`, `Order`, `Receipt`, `Faktura`). Prefer candidates without digit runs longer than 10. When the subject is the only candidate, keep its sanitized text. Sanitization uses PAN, IBAN, and PESEL redaction, removes long digit runs, collapses whitespace, and caps the result at 128 chars. An empty result falls back to `Płatność`.
 - **Contact filtering.** In one whitespace-token pass, drop any token containing `://`, `mailto:` or `www.`, or an `@` joining two non-empty parts. This also removes composite tokens such as `order_https://shop.example.test/`.
-- **Gateway sender.** Collect payee candidates from every matching label on a line and from gateway subject forms. A payee must be unique, 2–128 chars and free of digit runs longer than 6. Use the config merchant if no candidate qualifies. Conflicting valid payees reject the message. Description extraction follows the same rules as above. `Tytuł:` never supplies a payee.
+- **Gateway sender.** Collect payee candidates from every matching label on a line and from gateway subject forms. A payee must be unique, 2–128 chars and free of digit runs longer than 6. When comparing candidates, ignore supported legal-form suffixes, case, periods, commas, hyphens, and repeated spaces. Keep the spelling of the first valid candidate. Use the config merchant if no candidate qualifies. Conflicting valid payees reject the message. Description extraction follows the same rules as above. `Tytuł:` never supplies a payee.
   - Body forms include `Odbiorca wpłaty: <X>`, `Odbiorca: <X>`, `Opis zamówienia w <X>:`, `płatność dla <X>`, `dla - <url-host>`, and `zarejestrowaliśmy zlecenie płatności dla <X> (http://…).` Strip the trailing contact token, its parentheses, and the final period from the registered-payment payee.
-  - SaaS receipts can use `Receipt from <X> Receipt #…`, `Receipt from <X>`, or `Payment to <X> : <amount>` in the body. The subject can use `Your receipt from <X> #1234-5678`, `Your <X> receipt [#1234-5678]`, or `Twoje pokwitowanie od <X> nr 1234-5678`.
+  - SaaS receipts can use `Receipt from <X> Receipt #…`, `Receipt from <X>`, `Receipt from <X> <amount> Paid <date>`, or `Payment to <X> : <amount>` in the body. When the receipt heading contains the amount and paid date, extract only `<X>` as the payee and use the paid date for the date cross-check. The subject can use `Your receipt from <X> #1234-5678`, `Your <X> receipt [#1234-5678]`, or `Twoje pokwitowanie od <X> nr 1234-5678`.
   - `Do <X>` supplies the payee when it follows the completed-payment heading `Przekazaliśmy Twoje pieniądze`. Registration and completion emails can both supply a valid total. The dedupe rules below handle the pair.
 - **Raw text.** No raw body text is persisted. `raw_ocr_text` stays NULL, as for invoices.
 
@@ -188,9 +190,13 @@ The fixtures live in `tests/fixtures/gmail/payment/*.txt`. The expected results:
 | `saas_gateway_receipt.txt` | `Your receipt from Example Workshop #1234-5678`, `Your Example Workshop receipt [#1234-5678]`, or `Twoje pokwitowanie od Example Workshop nr 1234-5678` | yes | 8.27 USD, merchant `Example Workshop` |
 | `shop_order_updates.txt` | Repeated notices for `Zamówienie nr 00000000001`, a notice with no reference, and a notice for `Zamówienie nr 00000000002` | no | 67.18 PLN, with the two known references kept separate and repeated notices deduped |
 | `food_description.txt` | `Potwierdzenie zamówienia nr 00000000001` | no | 26.42 PLN, description `Przykładowa Restauracja` |
+| `saas_gateway_charged.txt` | `Receipt #1111-2222` | yes | 96.77 PLN charged for a 24.50 USD invoice, merchant `Example Studio`, paid November 5, 2026 |
+| `sports_shop_html_order.txt` | `Potwierdzenie zamówienia nr 00000000003` | no | 248.36 PLN from `Wartość zamówienia` in rendered HTML |
+| `zero_dual_currency.txt` | `Example invoice notice` | no | None |
 
 Also required:
 - disagreement, two amounts on one total line, and negative-value rejects;
+- flattened summaries with currency conversion and conflicting repeated totals, and a terminal rejection for a labelled EUR zero using a symbol and code;
 - NBSP amounts;
 - a marker inside an item line does not reject;
 - the legal-footer capital line is ignored;
