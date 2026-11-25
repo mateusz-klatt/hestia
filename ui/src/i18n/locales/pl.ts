@@ -512,9 +512,11 @@ const pl: Partial<Messages> = {
   "budget.receipts.deleteError": "Nie udało się usunąć dokumentu. Spróbuj ponownie.",
   "budget.receipts.cursorExpiredNotice": "Kursor strony wygasł — wczytano ponownie od strony 1.",
   "budget.receipts.clientFilterHint": "Filtrowanie w załadowanych stronach — wczytaj więcej, aby sprawdzić starsze wpisy.",
-  "budget.receipts.confirmedUnlinkNote": "Zatwierdzone dokumenty nie mają kandydatów do powiązania — zapisanie odłączy bieżącą transakcję.",
+  "budget.receipts.confirmedUnlinkNote": "Zatwierdzone dokumenty nie obsługują zachowania ani zmiany kandydata — wybierz jawnie Odłącz transakcję, aby zapisać.",
   "budget.receipts.draftNoCandidatesNote": "Kandydaci powiązania są dostępni w trybie do przeglądu — zatwierdzenie tutaj zapisze dokument bez powiązania.",
-  "budget.receipts.staleSourceEditHint": "Zmiana nazwy sprzedawcy lub NIP unieważnia token kandydata powiązania.",
+  "budget.receipts.staleSourceEditHint": "Zmiana sprzedawcy, NIP, kwoty, daty, waluty lub typu unieważnia tokeny powiązania — opcje Zachowaj/Powiąż są wyłączone do czasu cofnięcia zmian.",
+  "budget.receipts.explicitUnlinkRequired": "Wybierz jawnie Odłącz transakcję przed zatwierdzeniem lub cofnij zmiany pól, aby zachować powiązanie.",
+  "budget.receipts.needsReviewNoKeepNote": "Brak pasującego tokenu podtrzymania dla obecnego powiązania — wybierz kandydata poniżej lub jawnie wskaż Odłącz transakcję.",
   "budget.receipts.linkedSummaryNote": "Powiązano z tym kontem; dane kontrahenta pozostają w rejestrze bankowym.",
 
   "budget.consent.title": "Stan zgód i przypomnienia o odnowieniu",

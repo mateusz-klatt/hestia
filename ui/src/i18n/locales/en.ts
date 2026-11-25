@@ -530,9 +530,11 @@ const en = {
   "budget.receipts.deleteError": "The document could not be deleted. Try again.",
   "budget.receipts.cursorExpiredNotice": "Page cursor expired — reloaded from page 1.",
   "budget.receipts.clientFilterHint": "Filtering loaded pages only — load more to check older entries.",
-  "budget.receipts.confirmedUnlinkNote": "Confirmed receipts cannot keep or choose candidates on edit; saving unlinks the current transaction.",
+  "budget.receipts.confirmedUnlinkNote": "Confirmed receipts cannot keep or choose candidates on edit; explicitly select Unlink transaction to save.",
   "budget.receipts.draftNoCandidatesNote": "Candidates are only checked on review; confirming here saves without a bank link.",
-  "budget.receipts.staleSourceEditHint": "Changing merchant or NIP invalidates the candidate link token until details reload.",
+  "budget.receipts.staleSourceEditHint": "Editing merchant, NIP, amount, date, currency or type invalidates candidate tokens — Keep/Link options are disabled until reverted.",
+  "budget.receipts.explicitUnlinkRequired": "Explicitly select Unlink transaction before confirming, or revert matching field edits to keep the link.",
+  "budget.receipts.needsReviewNoKeepNote": "No matching keep token is available for this link; select a candidate below or explicitly choose Unlink transaction.",
   "budget.receipts.linkedSummaryNote": "Linked to this account; bank counterparty details stay on the ledger.",
 
   "budget.consent.title": "Consent status & renewal overview",
