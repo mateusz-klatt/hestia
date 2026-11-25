@@ -1,6 +1,7 @@
 """Transactional store and browser contracts for the PR 3 grant editor."""
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -274,7 +275,7 @@ class GrantEditorStoreTests(unittest.TestCase):
         self.assertEqual(self._phase(), authz.POLICY_PHASE_COMPAT)
         self.assertEqual(self._rows(), before)
 
-    def _device(self, token_id, owner, actor, revoked_at=None):
+    def _device(self, token_id, owner, actor, revoked_at=None, issued_permissions=None):
         return db.BudgetReceiptDeviceToken(
             id=token_id,
             owner=owner,
@@ -287,9 +288,10 @@ class GrantEditorStoreTests(unittest.TestCase):
             sliding_written_at=1.0,
             last_used_at=None,
             revoked_at=revoked_at,
+            issued_permissions=issued_permissions,
         )
 
-    def test_real_changes_revoke_owner_and_actor_devices_but_idempotent_posts_do_not(self):
+    def test_real_changes_narrow_owner_and_actor_devices_but_idempotent_posts_do_not(self):
         with self.sessions.begin() as session:
             session.add_all([
                 self._device("admin-self", "admin", "admin"),
@@ -302,7 +304,7 @@ class GrantEditorStoreTests(unittest.TestCase):
         with mock.patch("hestia.store_sql.time.time", return_value=1000.0):
             self._replace(admin_selected, username="admin")
         with self.sessions() as session:
-            self.assertEqual(session.get(db.BudgetReceiptDeviceToken, "admin-self").revoked_at, 1000.0)
+            self.assertIsNone(session.get(db.BudgetReceiptDeviceToken, "admin-self").revoked_at)
             self.assertEqual(session.get(db.BudgetReceiptDeviceToken, "admin-delegate").revoked_at, 1000.0)
             self.assertIsNone(session.get(db.BudgetReceiptDeviceToken, "other-self").revoked_at)
             self.assertEqual(session.get(db.BudgetReceiptDeviceToken, "already-revoked").revoked_at, 50.0)
@@ -318,7 +320,31 @@ class GrantEditorStoreTests(unittest.TestCase):
         with self.sessions() as session:
             self.assertEqual(session.get(db.BudgetReceiptDeviceToken, "delegate-other").revoked_at, 2000.0)
             self.assertIsNone(session.get(db.BudgetReceiptDeviceToken, "other-self").revoked_at)
-            self.assertEqual(session.get(db.BudgetReceiptDeviceToken, "admin-self").revoked_at, 1000.0)
+            self.assertIsNone(session.get(db.BudgetReceiptDeviceToken, "admin-self").revoked_at)
+
+    def test_custom_activation_preflights_existing_foreign_owner_target(self):
+        with self.sessions.begin() as session:
+            session.add(db.PermissionGrant(
+                username="dormant_owner", permission_id="household.view", target_owner="owner",
+            ))
+        self._assert_error("target_conflict", [], username="other")
+
+    def test_partial_receipt_withdrawal_narrows_then_empty_intersection_revokes(self):
+        full = sorted(authz.DEVICE_ELIGIBLE_PERMISSIONS)
+        with self.sessions.begin() as session:
+            session.add(self._device("modern-self", "admin", "admin", issued_permissions=json.dumps(full)))
+        current = self._get("admin")["direct"]
+        narrowed = [row for row in current if row["permission_id"] != "budget.receipts.match"]
+        self._replace(narrowed, username="admin")
+        with self.sessions() as session:
+            row = session.get(db.BudgetReceiptDeviceToken, "modern-self")
+            self.assertIsNone(row.revoked_at)
+            self.assertEqual(json.loads(row.issued_permissions),
+                             [pid for pid in full if pid != "budget.receipts.match"])
+        installation_only = [row for row in narrowed if row["target_owner"] is None]
+        self._replace(installation_only, username="admin")
+        with self.sessions() as session:
+            self.assertIsNotNone(session.get(db.BudgetReceiptDeviceToken, "modern-self").revoked_at)
 
     def test_household_metadata_and_permission_ids_are_atomic_stable_and_fresh_on_regrant(self):
         granted = household.grant_member("delegate", "owner", path=str(self.path))

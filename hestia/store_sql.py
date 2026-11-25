@@ -1160,14 +1160,36 @@ def _apply_household_metadata(
 
 
 def _revoke_changed_grant_devices(session: Session, username: str) -> None:
-    session.execute(
-        update(BudgetReceiptDeviceToken)
-        .where(
-            (BudgetReceiptDeviceToken.owner == username) | (BudgetReceiptDeviceToken.actor == username),
-            BudgetReceiptDeviceToken.revoked_at.is_(None),
+    from .budget.device_token import _issued_mask
+
+    rows = session.scalars(select(BudgetReceiptDeviceToken).where(
+        (BudgetReceiptDeviceToken.owner == username) | (BudgetReceiptDeviceToken.actor == username),
+        BudgetReceiptDeviceToken.revoked_at.is_(None),
+    ))
+    for row in rows:
+        actor = row.actor or row.owner
+        live = authz.effective_permissions(session, actor, owner=row.owner)
+        narrowed = _issued_mask(row) & live & authz.DEVICE_ELIGIBLE_PERMISSIONS
+        if not narrowed:
+            row.revoked_at = time.time()
+        elif narrowed != _issued_mask(row):
+            row.issued_permissions = json.dumps(sorted(narrowed))
+
+
+def _validate_custom_roster(session: Session) -> None:
+    targets = {}
+    for username, target_owner in session.execute(
+        select(PermissionGrant.username, PermissionGrant.target_owner).where(
+            PermissionGrant.target_owner.is_not(None),
         )
-        .values(revoked_at=time.time())
-    )
+    ):
+        targets.setdefault(username, set()).add(target_owner)
+    for username, owners in targets.items():
+        user = session.get(User, username)
+        if len(owners) > 1 or (user is not None and user.budget_owner and owners != {username}):
+            raise GrantEditorError("target_conflict")
+        if any((owner := session.get(User, target)) is None or not owner.budget_owner for target in owners):
+            raise GrantEditorError("target_conflict")
 
 
 def replace_user_grants(username: str, grants, *, actor: str, path=None) -> dict:
@@ -1196,6 +1218,7 @@ def replace_user_grants(username: str, grants, *, actor: str, path=None) -> dict
                 return {"ok": True, "phase": phase}
 
             if phase == authz.POLICY_PHASE_COMPAT:
+                _validate_custom_roster(session)
                 _upsert(
                     session, AppMeta, "key", authz.POLICY_PHASE_KEY,
                     {"value": authz.POLICY_PHASE_CUSTOM},
