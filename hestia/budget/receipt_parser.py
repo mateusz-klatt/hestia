@@ -112,11 +112,17 @@ _CHAIN_TOKENS = {
     "carrefour": ("carrefour",),
     "lidl": ("lidl",),
 }
-GATEWAY_TOKENS = frozenset({"p24", "przelewy24", "payu", "autopay", "tpay", "paynow", "blik"})
+_CHAIN_ALIAS_GROUPS = {
+    "biedronka": (frozenset({"biedronka"}), frozenset({"jeronimo", "martins"})),
+    "carrefour": (frozenset({"carrefour"}),),
+    "lidl": (frozenset({"lidl"}),),
+}
+GATEWAY_TOKENS = frozenset({"p24", "przelewy24", "payu", "autopay", "tpay", "paynow", "dotpay", "blik"})
 _STOP_TOKENS = frozenset({
-    "sklep", "shop", "store",
-    "sp", "z", "o", "oo", "sa", "spolka", "zoo", "polska",
-    "pl", "com", "www",
+    "energy", "energia", "polska", "poland", "services", "service", "group",
+    "store", "shop", "sklep", "market", "online", "pay", "payment", "oplata",
+    "sp", "z", "o", "oo", "sa", "spolka", "zoo",
+    "com", "pl", "www", "net", "eu",
     "fiskalny", "paragon",
 }) | GATEWAY_TOKENS
 
@@ -457,9 +463,9 @@ def valid_nip(value):
 def chain_for(shop_name, nip):
     if nip in _CHAIN_NIPS:
         return _CHAIN_NIPS[nip]
-    key = fold_text(shop_name or "")
+    words = frozenset(merchant_word_tokens(shop_name))
     return next((chain for chain, tokens in _CHAIN_TOKENS.items()
-                 if any(token in key for token in tokens)), None)
+                 if words.intersection(tokens)), None)
 
 
 def merchant_word_tokens(value):
@@ -468,13 +474,27 @@ def merchant_word_tokens(value):
     return tuple(re.findall(r"[^\W_]+", fold_text(value), re.UNICODE))
 
 
-def merchant_tokens(shop_name, nip):
+def merchant_match_groups(shop_name, nip):
+    distinctive = frozenset(
+        token for token in merchant_word_tokens(shop_name)
+        if len(token) >= 4 and token not in _STOP_TOKENS
+    )
     chain = chain_for(shop_name, nip)
-    tokens = set(_CHAIN_TOKENS.get(chain, ()))
-    for token in merchant_word_tokens(shop_name):
-        if len(token) >= 4 and token not in _STOP_TOKENS:
-            tokens.add(token)
-    return frozenset(tokens)
+    if chain is None:
+        return (distinctive,) if distinctive else ()
+    extra = distinctive - frozenset(_CHAIN_TOKENS[chain])
+    return tuple(group | extra for group in _CHAIN_ALIAS_GROUPS[chain])
+
+
+def merchant_tokens(shop_name, nip):
+    distinctive = {
+        token for token in merchant_word_tokens(shop_name)
+        if len(token) >= 4 and token not in _STOP_TOKENS
+    }
+    chain = chain_for(shop_name, nip)
+    if chain is not None:
+        distinctive.update(_CHAIN_TOKENS[chain])
+    return frozenset(distinctive)
 
 
 def _bounded_money(value, *, mismatch=False):

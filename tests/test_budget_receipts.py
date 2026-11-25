@@ -1565,16 +1565,20 @@ NR KARTY ****5555
                              for row in self.rows(db.BudgetAnalyticsAudit)))
 
     def _seed_imported(self, *, document_kind, issue_date, due_date=None, total="100", shop="ORANGE POLSKA",
-                       nip="5260250995", source_kind="email", with_line=False):
+                       nip="5260250995", source_kind="email", with_line=False, forwarded_sender_domain=None,
+                       created_at=None, import_expires_at=None):
         import uuid
         identifier = str(uuid.uuid4())
+        created = self.now if created_at is None else created_at
+        expires = self.now + 86400 if import_expires_at is None else import_expires_at
         with self.sessions.begin() as session:
             session.add(db.BudgetReceipt(
                 id=identifier, owner="owner", raw_shop_name=shop, raw_nip=nip,
                 receipt_kind="purchase", receipt_date=issue_date, due_date=due_date,
                 total_amount=total, currency="PLN", payment_method=None,
+                forwarded_sender_domain=forwarded_sender_domain,
                 status="imported", source_kind=source_kind, document_kind=document_kind,
-                import_expires_at=self.now + 86400, version=1, created_at=self.now, updated_at=self.now,
+                import_expires_at=expires, version=1, created_at=created, updated_at=created,
             ))
             if with_line:
                 session.add(db.BudgetReceiptLine(
@@ -1777,13 +1781,12 @@ NR KARTY ****5555
         self.assertEqual(saved["linked_entry_ref"], reference_digest("pc-plus-4"))
 
     def test_merchant_hit_specificity_nip_whole_word_and_gateway(self):
-        from hestia.budget.gmail_store import _payment_payee_key
-
-        # 1. Generic words / gateway tokens / short words never match across unrelated shops ("sklep", "p24", "pl").
+        # 1. Rule (2): Gateway-mediated debits (remittance or creditor containing p24, przelewy24, payu,
+        #    autopay, tpay, paynow, dotpay, or blik) stay manual even if shop name or NIP matches.
         self.add_transaction("a", "p24-other-shop", amount="61.00", booking_date="2026-11-10", value_date=None,
-                             remittance_information=["P24 inny-sklep.pl"])
-        self.add_transaction("a", "p24-same-shop", amount="61.00", booking_date="2026-11-11", value_date=None,
-                             remittance_information=["P24 PRZYKLADOWY SKLEP"])
+                             remittance_information=["P24 OTHER-SHOP"])
+        self.add_transaction("a", "direct-same-shop", amount="61.00", booking_date="2026-11-11", value_date=None,
+                             remittance_information=["PRZYKLADOWY SKLEP"])
         direct_id = self._seed_imported(
             document_kind="payment_confirmation", issue_date="2026-11-10", due_date=None,
             total="61.00", shop="PRZYKŁADOWY SKLEP", nip=None, with_line=True,
@@ -1791,32 +1794,61 @@ NR KARTY ****5555
         direct_hits = {item["entry_reference"]: item["merchant_token_hit"]
                        for item in self.receipts.detail("owner", direct_id)["candidates"]}
         self.assertEqual(direct_hits, {
-            reference_digest("p24-same-shop"): True,
+            reference_digest("direct-same-shop"): True,
             reference_digest("p24-other-shop"): False,
         })
 
-        # 2. Gateway receipts (AppMeta payee key or gateway shop token) never get merchant_token_hit=True, staying manual.
-        gateway_id = self._seed_imported(
+        # P24 LIDL -> False even though Lidl is a known chain; P24 TAURON -> False even with exact NIP in remittance.
+        self.add_transaction("a", "p24-lidl", amount="62.00", booking_date="2026-11-10", value_date=None,
+                             remittance_information=["P24 LIDL KRAKOW"])
+        lidl_id = self._seed_imported(
             document_kind="payment_confirmation", issue_date="2026-11-10", due_date=None,
-            total="61.00", shop="PRZYKŁADOWY SKLEP", nip=None, with_line=True,
+            total="62.00", shop="LIDL", nip="7811897358", with_line=True,
         )
-        with self.sessions.begin() as session:
-            session.add(db.AppMeta(key=_payment_payee_key(gateway_id), value="payee-hmac"))
-        gateway_candidates = self.receipts.detail("owner", gateway_id)["candidates"]
-        self.assertEqual(len(gateway_candidates), 2)
-        self.assertTrue(all(item["merchant_token_hit"] is False for item in gateway_candidates))
+        lidl_cands = self.receipts.detail("owner", lidl_id)["candidates"]
+        self.assertEqual([item["merchant_token_hit"] for item in lidl_cands], [False])
 
-        named_gateway_id = self._seed_imported(
-            document_kind="payment_confirmation", issue_date="2026-11-10", due_date=None,
-            total="61.00", shop="P24 PRZYKŁADOWY SKLEP", nip=None, with_line=True,
+        for gw_idx, gw_marker in enumerate(("P24", "Przelewy24", "PayU", "Autopay", "Tpay", "Paynow", "Dotpay", "BLIK")):
+            tx_ref = f"gw-tauron-{gw_idx}"
+            self.add_transaction("a", tx_ref, amount="63.00", booking_date="2026-11-10", value_date=None,
+                                 remittance_information=[f"{gw_marker} TAURON NIP 5261040828"])
+        self.add_transaction("a", "creditor-gw-tauron", amount="63.00", booking_date="2026-11-10", value_date=None,
+                             remittance_information=["TAURON SPRZEDAZ"])
+        self.metadata("a", "creditor-gw-tauron", {"creditor_name": "Dotpay Sp. z o.o."})
+        self.add_transaction("a", "direct-tauron", amount="63.00", booking_date="2026-11-10", value_date=None,
+                             remittance_information=["TAURON SPRZEDAZ"])
+        tauron_id = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-10", due_date="2026-11-15",
+            total="63.00", shop="TAURON", nip="5261040828",
         )
+        tauron_hits = {item["entry_reference"]: item["merchant_token_hit"]
+                       for item in self.receipts.detail("owner", tauron_id)["candidates"]}
+        self.assertEqual(tauron_hits[reference_digest("direct-tauron")], True)
+        self.assertEqual(tauron_hits[reference_digest("creditor-gw-tauron")], False)
+        for gw_idx in range(8):
+            self.assertEqual(tauron_hits[reference_digest(f"gw-tauron-{gw_idx}")], False)
+
+        # 2. Rule (3): Durable gateway check on the receipt row (401-day case: no AppMeta _payment_payee_key).
+        old_ts = self.now - 401 * 86400
+        old_domain_gw_id = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-10", due_date=None,
+            total="63.00", shop="TAURON", nip="5261040828", with_line=True,
+            forwarded_sender_domain="powiadomienia.przelewy24.pl", created_at=old_ts,
+        )
+        old_shop_gw_id = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-10", due_date=None,
+            total="63.00", shop="Dotpay TAURON", nip=None, with_line=True, created_at=old_ts,
+        )
+        old_cands = self.receipts.detail("owner", old_domain_gw_id)["candidates"]
+        self.assertGreaterEqual(len(old_cands), 1)
+        self.assertTrue(all(item["merchant_token_hit"] is False for item in old_cands))
         self.assertTrue(all(item["merchant_token_hit"] is False
-                            for item in self.receipts.detail("owner", named_gateway_id)["candidates"]))
-        chosen = next(item for item in gateway_candidates
-                      if item["entry_reference"] == reference_digest("p24-same-shop"))
+                            for item in self.receipts.detail("owner", old_shop_gw_id)["candidates"]))
+        # Gateway receipts stay manually confirmable.
+        chosen = next(item for item in old_cands if item["entry_reference"] == reference_digest("direct-tauron"))
         confirmed_gw = self.receipts.confirm("owner", {
-            "receipt_id": gateway_id, "expected_version": 1, "receipt_kind": "purchase",
-            "receipt_date": "2026-11-10", "receipt_time": None, "total_amount": "61.00",
+            "receipt_id": old_domain_gw_id, "expected_version": 1, "receipt_kind": "purchase",
+            "receipt_date": "2026-11-10", "receipt_time": None, "total_amount": "63.00",
             "currency": "PLN", "payment_method": "unknown",
             "link": {
                 "account_id": chosen["account_id"], "entry_reference": chosen["entry_reference"],
@@ -1825,27 +1857,69 @@ NR KARTY ****5555
         })["receipt"]
         self.assertEqual((confirmed_gw["status"], confirmed_gw["linked"]), ("confirmed", True))
 
-        # 3. Whole-word token match only (no substring hit like "mart" in "smartmarket").
-        self.add_transaction("a", "substr-bad", amount="42.00", booking_date="2026-11-10", value_date=None,
-                             remittance_information=["SMARTMARKET KRAKOW"])
-        self.add_transaction("a", "word-ok", amount="42.00", booking_date="2026-11-11", value_date=None,
-                             remittance_information=["MART KRAKOW"])
-        word_id = self._seed_imported(
+        # 3. Rule (4): Whole-word chain aliases ("LIDLBERG" never gains "lidl") and ALL distinctive tokens required.
+        self.add_transaction("a", "lidl-tx", amount="42.00", booking_date="2026-11-10", value_date=None,
+                             remittance_information=["LIDL KRAKOW"])
+        self.add_transaction("a", "lidlberg-tx", amount="42.00", booking_date="2026-11-11", value_date=None,
+                             remittance_information=["LIDLBERG KRAKOW"])
+        lidlberg_id = self._seed_imported(
             document_kind="invoice", issue_date="2026-11-10", due_date="2026-11-15",
-            total="42.00", shop="MART", nip=None,
+            total="42.00", shop="LIDLBERG", nip=None,
         )
-        word_hits = {item["entry_reference"]: item["merchant_token_hit"]
-                     for item in self.receipts.detail("owner", word_id)["candidates"]}
-        self.assertEqual(word_hits, {
-            reference_digest("word-ok"): True,
-            reference_digest("substr-bad"): False,
-        })
+        self.assertEqual(
+            {item["entry_reference"]: item["merchant_token_hit"]
+             for item in self.receipts.detail("owner", lidlberg_id)["candidates"]},
+            {reference_digest("lidlberg-tx"): True, reference_digest("lidl-tx"): False},
+        )
 
-        # 4. Exact NIP match suffices when merchant name consists solely of generic/short tokens.
+        self.add_transaction("a", "partial-tokens", amount="44.00", booking_date="2026-11-10", value_date=None,
+                             remittance_information=["GREEN MARKET KRAKOW"])
+        self.add_transaction("a", "all-tokens", amount="44.00", booking_date="2026-11-11", value_date=None,
+                             remittance_information=["GREEN TECH POLAND"])
+        multi_id = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-10", due_date="2026-11-15",
+            total="44.00", shop="GREEN TECH SERVICES", nip=None,
+        )
+        self.assertEqual(
+            {item["entry_reference"]: item["merchant_token_hit"]
+             for item in self.receipts.detail("owner", multi_id)["candidates"]},
+            {reference_digest("all-tokens"): True, reference_digest("partial-tokens"): False},
+        )
+        generic_only_id = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-10", due_date="2026-11-15",
+            total="44.00", shop="POLAND ENERGY GROUP SERVICES", nip=None,
+        )
+        self.assertTrue(all(item["merchant_token_hit"] is False
+                            for item in self.receipts.detail("owner", generic_only_id)["candidates"]))
+
+        # Positive punctuation-split case: "APPLE" <-> "APPLE.COM/BILL".
+        self.add_transaction("a", "apple-bill", amount="49.99", booking_date="2026-11-10", value_date=None,
+                             remittance_information=["APPLE.COM/BILL"])
+        apple_id = self._seed_imported(
+            document_kind="payment_confirmation", issue_date="2026-11-10", due_date=None,
+            total="49.99", shop="APPLE", nip=None, with_line=True,
+        )
+        apple_cands = self.receipts.detail("owner", apple_id)["candidates"]
+        self.assertEqual([(c["entry_reference"], c["merchant_token_hit"]) for c in apple_cands],
+                         [(reference_digest("apple-bill"), True)])
+
+        # 4. Rule (4): Strict NIP boundaries (10 digits after separators, never inside a longer digit/word run).
         self.add_transaction("a", "nip-exact", amount="88.00", booking_date="2026-11-12", value_date=None,
                              remittance_information=["PRZELEW /NIP/526-104-08-28"])
+        self.add_transaction("a", "nip-pl", amount="88.00", booking_date="2026-11-12", value_date=None,
+                             remittance_information=["PL5261040828"])
         self.add_transaction("a", "nip-wrong-len", amount="88.00", booking_date="2026-11-13", value_date=None,
                              remittance_information=["PRZELEW 52610408289"])
+        self.add_transaction("a", "nip-hyphen-longer", amount="88.00", booking_date="2026-11-13", value_date=None,
+                             remittance_information=["PRZELEW 526-104-08-28-1"])
+        self.add_transaction("a", "nip-lead-digit", amount="88.00", booking_date="2026-11-13", value_date=None,
+                             remittance_information=["PRZELEW 12-526-104-08-28"])
+        self.add_transaction("a", "nip-lead-alpha", amount="88.00", booking_date="2026-11-13", value_date=None,
+                             remittance_information=["REF5261040828"])
+        self.add_transaction("a", "nip-apl-prefix", amount="88.00", booking_date="2026-11-13", value_date=None,
+                             remittance_information=["APL5261040828"])
+        self.add_transaction("a", "nip-tail-alpha", amount="88.00", booking_date="2026-11-13", value_date=None,
+                             remittance_information=["5261040828X"])
         nip_id = self._seed_imported(
             document_kind="invoice", issue_date="2026-11-10", due_date="2026-11-15",
             total="88.00", shop="ABC SP. Z O.O.", nip="5261040828",
@@ -1854,7 +1928,13 @@ NR KARTY ****5555
                     for item in self.receipts.detail("owner", nip_id)["candidates"]}
         self.assertEqual(nip_hits, {
             reference_digest("nip-exact"): True,
+            reference_digest("nip-pl"): True,
             reference_digest("nip-wrong-len"): False,
+            reference_digest("nip-hyphen-longer"): False,
+            reference_digest("nip-lead-digit"): False,
+            reference_digest("nip-lead-alpha"): False,
+            reference_digest("nip-apl-prefix"): False,
+            reference_digest("nip-tail-alpha"): False,
         })
 
     def test_unedited_double_space_linked_draft_survives_reconcile(self):
@@ -2137,7 +2217,7 @@ class ReceiptHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
                 observed_at=now, source="api", api_observed_at=now, uncertain=False,
             ))
             session.add(db.BudgetReceipt(
-                id=invoice_id, owner="alice", raw_shop_name="Respect Energy", raw_nip="7791011327",
+                id=invoice_id, owner="alice", raw_shop_name="Respect Energy", raw_nip="5261040828",
                 receipt_kind="purchase", receipt_date="2026-11-01", due_date="2026-11-20",
                 total_amount="150", currency="PLN", payment_method=None, status="imported",
                 source_kind="email", document_kind="invoice", import_expires_at=now + 86400,

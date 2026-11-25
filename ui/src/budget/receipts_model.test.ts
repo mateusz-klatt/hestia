@@ -679,7 +679,7 @@ describe("receipts_model", () => {
       action: "skip",
     });
 
-    for (const nonMatchCandidates of [[hitCand, hitCand2], [], [noHitCand]]) {
+    for (const nonMatchCandidates of [[hitCand, hitCand2], [hitCand, noHitCand], [], [noHitCand]]) {
       const confirmUnlinkedRes = buildBulkConfirmRequest(paymentDetail, nonMatchCandidates, "Summary", {
         autoLink: true,
         confirmUnlinked: true,
