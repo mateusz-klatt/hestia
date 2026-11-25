@@ -689,7 +689,7 @@ async def _auth_middleware(request, handler):
         except (authz.PolicyPhaseUnsupported, store_sql.SessionPhaseUnsupported):
             return _incompatible_bridge_response()
     if not allowed:
-        if request.path.startswith("/api/budget/"):
+        if auth_state.policy_phase != authz.POLICY_PHASE_LEGACY and request.path.startswith("/api/budget/"):
             if not budget_api.expected_actor_matches(request, envelope.username):
                 return _json(HTTPStatus.CONFLICT, {"error": {"code": "budget_actor_changed"}})
             return _json(HTTPStatus.FORBIDDEN, {"error": {"code": "budget_forbidden"}})
