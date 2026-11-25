@@ -214,6 +214,16 @@ class PaymentExtractionTests(unittest.TestCase):
         self.assertIsNone(_extract("Odbiorca wpłaty: Example A\nPłatność dla Example B\nTotal 3 PLN", gateway=True))
         self.assertIsNone(_extract("Odbiorca wpłaty: Example A Płatność dla Example B\nTotal 3 PLN", gateway=True))
         self.assertIsNone(_extract("Odbiorca wpłaty: Example A dla - https://shop.example.test\nTotal 3 PLN", gateway=True))
+        for body, payee in (
+            ("Przekazaliśmy Twoje pieniądze\nDo Example Polska S.A.\nOdbiorca: Example Polska SA\nTotal 3 PLN",
+             "Example Polska S.A."),
+            ("Odbiorca: EXAMPLE SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ\nPłatność dla Example sp. z o.o.\nTotal 3 PLN",
+             "EXAMPLE SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ"),
+            ("Odbiorca: Example Ltd\nPayment to Example Limited : 3 PLN\nTotal 3 PLN", "Example Ltd"),
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(_extract(body, gateway=True).merchant, payee)
+        self.assertIsNone(_extract("Odbiorca: S.A.\nPłatność dla Example\nTotal 3 PLN", gateway=True))
 
     def test_description_selection_redaction_and_cap(self):
         self.assertEqual(_extract(

@@ -262,6 +262,23 @@ def _payee(value: str) -> str:
     return ""
 
 
+# Gateways spell one payee several ways ("Do Orange Polska S.A." beside
+# "Odbiorca: Orange Polska SA"). Legal-form suffixes and punctuation do not
+# make a second payee.
+_LEGAL_FORM = re.compile(
+    r"(?:\s+(?:s\.?\s*a\.?|sp\.?\s*z\s*o\.?\s*o\.?|sp\.?\s*k\.?|sp\.?\s*j\.?"
+    r"|spółka\s+(?:akcyjna|komandytowa|jawna|z\s+ograniczoną\s+odpowiedzialnością)"
+    r"|ltd\.?|limited|inc\.?|llc|gmbh|pbc))+$",
+    re.IGNORECASE,
+)
+_PAYEE_PUNCT = re.compile(r"[\s.,\-]+")
+
+
+def _payee_key(value: str) -> str:
+    stem = _LEGAL_FORM.sub("", value.strip())
+    return _PAYEE_PUNCT.sub(" ", stem or value).strip().casefold()
+
+
 def _payee_candidates(line: str) -> list[str]:
     candidates = []
     labels = list(_PAYEE_LABEL.finditer(line))
@@ -316,7 +333,7 @@ def _receipt_fields(lines: list[str], subjects: tuple[str, ...], merchant: str, 
             candidates.extend(match[1] for pattern in _SUBJECT_PAYEES if (match := pattern.fullmatch(subject)))
         for candidate in candidates:
             if clean := _payee(candidate):
-                payees.setdefault(clean.casefold(), clean)
+                payees.setdefault(_payee_key(clean), clean)
     if len(payees) > 1:
         raise _RejectedPayment
     return next(iter(payees.values()), merchant), _description([*descriptions, *titles, *venues, *subjects])
