@@ -10,7 +10,7 @@ from unittest import mock
 
 from sqlalchemy import select
 
-from hestia import authz, db, store_sql, web
+from hestia import api_contract, authz, db, store_sql, web
 from hestia.budget import device_token, receipt_api
 from hestia.budget.receipt_parser import ReceiptError
 from hestia.budget.receipt_store import BudgetReceiptStore
@@ -290,6 +290,120 @@ class DelegatedReceiptStoreTests(AnalyticsCase):
         with self.assertRaises(device_token.DeviceTokenError):
             store.parse_text("owner", receipt_text())
 
+    def test_device_token_match_strength_and_delegated_confirm_guards(self):
+        self.add_transaction(
+            "a", "del-match-tx", amount="123.45", booking_date="2026-11-30", value_date=None,
+            remittance_information=["BIEDRONKA NIP 7791011327"],
+        )
+        store_sql.activate_sessions_v2(path=self.path)
+        devices = device_token.DeviceTokenStore(
+            self.sessions, clock=lambda: self.now, session_secret=b"device-secret",
+        )
+        owner_device = devices.exchange("owner", "Vesta Owner", generation=0)
+        owner_dev_store = BudgetReceiptStore(
+            self.sessions, clock=lambda: self.now, cursor_secret=b"receipts-only", device_id=owner_device["token_id"],
+        )
+        parsed = owner_dev_store.parse_text("owner", receipt_text(total="123.45"))
+        self.assertEqual(len(parsed["candidates"]), 1)
+        self.assertEqual(parsed["candidates"][0]["match_strength"], "nip")
+        detail = owner_dev_store.detail("owner", parsed["receipt_id"])
+        self.assertEqual(detail["candidates"][0]["match_strength"], "nip")
+
+        # Stale candidate token submitted by device token is rejected inside BEGIN IMMEDIATE.
+        stale_cand = detail["candidates"][0]
+        self.change_transaction("a", "del-match-tx", remittance_information=["BIEDRONKA NIP 7791011327 CHANGED"])
+        with self.assertRaises(ReceiptError) as stale_err:
+            owner_dev_store.confirm("owner", confirm_values(parsed, link={
+                "account_id": stale_cand["account_id"],
+                "entry_reference": stale_cand["entry_reference"],
+                "candidate_token": stale_cand["candidate_token"],
+            }))
+        self.assertEqual((stale_err.exception.status, stale_err.exception.code),
+                         (409, "budget_receipt_stale_source"))
+
+        # Grant delegate add+view+edit: delegate confirms on an evidence row (both browser & device) fail with 409,
+        # and delegate passing any link fails closed with 403.
+        self.grant("budget.receipts.add", "budget.receipts.view", "budget.receipts.edit")
+        doc_id, ev_id = str(uuid.uuid4()), str(uuid.uuid4())
+        with self.sessions.begin() as session:
+            session.add_all((
+                db.BudgetReceipt(
+                    id=doc_id, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                    receipt_kind="purchase", receipt_date="2026-11-30", total_amount="100",
+                    currency="PLN", status="imported", source_kind="email", document_kind="invoice",
+                    import_expires_at=self.now + 86400, version=1, created_at=self.now, updated_at=self.now,
+                ),
+                db.BudgetReceipt(
+                    id=ev_id, owner="owner", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                    receipt_kind="purchase", receipt_date="2026-11-30", total_amount="100",
+                    currency="PLN", status="imported", source_kind="email", document_kind="payment_confirmation",
+                    gateway="PayU", evidence_for_receipt_id=doc_id,
+                    import_expires_at=self.now + 86400, version=1, created_at=self.now, updated_at=self.now,
+                ),
+            ))
+            session.add(db.BudgetReceiptLine(
+                receipt_id=ev_id, owner="owner", line_no=1, line_kind="other",
+                raw_name="Pozycja", raw_name_key="pozycja", quantity="1",
+                gross_line_total="100", discount_amount="0", net_line_total="100",
+            ))
+
+        del_device = devices.exchange("delegate", "Vesta Delegate", generation=0)
+        del_dev_store = BudgetReceiptStore(
+            self.sessions, clock=lambda: self.now, cursor_secret=b"receipts-only", device_id=del_device["token_id"],
+        )
+        ev_payload = confirm_values({
+            "receipt_id": ev_id, "version": 1,
+            "draft": {
+                "raw_shop_name": "BIEDRONKA", "raw_nip": "7791011327", "receipt_kind": "purchase",
+                "receipt_date": "2026-11-30", "receipt_time": None, "total_amount": "100",
+                "currency": "PLN", "payment_method": "card",
+                "lines": [{
+                    "line_kind": "other", "raw_name": "Pozycja", "ptu_code": None, "quantity": "1",
+                    "raw_unit": None, "unit_price_raw": None, "gross_line_total": "100",
+                    "discount_amount": "0", "net_line_total": "100",
+                }],
+            },
+        })
+        for store_actor, target_store in (("delegate", self.delegated()), ("delegate", del_dev_store)):
+            with self.subTest(actor=target_store._actor):
+                with self.assertRaises(ReceiptError) as ev_err:
+                    target_store.confirm(store_actor if target_store._device_id is None else "owner", ev_payload)
+                self.assertEqual((ev_err.exception.status, ev_err.exception.code),
+                                 (409, "budget_receipt_stale_source"))
+                with self.assertRaises(ReceiptError) as del_err:
+                    target_store.delete(
+                        store_actor if target_store._device_id is None else "owner",
+                        {"receipt_id": ev_id, "expected_version": 1},
+                    )
+                self.assertEqual((del_err.exception.status, del_err.exception.code),
+                                 (409, "budget_receipt_stale_source"))
+
+        # Even if a delegate holds match permission, candidates preserve match_strength and stale tokens still 409.
+        real_effective = authz.effective_permissions
+
+        def with_match(session, actor, *, owner=None):
+            perms = real_effective(session, actor, owner=owner)
+            if actor == "delegate" and owner == "owner":
+                return perms | {"budget.receipts.match"}
+            return perms
+
+        with mock.patch("hestia.authz.effective_permissions", side_effect=with_match):
+            match_delegate = self.delegated()
+            del_parsed = match_delegate.parse_text("delegate", receipt_text(total="123.45"))
+            self.assertEqual(del_parsed["candidates"][0]["match_strength"], "nip")
+            del_detail = match_delegate.detail("delegate", del_parsed["receipt_id"])
+            self.assertEqual(del_detail["candidates"][0]["match_strength"], "nip")
+            del_cand = del_detail["candidates"][0]
+            self.change_transaction("a", "del-match-tx", remittance_information=["BIEDRONKA NIP 7791011327 AGAIN"])
+            with self.assertRaises(ReceiptError) as del_stale:
+                match_delegate.confirm("delegate", confirm_values(del_parsed, link={
+                    "account_id": del_cand["account_id"],
+                    "entry_reference": del_cand["entry_reference"],
+                    "candidate_token": del_cand["candidate_token"],
+                }))
+            self.assertEqual((del_stale.exception.status, del_stale.exception.code),
+                             (409, "budget_receipt_stale_source"))
+
 
 class DelegatedReceiptHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
     rows = fixture.BudgetAPITests.rows
@@ -393,6 +507,92 @@ class DelegatedReceiptHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         self.assertEqual([receipt["receipt_id"] for receipt in (await following.json())["receipts"]], [document_id])
         self.assertEqual((await listing({"evidence": "only", "cursor": cursor})).status, 400)
         self.assertEqual((await listing({"evidence": "include", "cursor": cursor}, user="alice")).status, 400)
+
+    async def test_delegated_http_evidence_row_confirm_and_stale_token_rejected(self):
+        doc_id, ev_id = str(uuid.uuid4()), str(uuid.uuid4())
+        now = web._now()
+        with self.sessions.begin() as session:
+            for perm in ("budget.receipts.add", "budget.receipts.view", "budget.receipts.edit"):
+                session.add(db.PermissionGrant(username="operator", permission_id=perm, target_owner="alice"))
+            session.add(db.BudgetConnection(
+                id="conn-del-http", owner="alice", application_id="app", bank_name="Bank", country="PL",
+                enabled=True, next_attempt=0, failures=0,
+            ))
+            session.flush()
+            session.add(db.BudgetAccount(
+                id="acc-del-http", connection_id="conn-del-http", owner="alice", identification_hash="acc",
+                enabled=True, balances_json="{}",
+            ))
+            session.flush()
+            session.add(db.BudgetTransaction(
+                account_id="acc-del-http", entry_reference="tx-del-http",
+                payload_json=json.dumps({
+                    "entry_reference": "tx-del-http", "amount": "100", "currency": "PLN",
+                    "credit_debit_indicator": "DBIT", "status": "BOOK", "booking_date": "2026-11-30",
+                    "value_date": None, "transaction_date": None,
+                    "remittance_information": ["BIEDRONKA NIP 7791011327"],
+                }),
+                observed_at=now, source="api", api_observed_at=now, uncertain=False,
+            ))
+            session.add_all((
+                db.BudgetReceipt(
+                    id=doc_id, owner="alice", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                    receipt_kind="purchase", receipt_date="2026-11-30", total_amount="100",
+                    currency="PLN", status="imported", source_kind="email", document_kind="invoice",
+                    import_expires_at=now + 86400, version=1, created_at=now, updated_at=now,
+                ),
+                db.BudgetReceipt(
+                    id=ev_id, owner="alice", raw_shop_name="BIEDRONKA", raw_nip="7791011327",
+                    receipt_kind="purchase", receipt_date="2026-11-30", total_amount="100",
+                    currency="PLN", status="imported", source_kind="email", document_kind="payment_confirmation",
+                    gateway="PayU", evidence_for_receipt_id=doc_id,
+                    import_expires_at=now + 86400, version=1, created_at=now, updated_at=now,
+                ),
+            ))
+            session.add(db.BudgetReceiptLine(
+                receipt_id=ev_id, owner="alice", line_no=1, line_kind="other",
+                raw_name="Pozycja", raw_name_key="pozycja", quantity="1",
+                gross_line_total="100", discount_amount="0", net_line_total="100",
+            ))
+
+        del_headers = {
+            **self.headers("operator", origin=True),
+            "Content-Type": "application/json",
+            "X-Hestia-Contract-Version": api_contract.CONTRACT_VERSION,
+        }
+        del_detail = await self.client.get(
+            receipt_api.PREFIX + "/detail", params={"receipt_id": doc_id}, headers=del_headers,
+        )
+        self.assertEqual(del_detail.status, 200, await del_detail.text())
+        self.assertNotIn("candidates", await del_detail.json())
+
+        confirm_body = {
+            "receipt_id": ev_id, "expected_version": 1, "raw_shop_name": "BIEDRONKA",
+            "raw_nip": "7791011327", "receipt_kind": "purchase", "receipt_date": "2026-11-30",
+            "receipt_time": None, "total_amount": "100", "currency": "PLN", "payment_method": "card",
+            "lines": [{
+                "line_kind": "other", "raw_name": "Pozycja", "ptu_code": None, "quantity": "1",
+                "raw_unit": None, "unit_price_raw": None, "gross_line_total": "100",
+                "discount_amount": "0", "net_line_total": "100",
+            }],
+            "link": None,
+        }
+        ev_res = await self.client.post(
+            receipt_api.PREFIX + "/confirm", data=json.dumps(confirm_body), headers=del_headers,
+        )
+        self.assertEqual(ev_res.status, 409, await ev_res.text())
+        self.assertEqual((await ev_res.json())["error"], "budget_receipt_stale_source")
+
+        link_res = await self.client.post(
+            receipt_api.PREFIX + "/confirm",
+            data=json.dumps({
+                **confirm_body, "receipt_id": doc_id,
+                "link": {"account_id": "acc-del-http", "entry_reference": "a" * 64, "candidate_token": "tok"},
+            }),
+            headers=del_headers,
+        )
+        self.assertEqual(link_res.status, 403, await link_res.text())
+        self.assertEqual((await link_res.json())["error"], "budget_forbidden")
 
 
 if __name__ == "__main__":

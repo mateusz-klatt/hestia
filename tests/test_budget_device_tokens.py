@@ -1118,6 +1118,67 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         who = await self.client.get("/api/whoami", headers=self._auth(device))
         self.assertEqual(who.status, 403)
 
+    async def test_device_token_candidate_reads_include_match_strength_and_stale_token_rejected(self):
+        device = await self._device()
+        now = web._now()
+        with self.sessions.begin() as session:
+            session.add(db.BudgetConnection(
+                id="conn-dev", owner="alice", application_id="app", bank_name="Bank", country="PL",
+                enabled=True, next_attempt=0, failures=0,
+            ))
+            session.flush()
+            session.add(db.BudgetAccount(
+                id="acc-dev", connection_id="conn-dev", owner="alice", identification_hash="acc",
+                enabled=True, balances_json="{}",
+            ))
+            session.flush()
+            session.add(db.BudgetTransaction(
+                account_id="acc-dev", entry_reference="tx-dev-1",
+                payload_json=json.dumps({
+                    "entry_reference": "tx-dev-1", "amount": "100", "currency": "PLN",
+                    "credit_debit_indicator": "DBIT", "status": "BOOK", "booking_date": "2026-11-30",
+                    "value_date": None, "transaction_date": None,
+                    "remittance_information": ["BIEDRONKA NIP 7791011327"],
+                }),
+                observed_at=now, source="api", api_observed_at=now, uncertain=False,
+            ))
+        for version in (None, "0.54.0", api_contract.CONTRACT_VERSION):
+            req_headers = self._auth(device)
+            if version is not None:
+                req_headers = {**req_headers, "X-Hestia-Contract-Version": version}
+            parsed = await self._post(receipt_api.PREFIX + "/parse-text", {"text": receipt_text()}, req_headers)
+            _status(parsed, 200)
+            parsed_body = await parsed.json()
+            api_contract.BudgetReceiptParseResult.model_validate(parsed_body)
+            self.assertEqual(parsed_body["candidates"][0]["match_strength"], "nip")
+            detail = await self.client.get(
+                receipt_api.PREFIX + "/detail", params={"receipt_id": parsed_body["receipt_id"]},
+                headers=req_headers,
+            )
+            _status(detail, 200)
+            detail_body = await detail.json()
+            api_contract.BudgetReceiptDetailResult.model_validate(detail_body)
+            self.assertEqual(detail_body["candidates"][0]["match_strength"], "nip")
+
+        # Mutate bank tx evidence and verify stale device confirm returns 409 budget_receipt_stale_source.
+        cand = detail_body["candidates"][0]
+        with self.sessions.begin() as session:
+            tx = session.get(db.BudgetTransaction, ("acc-dev", "tx-dev-1"))
+            payload = json.loads(tx.payload_json)
+            payload["remittance_information"] = ["BIEDRONKA NIP 7791011327 CHANGED"]
+            tx.payload_json = json.dumps(payload)
+        stale_confirm = await self._post(
+            receipt_api.PREFIX + "/confirm",
+            confirm_values(parsed_body, link={
+                "account_id": cand["account_id"],
+                "entry_reference": cand["entry_reference"],
+                "candidate_token": cand["candidate_token"],
+            }),
+            self._auth(device),
+        )
+        self.assertEqual(stale_confirm.status, 409, await stale_confirm.text())
+        self.assertEqual((await stale_confirm.json())["error"], "budget_receipt_stale_source")
+
     async def test_browser_management_requires_owner_cookie_and_exact_origin(self):
         device = await self._device()
         for path in (device_token.PAIR_PATH, device_token.LIST_PATH, device_token.REVOKE_PATH):
