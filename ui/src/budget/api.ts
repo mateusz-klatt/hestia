@@ -13,6 +13,18 @@ import type { AnalyticsCategory, AnalyticsForecast, AnalyticsInbox, AnalyticsInb
   MortgagePaymentSetRequest, MortgageSaveRequest, MortgageScheduleSaved, RuleCandidate, RulePreview, RuleSaved,
   SpendingLimitSaveRequest, SpendingLimitSaved, TransactionFilter, TransferDecisionRequest, TransferDecisionResult,
   TransferList, TransferQueue } from "./analytics/model";
+import type {
+  ReceiptConfirmRequest,
+  ReceiptConfirmResult,
+  ReceiptDeleteRequest,
+  ReceiptDeleteResult,
+  ReceiptDetailResult,
+  ReceiptListRequest,
+  ReceiptListResult,
+  ReceiptSearchRequest,
+} from "./receipts_model";
+
+export const RECEIPT_CONTRACT_HEADERS = { "X-Hestia-Contract-Version": "0.40.0" } as const;
 
 export interface ReceiptDevice {
   token_id: string;
@@ -45,6 +57,15 @@ function url(path: string, query: Query = {}): URL {
   return target;
 }
 
+function parseErrorBody<T>(status: number, body: unknown): BudgetResult<T> {
+  const record = (body ?? {}) as { error?: unknown; current?: unknown };
+  const nested = typeof record.error === "object" && record.error !== null
+    ? (record.error as { code?: unknown }).code : undefined;
+  const error = typeof record.error === "string" ? record.error
+    : typeof nested === "string" ? nested : `budget_http_${String(status)}`;
+  return { ok: false, status, error, current: record.current };
+}
+
 async function request<T>(target: URL, init: RequestInit = {}): Promise<BudgetResult<T>> {
   let response: Response;
   try {
@@ -59,12 +80,7 @@ async function request<T>(target: URL, init: RequestInit = {}): Promise<BudgetRe
     // A 2xx whose body cannot be read leaves the outcome unknown (the write may have happened).
     return { ok: false, status: response.status, error: "budget_uncertain" };
   }
-  const record = (body ?? {}) as { error?: unknown; current?: unknown };
-  const nested = typeof record.error === "object" && record.error !== null
-    ? (record.error as { code?: unknown }).code : undefined;
-  const error = typeof record.error === "string" ? record.error
-    : typeof nested === "string" ? nested : `budget_http_${String(response.status)}`;
-  return { ok: false, status: response.status, error, current: record.current };
+  return parseErrorBody(response.status, body);
 }
 
 export interface ConnectionsData { connections: BudgetConnection[]; capabilities: BudgetCapabilities }
@@ -131,7 +147,12 @@ export function createBudgetApi(expectedActor: string | null = null) {
     return pending;
   }
 
-  async function call<T>(target: URL, init: RequestInit = {}, mutation = false): Promise<BudgetResult<T>> {
+  async function runGated<T>(
+    target: URL,
+    init: RequestInit,
+    mutation: boolean,
+    executor: (finalTarget: URL, finalInit: RequestInit) => Promise<BudgetResult<T>>,
+  ): Promise<BudgetResult<T>> {
     if (!verified) return denial();
     const verification = verificationGeneration;
     const lock = lockGeneration;
@@ -147,13 +168,39 @@ export function createBudgetApi(expectedActor: string | null = null) {
     }
     if (mutation && (authorizationLocked || lock !== lockGeneration)) return denial("budget_server_changed");
     try {
-      const result = await request<T>(target, init);
+      const result = await executor(target, init);
       if (verification !== verificationGeneration) return denial();
       if (mutation && lock !== lockGeneration) return denial("budget_server_changed");
       return result;
     } finally {
       if (controller !== null) pendingReads.delete(controller);
     }
+  }
+
+  function call<T>(target: URL, init: RequestInit = {}, mutation = false): Promise<BudgetResult<T>> {
+    return runGated<T>(target, init, mutation, request);
+  }
+
+  function callBinary(target: URL, fallbackType: string): Promise<BudgetResult<Blob>> {
+    return runGated<Blob>(target, {}, false, async (finalTarget, finalInit) => {
+      let response: Response;
+      try {
+        response = await fetch(finalTarget, { credentials: "same-origin", cache: "no-store", ...finalInit });
+      } catch {
+        return { ok: false, status: 0, error: "budget_network" };
+      }
+      if (response.ok) {
+        try {
+          const bytes = await response.arrayBuffer();
+          const contentType = response.headers.get("content-type") || fallbackType;
+          return { ok: true, data: new Blob([bytes], { type: contentType }) };
+        } catch {
+          return { ok: false, status: response.status, error: "budget_uncertain" };
+        }
+      }
+      const body = (await response.json().catch(() => null)) as unknown;
+      return parseErrorBody(response.status, body);
+    });
   }
 
   function post<T>(path: string, body: object, headers: Record<string, string> = {},
@@ -172,6 +219,7 @@ export function createBudgetApi(expectedActor: string | null = null) {
       lockGeneration += 1;
     }
   },
+  isAuthorizationLocked: () => authorizationLocked,
   capabilities,
   connections: () => call<ConnectionsData>(url("connections")),
   accounts: (connectionId?: string) =>
@@ -262,6 +310,23 @@ export function createBudgetApi(expectedActor: string | null = null) {
     post<{ ok: true }>("receipts/device-token/pair-code-cancel", { code_id: codeId }),
   revokeReceiptDevice: (tokenId: string) =>
     post<{ ok: true }>("receipts/device-token/revoke", { token_id: tokenId }),
+  /** Keyset-paged owner receipts and documents (POST JSON). A 404 means the receipts flag is off. */
+  receiptsList: (body: ReceiptListRequest = {}) =>
+    post<ReceiptListResult>("receipts/list", body, RECEIPT_CONTRACT_HEADERS, false),
+  /** Searches owner receipts and line items via POST JSON (never GET query strings). */
+  receiptsSearch: (body: ReceiptSearchRequest) =>
+    post<ReceiptListResult>("receipts/search", body, RECEIPT_CONTRACT_HEADERS, false),
+  /** Reads one owned receipt, its line items, and needs_review link candidates when available. */
+  receiptDetail: (receiptId: string) =>
+    call<ReceiptDetailResult>(url("receipts/detail", { receipt_id: receiptId }), { headers: RECEIPT_CONTRACT_HEADERS }),
+  /** Fetches the owner-private WebP receipt image only when image_available is true. */
+  receiptImage: (receiptId: string) => callBinary(url("receipts/image", { receipt_id: receiptId }), "image/webp"),
+  /** Confirms receipt metadata, line items, and optional transaction link with expected_version CAS. */
+  confirmReceipt: (body: ReceiptConfirmRequest) =>
+    post<ReceiptConfirmResult>("receipts/confirm", body, RECEIPT_CONTRACT_HEADERS, true),
+  /** Deletes an owned receipt with expected_version CAS. */
+  deleteReceipt: (body: ReceiptDeleteRequest) =>
+    post<ReceiptDeleteResult>("receipts/delete", body, {}, true),
   setSelected: (account: BudgetAccount, selected: boolean) =>
     post<{ account: BudgetAccount }>("account-selection",
       { account_id: account.id, selected, expected_version: account.control_version }),

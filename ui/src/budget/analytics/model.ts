@@ -384,6 +384,7 @@ export const MAIN_VIEW_KEYS: Readonly<Record<string, MessageKey>> = {
   forecast: "budget.main.views.forecast",
   quarantine: "budget.main.views.quarantine",
   rules: "budget.main.views.rules",
+  receipts: "budget.main.views.receipts",
 };
 
 export const MAIN_KIND_KEYS: Readonly<Record<string, MessageKey>> = {

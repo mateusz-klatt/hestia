@@ -27,6 +27,8 @@ import { MAIN_BALANCE_TYPE_KEYS, MAIN_FRESHNESS_KEYS, MAIN_JOB_STATUS_KEYS, MAIN
   MAIN_VIEW_KEYS, hasAnalytics, labelOf } from "./analytics/model";
 import type { RuleCandidate } from "./analytics/model";
 import { ReceiptDevices } from "./devices";
+import { ReceiptsView } from "./receipts";
+import type { ReceiptsApi } from "./receipts_api";
 import "./budget.css";
 
 const PRESET_KEYS = {
@@ -36,7 +38,7 @@ const PRESET_KEYS = {
   all: "budget.main.presets.all",
 } as const;
 
-type View = "monthly_budget" | "accounts" | "inbox" | "month" | "year" | "limits" | "recurring" | "mortgages" | "forecast" | "quarantine" | "rules";
+type View = "monthly_budget" | "accounts" | "inbox" | "month" | "year" | "limits" | "recurring" | "mortgages" | "forecast" | "quarantine" | "rules" | "receipts";
 
 function serverMonthToToday(month: string): (() => Date) | undefined {
   const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(month);
@@ -74,7 +76,7 @@ function jobText(job: BudgetJob, locale: string): string {
 }
 
 export interface BudgetProps {
-  active: boolean; api?: BudgetApi; pollMs?: number;
+  active: boolean; api?: BudgetApi; receiptsApi?: ReceiptsApi; pollMs?: number;
   /** The user this page signed in as; budget data are shown only while the cookie still names them. */
   principal?: string | null;
   /** Leaves the page for the bank's authorization screen (tests inject a recorder). */
@@ -83,12 +85,13 @@ export interface BudgetProps {
   completeUrl?: string;
 }
 
-export function Budget({ active, api: providedApi, pollMs = 2000, principal,
+export function Budget({ active, api: providedApi, receiptsApi: providedReceiptsApi, pollMs = 2000, principal,
   navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
   const api = useMemo<BudgetApi>(
     () => providedApi ?? (principal === undefined || principal === null ? budgetApi : createBudgetApi(principal)),
     [providedApi, principal],
   );
+  const effectiveReceiptsApi = providedReceiptsApi ?? api;
   const locale = currentLocale();
   const [load, setLoad] = useState<Load>("loading");
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
@@ -424,6 +427,12 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
             {t("budget.main.devices")}
           </button>
         ) : null}
+        {load === "ready" && !analysis && receiptsAllowed ? (
+          <button type="button" aria-pressed={shownView === "receipts"}
+            onClick={() => { authorizeView(() => { setView((current) => (current === "receipts" ? "accounts" : "receipts")); }); }}>
+            {t("budget.main.views.receipts")}
+          </button>
+        ) : null}
         {load === "ready" ? (
           <button type="button" aria-pressed={showLimits}
             onClick={() => { authorizeView(() => { setShowLimits((current) => !current); }); }}>
@@ -440,8 +449,17 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
   }
   const opened = accounts.find((account) => account.id === detail) ?? null;
   const analysis = hasAnalytics(capabilities);
-  // Analytics views are available only while the server offers analytics.
-  const shownView: View = analysis ? view : "accounts";
+  const receiptsFlag = capabilities === null
+    ? undefined
+    : Object.entries(capabilities).find(([key]) => key === "receipts")?.[1];
+  const receiptsAllowed = capabilities !== null
+    && capabilities.stored_reads
+    && receiptsFlag !== false
+    && authorization?.own_budget?.can_use_receipts === true;
+  // Analytics views are available only while the server offers analytics; receipts are gated independently.
+  const shownView: View = view === "receipts"
+    ? (receiptsAllowed ? "receipts" : "accounts")
+    : (!analysis ? "accounts" : view);
   return (
     <section className="budget-app">
       {header}
@@ -470,7 +488,7 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
       )}
       {analysis ? (
         <div className="budget-views" role="group" aria-label={t("budget.main.viewsLabel")}>
-          {(["monthly_budget", "accounts", "inbox", "month", "year", "limits", "recurring", "mortgages", "forecast", "quarantine", "rules"] as const).map((item) => (
+          {(["monthly_budget", "accounts", "inbox", "month", "year", "limits", "recurring", "mortgages", "forecast", "quarantine", "rules", ...(receiptsAllowed ? (["receipts"] as const) : [])] as const).map((item) => (
             <button type="button" key={item} aria-pressed={shownView === item}
               onClick={() => { authorizeView(() => { setView(item); if (item === "month") { setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); } if (item === "rules") setFocusRule(undefined); }); }}>{labelOf(MAIN_VIEW_KEYS, item)}</button>
           ))}
@@ -536,6 +554,9 @@ export function Budget({ active, api: providedApi, pollMs = 2000, principal,
       ) : shownView === "rules" ? (
         <CategoriesView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} initialRule={focusRule ?? null} />
+      ) : shownView === "receipts" ? (
+        <ReceiptsView api={api} receiptsApi={effectiveReceiptsApi} accounts={accounts} connections={connections}
+          analyticsEnabled={analysis} locale={locale} revision={revision} onAccessLoss={barrier} />
       ) : (
         <>
         {canManageDevices ? <ReceiptDevices key={principal ?? ""} api={api} locale={locale} revision={revision}
