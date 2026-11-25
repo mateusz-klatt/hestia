@@ -16,8 +16,9 @@ from hestia import db
 from hestia.budget import gmail_message
 from hestia.budget.gmail_invoice import extract_invoice
 from hestia.budget.gmail_payment import ImportedPayment, inspect_payment
-from hestia.budget.gmail_store import (DAY as SECONDS_PER_DAY, GATEWAY_REF_DOMAIN, PAYMENT_SENDER_DOMAIN, GmailStore,
-                                       PendingMessage, PendingPayment, _failed_gateway_key, digest, retain_imports)
+from hestia.budget.gmail_store import (DAY as SECONDS_PER_DAY, GATEWAY_REF_DOMAIN, PAYMENT_SENDER_DOMAIN,
+                                       PROVENANCE_TTL, GmailStore, PendingMessage, PendingPayment,
+                                       _failed_gateway_key, digest, retain_imports)
 from hestia.budget.gmail_trust import PaymentSender
 from hestia.budget.receipt_parser import ReceiptError
 from hestia.budget.receipt_store import BudgetReceiptStore
@@ -176,6 +177,16 @@ class V1fExtractionTests(unittest.TestCase):
         self.assertEqual(_inspect_text(base + "Opłata za realizację transakcji: 0,50 PLN", "Potwierdzenie").payment.total_amount, "10.5")
         self.assertEqual(_inspect_text("Do zapłaty: 10,00 PLN", "Potwierdzenie").payment.total_amount, "10")
         self.assertEqual(_inspect_text("Łączna kwota do zapłaty: 10,00 PLN", "Potwierdzenie").payment.total_amount, "10")
+        self.assertEqual(_inspect_text("Do zapłaty: 10,00 PLN\nDodatkowe opłaty: 1,00 PLN", "Potwierdzenie").payment.fee_amount, "1")
+        # Base and charged currencies must match even without a fee; fee cannot exceed charged even without a base.
+        for bad in (
+            "Kwota transakcji: 10,00 PLN\nDo zapłaty: 10,00 EUR",
+            "Do zapłaty: 10,00 PLN\nDodatkowe opłaty: 10,01 PLN",
+        ):
+            with self.subTest(bad=bad):
+                rejected = _inspect_text(bad, "Potwierdzenie", provider="p24")
+                self.assertIsNone(rejected.payment)
+                self.assertFalse(rejected.missing_total)
         self.assertIsNone(_inspect_text("Dodatkowe opłaty: 1,00 PLN", "Potwierdzenie").payment)
         self.assertTrue(_inspect_text("Dodatkowe opłaty: 1,00 PLN", "Potwierdzenie").missing_total)
         self.assertIsNone(_inspect_text(base + "Do zapłaty: 1000001,00 PLN", "Potwierdzenie").payment)
@@ -206,6 +217,59 @@ class V1fExtractionTests(unittest.TestCase):
                                         provider="payu").gateway_ref)
         self.assertEqual(_inspect_text(body + "Transakcja AB12-CDE-FGH-IJK", "Zlecenie (P24-ABC-123-DEF)",
                                        provider="paynow").gateway_ref, "AB12-CDE-FGH-IJK")
+
+    def test_autopay_next_line_transaction_id_from_table_cells(self):
+        base = "Kwota transakcji: 5,00 PLN\n"
+        for block, expected in (
+            ("Identyfikator transakcji:\nSYNTH0007GG", "SYNTH0007GG"),
+            ("Identyfikator transakcji Autopay:\n\nsynth-0008-hh", "SYNTH-0008-HH"),
+            ("Identyfikator transakcji\nSYNTH0009II", "SYNTH0009II"),
+            ("- Identyfikator transakcji:\nSYNTH0010JJ", "SYNTH0010JJ"),
+            ("Identyfikator transakcji:\nKwota transakcji: 5,00 PLN", None),
+            ("Identyfikator transakcji:\nOdbiorca", None),
+            ("Identyfikator transakcji:\n5,00 PLN", None),
+            ("Numer płatności: ABcd_123456_PL_22_11_2026\nIdentyfikator transakcji: SYNTH0011KK",
+             "ABCD_123456_PL_22_11_2026"),
+            ("Numer płatności:\nABcd_123456_PL_22_11_2026\nIdentyfikator transakcji: SYNTH0012LL",
+             "ABCD_123456_PL_22_11_2026"),
+            ("Numer płatności:\nOdbiorca\nIdentyfikator transakcji: SYNTH0013MM", "SYNTH0013MM"),
+        ):
+            with self.subTest(block=block):
+                self.assertEqual(_inspect_text(base + block, "Potwierdzenie", provider="autopay").gateway_ref, expected)
+
+    def test_autopay_payment_number_and_on_behalf_of_payee_align_registered_and_paid(self):
+        registered_body = (
+            "Numer płatności: ABcd_123456_PL_22_11_2026\n"
+            "Identyfikator transakcji: REG111111\n"
+            "Odbiorca: SKLEP PRZYKŁADOWY SP. Z O.O.\n"
+            "Kwota transakcji: 49,99 PLN\n"
+        )
+        paid_body = (
+            "Przekazaliśmy Twoje pieniądze\n"
+            "Numer płatności: ABcd_123456_PL_22_11_2026\n"
+            "Identyfikator transakcji: PAID222222\n"
+            "Odbiorca: Autopay S.A. w imieniu SKLEP PRZYKŁADOWY SP. Z O.O.\n"
+            "Kwota transakcji: 49,99 PLN\n"
+        )
+        reg = _inspect_text(registered_body, "Potwierdzenie rozpoczęcia transakcji", provider="autopay")
+        paid = _inspect_text(paid_body, "Przekazaliśmy Twoją płatność", provider="autopay")
+        self.assertEqual((reg.status, paid.status), ("registered", "paid"))
+        self.assertEqual(reg.gateway_ref, "ABCD_123456_PL_22_11_2026")
+        self.assertEqual(paid.gateway_ref, reg.gateway_ref)
+        self.assertEqual(paid.payment.merchant, "SKLEP PRZYKŁADOWY SP. Z O.O.")
+        self.assertEqual(paid.payment.merchant, reg.payment.merchant)
+        # Unlabelled payees keep their wording untouched; labelled host after "w imieniu" feeds payee_host.
+        host_behalf = _inspect_text(
+            "Odbiorca: Autopay S.A. W IMIENIU 4parents.pl.\nKwota transakcji: 10,00 PLN",
+            "Przekazaliśmy Twoją płatność", provider="autopay",
+        ).payment
+        self.assertEqual((host_behalf.merchant, host_behalf.payee_from_config, host_behalf.payee_host),
+                         (_MERCHANT, True, "4parents.pl"))
+        unlabelled = _inspect_text(
+            "Płatność dla Fundacja w imieniu dzieci\nKwota transakcji: 10,00 PLN",
+            "Potwierdzenie", provider="autopay",
+        ).payment
+        self.assertEqual(unlabelled.merchant, "Fundacja w imieniu dzieci")
 
     def test_payee_host_sources_and_validation(self):
         base = "Kwota transakcji: 5,00 PLN\n"
@@ -260,6 +324,25 @@ class V1fExtractionTests(unittest.TestCase):
         body = "Transakcja została opłacona\nOdbiorca:\nKwota transakcji: 6 PLN"
         payment = _inspect_text(body, "Zlecenie", provider="paynow").payment
         self.assertEqual((payment.merchant, payment.payee_from_config), (_MERCHANT, True))
+
+    def test_trailing_dot_host_detection_and_empty_recipient_guards(self):
+        # Trailing sentence dot is stripped before host detection: plain names stay payees, domains become hosts.
+        payee_dot = _inspect_text("Płatność dla Allegro.\nKwota transakcji: 15,00 PLN", "Potwierdzenie").payment
+        self.assertEqual((payee_dot.merchant, payee_dot.payee_from_config, payee_dot.payee_host),
+                         ("Allegro.", False, None))
+        host_dot = _inspect_text("Płatność dla 4parents.pl.\nKwota transakcji: 15,00 PLN", "Potwierdzenie").payment
+        self.assertEqual((host_dot.merchant, host_dot.payee_from_config, host_dot.payee_host),
+                         (_MERCHANT, True, "4parents.pl"))
+        # Bulleted lines and fee lines immediately following an empty Odbiorca: must not become the payee.
+        for block in (
+            "- Odbiorca:\n- Kwota transakcji: 15,00 PLN",
+            "- Odbiorca:\n- Status: opłacona\nKwota transakcji: 15,00 PLN",
+            "Odbiorca:\nOpłata za realizację transakcji: 1,00 PLN\nKwota transakcji: 15,00 PLN",
+            "Odbiorca:\nDodatkowe opłaty:\n0,00 PLN\nKwota transakcji: 15,00 PLN",
+        ):
+            with self.subTest(block=block):
+                payment = _inspect_text(block, "Potwierdzenie", provider="autopay").payment
+                self.assertEqual((payment.merchant, payment.payee_from_config), (_MERCHANT, True))
 
     def test_conflicting_charged_labels_reject(self):
         body = ("Płatność zakończona sukcesem\nKwota transakcji: 10,00 PLN\n"
@@ -438,7 +521,7 @@ class V1fStoreTests(unittest.TestCase):
         with self.sessions() as session:
             self.assertEqual(json.loads(session.get(db.AppMeta, key).value), {
                 "gateway": "Example Pay", "ref_hmac": reference,
-                "expires_at": self.clock.now + 365 * SECONDS_PER_DAY,
+                "expires_at": self.clock.now + PROVENANCE_TTL,
             })
         self.assertEqual(self._commit(self._message(2, payment=_gateway_payment(
             status="registered", ref=reference))), (0, 1, True))
@@ -450,22 +533,29 @@ class V1fStoreTests(unittest.TestCase):
         with self.sessions() as session:
             self.assertIsNone(session.get(db.AppMeta, key))
 
-    def test_failed_dispositions_follow_the_import_window_and_grant(self):
+    def test_failed_dispositions_follow_provenance_ttl_and_grant(self):
         ref = _ref("ref-fail")
         old_ref = _ref("ref-old")
+        backfill_edge_ref = _ref("ref-365d")
         key = _failed_gateway_key("owner", "Example Pay", ref)
         old_key = _failed_gateway_key("owner", "Example Pay", old_ref)
+        edge_key = _failed_gateway_key("owner", "Example Pay", backfill_edge_ref)
         failed = self._message(1, outcome="skipped_non_receipt", failed_gateway=("Example Pay", ref))
-        self.store.commit("owner", 1, {}, (failed,), backfill_days=2)
+        self.store.commit("owner", 1, {}, (failed,))
         later = replace(failed, gmail_id_hmac=f"{2:064x}", internal_date=failed.internal_date + 10)
         earlier = replace(failed, gmail_id_hmac=f"{3:064x}", internal_date=failed.internal_date - 10)
-        self.store.commit("owner", 1, {}, (later, earlier), backfill_days=2)
-        expiry = later.internal_date + 2 * SECONDS_PER_DAY
+        self.store.commit("owner", 1, {}, (later, earlier))
+        expiry = later.internal_date + PROVENANCE_TTL
+        # A message at the 365-day backfill edge still has 35 days left under PROVENANCE_TTL (400 days).
+        edge = replace(failed, gmail_id_hmac=f"{9:064x}", failed_gateway=("Example Pay", backfill_edge_ref),
+                       internal_date=failed.internal_date - 365 * SECONDS_PER_DAY)
         old = replace(earlier, gmail_id_hmac=f"{4:064x}", failed_gateway=("Example Pay", old_ref),
-                      internal_date=failed.internal_date - 2 * SECONDS_PER_DAY)
-        self.store.commit("owner", 1, {}, (old,), backfill_days=2)
+                      internal_date=failed.internal_date - PROVENANCE_TTL)
+        self.store.commit("owner", 1, {}, (edge, old))
         with self.sessions() as session:
             self.assertEqual(json.loads(session.get(db.AppMeta, key).value)["expires_at"], expiry)
+            self.assertEqual(json.loads(session.get(db.AppMeta, edge_key).value)["expires_at"],
+                             edge.internal_date + PROVENANCE_TTL)
             self.assertIsNone(session.get(db.AppMeta, old_key))
         self.assertEqual(self._commit(self._message(5, payment=_gateway_payment(
             status="registered", ref=ref, gateway="Other Pay"))), (1, 0, True))
@@ -654,23 +744,44 @@ class V1fStoreTests(unittest.TestCase):
         (gateway,) = [row for row in self._receipts() if row.gateway is not None]
         self.assertIsNone(gateway.evidence_for_receipt_id)
 
-    def test_paid_date_change_invalidates_an_unconfirmed_document_only(self):
+    def test_paid_date_change_invalidates_an_imported_document_only(self):
         paid_day = date(2026, 11, 20)
-        for index, confirmed in enumerate((False, True), start=1):
-            with self.subTest(confirmed=confirmed):
+        for index, status in enumerate(("imported", "confirmed", "needs_review"), start=1):
+            with self.subTest(status=status):
                 total = str(60 + index)
                 ref = _ref(f"date-change-{index}")
                 register = _gateway_payment(total=total, fee=None, status="registered", ref=ref)
                 self.assertEqual(self._commit(self._message(index * 3, payment=_shop_payment(total=total)),
                                               self._message(index * 3 + 1, payment=register)), (2, 0, True))
                 shop = next(row for row in self._receipts() if row.gateway is None and row.total_amount == total)
-                if confirmed:
-                    self._confirm(shop.id)
+                if status != "imported":
+                    with self.sessions.begin() as session:
+                        row = session.get(db.BudgetReceipt, shop.id)
+                        row.status = status
+                        row.payment_method = "card"
                 paid = _gateway_payment(total=total, fee=None, ref=ref, day=paid_day)
                 self.assertEqual(self._commit(self._message(index * 3 + 2, payment=paid)), (0, 1, True))
                 gateway = next(row for row in self._receipts() if row.gateway_ref_hmac == ref)
                 self.assertEqual((gateway.receipt_date, gateway.evidence_for_receipt_id),
-                                 (paid_day.isoformat(), shop.id if confirmed else None))
+                                 (paid_day.isoformat(), None if status == "imported" else shop.id))
+
+    def test_evidence_attachment_requires_matching_receipt_kind(self):
+        with self.sessions.begin() as session:
+            session.add(db.BudgetReceipt(
+                id="refund-doc", owner="owner", raw_shop_name="Sklep Przykładowy", receipt_kind="refund",
+                receipt_date=DAY.isoformat(), total_amount="66", currency="PLN", status="imported",
+                document_kind="receipt", source_kind="email", version=1,
+                created_at=self.clock.now, updated_at=self.clock.now,
+            ))
+        self.assertEqual(self._commit(self._message(1, payment=_gateway_payment(
+            merchant="Sklep Przykładowy", total="66", fee=None, ref=_ref("ref-purchase")))), (1, 0, True))
+        gateway = next(row for row in self._receipts() if row.gateway_ref_hmac == _ref("ref-purchase"))
+        self.assertIsNone(gateway.evidence_for_receipt_id)
+        with self.sessions.begin() as session:
+            refund = session.get(db.BudgetReceipt, "refund-doc")
+            self.store._attach_gateway_for_document(session, "owner", refund)
+        gateway = next(row for row in self._receipts() if row.gateway_ref_hmac == _ref("ref-purchase"))
+        self.assertIsNone(gateway.evidence_for_receipt_id)
 
     def test_pending_cap_ignores_evidence_rows(self):
         self.assertEqual(self._commit(self._message(1, invoice=INVOICE)), (1, 0, True))
@@ -858,3 +969,35 @@ class V1fMessageTests(unittest.TestCase):
         self.assertEqual(pending.outcome, "imported")
         self.assertEqual((pending.payment.status, pending.payment.gateway_name, pending.payment.gateway_ref_hmac),
                          (None, None, None))
+
+    def test_autopay_registered_and_paid_merge_via_payment_number_and_on_behalf_of_payee(self):
+        registered = self._process(
+            "Numer płatności: ABcd_123456_PL_22_11_2026\nIdentyfikator transakcji: REG111111\n"
+            "Odbiorca: SKLEP PRZYKŁADOWY SP. Z O.O.\nKwota transakcji: 49,99 PLN\n",
+            "Potwierdzenie rozpoczęcia transakcji",
+        )
+        paid = self._process(
+            "Przekazaliśmy Twoje pieniądze\nNumer płatności: ABcd_123456_PL_22_11_2026\n"
+            "Identyfikator transakcji: PAID222222\n"
+            "Odbiorca: Autopay S.A. w imieniu SKLEP PRZYKŁADOWY SP. Z O.O.\nKwota transakcji: 49,99 PLN\n",
+            "Przekazaliśmy Twoją płatność",
+        )
+        self.assertEqual((registered.payment.status, paid.payment.status), ("registered", "paid"))
+        self.assertEqual(registered.payment.gateway_ref_hmac, paid.payment.gateway_ref_hmac)
+        self.assertEqual(registered.payment.payee_hmac, paid.payment.payee_hmac)
+        with TemporaryDirectory() as directory:
+            self.addCleanup(db.reset_engine_cache)
+            _engine, sessions = db.init_db(Path(directory) / "autopay-merge.db")
+            with sessions.begin() as session:
+                session.add(db.AppMeta(key="users_authoritative", value="1"))
+                session.add(db.User(username="owner", password_hash="synthetic", role="admin"))
+            store = GmailStore(sessions, clock=FakeClock().wall)
+            store.transition("owner", 1, "active")
+            self.assertEqual(store.commit("owner", 1, {}, (
+                replace(registered, gmail_id_hmac="1" * 64),
+                replace(paid, gmail_id_hmac="2" * 64),
+            )), (1, 1, True))
+            with sessions() as session:
+                (row,) = session.scalars(select(db.BudgetReceipt)).all()
+                self.assertEqual((row.gateway_status, row.raw_shop_name, row.total_amount),
+                                 ("paid", "SKLEP PRZYKŁADOWY SP. Z O.O.", "49.99"))

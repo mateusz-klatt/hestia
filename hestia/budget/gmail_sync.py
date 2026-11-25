@@ -184,7 +184,6 @@ class GmailSync:
         imported, skipped, drained = self.store.commit(
             owner, progress.generation, changes, pending,
             starting_recovery=starting_recovery, starting_incremental=starting_incremental,
-            backfill_days=self.settings.backfill_days,
         )
         progress.imported += imported
         progress.skipped += skipped
