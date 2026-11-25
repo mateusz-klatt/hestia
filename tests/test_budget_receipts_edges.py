@@ -758,6 +758,20 @@ class StoreEdgeTests(AnalyticsCase):
             ((), ("internetowy", "sklep", "zamowienie")),
         )
 
+        # Generic-only business/corporate names never fall back to distinctive tokens.
+        for corporate_generic in (
+            "FIRMA HANDLOWA",
+            "FIRMA HANDLOWO-USŁUGOWA",
+            "COMPANY",
+            "SKLEP OGÓLNOSPOŻYWCZY",
+            "PRZEDSIĘBIORSTWO HANDLOWE USŁUGOWE PRODUKCYJNE HURTOWNIA CENTRUM",
+            "GRUPA HOLDING INTERNATIONAL TRADING SOLUTIONS SYSTEMS CONSULTING POLAND POLSKA PL",
+        ):
+            self.assertEqual(merchant_tokens(corporate_generic, None), frozenset(), corporate_generic)
+            groups, _generic = merchant_score_groups(corporate_generic, None)
+            self.assertEqual(groups, (), corporate_generic)
+        self.assertEqual(merchant_score_groups("FIRMA HANDLOWA ALFA", None)[0], ((frozenset({"alfa"}),),))
+
 
 class ReceiptApiEdgeTests(unittest.TestCase):
     def test_store_refuses_a_non_authoritative_backend(self):

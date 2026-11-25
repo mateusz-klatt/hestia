@@ -212,7 +212,7 @@ _POLISH_CITY_TOKENS = frozenset({
     "pabianice",
 })
 _LOCATION_STOP_TOKENS = frozenset({
-    "ul", "ulica", "al", "aleja", "plac", "centrum", "galeria",
+    "ul", "ulica", "al", "aleja", "plac", "centrum", "centra", "center", "centers", "centre", "centres", "galeria",
 })
 _SHOP_CATEGORY_TOKENS = frozenset({
     # Polish and English shop-category nouns (with/without diacritics and common inflections).
@@ -264,6 +264,12 @@ _SHOP_CATEGORY_TOKENS = frozenset({
     "spozywczej", "spożywczej", "spozywczym", "spożywczym", "spozywczych", "spożywczych", "spozywczemu",
     "spożywczemu", "spozywcza", "spożywczą", "spozywcy", "spożywcy", "spozywczo", "spożywczo", "spozywczak",
     "spożywczak",
+    "ogolnospozywczy", "ogólnospożywczy", "ogolnospozywcza", "ogólnospożywcza", "ogolnospozywcze",
+    "ogólnospożywcze", "ogolnospozywczego", "ogólnospożywczego", "ogolnospozywczej", "ogólnospożywczej",
+    "ogolnospozywczym", "ogólnospożywczym", "ogolnospozywczych", "ogólnospożywczych", "ogolnospozywczemu",
+    "ogólnospożywczemu", "ogolnospozywczą", "ogólnospożywczą",
+    "wielobranzowy", "wielobranżowy", "wielobranzowa", "wielobranżowa", "wielobranzowe", "wielobranżowe",
+    "wielobranzowej", "wielobranżowej",
     "market", "marketu", "marketowi", "marketem", "markecie", "markety", "marketow", "marketów", "marketom",
     "marketami", "marketach", "markets",
     "supermarket", "supermarketu", "supermarketowi", "supermarketem", "supermarkecie", "supermarkety",
@@ -301,7 +307,9 @@ _ECOMMERCE_GENERIC_TOKENS = frozenset({
     "płatnicza", "platnicze", "płatnicze", "payments",
     "usluga", "usługa", "uslugi", "usługi", "usludze", "usłudze", "usluge", "usługę", "uslugo", "usługo", "uslug",
     "usług", "uslugom", "usługom", "uslugami", "usługami", "uslugach", "usługach", "uslugowy", "usługowy",
-    "uslugowa", "usługowa", "uslugowe", "usługowe",
+    "uslugowa", "usługowa", "uslugowe", "usługowe", "uslugowego", "usługowego", "uslugowej", "usługowej",
+    "uslugowemu", "usługowemu", "uslugowym", "usługowym", "uslugowych", "usługowych", "uslugowymi", "usługowymi",
+    "uslugową", "usługową", "uslugowo", "usługowo",
     "abonament", "abonamentu", "abonamentowi", "abonamentem", "abonamencie", "abonamenty", "abonamentow",
     "abonamentów", "abonamentom", "abonamentami", "abonamentach", "abonamentowy", "abonamentowa", "abonamentowe",
     "opłata", "oplaty", "opłaty", "oplacie", "opłacie", "oplate", "opłatę", "opłatą", "oplato", "opłato", "oplat",
@@ -323,10 +331,31 @@ _ECOMMERCE_GENERIC_TOKENS = frozenset({
     "zaplata", "zapłata", "zaplaty", "zapłaty", "zaplacie", "zapłacie", "zaplate", "zapłatę", "zapłatą",
     "zaplato", "zapłato", "zaplat", "zapłat",
 })
+_CORPORATE_GENERIC_TOKENS = frozenset({
+    # Generic business / corporate nouns and qualifiers (PL/EN, with/without diacritics & inflections).
+    "firma", "firmy", "firmie", "firme", "firmę", "firmą", "firmo", "firm", "firmom", "firmami", "firmach",
+    "handlowa", "handlowy", "handlowe", "handlowego", "handlowej", "handlowemu", "handlowym", "handlowych",
+    "handlowymi", "handlową", "handlowo", "handel", "handlu",
+    "company", "companies",
+    "przedsiebiorstwo", "przedsiębiorstwo", "przedsiebiorstwa", "przedsiębiorstwa", "przedsiebiorstwu",
+    "przedsiębiorstwu", "przedsiebiorstwem", "przedsiębiorstwem", "przedsiebiorstwie", "przedsiębiorstwie",
+    "przedsiebiorstw", "przedsiębiorstw", "przedsiebiorstwom", "przedsiębiorstwom", "przedsiebiorstwami",
+    "przedsiębiorstwami", "przedsiebiorstwach", "przedsiębiorstwach",
+    "produkcyjne", "produkcyjny", "produkcyjna", "produkcyjnego", "produkcyjnej", "produkcyjnemu", "produkcyjnym",
+    "produkcyjnych", "produkcyjnymi", "produkcyjną", "produkcyjno", "produkcja", "produkcji",
+    "hurtownia", "hurtowni", "hurtownie", "hurtownię", "hurtownią", "hurtownio", "hurtowniom", "hurtowniami",
+    "hurtowniach", "hurtowy", "hurtowa", "hurtowe", "hurtowego", "hurtowej", "hurtowym", "hurtowych",
+    "grupa", "grupy", "grupie", "grupe", "grupę", "grupą", "grupo", "grup", "grupom", "grupami", "grupach",
+    "holding", "holdingu", "holdingowi", "holdingiem", "holdingi", "holdingow", "holdingów", "holdingom",
+    "holdingami", "holdingach", "holdings", "holdingowy", "holdingowa", "holdingowe",
+    "international", "trading", "solutions", "solution", "systems", "system", "systemy", "systemow", "systemów",
+    "consulting", "konsulting", "konsultingowy", "konsultingowa", "konsultingowe",
+    "polski", "polskie", "polskiego", "polskiej", "polskiemu", "polskim", "polskich", "polskimi", "polską", "polish",
+})
 _GENERIC_MERCHANT_TOKENS = frozenset({
-    "grocery", "groceries", "grocer", "energy", "energia", "polska", "poland", "services", "service",
+    "grocery", "groceries", "grocer", "energy", "energia", "polska", "poland", "pl", "services", "service",
     "group", "store", "shop", "sklep", "market", "online", "pay", "payment", "oplata",
-}) | _POLISH_CITY_TOKENS | _LOCATION_STOP_TOKENS | _SHOP_CATEGORY_TOKENS | _ECOMMERCE_GENERIC_TOKENS
+}) | _POLISH_CITY_TOKENS | _LOCATION_STOP_TOKENS | _SHOP_CATEGORY_TOKENS | _ECOMMERCE_GENERIC_TOKENS | _CORPORATE_GENERIC_TOKENS
 _STOP_TOKENS = _NON_MERCHANT_TOKENS | _GENERIC_MERCHANT_TOKENS
 
 
@@ -705,7 +734,10 @@ def merchant_match_groups(shop_name, nip):
 
 
 def _distinctive_shop_words(shop_name):
-    """Return distinctive shop tokens (at least 4 chars, not stop/generic/location, and >= 3 letters)."""
+    """Return distinctive shop tokens (at least 4 chars, not stop/generic/location, and >= 3 letters).
+
+    Never falls back to generic or stop words: if every word is generic, returns an empty set.
+    """
     return {
         token for token in merchant_word_tokens(shop_name)
         if len(token) >= 4 and token not in _STOP_TOKENS and sum(1 for ch in token if ch.isalpha()) >= 3

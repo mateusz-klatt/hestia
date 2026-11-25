@@ -2915,6 +2915,37 @@ NR KARTY ****5555
         })
         self.assertEqual(saved["receipt"]["status"], "confirmed")
 
+    def test_kimi_generic_only_merchant_names_never_distinctive(self):
+        for idx, (shop, tx_text, expected_strength) in enumerate((
+            ("FIRMA HANDLOWA", ["FIRMA HANDLOWA"], "generic"),
+            ("COMPANY", ["COMPANY"], "generic"),
+            ("SKLEP OGÓLNOSPOŻYWCZY", ["SKLEP OGÓLNOSPOŻYWCZY"], "generic"),
+            ("PRZEDSIĘBIORSTWO USŁUGOWE PRODUKCYJNE HURTOWNIA CENTRUM GRUPA HOLDING",
+             ["INTERNATIONAL TRADING SOLUTIONS SYSTEMS CONSULTING POLAND POLSKA PL"], "none"),
+        )):
+            amount = f"24{idx}.00"
+            self.add_transaction(
+                "a", f"kimi-gen-{idx}", amount=amount, booking_date="2026-11-15", value_date=None,
+                remittance_information=tx_text,
+            )
+            rec_id = self._seed_imported(
+                document_kind="invoice", issue_date="2026-11-15", total=amount, shop=shop, nip=None,
+            )
+            cand = self.receipts.detail("owner", rec_id)["candidates"]
+            self.assertEqual(len(cand), 1, shop)
+            self.assertEqual(cand[0]["match_strength"], expected_strength, shop)
+
+        # Adding a genuine brand token alongside corporate generic words restores "distinctive".
+        self.add_transaction(
+            "a", "kimi-gen-brand", amount="249.00", booking_date="2026-11-15", value_date=None,
+            remittance_information=["POLBUD PL"],
+        )
+        rec_brand = self._seed_imported(
+            document_kind="invoice", issue_date="2026-11-15", total="249.00",
+            shop="PRZEDSIĘBIORSTWO HANDLOWO USŁUGOWE POLBUD POLSKA", nip=None,
+        )
+        self.assertEqual(self.receipts.detail("owner", rec_brand)["candidates"][0]["match_strength"], "distinctive")
+
 
 class ReceiptRetentionSweepTests(fixture.unittest.IsolatedAsyncioTestCase):
     async def test_sweep_calls_retain_expired_when_flag_is_off(self):

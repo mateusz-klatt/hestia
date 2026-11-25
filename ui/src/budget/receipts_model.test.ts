@@ -802,6 +802,9 @@ describe("receipts_model", () => {
       expect(draftFromDetail(detailOf({ status, linked: false }), [genericCand]).linkChoice).toBe("");
       expect(draftFromDetail(detailOf({ status, linked: false }), [noneCand]).linkChoice).toBe("");
       expect(draftFromDetail(detailOf({ status, linked: false }), [nipCand, noneCand]).linkChoice).toBe("");
+      for (const genericShop of ["FIRMA HANDLOWA", "COMPANY", "SKLEP OGÓLNOSPOŻYWCZY"]) {
+        expect(draftFromDetail(detailOf({ status, linked: false, raw_shop_name: genericShop }), [genericCand]).linkChoice).toBe("");
+      }
     }
 
     // Never preselect if linked flag or stored link fields are set, or when confirmed, or for cash/mixed.
