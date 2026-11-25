@@ -264,7 +264,8 @@ def projection_snapshot(session, owner, *, classify=True, account_secret=None, a
     snapshot = {"owner": owner, "accounts": account_state, "categories": categories, "rules": rules,
                 "decisions": decisions, "identities": identities, "transactions": [row for row in records if row["eligible"]],
                 "counts": _scope_counts(session, owner, accounts), "_records": records, "_accounts": accounts}
-    semantic = {"version": 1, "owner": owner, "counterparty_rule_key_id": account_key_id,
+    semantic = {"version": 1, "classification_version": core.CLASSIFICATION_VERSION, "owner": owner,
+                "counterparty_rule_key_id": account_key_id,
                 "accounts": [{"id": row.id, "enabled": row.enabled} for row in accounts], "identities": identity_state,
                 "ledger": [[row.account_id, row.entry_reference, record["payload"], row.uncertain, row.source]
                            for row, record in zip(ledger, records, strict=True)],
@@ -726,6 +727,7 @@ def _source_digest(session, owner, *, account_key_id=None):
         digest.update(len(data).to_bytes(8, "big"))
         digest.update(data)
 
+    put(core.CLASSIFICATION_VERSION)
     put(account_key_id)
     for model, conditions, joined in sources:
         table = model.__table__

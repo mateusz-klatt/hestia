@@ -856,4 +856,4 @@ def _cursor_context(member, owner, grant_id, route, filters):
 
 
 def _safe_digest(rows):
-    return core.projection_digest(rows)
+    return core.projection_digest({"classification_version": core.CLASSIFICATION_VERSION, "rows": rows})

@@ -4,9 +4,10 @@ from types import SimpleNamespace
 import unicodedata
 import unittest
 
-from hestia.budget.analytics_core import (AnalyticsError, canonical_money, compare_money, compatible_kind,
-    compile_rules, default_effective_kind, effective_date, financial_fingerprint, first_matching_rule, match_rule,
-    match_texts, negate_money, owned_identities, pair_fingerprint, parse_period, projection_digest, rule_matches, sum_money)
+from hestia.budget.analytics_core import (AnalyticsError, CLASSIFICATION_VERSION, canonical_money, compare_money,
+    compatible_kind, compile_rules, default_effective_kind, effective_date, financial_fingerprint,
+    first_matching_rule, match_rule, match_texts, negate_money, owned_identities, pair_fingerprint, parse_period,
+    projection_digest, rule_matches, sum_money)
 
 
 def payload(**changes):
@@ -249,6 +250,7 @@ class PeriodAndRuleTests(unittest.TestCase):
         self.assertEqual(match_rule(disabled_only, crdt, match_texts(crdt)), (None, "unclassified_credit"))
         self.assertEqual(match_rule(disabled_only, dbit, match_texts(dbit)), (None, "expense"))
 
+        self.assertEqual(CLASSIFICATION_VERSION, 2)
         # Any primary CRDT rule (income/refund/auto/excluded) beats expense fallback regardless of priority.
         for primary, expected_kind in ((inc_low, "income"), (ref_low, "refund"),
                                        (auto_low, "unclassified_credit"), (excl_low, "excluded")):

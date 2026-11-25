@@ -18,7 +18,7 @@ from sqlalchemy import select
 
 from hestia import db
 from hestia.budget.analytics_core import AnalyticsError, financial_fingerprint
-from hestia.budget import analytics_store
+from hestia.budget import analytics_core, analytics_store
 from hestia.budget.analytics_store import BudgetAnalyticsStore
 from hestia.budget.views import BudgetAccessDenied, BudgetUsersBackendRequired
 from hestia.budget.store import BudgetNotFound
@@ -923,6 +923,33 @@ class RuleBatchTests(AnalyticsCase):
         with self.sessions() as session:
             reverted = {row["entry_reference"]: row["effective"] for row in projection_snapshot(session, "owner")["transactions"]}
         self.assertEqual(reverted["credit"], {"kind": "refund", "category_id": ai["id"], "source": "rule", "rule_id": exp_rule["id"]})
+
+    def test_old_classification_version_preview_is_rejected_with_stale_409(self):
+        ai = self.store.create_category("owner", "Subskrypcje AI")
+        candidate = self.candidate(field="description", operator="contains", value="shop",
+                                   category_id=ai["id"], kind="expense", priority=10)
+        with mock.patch.object(analytics_core, "CLASSIFICATION_VERSION", 1):
+            old_single = self.store.preview_rule("owner", candidate)
+            old_batch = self.store.preview_rules("owner", [candidate])
+
+        for action in (lambda: self.store.save_rule("owner", old_single["preview_id"]),
+                       lambda: self.store.save_rules("owner", old_batch["preview_id"])):
+            with self.assertRaises(AnalyticsError) as stale:
+                action()
+            self.assertEqual((stale.exception.code, stale.exception.status), ("budget_analytics_stale_preview", 409))
+        self.assertEqual(self.store.rules("owner"), [])
+
+        # A legacy snapshot_digest minted before classification_version existed is also rejected.
+        legacy = self.store.preview_rule("owner", candidate)
+        with self.sessions.begin() as session:
+            session.get(db.BudgetRulePreview, legacy["preview_id"]).snapshot_digest = "0" * 64
+        with self.assertRaises(AnalyticsError) as stale:
+            self.store.save_rule("owner", legacy["preview_id"])
+        self.assertEqual((stale.exception.code, stale.exception.status), ("budget_analytics_stale_preview", 409))
+
+        fresh = self.store.preview_rule("owner", candidate)
+        self.assertEqual(fresh["affected_count"], 4)
+        self.assertTrue(self.store.save_rule("owner", fresh["preview_id"])["changed"])
 
     def test_saved_batch_is_visible_through_the_projection_cache(self):
         from hestia.budget.analytics_views import BudgetAnalyticsViews, clear_projection_cache

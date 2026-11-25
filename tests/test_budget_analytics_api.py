@@ -12,7 +12,7 @@ from unittest import mock
 from multidict import MultiDict
 
 from hestia import api_contract, db, web
-from hestia.budget import analytics_api, analytics_views, config, forecast, month_budget, runtime
+from hestia.budget import analytics_api, analytics_core, analytics_views, config, forecast, month_budget, runtime
 from hestia.budget.analytics_core import financial_fingerprint
 from hestia.budget.normalize import AccountSnapshot, Snapshot
 from hestia.budget.recurring import RecurringHint, RecurringOccurrence
@@ -1010,6 +1010,52 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
                          analytics_views.core.sum_money([before_mb["summary"]["spent"], "60"]))
         ai_mb = next(row for row in mb["category_spend"] if row["category_id"] == ai_cat["id"])
         self.assertEqual((ai_mb["expenses"], ai_mb["refunds"], ai_mb["net_spending"]), ("100", "40", "60"))
+
+    async def test_pre_upgrade_preview_and_cursor_return_409_over_http(self):
+        cat_resp = await self.post("category-create", {"name": "Subskrypcje AI"})
+        self.assertEqual(cat_resp.status, 200)
+        ai_cat = (await cat_resp.json())["category"]
+
+        dbit = transaction("alice-moon-dbit", amount="100.00", booking_date="2026-11-10",
+                           remittance_information=["MOONSHOT AI charge"])
+        crdt = transaction("alice-moon-crdt", amount="40.00", credit_debit_indicator="CRDT",
+                           booking_date="2026-11-10", remittance_information=["MOONSHOT AI partial refund"])
+        with self.sessions.begin() as session:
+            for item, meta in (
+                (dbit, {"creditor_name": "MOONSHOT AI", "debtor_name": None, "creditor_accounts": [], "debtor_accounts": [], "mcc": None}),
+                (crdt, {"creditor_name": None, "debtor_name": "MOONSHOT AI", "creditor_accounts": [], "debtor_accounts": [], "mcc": None}),
+            ):
+                session.add(db.BudgetTransaction(account_id=self.alice_id, entry_reference=item["entry_reference"],
+                            payload_json=json.dumps(item), observed_at=web._now(), source="api", uncertain=False))
+                session.add(db.BudgetTransactionMetadata(account_id=self.alice_id, entry_reference=item["entry_reference"],
+                            owner="alice", ledger_fingerprint=financial_fingerprint(item),
+                            payload_json=json.dumps(meta), source="api", observed_at=web._now(), version=1))
+
+        candidate = self.candidate(field="counterparty_name", operator="contains", value="moonshot",
+                                   category_id=ai_cat["id"], kind="expense", priority=10)
+        with mock.patch.object(analytics_core, "CLASSIFICATION_VERSION", 1):
+            old_preview = await (await self.post("rule-preview", candidate)).json()
+            old_page = await (await self.get("transactions", params={**PERIOD, "limit": "1"})).json()
+        self.assertIsNotNone(old_page["next_cursor"])
+
+        stale_save = await self.post("rule-save", {"preview_id": old_preview["preview"]["preview_id"]})
+        self.assertEqual(stale_save.status, 409)
+        self.assertEqual((await stale_save.json())["error"], "budget_analytics_stale_preview")
+        self.assertEqual((await (await self.get("rules")).json())["rules"], [])
+
+        stale_page = await self.get("transactions", params={**PERIOD, "limit": "1", "cursor": old_page["next_cursor"]})
+        self.assertEqual(stale_page.status, 409)
+        self.assertEqual((await stale_page.json())["error"], "budget_analytics_stale_cursor")
+
+        fresh_preview = await (await self.post("rule-preview", candidate)).json()
+        self.assertEqual((await self.post("rule-save", {"preview_id": fresh_preview["preview"]["preview_id"]})).status, 200)
+        first = await (await self.get("transactions", params={**PERIOD, "query": "moonshot", "limit": "1"})).json()
+        second = await (await self.get("transactions", params={**PERIOD, "query": "moonshot", "limit": "1",
+                                                               "cursor": first["next_cursor"]})).json()
+        self.assertEqual(
+            {row["entry_reference"]: row["effective"]["kind"] for row in first["transactions"] + second["transactions"]},
+            {"alice-moon-dbit": "expense", "alice-moon-crdt": "refund"},
+        )
 
     async def test_transfer_accept_reject_undo_and_fingerprints_are_atomic(self):
         response = await self.get("transfers")

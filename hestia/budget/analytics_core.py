@@ -9,6 +9,9 @@ import re
 import unicodedata
 
 MAX_ROWS = 100_000
+# Bump whenever rule matching or effective classification semantics change so stale
+# previews, cursors and cached projections invalidate across deploys.
+CLASSIFICATION_VERSION = 2
 KINDS = frozenset({"auto", "expense", "income", "refund", "excluded"})
 _FIELDS = frozenset({"description", "counterparty_name", "counterparty_account", "mcc"})
 _MONEY = re.compile(r"-?[0-9]+(?:\.[0-9]+)?\Z", re.ASCII)

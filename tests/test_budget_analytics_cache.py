@@ -11,7 +11,7 @@ import uuid
 from sqlalchemy import and_, select
 
 from hestia import db
-from hestia.budget import analytics_views as views
+from hestia.budget import analytics_core, analytics_views as views
 from hestia.budget.analytics_core import AnalyticsError, financial_fingerprint
 from hestia.budget.views import BudgetAccessDenied
 from tests.test_budget_analytics_core import identity
@@ -256,6 +256,66 @@ class MemoTests(CacheCase):
                             code="budget_analytics_stale_cursor", status=409)
         self.assert_invalid(lambda: self.store.save_rule("owner", preview["preview_id"]),
                             code="budget_analytics_stale_preview", status=409)
+
+    def test_classification_version_change_invalidates_cache_cursors_and_previews(self):
+        ai = self.store.create_category("owner", "Subskrypcje AI")
+        self.rule(category=ai["id"], field="counterparty_name", operator="contains", value="moonshot",
+                  kind="expense", priority=10)
+        self.add_transaction("a", "moon-dbit", amount="100", booking_date="2026-11-10",
+                             remittance_information=["MOONSHOT AI charge"])
+        self.metadata("a", "moon-dbit", {"creditor_name": "MOONSHOT AI"})
+        self.add_transaction("b", "moon-crdt", amount="40", credit_debit_indicator="CRDT",
+                             booking_date="2026-11-10", remittance_information=["MOONSHOT AI partial refund"])
+        self.metadata("b", "moon-crdt", {"debtor_name": "MOONSHOT AI"})
+        self.add_transaction("d", "pair2-dbit", amount="200", booking_date="2026-11-15")
+        self.add_transaction("b", "pair2-crdt", amount="200", credit_debit_indicator="CRDT", booking_date="2026-11-16")
+        keys = [f"{self.accounts['a']}/moon-dbit", f"{self.accounts['b']}/moon-crdt"]
+        candidate = {"rule_id": None, "field": "description", "operator": "contains", "value": "shop",
+                     "category_id": ai["id"], "kind": "expense", "priority": 50, "enabled": True, "expected_version": 0}
+
+        with mock.patch.object(analytics_core, "CLASSIFICATION_VERSION", 1):
+            old_tx = self.store.transactions("owner", "2026-11", limit=1)
+            old_keys = self.store.transactions_by_keys("owner", row_keys=keys, limit=1)
+            old_xfer = self.store.transfers("owner", "2026", limit=1)
+            old_preview = self.store.preview_rule("owner", candidate)
+            old_batch = self.store.preview_rules("owner", [candidate])
+        self.assertEqual(self.computed, 1)
+        self.assertIsNotNone(old_tx["next_cursor"])
+        self.assertIsNotNone(old_keys["next_cursor"])
+        self.assertIsNotNone(old_xfer["next_cursor"])
+
+        for call in (lambda: self.store.transactions("owner", "2026-11", limit=1, cursor=old_tx["next_cursor"]),
+                     lambda: self.store.transactions_by_keys("owner", row_keys=keys, limit=1, cursor=old_keys["next_cursor"]),
+                     lambda: self.store.transfers("owner", "2026", limit=1, cursor=old_xfer["next_cursor"])):
+            self.assert_invalid(call, code="budget_analytics_stale_cursor", status=409)
+        self.assertEqual(self.computed, 2)
+
+        for save in (lambda: self.store.save_rule("owner", old_preview["preview_id"]),
+                     lambda: self.store.save_rules("owner", old_batch["preview_id"])):
+            self.assert_invalid(save, code="budget_analytics_stale_preview", status=409)
+
+        page1 = self.store.transactions_by_keys("owner", row_keys=keys, limit=1)
+        page2 = self.store.transactions_by_keys("owner", row_keys=keys, limit=1, cursor=page1["next_cursor"])
+        kinds = {row["entry_reference"]: row["effective"]["kind"] for row in page1["transactions"] + page2["transactions"]}
+        self.assertEqual(kinds, {"moon-dbit": "expense", "moon-crdt": "refund"})
+
+        from hestia.budget import household_views
+
+        reader = household_views.HouseholdReader(self.sessions, cursor_secret=b"synthetic-only")
+        ctx = household_views._cursor_context("viewer", "owner", "ab" * 32, "transactions",
+                                              {"period": "2026-11", "limit": 1})
+        safe_rows = [{"id": "tx-1", "kind": "unclassified_credit"}]
+        with mock.patch.object(analytics_core, "CLASSIFICATION_VERSION", 1):
+            old_hh_cursor = reader._cursor_encode(ctx, household_views._safe_digest(safe_rows), 1, self.now)
+        self.assert_invalid(
+            lambda: reader._cursor_index(old_hh_cursor, ctx, household_views._safe_digest(safe_rows), self.now),
+            code="budget_analytics_stale_cursor", status=409,
+        )
+        legacy_hh_cursor = reader._cursor_encode(ctx, analytics_core.projection_digest(safe_rows), 1, self.now)
+        self.assert_invalid(
+            lambda: reader._cursor_index(legacy_hh_cursor, ctx, household_views._safe_digest(safe_rows), self.now),
+            code="budget_analytics_stale_cursor", status=409,
+        )
 
     def test_returned_rows_are_private_copies(self):
         cached = self.reads()
