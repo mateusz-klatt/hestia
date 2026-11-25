@@ -491,6 +491,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "সরান",
   "budget.receipts.lineName": "বিবরণ",
   "budget.receipts.lineAmount": "নিট পরিমাণ",
+  "budget.receipts.lineGross": "মোট মূল্য",
+  "budget.receipts.lineDiscount": "ছাড়",
   "budget.receipts.summaryLineDefault": "রসিদ সারাংশ",
   "budget.receipts.confirmAction": "রসিদ নিশ্চিত করুন",
   "budget.receipts.confirming": "নিশ্চিত করা হচ্ছে…",

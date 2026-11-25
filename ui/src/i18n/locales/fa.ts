@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "برداشتن",
   "budget.receipts.lineName": "شرح",
   "budget.receipts.lineAmount": "مبلغ خالص",
+  "budget.receipts.lineGross": "مبلغ ناخالص",
+  "budget.receipts.lineDiscount": "تخفیف",
   "budget.receipts.summaryLineDefault": "خلاصه رسید",
   "budget.receipts.confirmAction": "تأیید رسید",
   "budget.receipts.confirming": "در حال تأیید…",

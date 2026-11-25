@@ -491,6 +491,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "นำออก",
   "budget.receipts.lineName": "คำอธิบาย",
   "budget.receipts.lineAmount": "ยอดสุทธิ",
+  "budget.receipts.lineGross": "ยอดก่อนส่วนลด",
+  "budget.receipts.lineDiscount": "ส่วนลด",
   "budget.receipts.summaryLineDefault": "สรุปใบเสร็จ",
   "budget.receipts.confirmAction": "ยืนยันใบเสร็จ",
   "budget.receipts.confirming": "กำลังยืนยัน…",

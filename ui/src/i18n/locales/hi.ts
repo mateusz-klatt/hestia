@@ -491,6 +491,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "हटाएँ",
   "budget.receipts.lineName": "विवरण",
   "budget.receipts.lineAmount": "शुद्ध राशि",
+  "budget.receipts.lineGross": "सकल राशि",
+  "budget.receipts.lineDiscount": "छूट",
   "budget.receipts.summaryLineDefault": "रसीद सारांश",
   "budget.receipts.confirmAction": "रसीद की पुष्टि करें",
   "budget.receipts.confirming": "पुष्टि हो रही है…",

@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Вилучити",
   "budget.receipts.lineName": "Опис",
   "budget.receipts.lineAmount": "Чиста сума",
+  "budget.receipts.lineGross": "Сума брутто",
+  "budget.receipts.lineDiscount": "Знижка",
   "budget.receipts.summaryLineDefault": "Підсумок чека",
   "budget.receipts.confirmAction": "Підтвердити чек",
   "budget.receipts.confirming": "Підтвердження…",

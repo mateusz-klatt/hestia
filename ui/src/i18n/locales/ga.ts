@@ -491,6 +491,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Bain",
   "budget.receipts.lineName": "Cur síos",
   "budget.receipts.lineAmount": "Glansuim",
+  "budget.receipts.lineGross": "Méid comhlán",
+  "budget.receipts.lineDiscount": "Lascaine",
   "budget.receipts.summaryLineDefault": "Achoimre na hadmhála",
   "budget.receipts.confirmAction": "Deimhnigh admháil",
   "budget.receipts.confirming": "Á dheimhniú…",

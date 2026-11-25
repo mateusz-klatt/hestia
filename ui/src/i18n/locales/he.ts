@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "הסר",
   "budget.receipts.lineName": "תיאור",
   "budget.receipts.lineAmount": "סכום נטו",
+  "budget.receipts.lineGross": "סכום ברוטו",
+  "budget.receipts.lineDiscount": "הנחה",
   "budget.receipts.summaryLineDefault": "סיכום קבלה",
   "budget.receipts.confirmAction": "אשר קבלה",
   "budget.receipts.confirming": "מאשר…",

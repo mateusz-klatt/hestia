@@ -491,6 +491,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "삭제",
   "budget.receipts.lineName": "설명",
   "budget.receipts.lineAmount": "순금액",
+  "budget.receipts.lineGross": "할인 전 금액",
+  "budget.receipts.lineDiscount": "할인",
   "budget.receipts.summaryLineDefault": "영수증 요약",
   "budget.receipts.confirmAction": "영수증 확정",
   "budget.receipts.confirming": "확정 중…",

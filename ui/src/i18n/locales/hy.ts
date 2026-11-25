@@ -491,6 +491,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Հեռացնել",
   "budget.receipts.lineName": "Նկարագրություն",
   "budget.receipts.lineAmount": "Զուտ գումար",
+  "budget.receipts.lineGross": "Համախառն գումար",
+  "budget.receipts.lineDiscount": "Զեղչ",
   "budget.receipts.summaryLineDefault": "Անդորրագրի ամփոփում",
   "budget.receipts.confirmAction": "Հաստատել անդորրագիրը",
   "budget.receipts.confirming": "Հաստատվում է…",

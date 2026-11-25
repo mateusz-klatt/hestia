@@ -491,6 +491,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Alih keluar",
   "budget.receipts.lineName": "Keterangan",
   "budget.receipts.lineAmount": "Amaun bersih",
+  "budget.receipts.lineGross": "Jumlah kasar",
+  "budget.receipts.lineDiscount": "Diskaun",
   "budget.receipts.summaryLineDefault": "Ringkasan resit",
   "budget.receipts.confirmAction": "Sahkan resit",
   "budget.receipts.confirming": "Mengesahkan…",

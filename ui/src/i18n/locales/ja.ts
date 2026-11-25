@@ -491,6 +491,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "削除",
   "budget.receipts.lineName": "品名・説明",
   "budget.receipts.lineAmount": "正味金額",
+  "budget.receipts.lineGross": "税込総額",
+  "budget.receipts.lineDiscount": "割引",
   "budget.receipts.summaryLineDefault": "レシート合計",
   "budget.receipts.confirmAction": "レシートを確定",
   "budget.receipts.confirming": "確定中…",

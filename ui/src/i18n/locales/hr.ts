@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Ukloni",
   "budget.receipts.lineName": "Opis",
   "budget.receipts.lineAmount": "Neto iznos",
+  "budget.receipts.lineGross": "Bruto iznos",
+  "budget.receipts.lineDiscount": "Popust",
   "budget.receipts.summaryLineDefault": "Sažetak računa",
   "budget.receipts.confirmAction": "Potvrdi račun",
   "budget.receipts.confirming": "Potvrđivanje…",

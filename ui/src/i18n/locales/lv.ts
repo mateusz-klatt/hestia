@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Noņemt",
   "budget.receipts.lineName": "Apraksts",
   "budget.receipts.lineAmount": "Neto summa",
+  "budget.receipts.lineGross": "Bruto summa",
+  "budget.receipts.lineDiscount": "Atlaide",
   "budget.receipts.summaryLineDefault": "Čeka kopsavilkums",
   "budget.receipts.confirmAction": "Apstiprināt čeku",
   "budget.receipts.confirming": "Apstiprina…",

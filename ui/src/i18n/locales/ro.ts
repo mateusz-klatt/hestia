@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Elimină",
   "budget.receipts.lineName": "Descriere",
   "budget.receipts.lineAmount": "Sumă netă",
+  "budget.receipts.lineGross": "Sumă brută",
+  "budget.receipts.lineDiscount": "Reducere",
   "budget.receipts.summaryLineDefault": "Rezumat bon",
   "budget.receipts.confirmAction": "Confirmă bonul",
   "budget.receipts.confirming": "Se confirmă…",

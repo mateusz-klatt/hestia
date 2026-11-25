@@ -512,6 +512,8 @@ const en = {
   "budget.receipts.removeLine": "Remove",
   "budget.receipts.lineName": "Description",
   "budget.receipts.lineAmount": "Net amount",
+  "budget.receipts.lineGross": "Gross amount",
+  "budget.receipts.lineDiscount": "Discount",
   "budget.receipts.summaryLineDefault": "Receipt summary",
   "budget.receipts.confirmAction": "Confirm receipt",
   "budget.receipts.confirming": "Confirming…",

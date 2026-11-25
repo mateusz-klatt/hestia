@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Poista",
   "budget.receipts.lineName": "Kuvaus",
   "budget.receipts.lineAmount": "Nettosumma",
+  "budget.receipts.lineGross": "Bruttosumma",
+  "budget.receipts.lineDiscount": "Alennus",
   "budget.receipts.summaryLineDefault": "Kuitin yhteenveto",
   "budget.receipts.confirmAction": "Vahvista kuitti",
   "budget.receipts.confirming": "Vahvistetaan…",

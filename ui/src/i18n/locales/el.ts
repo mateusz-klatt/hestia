@@ -491,6 +491,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Αφαίρεση",
   "budget.receipts.lineName": "Περιγραφή",
   "budget.receipts.lineAmount": "Καθαρό ποσό",
+  "budget.receipts.lineGross": "Μικτό ποσό",
+  "budget.receipts.lineDiscount": "Έκπτωση",
   "budget.receipts.summaryLineDefault": "Σύνοψη απόδειξης",
   "budget.receipts.confirmAction": "Επιβεβαίωση απόδειξης",
   "budget.receipts.confirming": "Επιβεβαίωση…",

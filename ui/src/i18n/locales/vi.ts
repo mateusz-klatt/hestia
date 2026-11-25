@@ -491,6 +491,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Xóa",
   "budget.receipts.lineName": "Mô tả",
   "budget.receipts.lineAmount": "Số tiền ròng",
+  "budget.receipts.lineGross": "Tổng trước giảm",
+  "budget.receipts.lineDiscount": "Giảm giá",
   "budget.receipts.summaryLineDefault": "Tóm tắt biên lai",
   "budget.receipts.confirmAction": "Xác nhận biên lai",
   "budget.receipts.confirming": "Đang xác nhận…",

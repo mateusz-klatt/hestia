@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Уклони",
   "budget.receipts.lineName": "Опис",
   "budget.receipts.lineAmount": "Нето износ",
+  "budget.receipts.lineGross": "Бруто износ",
+  "budget.receipts.lineDiscount": "Попуст",
   "budget.receipts.summaryLineDefault": "Резиме рачуна",
   "budget.receipts.confirmAction": "Потврди рачун",
   "budget.receipts.confirming": "Потврђивање…",

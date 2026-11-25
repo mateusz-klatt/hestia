@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Fjarlægja",
   "budget.receipts.lineName": "Lýsing",
   "budget.receipts.lineAmount": "Nettóupphæð",
+  "budget.receipts.lineGross": "Brúttóupphæð",
+  "budget.receipts.lineDiscount": "Afsláttur",
   "budget.receipts.summaryLineDefault": "Samantekt kvittunar",
   "budget.receipts.confirmAction": "Staðfesta kvittun",
   "budget.receipts.confirming": "Staðfesti…",

@@ -491,6 +491,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Hiq",
   "budget.receipts.lineName": "Përshkrimi",
   "budget.receipts.lineAmount": "Shuma neto",
+  "budget.receipts.lineGross": "Shuma bruto",
+  "budget.receipts.lineDiscount": "Zbritje",
   "budget.receipts.summaryLineDefault": "Përmbledhja e dëftesës",
   "budget.receipts.confirmAction": "Konfirmo dëftesën",
   "budget.receipts.confirming": "Duke konfirmuar…",

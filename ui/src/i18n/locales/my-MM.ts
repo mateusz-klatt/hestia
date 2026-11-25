@@ -491,6 +491,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "ဖယ်ရှားရန်",
   "budget.receipts.lineName": "ဖော်ပြချက်",
   "budget.receipts.lineAmount": "အသားတင် ပမာဏ",
+  "budget.receipts.lineGross": "စုစုပေါင်းတန်ဖိုး",
+  "budget.receipts.lineDiscount": "လျှော့ဈေး",
   "budget.receipts.summaryLineDefault": "ပြေစာ အနှစ်ချုပ်",
   "budget.receipts.confirmAction": "ပြေစာ အတည်ပြုရန်",
   "budget.receipts.confirming": "အတည်ပြုနေသည်…",

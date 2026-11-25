@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Fjern",
   "budget.receipts.lineName": "Beskrivelse",
   "budget.receipts.lineAmount": "Nettobeløb",
+  "budget.receipts.lineGross": "Bruttobeløb",
+  "budget.receipts.lineDiscount": "Rabat",
   "budget.receipts.summaryLineDefault": "Kvitteringsoversigt",
   "budget.receipts.confirmAction": "Bekræft kvittering",
   "budget.receipts.confirming": "Bekræfter…",

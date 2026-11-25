@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "إزالة",
   "budget.receipts.lineName": "الوصف",
   "budget.receipts.lineAmount": "المبلغ الصافي",
+  "budget.receipts.lineGross": "المبلغ الإجمالي",
+  "budget.receipts.lineDiscount": "الخصم",
   "budget.receipts.summaryLineDefault": "ملخص الإيصال",
   "budget.receipts.confirmAction": "تأكيد الإيصال",
   "budget.receipts.confirming": "جارٍ التأكيد…",

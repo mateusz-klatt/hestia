@@ -491,6 +491,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Alisin",
   "budget.receipts.lineName": "Paglalarawan",
   "budget.receipts.lineAmount": "Netong halaga",
+  "budget.receipts.lineGross": "Kabuuang halaga",
+  "budget.receipts.lineDiscount": "Diskwento",
   "budget.receipts.summaryLineDefault": "Buod ng resibo",
   "budget.receipts.confirmAction": "Kumpirmahin ang resibo",
   "budget.receipts.confirming": "Kinukumpirma…",

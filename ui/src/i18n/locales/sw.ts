@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Ondoa",
   "budget.receipts.lineName": "Maelezo",
   "budget.receipts.lineAmount": "Kiasi halisi",
+  "budget.receipts.lineGross": "Kiasi ghafi",
+  "budget.receipts.lineDiscount": "Punguzo",
   "budget.receipts.summaryLineDefault": "Muhtasari wa risiti",
   "budget.receipts.confirmAction": "Thibitisha risiti",
   "budget.receipts.confirming": "Inathibitisha…",

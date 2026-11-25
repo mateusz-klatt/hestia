@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Pašalinti",
   "budget.receipts.lineName": "Aprašymas",
   "budget.receipts.lineAmount": "Grynoji suma",
+  "budget.receipts.lineGross": "Bendra suma",
+  "budget.receipts.lineDiscount": "Nuolaida",
   "budget.receipts.summaryLineDefault": "Kvito suvestinė",
   "budget.receipts.confirmAction": "Patvirtinti kvitą",
   "budget.receipts.confirming": "Tvirtinama…",

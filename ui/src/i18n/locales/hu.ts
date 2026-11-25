@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Eltávolítás",
   "budget.receipts.lineName": "Leírás",
   "budget.receipts.lineAmount": "Nettó összeg",
+  "budget.receipts.lineGross": "Bruttó összeg",
+  "budget.receipts.lineDiscount": "Kedvezmény",
   "budget.receipts.summaryLineDefault": "Nyugta összesítése",
   "budget.receipts.confirmAction": "Nyugta jóváhagyása",
   "budget.receipts.confirming": "Jóváhagyás…",

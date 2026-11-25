@@ -489,6 +489,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Verwijderen",
   "budget.receipts.lineName": "Omschrijving",
   "budget.receipts.lineAmount": "Nettobedrag",
+  "budget.receipts.lineGross": "Brutobedrag",
+  "budget.receipts.lineDiscount": "Korting",
   "budget.receipts.summaryLineDefault": "Bonoverzicht",
   "budget.receipts.confirmAction": "Bon bevestigen",
   "budget.receipts.confirming": "Bevestigen…",

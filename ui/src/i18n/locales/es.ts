@@ -489,6 +489,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Quitar",
   "budget.receipts.lineName": "Descripción",
   "budget.receipts.lineAmount": "Importe neto",
+  "budget.receipts.lineGross": "Importe bruto",
+  "budget.receipts.lineDiscount": "Descuento",
   "budget.receipts.summaryLineDefault": "Resumen del recibo",
   "budget.receipts.confirmAction": "Confirmar recibo",
   "budget.receipts.confirming": "Confirmando…",

@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Kaldır",
   "budget.receipts.lineName": "Açıklama",
   "budget.receipts.lineAmount": "Net tutar",
+  "budget.receipts.lineGross": "Brüt tutar",
+  "budget.receipts.lineDiscount": "İndirim",
   "budget.receipts.summaryLineDefault": "Makbuz özeti",
   "budget.receipts.confirmAction": "Makbuzu onayla",
   "budget.receipts.confirming": "Onaylanıyor…",

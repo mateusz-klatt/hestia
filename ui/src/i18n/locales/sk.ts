@@ -490,6 +490,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "Odstrániť",
   "budget.receipts.lineName": "Popis",
   "budget.receipts.lineAmount": "Čistá suma",
+  "budget.receipts.lineGross": "Hrubá suma",
+  "budget.receipts.lineDiscount": "Zľava",
   "budget.receipts.summaryLineDefault": "Súhrn dokladu",
   "budget.receipts.confirmAction": "Potvrdiť doklad",
   "budget.receipts.confirming": "Potvrdzovanie…",

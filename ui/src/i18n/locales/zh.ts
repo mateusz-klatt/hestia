@@ -491,6 +491,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.removeLine": "移除",
   "budget.receipts.lineName": "描述",
   "budget.receipts.lineAmount": "净额",
+  "budget.receipts.lineGross": "折前金额",
+  "budget.receipts.lineDiscount": "折扣",
   "budget.receipts.summaryLineDefault": "收据汇总",
   "budget.receipts.confirmAction": "确认收据",
   "budget.receipts.confirming": "正在确认…",
