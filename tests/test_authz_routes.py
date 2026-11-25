@@ -136,16 +136,18 @@ class RouteMatrixTests(unittest.TestCase):
             session.get(db.User, "admin").role = "viewer"
             session.get(db.User, "owner2").disabled = True
         self.assertEqual(store_sql.set_user_disabled("admin", True, path=self.path), "last_admin")
-        granted = household.grant_member("candidate", "admin", path=str(self.path))
+        with self.sessions.begin() as session:
+            session.add(db.User(username="cleanup", password_hash="h", role="viewer"))
+        granted = household.grant_member("cleanup", "admin", path=str(self.path))
         with self.sessions.begin() as session:
             permission = session.execute(select(db.PermissionGrant).where(
-                db.PermissionGrant.username == "candidate",
+                db.PermissionGrant.username == "cleanup",
                 db.PermissionGrant.permission_id == "household.view",
                 db.PermissionGrant.target_owner == "admin",
             )).scalar_one()
             session.delete(permission)
         self.assertEqual(
-            household.revoke_grant("candidate", "admin", granted["grant_id"], path=str(self.path))["status"],
+            household.revoke_grant("cleanup", "admin", granted["grant_id"], path=str(self.path))["status"],
             "revoked",
         )
         with self.sessions.begin() as session:
@@ -304,6 +306,50 @@ class DiscoveryHTTPTests(unittest.IsolatedAsyncioTestCase):
     def _cookie(self, username):
         token = auth.make_session(username, now=web._now(), secret=b"route-secret")
         return {"Cookie": f"hestia_session={token}"}
+
+    async def test_http_ingress_matrix_disabled_unknown_and_public_routes(self):
+        routes = list(_registered_routes(self.client.server.app))
+        self.client.server.app[web._RT_KEY].audit_engine = None
+        unknown_token = self._cookie("ghost")
+        with self.sessions.begin() as session:
+            session.get(db.User, "admin").disabled = True
+        disabled_token = self._cookie("admin")
+        public_post_status = {
+            "/api/login": 401,
+            "/api/logout": 200,
+            "/api/budget/receipts/device-token/login": 400,
+            "/api/budget/receipts/device-token/redeem": 400,
+        }
+        for method, path in routes:
+            with self.subTest(method=method, path=path):
+                public = web._is_public_route(method, path)
+                if public:
+                    for headers in ({}, unknown_token, disabled_token):
+                        response = await self.client.request(
+                            method, path, headers=headers,
+                            **({"json": {}} if method == "POST" else {}),
+                        )
+                        expected = public_post_status.get(path)
+                        if expected is not None:
+                            self.assertEqual(response.status, expected)
+                        else:
+                            self.assertNotIn(response.status, (401, 403))
+                        await response.read()
+                else:
+                    for headers in (unknown_token, disabled_token):
+                        response = await self.client.request(
+                            method, path, headers=headers,
+                            **({"json": {}} if method == "POST" else {}),
+                        )
+                        self.assertEqual(response.status, 401)
+                        await response.read()
+        for headers, expected in ((unknown_token, 401), (disabled_token, 401)):
+            response = await self.client.get("/api/does-not-exist", headers=headers)
+            self.assertEqual(response.status, expected)
+        with self.sessions.begin() as session:
+            session.get(db.User, "admin").disabled = False
+        response = await self.client.get("/api/does-not-exist", headers=self._cookie("admin"))
+        self.assertEqual(response.status, 404)
 
     async def test_feature_probe_is_public_no_store_and_uses_the_real_router(self):
         response = await self.client.get("/api/auth/features", headers={"Authorization": "Bearer unsupported"})

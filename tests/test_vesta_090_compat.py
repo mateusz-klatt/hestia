@@ -113,6 +113,7 @@ class Vesta090HTTPTests(unittest.IsolatedAsyncioTestCase):
         with self.sessions.begin() as session:
             for username in ("alice", "bob", "operator", "viewer"):
                 session.get(db.User, username).password_hash = self.password_hash
+        self.preactivation_session = self.token("operator")
         self.assertEqual(store_sql.activate_catalog_compat(path=self.path), "activated")
         from types import SimpleNamespace
         self.client.server.app[web._RT_KEY] = SimpleNamespace(
@@ -144,13 +145,16 @@ class Vesta090HTTPTests(unittest.IsolatedAsyncioTestCase):
                 "user": "operator", "password": self.password, "bearer": True,
             })
         self.assertEqual(set(login), {"ok", "user", "token"})
-        cached = login["token"]
+        self.assertTrue(login["token"])
         with mock.patch.object(web, "_merged_discovery", return_value={}):
-            await self._decoded("GET", "/api/discovery", 200, headers={"Authorization": f"Bearer {cached}"})
+            await self._decoded(
+                "GET", "/api/discovery", 200,
+                headers={"Authorization": f"Bearer {self.preactivation_session}"},
+            )
         with mock.patch.object(web, "_dispatch_op", return_value=web._json(200, {"ok": True, "sent": "01"})):
             controlled = await self._decoded("POST", "/api/control", 200, body={
                 "op": "switch", "node": 5, "on": True,
-            }, headers={"Authorization": f"Bearer {cached}"})
+            }, headers={"Authorization": f"Bearer {self.preactivation_session}"})
             self.assertTrue(controlled["ok"])
             denied = await self.client.post("/api/control", json={
                 "op": "switch", "node": 5, "on": True,
