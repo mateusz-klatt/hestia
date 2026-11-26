@@ -7,9 +7,10 @@ deterministic merchant evidence (structured counterparty name, falling back to
 remittance description) are grouped, separately per currency and label source.
 
 A hint requires at least three observed monthly occurrences across at least
-three distinct calendar months with consecutive gaps in [23, 38] days. Clusters
-containing shorter gaps (weekly/bi-weekly charges, frequent purchases, duplicate
-charges) are rejected rather than arbitrarily pruned. Hints show every observed
+three distinct calendar months with consecutive gaps in [23, 38] days. A monthly
+history may change its amount. Overlapping charges retain independently monthly
+fixed-amount histories. Other short-gap clusters (weekly/bi-weekly charges,
+frequent purchases, duplicate charges) are rejected. Hints show every observed
 occurrence as evidence and never assert that a subscription is unwanted or
 unused.
 
@@ -24,7 +25,7 @@ from datetime import date
 import re
 import unicodedata
 
-RULE_VERSION = 1
+RULE_VERSION = 2
 MIN_OCCURRENCES = 3
 MIN_GAP_DAYS = 23
 MAX_GAP_DAYS = 38
@@ -109,6 +110,7 @@ class _Charge:
     year_month: tuple[int, int]
     occurrence: RecurringOccurrence
     display_label: str
+    amount: str
 
 
 def _text(value, maximum=MAX_TEXT):
@@ -197,7 +199,7 @@ def _validated_charge(owner, entry, accounts, seen):
         return None
     source, display, normalized = merchant
     occurrence = RecurringOccurrence(entry.account_id, entry.entry_reference, entry.date, entry.fingerprint)
-    return (entry.currency, source, normalized, amount), _Charge(day, year_month, occurrence, display)
+    return (entry.currency, source, normalized), _Charge(day, year_month, occurrence, display, amount)
 
 
 def _groups(owner, entries, accounts, max_entries):
@@ -235,12 +237,12 @@ def _hint_from_cluster(key, cluster):
     distinct_months = len({item.year_month for item in cluster})
     if distinct_months < MIN_OCCURRENCES:
         return None
-    currency, source, normalized, amount = key
+    currency, source, normalized = key
     return RecurringHint(
         label=cluster[-1].display_label,
         normalized_label=normalized,
         label_source=source,
-        amount=amount,
+        amount=cluster[-1].amount,
         currency=currency,
         cadence="monthly",
         occurrence_count=len(cluster),
@@ -254,6 +256,26 @@ def _hint_from_cluster(key, cluster):
     )
 
 
+def _monthly_hints(key, items):
+    for cluster in _clusters(items):
+        hint = _hint_from_cluster(key, cluster)
+        if hint is not None:
+            yield hint
+            continue
+        # Multiple nearby charges can belong to separate contracts with the same
+        # merchant. Preserve independently recurring fixed amounts in that case.
+        by_amount = {}
+        for item in cluster:
+            by_amount.setdefault(item.amount, []).append(item)
+        if len(by_amount) == 1:
+            continue
+        for charges in by_amount.values():
+            for fixed_cluster in _clusters(charges):
+                hint = _hint_from_cluster(key, fixed_cluster)
+                if hint is not None:
+                    yield hint
+
+
 def detect_recurring_charges(owner: str, entries: Iterable[RecurringEntry],
                              selected_accounts: set[str] | frozenset[str], *,
                              max_entries: int = MAX_ENTRIES) -> tuple[RecurringHint, ...]:
@@ -263,16 +285,15 @@ def detect_recurring_charges(owner: str, entries: Iterable[RecurringEntry],
     amounts and non-empty merchant evidence (``counterparty_name`` preferred over
     ``description``) are considered. Each hint requires at least three monthly
     occurrences across at least three distinct calendar months with consecutive
-    date gaps in [23, 38] days.
+    date gaps in [23, 38] days. Monthly amount changes stay in one history, with
+    the latest observed amount used for the estimate. Overlapping charges are
+    considered only as independently recurring fixed-amount histories.
     """
     owner, accounts = _scope(owner, selected_accounts, max_entries)
     groups = _groups(owner, entries, accounts, max_entries)
     hints = []
     for key, items in sorted(groups.items()):
-        for cluster in _clusters(items):
-            hint = _hint_from_cluster(key, cluster)
-            if hint is not None:
-                hints.append(hint)
+        hints.extend(_monthly_hints(key, items))
     hints.sort(key=lambda hint: (hint.currency, hint.normalized_label, hint.label_source,
                                  hint.amount, hint.first_date, hint.last_date))
     return tuple(hints)
