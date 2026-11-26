@@ -1409,7 +1409,9 @@ describe("analytics views", () => {
     } }));
     await render(api);
     await click(button("Month"));
-    await click(button("Change"));
+    const details = host.querySelector<HTMLButtonElement>(".budget-entry-open");
+    if (details === null) throw new Error("transaction details trigger missing");
+    await click(details);
     await click(button("Create rule from recipient account"));
     expect(button("Categories and rules").getAttribute("aria-pressed")).toBe("true");
     const form = host.querySelector<HTMLFormElement>(".budget-rule-editor");
