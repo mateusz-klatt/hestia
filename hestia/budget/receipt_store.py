@@ -728,7 +728,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         return unique_primary
 
     @staticmethod
-    def _candidate_rows(session, owner, *, include_receipt_id=None):
+    def _candidate_rows(session, owner, *, include_receipt_id=None, card_filters=()):
         # Confirmed and needs_review rows reserve a transaction. Re-issuing for one
         # needs_review receipt must still see that receipt's own reservation.
         held = [
@@ -744,9 +744,13 @@ class BudgetReceiptStore(BudgetHTTPStore):
             Leg.account_id == Transaction.account_id, Leg.entry_reference == Transaction.entry_reference,
             Leg.account_id == Account.id, Account.owner == owner,
         )
-        return session.execute(select(Transaction, _ROW_ID).join(Account).join(Connection).where(
+        # Automatic card matching checks whether the only plausible transaction is free.
+        # An already occupied debit must still count when two purchases look identical.
+        columns = (Transaction, Account.kind, active_link) if card_filters else (Transaction, _ROW_ID)
+        filters = card_filters or (~active_link,)
+        return session.execute(select(*columns).join_from(Transaction, Account).join(Connection).where(
             Account.owner == owner, Connection.owner == owner, Account.enabled.is_(True),
-            Transaction.uncertain.is_(False), ~active_link, ~transfer_leg,
+            Transaction.uncertain.is_(False), ~transfer_leg, *filters,
         )).all()
 
     def _candidates(self, session, owner, row, parsed, *, include_receipt_id=None):

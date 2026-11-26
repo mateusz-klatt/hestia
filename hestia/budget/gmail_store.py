@@ -13,6 +13,7 @@ from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.orm import aliased
 
 from ..db import AppMeta, BudgetAnalyticsAudit, BudgetGmailMessage, BudgetGmailState, BudgetReceipt, BudgetReceiptLine
+from . import gmail_card_import
 from .gmail_client import GmailError
 from .gmail_payment import ImportedPayment, _payee_key
 from .receipt_parser import fold_text
@@ -55,6 +56,7 @@ STATUS_FIELDS = ("grant_status", "grant_generation", "version", "sync_phase", "a
 _PARSE_FAILED_REASONS_PREFIX = "budget_gmail_parse_failed_reasons:"
 _RETRY_WINDOW_PREFIX = "budget_gmail_retry_full_window:"
 _INC_RESET_PREFIX = "budget_gmail_inc_reset:"
+_RELAXED_SINCE_PREFIX = "budget_gmail_relaxed_since:"
 _DOCUMENT_NUMBER_PREFIX = "budget_gmail_document_number:"
 _PAYMENT_SENDER_PREFIX = "budget_gmail_payment_sender:"
 _PAYMENT_ORDER_PREFIX = "budget_gmail_payment_order:"
@@ -103,6 +105,13 @@ def _inc_reset_key(owner):
     return _INC_RESET_PREFIX + owner
 
 
+def _already_processed(source, retry_untrusted_before):
+    return source is not None and not (
+        retry_untrusted_before is not None and source.created_at < retry_untrusted_before
+        and source.outcome == "skipped_untrusted_sender" and source.receipt_id is None
+    )
+
+
 def digest(secret, domain, value):
     return hmac.digest(secret, domain + value.encode("utf-8"), "sha256").hex()
 
@@ -143,6 +152,7 @@ class PendingMessage:
     failed_gateway: tuple[str, ...] | None = None
     document_provenance: dict | None = None
     diagnostic_reason: str | None = None
+    card_required: bool = False
 
 
 def _linked_manual_forward():
@@ -276,6 +286,7 @@ def _delete_imports(session, owner, expires_at=None):
 
 
 def retain_imports(session, owner, now):
+    gmail_card_import.expire_waiting(session, owner, now)
     _delete_imports(session, owner, now)
     expired = (BudgetGmailMessage.internal_date < now - PROVENANCE_TTL,)
     if owner is not None:
@@ -359,6 +370,25 @@ class GmailStore(BudgetStore):
         session.merge(AppMeta(key=key, value=json.dumps({"state": "pending", "cutoff": cutoff})))
         row.force_full_resync = 1
         return cutoff
+
+    def prepare_sender_policy(self, owner, generation, require_authentication, backfill_days):
+        """Catch up once when an active mailbox starts using Gmail's wider document scope."""
+        with self.transaction() as session:
+            row = self._state(session, owner)
+            self._active(row, generation)
+            key = _RELAXED_SINCE_PREFIX + owner
+            marker = session.get(AppMeta, key)
+            if require_authentication:
+                if marker is not None:
+                    session.delete(marker)
+                return None
+            if marker is not None:
+                return float(marker.value)
+            now = self.clock()
+            if row.history_id is not None or row.pending_history_id is not None:
+                self._request_full_window(session, row, now, backfill_days)
+            session.add(AppMeta(key=key, value=str(now)))
+            return now
 
     def retry_full_window(self, owner):
         with self.sessions() as session:
@@ -447,8 +477,10 @@ class GmailStore(BudgetStore):
             for key, value in GRANT_RESET.items():
                 setattr(row, key, value)
             session.execute(delete(AppMeta).where(
-                AppMeta.key.in_((_reasons_key(owner), _retry_window_key(owner), _inc_reset_key(owner))),
+                AppMeta.key.in_((_reasons_key(owner), _retry_window_key(owner), _inc_reset_key(owner),
+                                 _RELAXED_SINCE_PREFIX + owner)),
             ))
+            gmail_card_import.forget_waiting(session, owner)
             row.grant_status = status
             row.grant_generation += 1
             row.version += 1
@@ -483,9 +515,10 @@ class GmailStore(BudgetStore):
             if row.grant_status == "active" and attention == "identity_mismatch":
                 row.grant_generation += 1
 
-    def known(self, owner, gmail_hmac):
+    def known(self, owner, gmail_hmac, *, retry_untrusted_before=None):
         with self.sessions() as session:
-            return session.get(BudgetGmailMessage, (owner, gmail_hmac)) is not None
+            return (_already_processed(session.get(BudgetGmailMessage, (owner, gmail_hmac)), retry_untrusted_before)
+                    or session.get(AppMeta, gmail_card_import.waiting_key(owner, gmail_hmac)) is not None)
 
     @staticmethod
     def _duplicate(session, owner, rfc_hmac):
@@ -832,7 +865,8 @@ class GmailStore(BudgetStore):
         session.flush()
         return receipt.id
 
-    def commit(self, owner, generation, changes, pending=(), *, starting_recovery=False, starting_incremental=False):
+    def commit(self, owner, generation, changes, pending=(), *, starting_recovery=False, starting_incremental=False,
+               retry_untrusted_before=None, settle_cards=False, enforce_pending_cap=True):
         """Commit up to one chunk; never advance a page past an uncommitted message."""
         imported = skipped = 0
         drained = True
@@ -843,8 +877,17 @@ class GmailStore(BudgetStore):
             row = self._state(session, owner)
             self._active(row, generation)
             now = self.clock()
+            staged = set()
             for item in pending:
-                if session.get(BudgetGmailMessage, (owner, item.gmail_id_hmac)) is not None:
+                source = session.get(BudgetGmailMessage, (owner, item.gmail_id_hmac))
+                if _already_processed(source, retry_untrusted_before):
+                    continue
+                if item.card_required:
+                    if session.get(AppMeta, gmail_card_import.waiting_key(owner, item.gmail_id_hmac)) is None:
+                        gmail_card_import.stage(session, owner, item, now + IMPORT_TTL)
+                        if source is not None:
+                            session.delete(source)
+                        staged.add(item.gmail_id_hmac)
                     continue
                 receipt_id = None
                 outcome = item.outcome
@@ -868,7 +911,7 @@ class GmailStore(BudgetStore):
                     else:
                         outcome = self._duplicate_payment(session, owner, item.payment) or outcome
                 if outcome == "imported":
-                    if self._pending_count(session, owner) >= MAX_PENDING_IMPORTS:
+                    if enforce_pending_cap and self._pending_count(session, owner) >= MAX_PENDING_IMPORTS:
                         drained = False
                         break
                     if item.forwarded_manually:
@@ -889,12 +932,18 @@ class GmailStore(BudgetStore):
                         new_reasons.append(normalize_parse_failed_reason(reason))
                 if item.diagnostic_reason is not None and not (outcome == "parse_failed" and reason == item.diagnostic_reason):
                     new_reasons.append(normalize_parse_failed_reason(item.diagnostic_reason))
-                session.add(BudgetGmailMessage(owner=owner, gmail_id_hmac=item.gmail_id_hmac,
-                                               rfc_message_id_hmac=rfc_hmac,
-                                               internal_date=item.internal_date, trust_path=item.trust_path,
-                                               outcome=outcome, created_at=now, receipt_id=receipt_id))
+                if source is None:
+                    source = BudgetGmailMessage(owner=owner, gmail_id_hmac=item.gmail_id_hmac)
+                    session.add(source)
+                source.rfc_message_id_hmac, source.internal_date = rfc_hmac, item.internal_date
+                source.trust_path, source.outcome, source.receipt_id = item.trust_path, outcome, receipt_id
+                source.created_at = now
+            scanned = imported + skipped + len(staged)
+            if settle_cards:
+                session.flush()
+                imported += gmail_card_import.settle(self, session, owner, now)
             if row.sync_phase in ("backfill", "full_resync"):
-                row.batch_processed_count += imported + skipped
+                row.batch_processed_count += scanned
             if starting_incremental:
                 session.merge(AppMeta(key=_inc_reset_key(owner), value="1"))
             if imported or skipped:
@@ -947,8 +996,13 @@ class GmailStore(BudgetStore):
                         session.execute(delete(AppMeta).where(AppMeta.key == _inc_reset_key(owner)))
         return imported, skipped, drained
 
-    def retain(self, owner, generation):
+    def retain(self, owner, generation, *, settle_cards=None):
         with self.transaction() as session:
             BudgetHTTPStore._owner(session, owner)
             self._active(self._state(session, owner), generation)
-            retain_imports(session, owner, self.clock())
+            now = self.clock()
+            if settle_cards:
+                gmail_card_import.settle(self, session, owner, now)
+            elif settle_cards is False:
+                gmail_card_import.forget_waiting(session, owner)
+            retain_imports(session, owner, now)

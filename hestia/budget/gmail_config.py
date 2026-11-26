@@ -29,7 +29,8 @@ _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]{0,127}\Z")
 _REQUIRED_FIELDS = {"owner", "owner_mailbox", "client_id_env", "client_secret_env", "refresh_token_env",
                     "sender_allowlist", "spouse_forward_senders"}
 _OPTIONAL_FIELDS = {"known_merchant_domains", "require_known_forwarded_merchant", "label_name",
-                    "backfill_days", "backfill_max_messages", "sync_interval_seconds", "payment_senders", "document_senders"}
+                    "backfill_days", "backfill_max_messages", "sync_interval_seconds", "payment_senders", "document_senders",
+                    "require_sender_authentication"}
 
 
 def _read_config(path):
@@ -136,9 +137,12 @@ def load_settings(*, environ=None, session_secret=b"") -> GmailSettings | None:
             raise ValueError
         payments = normalize_payment_senders(data.get("payment_senders", []))
         documents = normalize_document_senders(data.get("document_senders", []))
+        require_auth = data.get("require_sender_authentication", False)
+        if type(require_auth) is not bool:
+            raise ValueError
         senders, spouse, domains = normalize_sender_rules(
             data["sender_allowlist"], data["spouse_forward_senders"], data.get("known_merchant_domains", []),
-            payment_senders=payments, document_senders=documents,
+            payment_senders=payments, document_senders=documents, allow_empty=not require_auth,
         )
         require_known = data.get("require_known_forwarded_merchant", True)
         if type(require_known) is not bool:
@@ -167,4 +171,5 @@ def load_settings(*, environ=None, session_secret=b"") -> GmailSettings | None:
 
     return GmailSettings(owner, mailbox, GmailCredentials(client_id, client_secret, refresh_token), hmac_secret,
                          senders, spouse, domains, require_known, label_name, backfill_days, backfill_max, interval,
-                         payment_senders=payments, document_senders=documents, card_accounts=card_accounts)
+                         payment_senders=payments, document_senders=documents, card_accounts=card_accounts,
+                         require_sender_authentication=require_auth)

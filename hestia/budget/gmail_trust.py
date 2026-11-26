@@ -132,12 +132,12 @@ def normalize_document_senders(values):
 
 
 def normalize_sender_rules(sender_allowlist, spouse_forward_senders, known_merchant_domains, *, payment_senders=(),
-                           document_senders=()):
+                           document_senders=(), allow_empty=False):
     """Return normalized direct rules, exact spouse mailboxes and merchant domains."""
     direct = _normalize_rules(sender_allowlist, _sender_rule)
     spouse = _normalize_rules(spouse_forward_senders, canonical_mailbox)
     merchants = set(_normalize_rules(known_merchant_domains, _domain_rule))
-    if not direct and not spouse and not payment_senders and not document_senders:
+    if not allow_empty and not (direct or spouse or payment_senders or document_senders):
         raise ValueError(_CONFIG_ERROR)
     # Match in both directions to catch either a parent domain or an exact mailbox
     # covered by the other list's domain rule.
@@ -301,21 +301,27 @@ def _gmail_authenticated(domain, results, signatures, *, relaxed=False):
     return "dkim" in aligned and bool(aligned & {"spf", "dmarc"})
 
 
-def classify_sender(headers, sender_allowlist, spouse_forward_senders, owner_mailbox=None, *, payment_senders=(),
-                    document_senders=()):
-    """Classify ordered outer headers, preserving duplicates and the topmost AR."""
+def sender_address(headers):
+    """Return the single From address when any Sender header is consistent with it."""
     by_name = {}
     for name, value in headers:
         by_name.setdefault(name.lower(), []).append(value)
     address = _single_mailbox(by_name.get("from", ()))
+    if address and "sender" in by_name:
+        sender = _single_mailbox(by_name["sender"])
+        if not sender or sender.rpartition("@")[2] != address.rpartition("@")[2]:
+            return None
+    return address
+
+
+def classify_sender(headers, sender_allowlist, spouse_forward_senders, owner_mailbox=None, *, payment_senders=(),
+                    document_senders=(), require_authentication=True):
+    """Classify the outer envelope, optionally verifying Google's authentication results."""
+    headers = tuple(headers)
+    address = sender_address(headers)
     if not address:
         return "untrusted"
     domain = address.rpartition("@")[2]
-    sender_headers = by_name.get("sender", ())
-    if sender_headers:
-        sender = _single_mailbox(sender_headers)
-        if not sender or sender.rpartition("@")[2] != domain:
-            return "untrusted"
     invoice_sender = any(_matches_sender(address, rule) for rule in sender_allowlist)
     if address == owner_mailbox:
         path = "owner_forward"
@@ -325,10 +331,11 @@ def classify_sender(headers, sender_allowlist, spouse_forward_senders, owner_mai
         path = "direct_allowlist"
     else:
         return "untrusted"
-    if not _gmail_authenticated(domain, by_name.get("authentication-results", ()),
-                               by_name.get("dkim-signature", ()),
-                               relaxed=invoice_sender or path == "direct_allowlist"):
-        return "untrusted"
+    if require_authentication:
+        results = [v for k, v in headers if k.lower() == "authentication-results"]
+        signatures = [v for k, v in headers if k.lower() == "dkim-signature"]
+        if not _gmail_authenticated(domain, results, signatures, relaxed=invoice_sender or path == "direct_allowlist"):
+            return "untrusted"
     return path
 
 

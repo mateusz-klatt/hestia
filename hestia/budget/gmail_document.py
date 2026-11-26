@@ -15,7 +15,7 @@ from .receipt_parser import MAX_TEXT_BYTES, ReceiptError
 class ImportedDocument:
     issuer: str
     nip: str | None
-    invoice_number: str
+    invoice_number: str | None
     amount: str
     currency: str
     issue_date: str | None
@@ -30,23 +30,23 @@ _OUT_OF_SCOPE = re.compile(r"^\s*(?:bilet(?:y|u|ów)?|tickets?|booking|rezerwacj
 _DOCUMENT = re.compile(r"faktura|invoice|receipt|rachunek|paragon|\bbilling\s+number\b", re.I)
 _GENERIC_SELLER = re.compile(r"^(?:billing|(?:summary|invoice|receipt|statement|faktura|rachunek|paragon)\b)", re.I)
 _LABELS = {
-    "invoice": r"faktura(?:\s+vat)?\s+nr\.?|(?:faktura\s+)?numer faktury|invoice number|billing number",
-    "receipt": r"receipt number|paragon(?:\s+nr\.?)?",
-    "issue": r"data wystawienia(?: faktury)?|data faktury|date of issue|date issued|document date",
+    "invoice": r"faktura(?:\s+vat)?\s+nr\.?|(?:faktura\s+)?numer faktury|invoice number|billing number|invoice(?=\s*#)",
+    "receipt": r"receipt number|receipt(?=\s*#)|paragon(?:\s+nr\.?)?",
+    "issue": r"data wystawienia(?: faktury)?|data faktury|date of issue|date issued|document date|purchase date|transaction date|date(?=\s*:)|data zakupu",
     "paid_date": r"date paid",
     "due": r"termin płatności|date due|payment due on",
-    "seller": r"sprzedawca|from(?=\s*:|\s*$)",
+    "seller": r"sprzedawca|merchant(?=\s*:)|seller(?=\s*:)|from(?=\s*:|\s*$)",
     "issuer": r"faktura wystawiona przez",
     "buyer": r"dane nabywcy|nabywca|odbiorca|kupujący|billed to|bill to|sold to|customer",
     "nip": r"nip",
     "total0": r"do zapłaty razem|razem do zapłaty",
     "total1": r"kwota do zapłaty|do zapłaty|amount due|total due",
-    "total2": r"suma brutto|suma(?=\s*:|\s+w\s+(?:PLN|EUR|USD|GBP)\b)|wartość brutto|kwota brutto|total amount|total",
+    "total2": r"suma brutto|suma(?=\s*:|\s+w\s+(?:PLN|EUR|USD|GBP)\b)|wartość brutto|kwota brutto|total amount|grand total|total",
     "total3": r"zapłacono|amount paid",
 }
 _LABEL = re.compile(r"^\s*(?:" + "|".join(f"(?P<{key}>{value})" for key, value in _LABELS.items()) + r")(?!\w)\s*[:.]?\s*(?P<value>.*)$", re.I)
 _PARAGON = re.compile(r"^\s*paragon\b", re.I | re.M)
-_RECEIPT_HEADING = re.compile(r"^\s*receipt\s*:?\s*$", re.I | re.M)
+_RECEIPT_HEADING = re.compile(r"^\s*(?:payment\s+|sales\s+)?receipt\s*:?\s*$", re.I | re.M)
 _PAID = re.compile(r"zapłacono|amount paid|payment history|płatność kartą", re.I)
 _EXCLUDED = re.compile(r"netto|\bnet\b|subtotal|excluding tax|podatek|\bvat\b", re.I)
 _RECEIPT_NUMBER = re.compile(r"[0-9A-Z-]{4,64}\Z", re.ASCII)
@@ -137,7 +137,7 @@ def _vat_totals(lines: list[str]) -> tuple[dict[int, str], set[int]]:
     return totals, headers
 
 
-def extract_document(text: str, *, merchant: str) -> ImportedDocument | None:
+def extract_document(text: str, *, merchant: str, allow_unnumbered_receipt: bool = False) -> ImportedDocument | None:
     """Return a document only if the labelled values are safe and unambiguous."""
     if not isinstance(text, str) or len(text) > MAX_TEXT_BYTES:
         return None
@@ -241,7 +241,7 @@ def extract_document(text: str, *, merchant: str) -> ImportedDocument | None:
         fields.setdefault(key, []).append(value)
 
     def one_number(key):
-        values = fields.get(key, [])
+        values = [value.removeprefix("#").strip() for value in fields.get(key, [])]
         if not values:
             return None
         if any(not any(char.isdecimal() for char in value) for value in values):
@@ -263,10 +263,10 @@ def extract_document(text: str, *, merchant: str) -> ImportedDocument | None:
         return None
     receipt_number = receipt_number or paragon_number
     number = number or receipt_number
-    if number is None:
-        return None
     kind = "receipt" if receipt_number or _RECEIPT_HEADING.search(joined) or (
         not fields.get("invoice") and _PARAGON.search(joined)) else "invoice"
+    if number is None and (kind != "receipt" or not allow_unnumbered_receipt):
+        return None
     dates = {}
     for key in ("issue", "due", "paid_date"):
         values = fields.get(key, [])

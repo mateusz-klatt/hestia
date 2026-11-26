@@ -134,6 +134,27 @@ def _name(raw):
     return (value, 0) if 0 < len(value) <= 256 else (None, int(bool(value)))
 
 
+def exchange_evidence(raw):
+    """Allowlisted Enable Banking FX fields, excluding contract identifiers."""
+    if not isinstance(raw, dict):
+        return {}
+    fields = {}
+    for key, data, amount_key, currency_key in (
+        ("instructed_amount", raw.get("instructed_amount"), "amount", "currency"),
+        ("rate", raw, "exchange_rate", "unit_currency"),
+    ):
+        if not isinstance(data, dict):
+            continue
+        amount, currency = data.get(amount_key), data.get(currency_key)
+        if (isinstance(amount, str) and re.fullmatch(r"[0-9]{1,16}(?:\.[0-9]{1,12})?", amount)
+                and amount.strip("0.") and isinstance(currency, str) and re.fullmatch("[A-Z]{3}", currency)):
+            if key == "instructed_amount":
+                fields[key] = {"currency": currency, "amount": amount}
+            else:
+                fields.update(unit_currency=currency, exchange_rate=amount)
+    return fields
+
+
 def _transaction_patch(raw, country=None):
     if not isinstance(raw, dict):
         return {}, 1
@@ -151,6 +172,8 @@ def _transaction_patch(raw, country=None):
             patch[party + "_accounts"] = list(values)
         elif identities or additional:
             rejected += 1
+    if exchange := exchange_evidence(raw.get("exchange_rate")):
+        patch["exchange_rate"] = exchange
     mcc = raw.get("merchant_category_code")
     if mcc is not None:
         if isinstance(mcc, str) and _MCC.fullmatch(mcc):
@@ -161,7 +184,7 @@ def _transaction_patch(raw, country=None):
 
 
 def normalize_transaction_metadata(raw, *, country=None):
-    """Return names, account identifiers and MCC only; invalid optional fields skip."""
+    """Return names, account identifiers, FX evidence and MCC; invalid optional fields skip."""
     return _transaction_patch(raw, country)[0]
 
 
@@ -287,7 +310,7 @@ def _identities_patch(patch):
 
 
 def _payload_patch(patch):
-    if not isinstance(patch, dict) or set(patch) - {"creditor_name", "debtor_name", "creditor_accounts", "debtor_accounts", "mcc"}:
+    if not isinstance(patch, dict) or set(patch) - {"creditor_name", "debtor_name", "creditor_accounts", "debtor_accounts", "mcc", "exchange_rate"}:
         return None
     result = {}
     for key, value in patch.items():
@@ -296,6 +319,10 @@ def _payload_patch(patch):
             if not normalized:
                 return None
             result[key] = list(normalized)
+        elif key == "exchange_rate":
+            if not value or exchange_evidence(value) != value:
+                return None
+            result[key] = value
         elif key == "mcc":
             if not isinstance(value, str) or not _MCC.fullmatch(value):
                 return None

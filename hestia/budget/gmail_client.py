@@ -30,6 +30,16 @@ class GmailError(Exception):
         self.attention = attention
 
 
+def has_spam_or_trash_label(response):
+    # Google can omit an empty repeated field for an unlabelled, archived message.
+    labels = response.get("labelIds", [])
+    if not isinstance(labels, list) or any(
+        not isinstance(label, str) or not label or label.strip() != label for label in labels
+    ):
+        raise GmailError("invalid_response")
+    return "SPAM" in labels or "TRASH" in labels
+
+
 class RunLimit(Exception):
     """Continue from the persisted checkpoint in the next round."""
 
@@ -185,7 +195,7 @@ class GmailRun:
         return self.client._get(self, "/labels", 1, {})
 
     def history(self, baseline, page_token, label_id):
-        params = {"startHistoryId": baseline, "historyTypes": ("messageAdded", "labelAdded"), "maxResults": 100}
+        params = {"startHistoryId": baseline, "historyTypes": ("messageAdded", "labelAdded", "labelRemoved"), "maxResults": 100}
         if label_id is not None:
             params["labelId"] = label_id
         if page_token is not None:
@@ -203,8 +213,8 @@ class GmailRun:
             raise RunLimit()
 
     def message(self, message_id, *, raw=False):
-        params = {"format": "raw", "fields": "id,raw"} if raw else {
+        params = {"format": "raw", "fields": "id,raw,labelIds"} if raw else {
             "format": "metadata", "metadataHeaders": ("From", "Sender", "Authentication-Results", "DKIM-Signature"),
-            "fields": "id,internalDate,sizeEstimate,payload(headers)",
+            "fields": "id,internalDate,sizeEstimate,payload(headers),labelIds",
         }
         return self.client._get(self, "/messages/" + quote(message_id, safe=""), _MESSAGE_COST, params)

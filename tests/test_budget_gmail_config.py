@@ -66,6 +66,7 @@ class GmailSettingsTests(TestCase):
         self.assertEqual(settings.spouse_forward_senders, ("spouse@example.test",))
         self.assertEqual(settings.known_merchant_domains, ("vendor.example.test",))
         self.assertTrue(settings.require_known_forwarded_merchant)
+        self.assertFalse(settings.require_sender_authentication)
         self.assertEqual((settings.label_name, settings.backfill_days, settings.backfill_max_messages,
                           settings.sync_interval_seconds), (None, 365, 500, 3600))
         self.assertNotIn(REFRESH_TOKEN, repr(settings))
@@ -77,6 +78,16 @@ class GmailSettingsTests(TestCase):
                           custom.sync_interval_seconds), ("Faktury", 1, 10, 7200))
         self.assertFalse(custom.require_known_forwarded_merchant)
         self.assertEqual(custom.known_merchant_domains, ("other.example.test", "vendor.example.test"))
+
+    def test_sender_authentication_switch_and_empty_sender_lists(self):
+        no_senders = {"sender_allowlist": [], "spouse_forward_senders": []}
+        self.assertFalse(self.load(**no_senders).require_sender_authentication)
+        self.assertTrue(self.load(require_sender_authentication=True).require_sender_authentication)
+        for invalid in (no_senders | {"require_sender_authentication": True},
+                        *({"require_sender_authentication": value} for value in (None, 0, 1, "false"))):
+            with self.subTest(invalid=invalid):
+                self.settings.write_text(json.dumps(self.data | invalid), encoding="utf-8")
+                self.assert_invalid()
 
     def test_payment_rules_normalize_and_can_supply_the_entire_direct_scope(self):
         entries = [
