@@ -1423,7 +1423,8 @@ class DeviceTokenHTTPTests(fixture.unittest.IsolatedAsyncioTestCase):
         routes = {(route.method, route.resource.canonical.replace("{path}", "asset.js"))
                   for route in self.client.server.app.router.routes()}
         allowed = {("POST", receipt_api.PREFIX + "/" + operation)
-                   for operation in ("parse-text", "confirm", "list", "search", "delete", "device-token/revoke")}
+                   for operation in ("parse-text", "confirm", "list", "search", "delete",
+                                     "group/candidates", "device-token/revoke")}
         allowed |= {("GET", receipt_api.PREFIX + "/" + operation) for operation in ("detail", "image")}
         self.assertEqual(device_token.ALLOWED, allowed)
         self.assertLessEqual(allowed, routes)

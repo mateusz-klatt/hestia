@@ -27,7 +27,11 @@ WRITES = {
     "list": (api_contract.BudgetReceiptListRequest, 16384),
     "search": (api_contract.BudgetReceiptSearchRequest, 16384),
     "delete": (api_contract.BudgetReceiptDeleteRequest, 16384),
+    "group/candidates": (api_contract.BudgetReceiptGroupCandidatesRequest, 16384),
+    "group/link": (api_contract.BudgetReceiptGroupLinkRequest, 16384),
+    "group/unlink": (api_contract.BudgetReceiptGroupUnlinkRequest, 16384),
 }
+_GROUP_OPERATIONS = frozenset({"group/detail", "group/candidates", "group/link", "group/unlink"})
 _CONTRACT_HEADER = "X-Hestia-Contract-Version"
 _CONTRACT_VERSION = re.compile(r"0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\Z")
 _NATIVE_GMAIL_VERSION = (0, 40, 0)
@@ -90,7 +94,7 @@ def _run(owner, operation, values, secret, device_id, actor=None):
     store = _store(secret, device_id, actor)
     if operation == "parse-text":
         return store.parse_text(owner, values["text"], source_kind=values["source_kind"])
-    return getattr(store, operation)(owner, values)
+    return getattr(store, operation.replace("/", "_"))(owner, values)
 
 
 def _device_error(status, code, retry=None):
@@ -107,7 +111,7 @@ _DEVICE_BROWSER_REQUESTS = {
 
 
 def _receipt_contract(request, operation):
-    if operation not in _RECEIPT_RESULT_KEY and operation not in ("gmail-status", "group/detail"):
+    if operation not in _RECEIPT_RESULT_KEY and operation != "gmail-status" and operation not in _GROUP_OPERATIONS:
         return (0, 0, 0)
     values = request.headers.getall(_CONTRACT_HEADER, [])
     if not values:
@@ -126,6 +130,7 @@ def _response(operation, result, version):
         receipts = result[key] if key == "receipts" else (result[key],)
         for receipt in receipts:
             receipt.pop("link_group", None)
+        result.pop("group_candidates", None)
     if version < _ID_MATCH_VERSION and operation in _RECEIPT_RESULT_KEY:
         key = _RECEIPT_RESULT_KEY[operation]
         receipts = result[key] if key == "receipts" else (result[key],)
@@ -184,6 +189,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
                 if retry is not None:
                     return _device_error(429, "device_token_rate_limited", retry)
             version = _receipt_contract(request, operation)
+            if operation in _GROUP_OPERATIONS and version < _MANY_TO_ONE_VERSION:
+                raise ReceiptError("budget_receipt_not_found", 404)
             body, error = await read_json_body(request, WRITES[operation][1], reject_duplicates=True)
             if error:
                 return body

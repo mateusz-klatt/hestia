@@ -23,7 +23,7 @@ import json
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, WrapValidator
+from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, WrapValidator, model_validator
 from pydantic.json_schema import models_json_schema
 
 from .budget.gmail_store import PARSE_FAILED_REASONS
@@ -3165,6 +3165,33 @@ class BudgetReceiptDeleteRequest(BaseModel):
     model_config = _STRICT
     receipt_id: BudgetReceiptId
     expected_version: BudgetVersion
+    dissolve_group: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "When true with expected_group_version and budget.receipts.match, dissolve an active or "
+                "needs_review receipt group and restore surviving members/evidence before deleting this receipt."
+            ),
+            json_schema_extra=_OMIT,
+        ),
+    ] = False
+    expected_group_version: Annotated[
+        BudgetVersion | None,
+        Field(
+            default=None,
+            description="Required current group version when dissolve_group is true; must be omitted or null otherwise.",
+            json_schema_extra=_OMIT,
+        ),
+    ] = None
+
+    @model_validator(mode="after")
+    def _check_dissolve_group(self) -> "BudgetReceiptDeleteRequest":
+        if self.dissolve_group and self.expected_group_version is None:
+            raise ValueError("expected_group_version is required when dissolve_group is true")
+        if not self.dissolve_group and self.expected_group_version is not None:
+            raise ValueError("expected_group_version requires dissolve_group=true")
+        return self
 
 
 class BudgetReceiptLine(BudgetReceiptLineInput):
@@ -3265,12 +3292,126 @@ class BudgetReceiptParseResult(BaseModel):
     no_bank_data: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
+class BudgetReceiptGroupTransactionCandidate(BaseModel):
+    model_config = _READ
+    account_id: str
+    entry_reference: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    amount: str
+    currency: str
+    credit_debit_indicator: Literal["DBIT", "CRDT"]
+    transaction_date: str | None
+    booking_date: str | None
+    value_date: str | None
+    merchant_token_hit: bool
+    match_strength: Literal["id", "nip", "distinctive", "generic", "none"]
+    date_distance: int
+    evidence_fingerprint: str
+    candidate_token: Annotated[str, Field(min_length=1, max_length=4096)]
+
+
+class BudgetReceiptGroupCandidate(BaseModel):
+    model_config = _READ
+    account_id: str
+    entry_reference: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    amount: str
+    currency: str
+    credit_debit_indicator: Literal["DBIT", "CRDT"]
+    transaction_date: str | None
+    booking_date: str | None
+    value_date: str | None
+    match_strength: Literal["id", "nip", "distinctive", "generic", "none"]
+    date_distance: int
+    evidence_fingerprint: str
+    candidate_token: Annotated[str, Field(min_length=1, max_length=4096)]
+    fee_amount: BudgetReceiptMoney | None
+    evidence_receipt_id: BudgetReceiptId | None
+    members_sum: BudgetReceiptMoney
+    member_receipt_ids: list[BudgetReceiptId]
+    member_receipts: list[BudgetReceiptSummary]
+    evidence: BudgetReceiptSummary | None = None
+
+
+class BudgetReceiptGroupCandidatesRequest(BaseModel):
+    model_config = _STRICT
+    receipt_id: BudgetReceiptId
+
+
+class BudgetReceiptGroupCandidatesResult(BaseModel):
+    model_config = _READ
+    anchor_receipt_id: BudgetReceiptId
+    transactions: list[BudgetReceiptGroupTransactionCandidate]
+    proposals: list[BudgetReceiptGroupCandidate]
+    eligible_receipts: list[BudgetReceiptSummary]
+    eligible_evidence: list[BudgetReceiptSummary]
+    no_bank_data: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+class BudgetReceiptGroupMemberInput(BaseModel):
+    model_config = _STRICT
+    receipt_id: BudgetReceiptId
+    expected_version: BudgetVersion
+
+
+class BudgetReceiptGroupLinkRequest(BaseModel):
+    model_config = _STRICT
+    link: BudgetReceiptLinkRequest
+    members: Annotated[list[BudgetReceiptGroupMemberInput], Field(min_length=2, max_length=8)]
+    evidence_receipt_id: Annotated[BudgetReceiptId | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    evidence_expected_version: Annotated[BudgetVersion | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    fee_amount: Annotated[BudgetReceiptMoney | None, Field(default=None, json_schema_extra=_OMIT)] = None
+
+    @model_validator(mode="after")
+    def _check_group_link(self) -> "BudgetReceiptGroupLinkRequest":
+        member_ids = [member.receipt_id for member in self.members]
+        if len(set(member_ids)) != len(member_ids):
+            raise ValueError("members must contain unique receipt_id values")
+        if (self.evidence_receipt_id is None) != (self.evidence_expected_version is None):
+            raise ValueError("evidence_receipt_id and evidence_expected_version must be supplied together")
+        if self.evidence_receipt_id is not None and self.evidence_receipt_id in set(member_ids):
+            raise ValueError("evidence_receipt_id cannot also appear in members")
+        if self.fee_amount is not None:
+            if self.fee_amount.startswith("-"):
+                raise ValueError("fee_amount must be non-negative")
+            whole, frac = (self.fee_amount.split(".") + [""])[:2]
+            if any(ch != "0" for ch in whole + frac) and self.evidence_receipt_id is None:
+                raise ValueError("positive fee_amount requires evidence_receipt_id")
+        return self
+
+
+class BudgetReceiptGroupLinkResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    group: BudgetReceiptLinkGroupRef
+    members: list[BudgetReceiptSummary]
+    evidence: BudgetReceiptSummary | None
+    linked_account_id: str | None
+    linked_entry_ref: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None
+
+
+class BudgetReceiptGroupUnlinkRequest(BaseModel):
+    model_config = _STRICT
+    group_id: BudgetReceiptId
+    expected_version: BudgetVersion
+
+
+class BudgetReceiptGroupUnlinkResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    unlinked: Literal[True]
+    group_id: BudgetReceiptId
+    members: list[BudgetReceiptSummary]
+    evidence: BudgetReceiptSummary | None
+
+
 class BudgetReceiptDetailResult(BaseModel):
     model_config = _READ
     receipt: BudgetReceiptDetail
     # Present only when the receipt is needs_review, so it can re-issue a token for its own link.
     candidates: Annotated[
         list[BudgetReceiptCandidate] | None, Field(default=None, json_schema_extra=_OMIT),
+    ] = None
+    group_candidates: Annotated[
+        list[BudgetReceiptGroupCandidate] | None, Field(default=None, json_schema_extra=_OMIT),
     ] = None
     no_bank_data: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
@@ -3419,8 +3560,11 @@ class BudgetReceiptGmailStatus(BaseModel):
 
 _RECEIPT_MODELS = (
     BudgetReceiptParseTextRequest, BudgetReceiptConfirmRequest, BudgetReceiptListRequest,
-    BudgetReceiptSearchRequest, BudgetReceiptDeleteRequest, BudgetReceiptParseResult,
-    BudgetReceiptDetailResult, BudgetReceiptGroupDetailResult, BudgetReceiptConfirmResult,
+    BudgetReceiptSearchRequest, BudgetReceiptDeleteRequest, BudgetReceiptGroupCandidatesRequest,
+    BudgetReceiptGroupMemberInput, BudgetReceiptGroupLinkRequest, BudgetReceiptGroupUnlinkRequest,
+    BudgetReceiptParseResult, BudgetReceiptGroupTransactionCandidate, BudgetReceiptGroupCandidate,
+    BudgetReceiptGroupCandidatesResult, BudgetReceiptDetailResult, BudgetReceiptGroupDetailResult,
+    BudgetReceiptGroupLinkResult, BudgetReceiptGroupUnlinkResult, BudgetReceiptConfirmResult,
     BudgetReceiptListResult, BudgetReceiptDeleteResult,
     BudgetReceiptDeviceBrowserRequest, BudgetReceiptDevicePairResult, BudgetReceiptDeviceCancelRequest,
     BudgetReceiptDeviceLoginRequest, BudgetReceiptDeviceRedeemRequest,
@@ -3875,6 +4019,9 @@ _PATH_ROLES = {
     ("POST", "/api/budget/receipts/search"): "admin",
     ("GET", "/api/budget/receipts/detail"): "admin",
     ("GET", "/api/budget/receipts/group/detail"): "admin",
+    ("POST", "/api/budget/receipts/group/candidates"): "admin",
+    ("POST", "/api/budget/receipts/group/link"): "admin",
+    ("POST", "/api/budget/receipts/group/unlink"): "admin",
     ("GET", "/api/budget/receipts/image"): "admin",
     ("POST", "/api/budget/receipts/delete"): "admin",
     ("POST", "/api/budget/receipts/device-token/pair-code"): "admin",
@@ -4741,6 +4888,27 @@ def _receipt_paths():
          "Stale expected_version (budget_receipt_conflict). A missing SQLite users backend also returns 409 "
          "(budget_requires_sqlite_users).",
          "JSON body exceeds 16384 bytes."),
+        ("group/candidates", "listBudgetReceiptGroupCandidates", "BudgetReceiptGroupCandidatesRequest",
+         "BudgetReceiptGroupCandidatesResult",
+         "Compute bounded many-to-one bank transaction and peer receipt group candidates for an owned receipt.",
+         "Requires budget.receipts.match. Accepts browser sessions or receipts device tokens. Requires contract "
+         "version 0.59.0 or later.",
+         "SQLite users backend is required (budget_requires_sqlite_users).",
+         "JSON body exceeds 16384 bytes."),
+        ("group/link", "linkBudgetReceiptGroup", "BudgetReceiptGroupLinkRequest", "BudgetReceiptGroupLinkResult",
+         "Atomically link 2 to 8 confirmed same-currency receipts (plus optional standalone gateway evidence) to one bank transaction.",
+         "Browser session, budget.receipts.edit and budget.receipts.match required. Requires contract version 0.59.0 or later.",
+         "Stale expected_version or evidence_expected_version (budget_receipt_conflict), receipt or transaction "
+         "already linked or reserved in a transfer leg (budget_receipt_tx_already_linked), or stale candidate "
+         "token / source mismatch (budget_receipt_stale_source). A missing SQLite users backend also returns 409 "
+         "(budget_requires_sqlite_users).",
+         "JSON body exceeds 16384 bytes."),
+        ("group/unlink", "unlinkBudgetReceiptGroup", "BudgetReceiptGroupUnlinkRequest", "BudgetReceiptGroupUnlinkResult",
+         "Atomically unlink a receipt group and restore all members and optional gateway evidence to confirmed unlinked status.",
+         "Browser session, budget.receipts.edit and budget.receipts.match required. Requires contract version 0.59.0 or later.",
+         "Stale expected_version (budget_receipt_conflict). A missing SQLite users backend also returns 409 "
+         "(budget_requires_sqlite_users).",
+         "JSON body exceeds 16384 bytes."),
     )
     paths = {}
     for name, operation, request, response, summary, access, conflict, too_large in writes:
@@ -4750,6 +4918,8 @@ def _receipt_paths():
         responses["411"] = _receipt_error("Content-Length is required.")
         responses["413"] = _receipt_error(too_large)
         responses["415"] = _receipt_error("Content-Type must be application/json.")
+        if name.startswith("group/"):
+            responses["404"] = _receipt_error("Unknown, disabled or foreign resource, or contract version below 0.59.0.")
         paths[prefix + name] = {"post": {
             "operationId": operation, "summary": summary,
             "description": (
@@ -4766,7 +4936,11 @@ def _receipt_paths():
                 "A receipts device token is limited to 30 parse-text requests per minute (Retry-After). "
                 "Browser cookie requests are not limited here.")
 
-        if name != "delete":
+        if name.startswith("group/"):
+            paths[prefix + name]["post"]["parameters"] = [
+                {**contract_version, "required": True, "description": "Receipt groups are available from 0.59.0."}
+            ]
+        elif name != "delete":
             paths[prefix + name]["post"]["parameters"] = [contract_version]
     receipt_query = [_budget_query("receipt_id", required=True,
                                    schema={"type": "string",

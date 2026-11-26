@@ -11243,6 +11243,24 @@
       "BudgetReceiptDeleteRequest": {
         "additionalProperties": false,
         "properties": {
+          "dissolve_group": {
+            "description": "When true with expected_group_version and budget.receipts.match, dissolve an active or needs_review receipt group and restore surviving members/evidence before deleting this receipt.",
+            "title": "Dissolve Group",
+            "type": "boolean"
+          },
+          "expected_group_version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Required current group version when dissolve_group is true; must be omitted or null otherwise.",
+            "title": "Expected Group Version"
+          },
           "expected_version": {
             "minimum": 1,
             "title": "Expected Version",
@@ -11726,6 +11744,20 @@
               }
             ],
             "title": "Candidates"
+          },
+          "group_candidates": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BudgetReceiptGroupCandidate"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Candidates"
           },
           "no_bank_data": {
             "anyOf": [
@@ -12243,6 +12275,245 @@
         "title": "BudgetReceiptGmailSyncResult",
         "type": "object"
       },
+      "BudgetReceiptGroupCandidate": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "booking_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Booking Date"
+          },
+          "candidate_token": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Candidate Token",
+            "type": "string"
+          },
+          "credit_debit_indicator": {
+            "enum": [
+              "DBIT",
+              "CRDT"
+            ],
+            "title": "Credit Debit Indicator",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "date_distance": {
+            "title": "Date Distance",
+            "type": "integer"
+          },
+          "entry_reference": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Entry Reference",
+            "type": "string"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetReceiptSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "evidence_fingerprint": {
+            "title": "Evidence Fingerprint",
+            "type": "string"
+          },
+          "evidence_receipt_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Receipt Id"
+          },
+          "fee_amount": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "minLength": 1,
+                "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee Amount"
+          },
+          "match_strength": {
+            "enum": [
+              "id",
+              "nip",
+              "distinctive",
+              "generic",
+              "none"
+            ],
+            "title": "Match Strength",
+            "type": "string"
+          },
+          "member_receipt_ids": {
+            "items": {
+              "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            "title": "Member Receipt Ids",
+            "type": "array"
+          },
+          "member_receipts": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetReceiptSummary"
+            },
+            "title": "Member Receipts",
+            "type": "array"
+          },
+          "members_sum": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$",
+            "title": "Members Sum",
+            "type": "string"
+          },
+          "transaction_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transaction Date"
+          },
+          "value_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value Date"
+          }
+        },
+        "required": [
+          "account_id",
+          "entry_reference",
+          "amount",
+          "currency",
+          "credit_debit_indicator",
+          "transaction_date",
+          "booking_date",
+          "value_date",
+          "match_strength",
+          "date_distance",
+          "evidence_fingerprint",
+          "candidate_token",
+          "fee_amount",
+          "evidence_receipt_id",
+          "members_sum",
+          "member_receipt_ids",
+          "member_receipts"
+        ],
+        "title": "BudgetReceiptGroupCandidate",
+        "type": "object"
+      },
+      "BudgetReceiptGroupCandidatesRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "receipt_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Receipt Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "receipt_id"
+        ],
+        "title": "BudgetReceiptGroupCandidatesRequest",
+        "type": "object"
+      },
+      "BudgetReceiptGroupCandidatesResult": {
+        "properties": {
+          "anchor_receipt_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Anchor Receipt Id",
+            "type": "string"
+          },
+          "eligible_evidence": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetReceiptSummary"
+            },
+            "title": "Eligible Evidence",
+            "type": "array"
+          },
+          "eligible_receipts": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetReceiptSummary"
+            },
+            "title": "Eligible Receipts",
+            "type": "array"
+          },
+          "no_bank_data": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Bank Data"
+          },
+          "proposals": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetReceiptGroupCandidate"
+            },
+            "title": "Proposals",
+            "type": "array"
+          },
+          "transactions": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetReceiptGroupTransactionCandidate"
+            },
+            "title": "Transactions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "anchor_receipt_id",
+          "transactions",
+          "proposals",
+          "eligible_receipts",
+          "eligible_evidence"
+        ],
+        "title": "BudgetReceiptGroupCandidatesResult",
+        "type": "object"
+      },
       "BudgetReceiptGroupDetailResult": {
         "properties": {
           "evidence": {
@@ -12297,6 +12568,324 @@
           "linked_entry_ref"
         ],
         "title": "BudgetReceiptGroupDetailResult",
+        "type": "object"
+      },
+      "BudgetReceiptGroupLinkRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence_expected_version": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Expected Version"
+          },
+          "evidence_receipt_id": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Receipt Id"
+          },
+          "fee_amount": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "minLength": 1,
+                "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee Amount"
+          },
+          "link": {
+            "$ref": "#/components/schemas/BudgetReceiptLinkRequest"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetReceiptGroupMemberInput"
+            },
+            "maxItems": 8,
+            "minItems": 2,
+            "title": "Members",
+            "type": "array"
+          }
+        },
+        "required": [
+          "link",
+          "members"
+        ],
+        "title": "BudgetReceiptGroupLinkRequest",
+        "type": "object"
+      },
+      "BudgetReceiptGroupLinkResult": {
+        "properties": {
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetReceiptSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "group": {
+            "$ref": "#/components/schemas/BudgetReceiptLinkGroupRef"
+          },
+          "linked_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Linked Account Id"
+          },
+          "linked_entry_ref": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Linked Entry Ref"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetReceiptSummary"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "group",
+          "members",
+          "evidence",
+          "linked_account_id",
+          "linked_entry_ref"
+        ],
+        "title": "BudgetReceiptGroupLinkResult",
+        "type": "object"
+      },
+      "BudgetReceiptGroupMemberInput": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "minimum": 1,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "receipt_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Receipt Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "expected_version"
+        ],
+        "title": "BudgetReceiptGroupMemberInput",
+        "type": "object"
+      },
+      "BudgetReceiptGroupTransactionCandidate": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "booking_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Booking Date"
+          },
+          "candidate_token": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Candidate Token",
+            "type": "string"
+          },
+          "credit_debit_indicator": {
+            "enum": [
+              "DBIT",
+              "CRDT"
+            ],
+            "title": "Credit Debit Indicator",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "date_distance": {
+            "title": "Date Distance",
+            "type": "integer"
+          },
+          "entry_reference": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Entry Reference",
+            "type": "string"
+          },
+          "evidence_fingerprint": {
+            "title": "Evidence Fingerprint",
+            "type": "string"
+          },
+          "match_strength": {
+            "enum": [
+              "id",
+              "nip",
+              "distinctive",
+              "generic",
+              "none"
+            ],
+            "title": "Match Strength",
+            "type": "string"
+          },
+          "merchant_token_hit": {
+            "title": "Merchant Token Hit",
+            "type": "boolean"
+          },
+          "transaction_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transaction Date"
+          },
+          "value_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value Date"
+          }
+        },
+        "required": [
+          "account_id",
+          "entry_reference",
+          "amount",
+          "currency",
+          "credit_debit_indicator",
+          "transaction_date",
+          "booking_date",
+          "value_date",
+          "merchant_token_hit",
+          "match_strength",
+          "date_distance",
+          "evidence_fingerprint",
+          "candidate_token"
+        ],
+        "title": "BudgetReceiptGroupTransactionCandidate",
+        "type": "object"
+      },
+      "BudgetReceiptGroupUnlinkRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "minimum": 1,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "group_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Group Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group_id",
+          "expected_version"
+        ],
+        "title": "BudgetReceiptGroupUnlinkRequest",
+        "type": "object"
+      },
+      "BudgetReceiptGroupUnlinkResult": {
+        "properties": {
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetReceiptSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "group_id": {
+            "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+            "title": "Group Id",
+            "type": "string"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetReceiptSummary"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "unlinked": {
+            "const": true,
+            "title": "Unlinked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "unlinked",
+          "group_id",
+          "members",
+          "evidence"
+        ],
+        "title": "BudgetReceiptGroupUnlinkResult",
         "type": "object"
       },
       "BudgetReceiptLine": {
@@ -26987,6 +27576,149 @@
         "x-required-role": "admin"
       }
     },
+    "/api/budget/receipts/group/candidates": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite users backend and a browser cookie with exact Origin or a receipts-capable device token. Permissions apply to the target ledger and may be delegated. Requires budget.receipts.match. Accepts browser sessions or receipts device tokens. Requires contract version 0.59.0 or later. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "operationId": "listBudgetReceiptGroupCandidates",
+        "parameters": [
+          {
+            "description": "Receipt groups are available from 0.59.0.",
+            "in": "header",
+            "name": "X-Hestia-Contract-Version",
+            "required": true,
+            "schema": {
+              "pattern": "^0\\.(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptGroupCandidatesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptGroupCandidatesResult"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Unknown, disabled or foreign resource, or contract version below 0.59.0."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "SQLite users backend is required (budget_requires_sqlite_users)."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 16384 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Compute bounded many-to-one bank transaction and peer receipt group candidates for an owned receipt.",
+        "x-required-permission": "legacy_receipts",
+        "x-required-role": "admin"
+      }
+    },
     "/api/budget/receipts/group/detail": {
       "get": {
         "description": "Browser session and budget.receipts.view required. Transaction account and reference digest also require budget.receipts.match. Requires contract version 0.59.0 or later.",
@@ -27096,6 +27828,292 @@
           }
         },
         "summary": "Read an owned receipt link group, its member receipts and optional gateway evidence.",
+        "x-required-permission": "legacy_receipts",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/receipts/group/link": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite users backend and a browser cookie with exact Origin or a receipts-capable device token. Permissions apply to the target ledger and may be delegated. Browser session, budget.receipts.edit and budget.receipts.match required. Requires contract version 0.59.0 or later. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "operationId": "linkBudgetReceiptGroup",
+        "parameters": [
+          {
+            "description": "Receipt groups are available from 0.59.0.",
+            "in": "header",
+            "name": "X-Hestia-Contract-Version",
+            "required": true,
+            "schema": {
+              "pattern": "^0\\.(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptGroupLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptGroupLinkResult"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Unknown, disabled or foreign resource, or contract version below 0.59.0."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stale expected_version or evidence_expected_version (budget_receipt_conflict), receipt or transaction already linked or reserved in a transfer leg (budget_receipt_tx_already_linked), or stale candidate token / source mismatch (budget_receipt_stale_source). A missing SQLite users backend also returns 409 (budget_requires_sqlite_users)."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 16384 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Atomically link 2 to 8 confirmed same-currency receipts (plus optional standalone gateway evidence) to one bank transaction.",
+        "x-required-permission": "legacy_receipts",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/receipts/group/unlink": {
+      "post": {
+        "description": "Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite users backend and a browser cookie with exact Origin or a receipts-capable device token. Permissions apply to the target ledger and may be delegated. Browser session, budget.receipts.edit and budget.receipts.match required. Requires contract version 0.59.0 or later. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.",
+        "operationId": "unlinkBudgetReceiptGroup",
+        "parameters": [
+          {
+            "description": "Receipt groups are available from 0.59.0.",
+            "in": "header",
+            "name": "X-Hestia-Contract-Version",
+            "required": true,
+            "schema": {
+              "pattern": "^0\\.(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetReceiptGroupUnlinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetReceiptGroupUnlinkResult"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "A missing or invalid credential, device_token_expired, or device_token_revoked."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Unknown, disabled or foreign resource, or contract version below 0.59.0."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Stale expected_version (budget_receipt_conflict). A missing SQLite users backend also returns 409 (budget_requires_sqlite_users)."
+          },
+          "411": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Length is required."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "JSON body exceeds 16384 bytes."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Content-Type must be application/json."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Atomically unlink a receipt group and restore all members and optional gateway evidence to confirmed unlinked status.",
         "x-required-permission": "legacy_receipts",
         "x-required-role": "admin"
       }

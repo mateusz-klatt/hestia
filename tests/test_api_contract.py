@@ -60,15 +60,36 @@ class OpenApiArtifactTests(unittest.TestCase):
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
         self.assertEqual(document["info"]["version"], "0.59.0")
-        # 0.59.0 additive receipt group detail and receipt summary metadata.
+        # 0.59.0 additive receipt group detail, group controller routes, and receipt summary metadata.
         group_detail = document["paths"].pop("/api/budget/receipts/group/detail")["get"]
         self.assertEqual(group_detail["x-required-permission"], "legacy_receipts")
         self.assertEqual([(p["name"], p["in"], p["required"]) for p in group_detail["parameters"]], [
             ("group_id", "query", True), ("X-Hestia-Contract-Version", "header", True),
         ])
+        for path_suffix in ("group/candidates", "group/link", "group/unlink"):
+            group_op = document["paths"].pop("/api/budget/receipts/" + path_suffix)["post"]
+            self.assertEqual(group_op["x-required-permission"], "legacy_receipts")
+            self.assertEqual([(p["name"], p["in"], p["required"]) for p in group_op["parameters"]], [
+                ("X-Hestia-Contract-Version", "header", True),
+            ])
         for schema in ("BudgetReceiptSummary", "BudgetReceiptDetail"):
             schemas[schema]["properties"].pop("link_group")
-        for schema in ("BudgetReceiptLinkGroupRef", "BudgetReceiptGroupDetailResult"):
+        schemas["BudgetReceiptDetailResult"]["properties"].pop("group_candidates")
+        for field in ("dissolve_group", "expected_group_version"):
+            schemas["BudgetReceiptDeleteRequest"]["properties"].pop(field)
+        for schema in (
+            "BudgetReceiptLinkGroupRef",
+            "BudgetReceiptGroupTransactionCandidate",
+            "BudgetReceiptGroupCandidate",
+            "BudgetReceiptGroupCandidatesRequest",
+            "BudgetReceiptGroupCandidatesResult",
+            "BudgetReceiptGroupMemberInput",
+            "BudgetReceiptGroupLinkRequest",
+            "BudgetReceiptGroupLinkResult",
+            "BudgetReceiptGroupUnlinkRequest",
+            "BudgetReceiptGroupUnlinkResult",
+            "BudgetReceiptGroupDetailResult",
+        ):
             schemas.pop(schema)
         document["info"]["version"] = "0.58.0"
         canonical_0_58 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -899,6 +920,8 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest",
         "BudgetReceiptLineInput", "BudgetReceiptLinkRequest", "BudgetReceiptListRequest",
         "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",
+        "BudgetReceiptGroupCandidatesRequest", "BudgetReceiptGroupMemberInput",
+        "BudgetReceiptGroupLinkRequest", "BudgetReceiptGroupUnlinkRequest",
         "BudgetReceiptDeviceBrowserRequest", "BudgetReceiptDeviceRedeemRequest",
         "BudgetReceiptDeviceRevokeRequest", "BudgetReceiptDeviceCancelRequest", "BudgetReceiptDeviceLoginRequest",
         "BudgetReceiptGmailGrantRequest", "BudgetReceiptGmailRevokeRequest", "BudgetReceiptGmailSyncRequest",
