@@ -516,19 +516,32 @@ def _opt_value(raw: str) -> str:
     return value
 
 
-def bank_remittance_for_payee(text: str, matched_refs: set[str]) -> str:
-    """Remove matched references while preserving the values of other SWIFT fields."""
-    normalized = _BANK_NIP_SPAN.sub(" ", unicodedata.normalize("NFKC", text))
-    if _BANK_SWIFT_TAG.search(normalized):
-        def strip_matched_opt(match: re.Match[str]) -> str:
-            return " " if _opt_value(match[1]) in matched_refs else match[0]
-
-        return _BANK_SWIFT_TAG.sub(" ", _BANK_OPT_PATH.sub(strip_matched_opt, normalized))
-
+def _strip_bare_bank_refs(text: str, matched_refs: set[str]) -> str:
     for ref in sorted(matched_refs, key=len, reverse=True):
         pattern = rf"(?<![\w./-]){re.escape(ref)}(?![\w./-])"
-        normalized = re.sub(pattern, " ", normalized, flags=re.IGNORECASE)
-    return normalized
+        text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+    return text
+
+
+def bank_payee_texts(text: str, matched_refs: set[str]) -> tuple[str, str]:
+    """Return bank text for finding and for ruling out the receipt's payee."""
+    normalized = _BANK_NIP_SPAN.sub(" ", unicodedata.normalize("NFKC", text))
+    first_tag = _BANK_SWIFT_TAG.search(normalized)
+    if first_tag is None:
+        plain = _strip_bare_bank_refs(normalized, matched_refs)
+        return plain, plain
+
+    plain = _strip_bare_bank_refs(normalized[:first_tag.start()], matched_refs)
+    fields = normalized[first_tag.start():]
+
+    def strip_matched_opt(match: re.Match[str]) -> str:
+        return " " if _opt_value(match[1]) in matched_refs else match[0]
+
+    # A reference cannot establish the merchant. Preserve the other field values
+    # when checking for a conflicting merchant, even if they repeat the reference.
+    evidence = _BANK_SWIFT_TAG.sub(" ", _BANK_OPT_PATH.sub(" ", fields))
+    remaining = _BANK_SWIFT_TAG.sub(" ", _BANK_OPT_PATH.sub(strip_matched_opt, fields))
+    return f"{plain} {_strip_bare_bank_refs(evidence, matched_refs)}", f"{plain} {remaining}"
 
 
 def _autopay_bank_tokens(text: str) -> list[tuple[str, int]]:

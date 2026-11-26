@@ -406,6 +406,10 @@ class ReceiptIdMatchingTests(AnalyticsCase):
              "/OPT/BETA5555/TXT/BETA5555 ALPHA", "82"),
             ("10000000-0000-4000-8000-000000000033", "ALPHA", "ALPHA/2026/555559",
              "/OPT/ALPHA/2026/555559", "83"),
+            ("10000000-0000-4000-8000-000000000036", "ALPHA", "ALPHA/2026/555562",
+             "/TI/12345 ALPHA/2026/555562", "86"),
+            ("10000000-0000-4000-8000-000000000037", "ALPHA", "BETA5556",
+             "/OPT/BETA5556/OPT/ALPHA", "87"),
         ]
         for rid, shop, sec_ref, remit, amt in neg_cases:
             with self.subTest(rid=rid, remit=remit):
@@ -430,6 +434,7 @@ class ReceiptIdMatchingTests(AnalyticsCase):
             ("10000000-0000-4000-8000-000000000031", "AP/2026/555558", "/OPT/AP/2026/555558/TXT/ALPHA", "81"),
             ("10000000-0000-4000-8000-000000000034", "AP/2026/555560", "/opt/ap/2026/５５５５６０/txt/ALPHA", "84"),
             ("10000000-0000-4000-8000-000000000035", "AP/2026/555561", "AP/2026/555561 ALPHA", "85"),
+            ("10000000-0000-4000-8000-000000000038", "AP/2026/555563", "AP/2026/555563 /TXT/ALPHA", "88"),
         ]
         for rid, sec_ref, remit, amt in positive_cases:
             with self.subTest(rid=rid, remit=remit):

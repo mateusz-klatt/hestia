@@ -27,7 +27,7 @@ from ..db import (AppMeta, BudgetAccount as Account, BudgetConnection as Connect
 from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint, negate_money, sum_money
 from .device_token import DeviceTokenError, _issued_mask, _legacy_bearer_allowed, write_device_audit
 from .gmail_config import normalize_card_accounts
-from .gmail_payment import bank_ref_tokens, bank_remittance_for_payee, canonical_gateway
+from .gmail_payment import bank_payee_texts, bank_ref_tokens, canonical_gateway
 from .gmail_store import (GATEWAY_REF_DOMAIN, _payment_payee_key, digest, receipt_ref_hmacs,
                           retain_imports, tombstone_receipt)
 from .receipt_parser import (GATEWAY_PHRASE_TOKENS, _IBAN_MAX, _IBAN_MIN, _STOP_TOKENS,
@@ -343,9 +343,9 @@ def _secondary_payee_guard(row, counterparty, remit_texts, matched_ref_tokens) -
     if not groups:
         return False
     description = " ".join(value for value in remit_texts if isinstance(value, str))
-    cleaned_remit = bank_remittance_for_payee(description, matched_ref_tokens)
-    bank_text = " ".join(part for part in (cleaned_remit, counterparty) if part)
-    bank_words = frozenset(merchant_word_tokens(bank_text))
+    bank_text = " ".join(part for part in (description, counterparty) if part)
+    evidence, remaining = bank_payee_texts(bank_text, matched_ref_tokens)
+    bank_words = frozenset(merchant_word_tokens(evidence))
     distinctive_score = sum(1 for group in groups if any(alias.issubset(bank_words) for alias in group))
     chain_group_hit = chain is not None and any(alias.issubset(bank_words) for alias in groups[0])
     if not (chain_group_hit or distinctive_score == len(groups)):
@@ -363,7 +363,7 @@ def _secondary_payee_guard(row, counterparty, remit_texts, matched_ref_tokens) -
         | _BANK_GATEWAY_PHRASE_WORDS
         | _SECONDARY_BANK_FILLER_TOKENS
     )
-    for tok in bank_words:
+    for tok in merchant_word_tokens(remaining):
         if tok.isdigit() or tok in allowed:
             continue
         if (len(tok) >= 4 and sum(1 for ch in tok if ch.isalpha()) >= 3) or (
