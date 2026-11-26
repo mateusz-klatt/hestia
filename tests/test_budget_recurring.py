@@ -139,6 +139,42 @@ class RecurringChargeDetectionTests(unittest.TestCase):
         self.assertEqual([(h.first_date, h.last_date) for h in hints],
                          [("2026-01-10", "2026-03-10"), ("2026-09-10", "2026-11-10")])
 
+    def test_monthly_price_change_keeps_one_history_with_latest_amount(self):
+        entries = [
+            _entry(f"p{month}", f"2026-{month:02d}-10", amount="93" if month <= 3 else "107")
+            for month in range(1, 7)
+        ]
+        hints = detect_recurring_charges("owner", entries, {"acc-1"})
+        self.assertEqual(len(hints), 1)
+        self.assertEqual((hints[0].amount, hints[0].occurrence_count), ("107", 6))
+        self.assertEqual([item.entry_reference for item in hints[0].evidence], [f"p{month}" for month in range(1, 7)])
+        self.assertEqual(detect_recurring_charges("owner", reversed(entries), {"acc-1"}), hints)
+
+    def test_monthly_variable_bills_keep_exact_latest_amount_and_all_occurrences(self):
+        amounts = ("100.01", "127.19", "99.07", "103.21", "120", "89.9900")
+        entries = [_entry(f"e{month}", f"2026-{month:02d}-07", amount=amount,
+                          counterparty_name="Synthetic Energy")
+                   for month, amount in enumerate(amounts, 1)]
+        hints = detect_recurring_charges("owner", entries, {"acc-1"})
+        self.assertEqual(len(hints), 1)
+        self.assertEqual((hints[0].amount, hints[0].occurrence_count), ("89.99", 6))
+        self.assertEqual((hints[0].first_date, hints[0].last_date), ("2026-01-07", "2026-06-07"))
+        self.assertEqual([item.entry_reference for item in hints[0].evidence], [f"e{month}" for month in range(1, 7)])
+
+    def test_parallel_fixed_contracts_remain_separate_with_disjoint_evidence(self):
+        entries = [_entry(f"{day}-{month}", f"2026-{month:02d}-{day:02d}", amount=amount)
+                   for day, amount in ((5, "10"), (20, "20")) for month in range(1, 4)]
+        hints = detect_recurring_charges("owner", entries, {"acc-1"})
+        self.assertEqual([(hint.amount, hint.occurrence_count) for hint in hints], [("10", 3), ("20", 3)])
+        evidence = [item.entry_reference for hint in hints for item in hint.evidence]
+        self.assertEqual(len(evidence), len(set(evidence)))
+        self.assertCountEqual(evidence, [entry.entry_reference for entry in entries])
+
+    def test_overlapping_variable_contracts_are_not_arbitrarily_combined(self):
+        entries = [_entry(f"{day}-{month}", f"2026-{month:02d}-{day:02d}", amount=str(base + month))
+                   for day, base in ((5, 10), (20, 100)) for month in range(1, 4)]
+        self.assertEqual(detect_recurring_charges("owner", entries, {"acc-1"}), ())
+
     def test_separates_currencies_exact_large_small_amounts_and_label_sources(self):
         large = "123456789012345678901234567890.00000001"
         entries = [

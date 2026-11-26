@@ -496,7 +496,7 @@ export function TransactionsPanel({ api, receiptsList, period, currencies, accou
     const label = categoryName(category);
     return (
       <button type="button" className="budget-entry-category" disabled={busy !== null}
-        aria-label={`${t("budget.transactions.category")}, ${label}`} aria-haspopup="dialog"
+        aria-label={`${t("budget.transactions.category")}, ${label}`} aria-haspopup="dialog" title={label}
         onClick={(event) => { onClick(event.currentTarget); }}>
         <CategoryBadge color={categoryColors.get(category !== null && categoryNames.has(category) ? category : null)} label={label} />
         <span aria-hidden="true">⌄</span>
@@ -598,68 +598,72 @@ export function TransactionsPanel({ api, receiptsList, period, currencies, accou
           <p className="budget-muted">{t("budget.transactions.total", { count: shownTotal })}</p>
           {page.loading ? <p className="budget-muted" role="status">{t("budget.transactions.loadingMore", { count: page.rows.length })}</p> : null}
           {truncatedNotice}
-          <div className="budget-views budget-sort" role="group" aria-label={t("budget.transactions.sort")}>
-            {SORT_KEYS.map((key) => {
-              const active = sort?.key === key;
-              const direction = active ? sort.direction : undefined;
-              const label = sortLabel(key);
-              const directionText = direction === "asc"
-                ? t("budget.transactions.sortAsc")
-                : direction === "desc" ? t("budget.transactions.sortDesc") : undefined;
-              return (
-                <button
-                  type="button"
-                  key={key}
-                  aria-pressed={active}
-                  data-sort={direction}
-                  aria-label={directionText === undefined ? label : `${label}, ${directionText}`}
-                  onClick={() => { changeSort(key); }}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-          <ul className="budget-entry-list" aria-label={t("budget.transactions.title")}>
-            {shownRows.map((row) => {
-              const key = rowKey(row);
-              const transferKey = TRANSACTION_TRANSFER_STATUS_KEYS[row.transfer.status];
-              const transfer = transferKey === undefined ? "" : t(transferKey);
+          <table className="budget-transaction-table" aria-label={t("budget.transactions.title")}>
+            <thead>
+              <tr>
+                {SORT_KEYS.map((key) => {
+                  const direction = sort?.key === key ? sort.direction : undefined;
+                  const ariaSort = direction === "asc" ? "ascending" : direction === "desc" ? "descending" : undefined;
+                  return (
+                    <th scope="col" key={key} aria-sort={ariaSort}>
+                      <button type="button" onClick={() => { changeSort(key); }}>
+                        <span>{sortLabel(key)}</span>
+                        <span className="budget-transaction-sort-arrow" aria-hidden="true">
+                          {direction === "asc" ? "↑" : direction === "desc" ? "↓" : ""}
+                        </span>
+                      </button>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {shownRows.map((row) => {
+                const key = rowKey(row);
+                const transferKey = TRANSACTION_TRANSFER_STATUS_KEYS[row.transfer.status];
+                const transfer = transferKey === undefined ? "" : t(transferKey);
                 const title = entryTitle(row);
-              return (
-                  <li key={key} className="budget-entry budget-entry--interactive"
+                return (
+                  <tr key={key} className="budget-entry--interactive"
                     onClick={(event) => {
                       if (event.target instanceof Element && event.target.closest("button") !== null) return;
                       const trigger = event.currentTarget.querySelector<HTMLButtonElement>(".budget-entry-open");
                       if (trigger !== null) openEntry(key, trigger, false);
                     }}>
-                    <div className="budget-entry-main budget-entry-transaction-main">
+                    <td>
                       <button type="button" className="budget-entry-open" disabled={busy !== null}
                         aria-label={`${detailsTitle}, ${title}`} aria-haspopup="dialog"
                         onClick={(event) => { openEntry(key, event.currentTarget, false); }}>
                         <span className="budget-entry-date">{transactionDate(row)}</span>
                         <span className="budget-entry-text">{title}</span>
                       </button>
+                      <div className="budget-entry-facts">
+                        <span>{accountName(row.account_id)}</span>
+                        {row.effective.kind === "expense" || row.effective.kind === "income" ? null
+                          : <span className="budget-chip">{kindText(row.effective.kind)}</span>}
+                        {transfer === "" ? null : <span className="budget-chip">{transfer}</span>}
+                        {row.transfer.ambiguous ? <span className="budget-warn">{t("budget.transactions.ambiguous")}</span> : null}
+                        {oneOffLabel(row) === "" ? null : <span className="budget-chip budget-one-off">{oneOffLabel(row)}</span>}
+                        {row.annotation.stale ? <span className="budget-warn">{t("budget.transactions.stale")}</span> : null}
+                      </div>
+                    </td>
+                    <td>
                       {categoryButton(row, (trigger) => { openEntry(key, trigger, true); })}
-                      <EntryDocumentIndicator enabled={receiptsList !== undefined && isExpense(row)}
-                        state={documents.state} rows={documentsFor(row)} />
-                    <strong className={row.credit_debit_indicator === "DBIT" ? "is-debit" : "is-credit"}>
-                      {formatAmount(row.amount, row.currency, locale, row.credit_debit_indicator)}
-                    </strong>
-                  </div>
-                  <div className="budget-entry-facts">
-                    <span>{accountName(row.account_id)}</span>
-                    {row.effective.kind === "expense" || row.effective.kind === "income" ? null
-                      : <span className="budget-chip">{kindText(row.effective.kind)}</span>}
-                    {transfer === "" ? null : <span className="budget-chip">{transfer}</span>}
-                    {row.transfer.ambiguous ? <span className="budget-warn">{t("budget.transactions.ambiguous")}</span> : null}
-                    {oneOffLabel(row) === "" ? null : <span className="budget-chip budget-one-off">{oneOffLabel(row)}</span>}
-                    {row.annotation.stale ? <span className="budget-warn">{t("budget.transactions.stale")}</span> : null}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+                    </td>
+                    <td>
+                      <div className="budget-transaction-amount">
+                        <EntryDocumentIndicator enabled={receiptsList !== undefined && isExpense(row)}
+                          state={documents.state} rows={documentsFor(row)} />
+                        <strong className={row.credit_debit_indicator === "DBIT" ? "is-debit" : "is-credit"}>
+                          {formatAmount(row.amount, row.currency, locale, row.credit_debit_indicator)}
+                        </strong>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </>
       )}
     </section>

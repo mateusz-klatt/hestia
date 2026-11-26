@@ -49,6 +49,24 @@ def _forecast(**overrides):
 
 
 class BudgetForecastTests(unittest.TestCase):
+    def test_changed_and_variable_monthly_amounts_project_only_the_latest_amount(self):
+        for amounts in (("93", "93", "93", "107", "107", "107"),
+                        ("100.01", "127.19", "99.07", "103.21", "120", "89.9900")):
+            with self.subTest(amounts=amounts):
+                entries = [RecurringEntry("test-owner", "source", str(month), amount, "PLN", "DBIT", "expense",
+                                          f"2026-{month:02d}-10", "f" * 64, counterparty_name="Synthetic Monthly Bill")
+                           for month, amount in enumerate(amounts, 5)]
+                hints = detect_recurring_charges("test-owner", entries, {"source"})
+                self.assertEqual(len(hints), 1)
+                expected_amount = "107" if amounts[0] == "93" else "89.99"
+                # Stale accounts also retain the single history instead of
+                # projecting both old and new price bands independently.
+                result = _forecast(evaluation_date="2026-11-01", months=2, hints=hints,
+                                   account_timestamps={"source": (None, None)})
+                self.assertEqual([len(month["items"]) for month in result["months"]], [1, 1])
+                self.assertEqual([month["items"][0]["amount"] for month in result["months"]],
+                                 [expected_amount, expected_amount])
+
     def test_query_defaults_and_exact_syntax(self):
         self.assertEqual(forecast.validate_forecast_query(None, None), (3, None))
         self.assertEqual(forecast.validate_forecast_query("01", "PLN"), (1, "PLN"))

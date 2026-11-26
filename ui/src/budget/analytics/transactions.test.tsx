@@ -173,7 +173,7 @@ describe("period entries", () => {
     ]);
     await show(api);
     expect(api.analyticsTransactions).toHaveBeenCalledWith("2026-11", { currency: "", category: "", kind: "", query: "" });
-    const entries = [...host.querySelectorAll(".budget-entry")];
+    const entries = [...host.querySelectorAll(".budget-transaction-table tbody tr")];
     const rows = entries.map((row) => row.textContent);
     expect(rows[0]).toContain("Synthetic Grocer");
     expect(rows[0]).toContain("−12.50 PLN");
@@ -205,7 +205,7 @@ describe("period entries", () => {
       effective: { category_id: "cat-food", kind: "expense", source: "manual", rule_id: null },
     })]);
     await show(api);
-    const row = host.querySelector<HTMLElement>(".budget-entry-list > .budget-entry");
+    const row = host.querySelector<HTMLElement>(".budget-transaction-table tbody tr");
     if (row === null) throw new Error("transaction row missing");
     const detailsButton = rowDetailsButton(row);
     const edit = categoryButton(row);
@@ -255,7 +255,7 @@ describe("period entries", () => {
     vi.stubGlobal("crypto", { subtle: { digest: (_algorithm: string, bytes: Uint8Array) => Promise.resolve(new Uint8Array(32).fill(bytes[0] ?? 0).buffer) } });
     try {
       await show(fakeApi([entry("invoice"), entry("missing"), entry("payment"), entry("review")]), { receiptsList });
-      const rows = [...host.querySelectorAll(".budget-entry-list > .budget-entry")];
+      const rows = [...host.querySelectorAll(".budget-transaction-table tbody tr")];
       expect(rows.map((row) => row.querySelector(".budget-entry-document")?.getAttribute("data-document-state")))
         .toEqual(["present", "missing", "payment", "review"]);
       await click(rowDetailsButton(rows[0]));
@@ -274,7 +274,7 @@ describe("period entries", () => {
       rule_id: null, expected_version: 0, field: "counterparty_account", operator: "equals", value: "PL** … 1234",
       counterparty_account_key: key, category_id: null, kind: "expense", priority: 100, enabled: true,
     };
-    expect(host.querySelector(".budget-entry-list")?.textContent).not.toContain("Utwórz regułę z konta odbiorcy");
+    expect(host.querySelector(".budget-transaction-table")?.textContent).not.toContain("Utwórz regułę z konta odbiorcy");
     await click(rowDetailsButton());
     const detailAction = button("Utwórz regułę z konta odbiorcy", transactionDrawer());
     expect(detailAction.title).toBe("PL** … 1234");
@@ -318,7 +318,7 @@ describe("period entries", () => {
     await show(api);
     await drain();
     expect(api.analyticsTransactions).toHaveBeenLastCalledWith("2026-11", { currency: "", category: "", kind: "", query: "" }, "cursor-1");
-    expect(host.querySelectorAll(".budget-entry")).toHaveLength(2);
+    expect(host.querySelectorAll(".budget-transaction-table tbody tr")).toHaveLength(2);
     expect(host.textContent).not.toContain("Loading…");
   });
 
@@ -401,7 +401,7 @@ describe("period entries", () => {
     const api = fakeApi([entry("e1", { effective: { category_id: "cat-old", kind: "expense", source: "rule", rule_id: "rule-1" } }),
       entry("e2")]);
     await show(api);
-    const [first, second] = [...host.querySelectorAll<HTMLElement>(".budget-entry")];
+    const [first, second] = [...host.querySelectorAll<HTMLElement>(".budget-transaction-table tbody tr")];
     if (first === undefined || second === undefined) throw new Error("rows missing");
     await editCategory(first);
     let editor = transactionDrawer().querySelector(".budget-entry-editor") ?? host;
@@ -439,13 +439,13 @@ describe("period entries", () => {
     const api = fakeApi([entry("out"), entry("in", { credit_debit_indicator: "CRDT",
       annotation: { version: 2, mode: "manual", category_id: null, kind: "expense", stale: false } })]);
     await show(api);
-    const rows = [...host.querySelectorAll<HTMLElement>(".budget-entry")];
+    const rows = [...host.querySelectorAll<HTMLElement>(".budget-transaction-table tbody tr")];
     await editCategory(rows[0]);
     let editor = host.querySelector(".budget-entry-editor") ?? host;
     expect([...select("Type", editor).options].map((option) => option.value)).toEqual(["auto", "expense", "excluded"]);
     await click(button("Cancel", editor));
     await pressEscape();
-    await editCategory(host.querySelectorAll<HTMLElement>(".budget-entry")[1]);
+    await editCategory(host.querySelectorAll<HTMLElement>(".budget-transaction-table tbody tr")[1]);
     editor = host.querySelector(".budget-entry-editor") ?? host;
     expect([...select("Type", editor).options].map((option) => option.value)).toEqual(["auto", "income", "refund", "excluded"]);
     expect(select("Type", editor).value).toBe("auto");
@@ -575,19 +575,24 @@ describe("period entries", () => {
   });
 
   function names(): string[] {
-    return [...host.querySelectorAll("ul.budget-entry-list[aria-label] > .budget-entry .budget-entry-text")]
+    return [...host.querySelectorAll(".budget-transaction-table tbody .budget-entry-text")]
       .map((item) => item.textContent);
   }
   function sortButton(label: string): HTMLButtonElement {
-    const group = host.querySelector('.budget-sort[role="group"]');
-    if (group === null) throw new Error("sort group missing");
-    return button(label, group);
+    const headers = host.querySelector(".budget-transaction-table thead");
+    if (headers === null) throw new Error("transaction table headers missing");
+    const control = [...headers.querySelectorAll("th[scope=col] button")].find((item) => item.firstElementChild?.textContent === label);
+    if (!(control instanceof HTMLButtonElement)) throw new Error(`sort control missing for ${label}`);
+    return control;
+  }
+  function sortDirection(label: string): string | null | undefined {
+    return sortButton(label).closest("th")?.getAttribute("aria-sort");
   }
   function classified(reference: string, changes: Partial<AnalyticsTransaction>): AnalyticsTransaction {
     return entry(reference, changes);
   }
 
-  it("sorts by date, category and absolute amount with a sort button bar above the transaction list", async () => {
+  it("sorts by date, category and absolute amount from the column headers", async () => {
     const rows = [
       classified("mid", { booking_date: "2026-11-02", amount: "10.00",
         effective: { kind: "expense", category_id: "cat-food", source: "default", rule_id: null } }),
@@ -598,42 +603,37 @@ describe("period entries", () => {
     ];
     const api = fakeApi(rows);
     await show(api);
-    expect(host.querySelector(".budget-entries-table")).toBeNull();
-    expect(host.querySelector(".budget-entry-list")?.getAttribute("aria-label")).toBe("Transactions");
-    expect(host.querySelector('.budget-sort[role="group"]')?.getAttribute("aria-label")).toBe("Sort");
+    expect(host.querySelector("table.budget-transaction-table")?.getAttribute("aria-label")).toBe("Transactions");
+    expect(host.querySelector(".budget-sort")).toBeNull();
     expect(names()).toEqual(["Synthetic shop mid", "Synthetic shop early", "Synthetic shop late"]);
-    expect(sortButton("Date").getAttribute("aria-pressed")).toBe("false");
-    expect(sortButton("Category").getAttribute("aria-pressed")).toBe("false");
-    expect(sortButton("Amount").getAttribute("aria-pressed")).toBe("false");
+    expect(sortDirection("Date")).toBeNull();
+    expect(sortDirection("Category")).toBeNull();
+    expect(sortDirection("Amount")).toBeNull();
 
     await click(sortButton("Date"));
-    expect(sortButton("Date").getAttribute("aria-pressed")).toBe("true");
-    expect(sortButton("Date").getAttribute("data-sort")).toBe("asc");
-    expect(sortButton("Date").getAttribute("aria-label")).toBe("Date, ascending");
+    expect(sortDirection("Date")).toBe("ascending");
+    expect(sortButton("Date").querySelector('[aria-hidden="true"]')?.textContent.trim()).toBe("↑");
     expect(names()).toEqual(["Synthetic shop early", "Synthetic shop mid", "Synthetic shop late"]);
     await click(sortButton("Date"));
-    expect(sortButton("Date").getAttribute("data-sort")).toBe("desc");
-    expect(sortButton("Date").getAttribute("aria-label")).toBe("Date, descending");
+    expect(sortDirection("Date")).toBe("descending");
+    expect(sortButton("Date").querySelector('[aria-hidden="true"]')?.textContent.trim()).toBe("↓");
     expect(names()).toEqual(["Synthetic shop late", "Synthetic shop mid", "Synthetic shop early"]);
 
     await click(sortButton("Category"));
-    expect(sortButton("Date").getAttribute("aria-pressed")).toBe("false");
-    expect(sortButton("Date").getAttribute("data-sort")).toBeNull();
-    expect(sortButton("Category").getAttribute("aria-pressed")).toBe("true");
-    expect(sortButton("Category").getAttribute("data-sort")).toBe("asc");
+    expect(sortDirection("Date")).toBeNull();
+    expect(sortDirection("Category")).toBe("ascending");
     expect(names()).toEqual(["Synthetic shop mid", "Synthetic shop late", "Synthetic shop early"]);
     await click(sortButton("Category"));
-    expect(sortButton("Category").getAttribute("data-sort")).toBe("desc");
+    expect(sortDirection("Category")).toBe("descending");
     expect(names()).toEqual(["Synthetic shop early", "Synthetic shop late", "Synthetic shop mid"]);
 
     await click(sortButton("Amount"));
-    expect(sortButton("Amount").getAttribute("aria-pressed")).toBe("true");
-    expect(sortButton("Amount").getAttribute("data-sort")).toBe("asc");
-    expect(sortButton("Category").getAttribute("aria-pressed")).toBe("false");
+    expect(sortDirection("Amount")).toBe("ascending");
+    expect(sortDirection("Category")).toBeNull();
     // Absolute values: 2.50, 10.00, 30.00. The negative amount is not treated as smaller.
     expect(names()).toEqual(["Synthetic shop late", "Synthetic shop mid", "Synthetic shop early"]);
     await click(sortButton("Amount"));
-    expect(sortButton("Amount").getAttribute("data-sort")).toBe("desc");
+    expect(sortDirection("Amount")).toBe("descending");
     expect(names()).toEqual(["Synthetic shop early", "Synthetic shop mid", "Synthetic shop late"]);
   });
 
@@ -737,8 +737,7 @@ describe("period entries", () => {
     const api = fakeApi(rows);
     api.categories.mockImplementation(() => ok({ categories: plCategories }));
     await show(api, { locale: "pl" });
-    expect(host.querySelector(".budget-entry-list")?.getAttribute("aria-label")).toBe("Transakcje");
-    expect(host.querySelector('.budget-sort[role="group"]')?.getAttribute("aria-label")).toBe("Sortowanie");
+    expect(host.querySelector(".budget-transaction-table")?.getAttribute("aria-label")).toBe("Transakcje");
     await click(sortButton(t("budget.transactions.category")));
     expect(names()).toEqual([
       "Synthetic shop cebula",
@@ -933,7 +932,7 @@ describe("period entries", () => {
     await click(sortButton("Amount"));
     expect(names()).toEqual(["Synthetic shop mid", "Synthetic shop high"]);
 
-    await editCategory(host.querySelectorAll(".budget-entry")[0]);
+    await editCategory(host.querySelectorAll(".budget-transaction-table tbody tr")[0]);
     expect(host.querySelector(".budget-entry-editor")).not.toBeNull();
 
     // Background page arrives with a smaller amount while editor is open: existing rows must not jump.
@@ -997,7 +996,7 @@ describe("period entries", () => {
     await click(sortButton("Amount"));
     expect(listNames()).toEqual(["Synthetic shop mid", "Synthetic shop high"]);
 
-    await openPair(host.querySelectorAll(".budget-entry")[0]);
+    await openPair(host.querySelectorAll(".budget-transaction-table tbody tr")[0]);
     expect(host.querySelector(".budget-pair-picker")).not.toBeNull();
 
     // Background page arrives with a smaller amount while picker is open: existing rows must not jump.
@@ -1037,7 +1036,7 @@ describe("period entries", () => {
     });
     await show(api, { revision: 1 });
     await click(sortButton("Amount"));
-    await openPair(host.querySelectorAll(".budget-entry")[0]);
+    await openPair(host.querySelectorAll(".budget-transaction-table tbody tr")[0]);
     await act(async () => {
       releaseConfirmPage2({ ok: true, data: pageOf([pairDebit("low", { amount: "5.00" })]) });
       await Promise.resolve();
@@ -1070,7 +1069,7 @@ describe("manual own-transfer pairing", () => {
     ];
     const api = fakeApi(rows);
     await show(api);
-    const rendered = [...host.querySelectorAll<HTMLElement>(".budget-entry")];
+    const rendered = [...host.querySelectorAll<HTMLElement>(".budget-transaction-table tbody tr")];
     expect(rendered).toHaveLength(rows.length);
     for (const [index, row] of rendered.entries()) {
       expect(row.textContent).not.toContain(t("budget.transactions.pair"));
@@ -1370,7 +1369,7 @@ describe("manual own-transfer pairing", () => {
     await show(api);
     let loaded: (value: BudgetResult<AnalyticsTransactions>) => void = () => undefined;
     api.analyticsTransactions.mockImplementationOnce(() => new Promise((resolve) => { loaded = resolve; }));
-    const rendered = [...host.querySelectorAll<HTMLElement>(".budget-entry")];
+    const rendered = [...host.querySelectorAll<HTMLElement>(".budget-transaction-table tbody tr")];
     await openPair(rendered[0]);
     await pressEscape();
     api.analyticsTransactions.mockImplementation(() => ok(entriesOf("2026-11", [pairCredit()])));
@@ -1503,6 +1502,6 @@ describe("manual own-transfer pairing", () => {
     });
     await settle();
     expect(host.querySelector('input[name="provisional"]')).toBeNull();
-    expect(host.querySelectorAll(".budget-entry")).toHaveLength(1);
+    expect(host.querySelectorAll(".budget-transaction-table tbody tr")).toHaveLength(1);
   });
 });

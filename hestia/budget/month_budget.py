@@ -299,14 +299,6 @@ def _future_accepted_keys(transfers: Sequence[Mapping], evaluation_date: str) ->
     return frozenset(keys)
 
 
-def _is_explicit_expense(eff: Mapping, annotation: Mapping, rules_by_id: Mapping[str, Mapping]) -> bool:
-    if eff["source"] == "manual":
-        return annotation["kind"] == "expense"
-    if eff["source"] == "rule":
-        return rules_by_id[eff["rule_id"]]["kind"] == "expense"
-    return False
-
-
 def _has_unresolved_transfer_evidence(
     row: Mapping,
     *,
@@ -1082,7 +1074,6 @@ def _evaluate_monthly_budget_core(
         if limit_row["enabled"]:
             observed_currencies.add(limit_row["currency"])
 
-    rules_by_id = {row["id"]: row for row in rules}
     other_owned = _other_owned_identities(identities)
     future_accepted = _future_accepted_keys(transfers, evaluation_date)
 
@@ -1164,8 +1155,7 @@ def _evaluate_monthly_budget_core(
                         purchase_date_fallback_count += 1
                     if nonzero:
                         cal_bucket.has_affecting_unexcluded = True
-                        if unresolved or (account_kinds.get(acct_id) != "credit_card"
-                                          and not _is_explicit_expense(eff, row["annotation"], rules_by_id)):
+                        if unresolved:
                             cal_bucket.record_pending(row_key)
                     cal_bucket.observed_spend_categories.add(cat_id)
                     if mortgage_cat_id is not None and cat_id == mortgage_cat_id:
