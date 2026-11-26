@@ -298,6 +298,7 @@ class GmailMessageProcessor:
         selected_template = None
         failure = pending
         no_text = False
+        issue_dates: dict[str, set[str]] = {}
         sender_domain = forward_sender_domain(message) or ""
         outer_parts = mime_parts(inline_outer) if inline_outer is not None else ()
         for part in chain(mime_parts(message), outer_parts):
@@ -343,6 +344,11 @@ class GmailMessageProcessor:
                     continue
                 if not -400 <= distance <= 7:
                     continue
+            known_dates = issue_dates.setdefault(document.document_kind, set())
+            if document.issue_date is not None:
+                known_dates.add(document.issue_date)
+                if len(known_dates) > 1:
+                    return _parse_failed(pending, "multiple_documents")
             if selected is None:
                 selected = document
                 selected_template = invoice if document.issue_date is None else None
@@ -352,9 +358,6 @@ class GmailMessageProcessor:
                 return _parse_failed(pending, "multiple_documents")
             else:
                 same_kind = selected.document_kind == document.document_kind
-                if (same_kind and selected.issue_date and document.issue_date
-                        and selected.issue_date != document.issue_date):
-                    return _parse_failed(pending, "multiple_documents")
                 use_document = ((selected.document_kind == "receipt" and document.document_kind == "invoice")
                                 or (same_kind and selected.issue_date is None and document.issue_date is not None))
                 preferred = document if use_document else selected
@@ -365,7 +368,7 @@ class GmailMessageProcessor:
         if selected is None:
             return replace(failure, diagnostic_reason="pdf_no_text") if no_text else failure
         secret = self.settings.hmac_secret
-        if selected.issue_date is None and selected_template is not None:
+        if selected.issue_date is None and selected_template is not None and len(issue_dates) == 1:
             return replace(pending, outcome="imported", invoice=selected_template, source_kind="attachment",
                            rfc_message_id_hmac=_rfc_message_hmac(message, secret), parse_failed_reason=None)
         number = selected.invoice_number.casefold()

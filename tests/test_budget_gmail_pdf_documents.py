@@ -2,6 +2,7 @@
 from dataclasses import replace
 from datetime import date
 from email.message import EmailMessage
+from itertools import permutations
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -274,9 +275,52 @@ class DocumentPipeline(unittest.TestCase):
                 message = self.message(texts, sender='billing@respectenergy.pl')
                 with patch.object(gmail_message, 'extract_invoice', side_effect=templates):
                     item = self.process(message)
-                self.assertEqual(item.invoice, invoice)
+                self.assertEqual((item.invoice.document_kind, item.invoice.invoice_number, item.invoice.due_date),
+                                 ('invoice', invoice.invoice_number, invoice.due_date))
                 self.assertIsNone(item.invoice.issue_date)
-                self.assertIsNone(item.document_provenance)
+                self.assertTrue(item.document_provenance['paid'])
+
+    def test_three_part_date_conflicts_are_detected_independently_of_preferred_kind(self):
+        invoice = fixture('stripe_invoice')
+        receipt = fixture('stripe_receipt')
+        later = receipt.replace('November 3, 2026', 'November 7, 2026')
+        for texts in permutations((invoice, receipt, later)):
+            with self.subTest(texts=texts):
+                item = self.process(self.message(texts))
+                self.assertEqual((item.outcome, item.parse_failed_reason), ('parse_failed', 'multiple_documents'))
+
+    def test_undated_template_bundle_and_receipt_deduplicate_in_both_message_and_mime_orders(self):
+        from hestia.budget import gmail_message
+        from hestia.budget.gmail_invoice import ImportedInvoice
+        self.settings.payment_senders = ()
+        self.settings.sender_allowlist = ('@respectenergy.pl',)
+        self.settings.document_senders = (PaymentSender('@respectenergy.pl', 'Vendor'),)
+        for index, (bundle_first, template_first) in enumerate(((True, True), (True, False),
+                                                               (False, True), (False, False))):
+            with self.subTest(bundle_first=bundle_first, template_first=template_first):
+                number = f'RE/2026/0004{index}'
+                invoice = ImportedInvoice('Respect Energy', None, number, '123.45', 'PLN', None, '2026-12-05')
+                receipt = (f'Receipt\nSprzedawca: Respect Energy\nReceipt number REC-4{index}\n'
+                           f'Invoice number {number}\nDate paid November 20, 2026\nAmount paid 123.45 PLN')
+                texts = ['template', receipt] if template_first else [receipt, 'template']
+                templates = [invoice, None] if template_first else [None, invoice]
+                with patch.object(gmail_message, 'extract_invoice', side_effect=templates):
+                    bundle = self.process(self.message(texts, sender='billing@respectenergy.pl'))
+                with patch.object(gmail_message, 'extract_invoice', return_value=None):
+                    single = self.process(self.message([receipt], sender='billing@respectenergy.pl'))
+                first, second = (bundle, single) if bundle_first else (single, bundle)
+                self.assertEqual(self.commit(first), (1, 0, True))
+                self.assertEqual(self.commit(second), (0, 1, True))
+                with self.sessions() as session:
+                    message = session.get(db.BudgetGmailMessage, (OWNER, first.gmail_id_hmac))
+                    row = session.get(db.BudgetReceipt, message.receipt_id)
+                    self.assertEqual((row.document_kind, row.receipt_date, row.invoice_number, row.due_date),
+                                     ('invoice', None, number, '2026-12-05'))
+                    provenance = json.loads(session.get(db.AppMeta, _document_number_key(row.id)).value)
+                    self.assertTrue(provenance['paid'])
+                    self.assertIsNotNone(provenance['receipt_number_hmac'])
+        with self.sessions() as session:
+            self.assertEqual(len(session.scalars(select(db.BudgetReceipt)).all()), 4)
 
     def test_invoice_receipt_both_orders_and_multi_pdf(self):
         for i, order in enumerate((('stripe_invoice', 'stripe_receipt'), ('stripe_receipt', 'stripe_invoice'))):
