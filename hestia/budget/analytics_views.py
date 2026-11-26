@@ -188,7 +188,7 @@ def _effective(payload, metadata, annotation, categories, rules, *, texts=None, 
 
 
 def _records(ledger, identities, metadata, annotations, categories, rules, *, account_secret=None, account_key_id=None, owner=None,
-             selected_accounts=frozenset()):
+             selected_accounts=frozenset(), selected_card_accounts=frozenset(), deselected_card_accounts=frozenset()):
     result = []
     owned = core.owned_identities(identities) if ledger else None
     account_identities = {} if owned is None else {acct: frozenset(pairs) for acct, pairs in owned.items()}
@@ -201,6 +201,7 @@ def _records(ledger, identities, metadata, annotations, categories, rules, *, ac
         annotation = _annotation(annotations.get(key), financial_fp)
         allow_bank_transfer = core.bank_card_transfer_allowed(
             row.account_id, evidence, selected_accounts=selected_accounts, account_identities=account_identities,
+            selected_card_accounts=selected_card_accounts, deselected_card_accounts=deselected_card_accounts,
         )
         default_kind = core.default_effective_kind(payload, evidence, allow_bank_transfer=allow_bank_transfer)
         account_evidence = (None if account_secret is None else
@@ -267,10 +268,17 @@ def projection_snapshot(session, owner, *, classify=True, account_secret=None, a
         db.BudgetTransferDecision.owner == owner).order_by(db.BudgetTransferDecision.id))]
     identities, identity_state, metadata, annotations = _auxiliary(session, owner, accounts)
     selected_accounts = frozenset(row.id for row in accounts if row.enabled)
+    selected_card_accounts = frozenset(
+        row.id for row in accounts if row.enabled and row.kind == "credit_card" and row.kind_confirmed_at is not None
+    )
+    deselected_card_accounts = frozenset(
+        row.id for row in accounts if not row.enabled and row.kind == "credit_card"
+    )
     applied = rules if classify else ()
     records = _records(ledger, identities, metadata, annotations, {row["id"]: row for row in categories}, applied,
                        account_secret=account_secret if classify else None, account_key_id=account_key_id, owner=owner,
-                       selected_accounts=selected_accounts)
+                       selected_accounts=selected_accounts, selected_card_accounts=selected_card_accounts,
+                       deselected_card_accounts=deselected_card_accounts)
     account_state = [{"id": row.id, "connection_id": row.connection_id, "enabled": row.enabled,
                       "configured": row.configured, "control_version": row.control_version, "kind": row.kind,
                       "kind_confirmed_at": row.kind_confirmed_at} for row in accounts]
@@ -279,7 +287,10 @@ def projection_snapshot(session, owner, *, classify=True, account_secret=None, a
                 "counts": _scope_counts(session, owner, accounts), "_records": records, "_accounts": accounts}
     semantic = {"version": 1, "classification_version": core.CLASSIFICATION_VERSION, "owner": owner,
                 "counterparty_rule_key_id": account_key_id,
-                "accounts": [{"id": row.id, "enabled": row.enabled} for row in accounts], "identities": identity_state,
+                "accounts": [{"id": row.id, "enabled": row.enabled,
+                              "card": row.kind == "credit_card" and (not row.enabled or row.kind_confirmed_at is not None)}
+                             for row in accounts],
+                "identities": identity_state,
                 "ledger": [[row.account_id, row.entry_reference, record["payload"], row.uncertain, row.source]
                            for row, record in zip(ledger, records, strict=True)],
                 "metadata": sorted([[row.account_id, row.entry_reference, row.ledger_fingerprint,

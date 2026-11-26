@@ -1074,6 +1074,9 @@ def _evaluate_monthly_budget_core(
 
     per_account_identities = {account_id: core.identity_pair_set(values) for account_id, values in identities.items()}
     selected_accounts = frozenset(account_component_timestamps) | {row["account_id"] for row in transactions}
+    selected_card_accounts = frozenset(
+        account_id for account_id, kind in account_kinds.items() if kind == "credit_card"
+    ) & selected_accounts
     other_owned = _other_owned_identities(per_account_identities)
     future_accepted = _future_accepted_keys(transfers, evaluation_date)
 
@@ -1135,11 +1138,12 @@ def _evaluate_monthly_budget_core(
             and kind == "expense"
             and core.is_bank_card_repayment(payload, row["metadata"])
         ):
-            if core.bank_card_transfer_allowed(
+            if "_default_kind" not in row and core.bank_card_transfer_allowed(
                 acct_id,
                 row["metadata"],
                 selected_accounts=selected_accounts,
                 account_identities=per_account_identities,
+                selected_card_accounts=selected_card_accounts,
             ):
                 kind = "transfer"
             else:

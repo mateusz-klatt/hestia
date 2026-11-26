@@ -11,7 +11,7 @@ import unicodedata
 MAX_ROWS = 100_000
 # Bump whenever rule matching or effective classification semantics change so stale
 # previews, cursors and cached projections invalidate across deploys.
-CLASSIFICATION_VERSION = 3
+CLASSIFICATION_VERSION = 4
 KINDS = frozenset({"auto", "expense", "income", "refund", "excluded"})
 _FIELDS = frozenset({"description", "counterparty_name", "counterparty_account", "mcc"})
 _MONEY = re.compile(r"-?[0-9]+(?:\.[0-9]+)?\Z", re.ASCII)
@@ -451,24 +451,37 @@ def identity_pair_set(values):
     return frozenset((item["scheme"], item["identification"]) for item in values)
 
 
-def bank_card_transfer_allowed(account_id, metadata, *, selected_accounts, account_identities):
-    """Return true when a bank-evidenced card repayment debit may auto-classify as transfer.
+def bank_card_transfer_allowed(
+    account_id,
+    metadata,
+    *,
+    selected_accounts,
+    account_identities,
+    selected_card_accounts,
+    deselected_card_accounts=frozenset(),
+):
+    """Return true when a bank-evidenced card repayment debit targets an unambiguous selected card.
 
-    Requires at least one other selected account in scope and refuses auto-transfer when
-    structured ``creditor_accounts`` metadata identifies only deselected owned accounts.
+    Requires at least one other selected credit-card account in scope. When structured
+    ``creditor_accounts`` metadata is present, it must match an owned identity of one of those
+    other selected credit cards (and not any deselected owned account), avoiding unknown external
+    creditors outside the owner's portfolio. When ``creditor_accounts`` is absent, requires an
+    unambiguous single other selected credit card and no deselected credit card accounts.
     """
-    if len(frozenset(selected_accounts) - {account_id}) == 0:
+    other_selected = frozenset(selected_accounts) - {account_id}
+    other_selected_cards = frozenset(selected_card_accounts) & other_selected
+    if not other_selected_cards:
         return False
+    other_deselected_cards = frozenset(deselected_card_accounts) - frozenset(selected_accounts) - {account_id}
     creditor_accounts = None if metadata is None else metadata.get("creditor_accounts")
     if not creditor_accounts:
-        return True
+        return len(other_selected_cards) == 1 and not other_deselected_cards
     creditor_pairs = identity_pair_set(creditor_accounts)
-    selected_other = frozenset().union(
-        *(pairs for other_id, pairs in account_identities.items()
-          if other_id != account_id and other_id in selected_accounts)
+    selected_card_pairs = frozenset().union(
+        *(account_identities.get(card_id, frozenset()) for card_id in other_selected_cards)
     )
-    if creditor_pairs & selected_other:
-        return True
+    if not (creditor_pairs & selected_card_pairs):
+        return False
     deselected_owned = frozenset().union(
         *(pairs for other_id, pairs in account_identities.items()
           if other_id != account_id and other_id not in selected_accounts)
@@ -476,7 +489,7 @@ def bank_card_transfer_allowed(account_id, metadata, *, selected_accounts, accou
     return not bool(creditor_pairs & deselected_owned)
 
 
-def default_effective_kind(payload, metadata=None, *, allow_bank_transfer=True):
+def default_effective_kind(payload, metadata=None, *, allow_bank_transfer=False):
     """Default effective kind when no manual annotation or matching rule sets one."""
     if payload.get("credit_debit_indicator") != "DBIT":
         return "unclassified_credit"

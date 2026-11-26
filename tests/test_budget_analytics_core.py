@@ -250,7 +250,7 @@ class PeriodAndRuleTests(unittest.TestCase):
         self.assertEqual(match_rule(disabled_only, crdt, match_texts(crdt)), (None, "unclassified_credit"))
         self.assertEqual(match_rule(disabled_only, dbit, match_texts(dbit)), (None, "expense"))
 
-        self.assertEqual(CLASSIFICATION_VERSION, 3)
+        self.assertEqual(CLASSIFICATION_VERSION, 4)
         # Any primary CRDT rule (income/refund/auto/excluded) beats expense fallback regardless of priority.
         for primary, expected_kind in ((inc_low, "income"), (ref_low, "refund"),
                                        (auto_low, "unclassified_credit"), (excl_low, "excluded")):
@@ -280,7 +280,9 @@ class PeriodAndRuleTests(unittest.TestCase):
         for name, body, metadata in positives:
             with self.subTest(positive=name):
                 self.assertTrue(is_bank_card_repayment(body, metadata))
-                self.assertEqual(default_effective_kind(body, metadata), "transfer")
+                # Fail-closed unless counterpart card scope is explicitly enabled.
+                self.assertEqual(default_effective_kind(body, metadata), "expense")
+                self.assertEqual(default_effective_kind(body, metadata, allow_bank_transfer=True), "transfer")
 
         negatives = (
             ("non dict", None, None),
@@ -311,27 +313,71 @@ class PeriodAndRuleTests(unittest.TestCase):
             with self.subTest(negative=name):
                 self.assertFalse(is_bank_card_repayment(body, metadata))
                 if isinstance(body, dict):
-                    self.assertNotEqual(default_effective_kind(body, metadata), "transfer")
+                    self.assertNotEqual(default_effective_kind(body, metadata, allow_bank_transfer=True), "transfer")
 
         repay = payload(remittance_information=["Spłata karty kredytowej"])
         self.assertEqual(default_effective_kind(repay, None, allow_bank_transfer=False), "expense")
 
         id_card = identity("CARD-1")
+        id_card_2 = identity("CARD-2")
+        id_sav = identity("SAV-1")
         id_off = identity("OFF-1")
         id_ext = identity("EXT-9")
         acct_ids = {
             "main": identity_pair_set(()),
+            "sav": identity_pair_set((id_sav,)),
             "card": identity_pair_set((id_card,)),
+            "card2": identity_pair_set((id_card_2,)),
             "off": identity_pair_set((id_off,)),
         }
-        self.assertFalse(bank_card_transfer_allowed("main", None, selected_accounts=frozenset({"main"}), account_identities=acct_ids))
-        self.assertTrue(bank_card_transfer_allowed("main", None, selected_accounts=frozenset({"main", "card"}), account_identities=acct_ids))
-        self.assertTrue(bank_card_transfer_allowed(
-            "main", {"creditor_accounts": [id_card]}, selected_accounts=frozenset({"main", "card"}), account_identities=acct_ids))
+        # Checking only or checking + savings without a selected credit card -> refused.
         self.assertFalse(bank_card_transfer_allowed(
-            "main", {"creditor_accounts": [id_off]}, selected_accounts=frozenset({"main", "card"}), account_identities=acct_ids))
+            "main", None, selected_accounts=frozenset({"main"}), account_identities=acct_ids,
+            selected_card_accounts=frozenset(),
+        ))
+        self.assertFalse(bank_card_transfer_allowed(
+            "main", None, selected_accounts=frozenset({"main", "sav"}), account_identities=acct_ids,
+            selected_card_accounts=frozenset(), deselected_card_accounts=frozenset({"off"}),
+        ))
+        # Checking paying from card itself without another card -> refused.
+        self.assertFalse(bank_card_transfer_allowed(
+            "card", None, selected_accounts=frozenset({"main", "card"}), account_identities=acct_ids,
+            selected_card_accounts=frozenset({"card"}),
+        ))
+        # Single unambiguous selected credit card (with or without explicit matching creditor identity) -> allowed.
         self.assertTrue(bank_card_transfer_allowed(
-            "main", {"creditor_accounts": [id_ext]}, selected_accounts=frozenset({"main", "card"}), account_identities=acct_ids))
+            "main", None, selected_accounts=frozenset({"main", "card"}), account_identities=acct_ids,
+            selected_card_accounts=frozenset({"card"}),
+        ))
+        self.assertTrue(bank_card_transfer_allowed(
+            "main", {"creditor_accounts": [id_card]}, selected_accounts=frozenset({"main", "card"}),
+            account_identities=acct_ids, selected_card_accounts=frozenset({"card"}),
+        ))
+        # Multiple selected or selected + deselected cards without creditor identity -> refused (no guessing).
+        self.assertFalse(bank_card_transfer_allowed(
+            "main", None, selected_accounts=frozenset({"main", "card", "card2"}), account_identities=acct_ids,
+            selected_card_accounts=frozenset({"card", "card2"}),
+        ))
+        self.assertFalse(bank_card_transfer_allowed(
+            "main", None, selected_accounts=frozenset({"main", "card"}), account_identities=acct_ids,
+            selected_card_accounts=frozenset({"card"}), deselected_card_accounts=frozenset({"off"}),
+        ))
+        # Structured creditor identity disambiguates selected card even with another selected or deselected card.
+        self.assertTrue(bank_card_transfer_allowed(
+            "main", {"creditor_accounts": [id_card]}, selected_accounts=frozenset({"main", "card", "card2"}),
+            account_identities=acct_ids, selected_card_accounts=frozenset({"card", "card2"}),
+        ))
+        self.assertTrue(bank_card_transfer_allowed(
+            "main", {"creditor_accounts": [id_card]}, selected_accounts=frozenset({"main", "card"}),
+            account_identities=acct_ids, selected_card_accounts=frozenset({"card"}),
+            deselected_card_accounts=frozenset({"off"}),
+        ))
+        # Deselected card identity, selected savings identity, external unknown creditor, or conflicting selected+deselected -> refused.
+        for wrong_target in ([id_off], [id_sav], [id_ext], [id_card, id_off]):
+            self.assertFalse(bank_card_transfer_allowed(
+                "main", {"creditor_accounts": wrong_target}, selected_accounts=frozenset({"main", "sav", "card"}),
+                account_identities=acct_ids, selected_card_accounts=frozenset({"card"}),
+            ))
 
         exp_rule = {"id": "r1", "enabled": True, "kind": "expense", "field": "description",
                     "operator": "contains", "value": "spłata", "category_id": "cat-1", "priority": 1}

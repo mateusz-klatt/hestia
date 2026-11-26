@@ -1973,6 +1973,7 @@ class CardExposureTests(unittest.TestCase):
             settings=DEFAULT_SETTINGS,
             transactions=[card_purchase, repayment, split_auto, ordinary_card_pos, card_fee],
             identities={"acc-main": [], "acc-card": []},
+            account_kinds={"acc-main": "current", "acc-card": "credit_card"},
             account_component_timestamps={"acc-main": ts, "acc-card": ts},
         )
         self.assertEqual(res["summary"]["spent"], "1350")
@@ -1980,18 +1981,67 @@ class CardExposureTests(unittest.TestCase):
         self.assertEqual(res["coverage"]["pending_transfer_rows"], 0)
         self.assertEqual(res["coverage"]["pending_row_keys"], [])
 
-        # Single selected account: cannot silently hide apparent card repayment -> stays spent + provisional.
-        single_repay = _tx("acc-main", "repay-single", amount="500", booking_date="2026-11-10")
-        single_repay["payload"]["remittance_information"] = ["Spłata karty kredytowej"]
-        single_res = _eval(
+        # Repro: checking + savings selected (NO selected credit card), card excluded, no creditor ID -> expense + provisional.
+        no_card_repay = _tx("acc-main", "repay-no-card", amount="500", booking_date="2026-11-10")
+        no_card_repay["payload"]["remittance_information"] = ["Spłata karty kredytowej"]
+        ordinary_buy = _tx("acc-main", "grocery-1", amount="120", booking_date="2026-11-09")
+        ordinary_buy["payload"]["remittance_information"] = ["Biedronka zakupy"]
+        no_card_res = _eval(
             settings=DEFAULT_SETTINGS,
-            transactions=[single_repay],
-            identities={"acc-main": []},
-            account_component_timestamps={"acc-main": ts},
+            transactions=[no_card_repay, ordinary_buy],
+            identities={"acc-main": [], "acc-savings": [], "acc-off-card": []},
+            account_kinds={"acc-main": "current", "acc-savings": "savings"},
+            account_component_timestamps={"acc-main": ts, "acc-savings": ts},
         )
-        self.assertEqual(single_res["summary"]["spent"], "500")
-        self.assertTrue(single_res["coverage"]["provisional"])
-        self.assertEqual(single_res["coverage"]["pending_row_keys"], ["acc-main/repay-single"])
+        self.assertEqual(no_card_res["summary"]["spent"], "620")
+        self.assertTrue(no_card_res["coverage"]["provisional"])
+        self.assertEqual(no_card_res["coverage"]["pending_row_keys"], ["acc-main/repay-no-card"])
+
+        # Multiple selected cards without creditor identity -> ambiguous, stays expense + provisional.
+        multi_res = _eval(
+            settings=DEFAULT_SETTINGS,
+            transactions=[no_card_repay],
+            identities={"acc-main": [], "acc-c1": [{"scheme": "IBAN", "identification": "PL111"}],
+                        "acc-c2": [{"scheme": "IBAN", "identification": "PL222"}]},
+            account_kinds={"acc-main": "current", "acc-c1": "credit_card", "acc-c2": "credit_card"},
+            account_component_timestamps={"acc-main": ts, "acc-c1": ts, "acc-c2": ts},
+        )
+        self.assertEqual(multi_res["summary"]["spent"], "500")
+        self.assertTrue(multi_res["coverage"]["provisional"])
+
+        # Matching structured creditor identity resolves multiple selected cards unambiguously.
+        resolved_repay = _tx(
+            "acc-main", "repay-resolved", amount="500", booking_date="2026-11-10",
+            metadata={"creditor_accounts": [{"scheme": "IBAN", "identification": "PL111"}]},
+        )
+        resolved_repay["payload"]["remittance_information"] = ["Spłata karty kredytowej"]
+        resolved_res = _eval(
+            settings=DEFAULT_SETTINGS,
+            transactions=[resolved_repay],
+            identities={"acc-main": [], "acc-c1": [{"scheme": "IBAN", "identification": "PL111"}],
+                        "acc-c2": [{"scheme": "IBAN", "identification": "PL222"}]},
+            account_kinds={"acc-main": "current", "acc-c1": "credit_card", "acc-c2": "credit_card"},
+            account_component_timestamps={"acc-main": ts, "acc-c1": ts, "acc-c2": ts},
+        )
+        self.assertEqual(resolved_res["summary"]["spent"], "0")
+        self.assertFalse(resolved_res["coverage"]["provisional"])
+
+        # Explicit unknown external creditor outside own portfolio -> stays expense + provisional.
+        external_repay = _tx(
+            "acc-main", "repay-external", amount="650", booking_date="2026-11-10",
+            metadata={"creditor_accounts": [{"scheme": "IBAN", "identification": "PL99999999999999999999999999"}]},
+        )
+        external_repay["payload"]["remittance_information"] = ["Spłata karty kredytowej"]
+        external_res = _eval(
+            settings=DEFAULT_SETTINGS,
+            transactions=[external_repay],
+            identities={"acc-main": [], "acc-card": [{"scheme": "IBAN", "identification": "PL111"}]},
+            account_kinds={"acc-main": "current", "acc-card": "credit_card"},
+            account_component_timestamps={"acc-main": ts, "acc-card": ts},
+        )
+        self.assertEqual(external_res["summary"]["spent"], "650")
+        self.assertTrue(external_res["coverage"]["provisional"])
+        self.assertEqual(external_res["coverage"]["pending_row_keys"], ["acc-main/repay-external"])
 
         # Creditor account explicitly identifies deselected owned card -> stays spent + provisional even with >1 selected.
         desel_repay = _tx(
@@ -2007,6 +2057,7 @@ class CardExposureTests(unittest.TestCase):
                 "acc-savings": [],
                 "acc-deselected-card": [{"scheme": "IBAN", "identification": "PL61109010140000071219812874"}],
             },
+            account_kinds={"acc-main": "current", "acc-savings": "savings"},
             account_component_timestamps={"acc-main": ts, "acc-savings": ts},
         )
         self.assertEqual(desel_res["summary"]["spent"], "700")
@@ -2022,8 +2073,9 @@ class CardExposureTests(unittest.TestCase):
         manual_res = _eval(
             settings=DEFAULT_SETTINGS,
             transactions=[manual_override],
-            identities={"acc-main": []},
-            account_component_timestamps={"acc-main": ts},
+            identities={"acc-main": [], "acc-card": []},
+            account_kinds={"acc-main": "current", "acc-card": "credit_card"},
+            account_component_timestamps={"acc-main": ts, "acc-card": ts},
         )
         self.assertEqual(manual_res["summary"]["spent"], "400")
         self.assertFalse(manual_res["coverage"]["provisional"])
