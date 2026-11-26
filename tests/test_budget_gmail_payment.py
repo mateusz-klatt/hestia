@@ -105,6 +105,14 @@ class PaymentFixtureTests(unittest.TestCase):
 
 
 class PaymentExtractionTests(unittest.TestCase):
+    def test_encoded_letters_in_receipt_descriptions(self):
+        for encoded in ("&oacute;", "&amp;oacute;", "&#243;", "&#xf3;"):
+            subject = f"Status zam{encoded}wienia"
+            self.assertEqual(_extract("Total 3 PLN", subject).description, "Status zamówienia")
+            self.assertEqual(_extract(f"Tytuł: {subject}\nTotal 3 PLN").description, "Status zamówienia")
+        literal = "Plan A & B &lt; &amp; &unknown; &#64;"
+        self.assertEqual(_extract("Total 3 PLN", literal).description, literal)
+
     def test_amount_currency_position_grouping_and_bounds(self):
         for value, amount, currency in (
             ("1\u00a0234,56 zł brutto", "1234.56", "PLN"),

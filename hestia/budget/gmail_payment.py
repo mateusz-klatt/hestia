@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from html import unescape
 from itertools import islice
 import re
 from typing import Literal
@@ -680,10 +681,21 @@ def _clean_field(value: str) -> str:
     return " ".join(token for token in value.replace(_REDACTED, " ").split() if not _contact_token(token))
 
 
+_DESCRIPTION_ENTITY = re.compile(r"&(?:amp;)?([A-Za-z][A-Za-z0-9]{1,30}|#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6});")
+_POLISH_DIACRITICS = frozenset("ąćęłńóśźżĄĆĘŁŃÓŚŹŻ")
+
+
+def _description_letter(match: re.Match) -> str:
+    # Some mail subjects and plain-text titles use HTML-encoded Polish letters.
+    # Leave markup, punctuation and arbitrary character references as literal text.
+    decoded = unescape(f"&{match[1]};")
+    return decoded if decoded in _POLISH_DIACRITICS else match[0]
+
+
 def _description(candidates: list[str]) -> str:
     fallback = "Płatność"
     for candidate in candidates:
-        value = _clean_field(candidate)
+        value = _clean_field(_DESCRIPTION_ENTITY.sub(_description_letter, candidate))
         if value.strip(" .,:;!?").casefold() in _GENERIC_DESCRIPTIONS:
             continue
         digit_heavy = bool(_LONG_DIGITS.search(value)) or redact_digit_field(value) != value
