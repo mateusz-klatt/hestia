@@ -1,0 +1,95 @@
+"""Medical appointment slot monitoring (default OFF via HESTIA_APPOINTMENTS_ENABLED).
+
+Slice 1 provides operator configuration, the CMP response parser, the pure slot-diff
+engine, and the transport-injected CMP client. Nothing is wired into Hestia's web app,
+database, or background scheduler until Slice 2.
+"""
+from __future__ import annotations
+
+from .cmp_client import (
+    DEFAULT_TIMEOUT_SECONDS,
+    MAX_RESPONSE_BYTES,
+    SCHEDULER_PATH,
+    CmpClient,
+    CmpClientError,
+    CmpRun,
+    CmpRunLimitError,
+    CmpSchedulerQuery,
+    HTTPResponse,
+    Transport,
+    TransportError,
+    UrllibTransport,
+    parse_retry_after,
+)
+from .config import (
+    CMP_BASE_URL,
+    CONFIG_FILE,
+    FLAG,
+    WARSAW_TZ,
+    AppointmentsConfigError,
+    AppointmentsSettings,
+    BookedAppointment,
+    CmpCredentials,
+    PollPolicy,
+    WatchCriteria,
+    is_enabled,
+    load_settings,
+)
+from .parser import (
+    AppointmentSlot,
+    CmpParseError,
+    ParseResult,
+    parse_cmp_scheduler,
+    parse_cmp_scheduler_bytes,
+)
+from .slots import (
+    SlotDiff,
+    dedupe_and_sort,
+    diff_slots,
+    is_better_than_booked,
+    matches_criteria,
+    slot_digest,
+    slot_identity_key,
+    slot_sort_key,
+)
+
+__all__ = [
+    "AppointmentSlot",
+    "AppointmentsConfigError",
+    "AppointmentsSettings",
+    "BookedAppointment",
+    "CMP_BASE_URL",
+    "CONFIG_FILE",
+    "CmpClient",
+    "CmpClientError",
+    "CmpCredentials",
+    "CmpParseError",
+    "CmpRun",
+    "CmpRunLimitError",
+    "CmpSchedulerQuery",
+    "DEFAULT_TIMEOUT_SECONDS",
+    "FLAG",
+    "HTTPResponse",
+    "MAX_RESPONSE_BYTES",
+    "ParseResult",
+    "PollPolicy",
+    "SCHEDULER_PATH",
+    "SlotDiff",
+    "Transport",
+    "TransportError",
+    "UrllibTransport",
+    "WARSAW_TZ",
+    "WatchCriteria",
+    "dedupe_and_sort",
+    "diff_slots",
+    "is_better_than_booked",
+    "is_enabled",
+    "load_settings",
+    "matches_criteria",
+    "parse_cmp_scheduler",
+    "parse_cmp_scheduler_bytes",
+    "parse_retry_after",
+    "slot_digest",
+    "slot_identity_key",
+    "slot_sort_key",
+]

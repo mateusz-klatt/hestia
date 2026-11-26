@@ -1,0 +1,54 @@
+{
+  "specialtyId": "spec-01",
+  "days": [
+    {
+      "date": "2026-12-09",
+      "slots": []
+    },
+    {
+      "date": "2026-12-10",
+      "slots": [
+        {
+          "slotId": "syn-slot-001",
+          "startTime": "2026-12-10T09:30:00",
+          "endTime": "2026-12-10T09:50:00",
+          "doctorId": "doc-101",
+          "doctorName": "Dr. Synthetic Alpha",
+          "locationId": "loc-01",
+          "locationName": "Clinic North",
+          "available": true,
+          "telemedicine": false
+        },
+        {
+          "slotId": "syn-slot-002",
+          "time": "11:15",
+          "endTime": "11:35",
+          "doctorId": 102,
+          "doctorName": "Dr. Synthetic Beta",
+          "locationId": 2,
+          "locationName": "Clinic South",
+          "specialtyId": "spec-02",
+          "telemedicine": true
+        },
+        {
+          "slotId": "syn-slot-003",
+          "startTime": "2026-12-10T13:00:00Z",
+          "doctorId": "doc-101",
+          "locationId": "loc-01",
+          "available": true
+        },
+        {
+          "slotId": "syn-slot-004",
+          "startTime": "2026-12-10T15:00:00",
+          "doctorId": "doc-101",
+          "locationId": "loc-01",
+          "available": false
+        }
+      ]
+    },
+    {
+      "date": "2026-12-11",
+      "slots": null
+    }
+  ]
+}
