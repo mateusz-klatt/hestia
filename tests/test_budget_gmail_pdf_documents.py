@@ -121,6 +121,23 @@ class DocumentPipeline(unittest.TestCase):
         self.assertIsNone(fallback.invoice)
         self.assertEqual(self.commit(fallback), (1, 0, True))
 
+    def test_later_payment_date_preserves_invoice_date_and_paid_provenance(self):
+        invoice = self.process(self.message([fixture('stripe_invoice') + '\nDate paid November 4, 2026']))
+        self.assertEqual((invoice.outcome, invoice.invoice.document_kind, invoice.payment),
+                         ('imported', 'invoice', None))
+        self.assertEqual(self.commit(invoice), (1, 0, True))
+        receipt = self.process(self.message([fixture('stripe_receipt') + '\nDate paid November 4, 2026']))
+        self.assertEqual(self.commit(receipt), (0, 1, True))
+        with self.sessions() as session:
+            rows = session.scalars(select(db.BudgetReceipt)).all()
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertEqual((row.receipt_date, row.document_kind, row.total_amount),
+                             ('2026-11-03', 'invoice', '123'))
+            provenance = json.loads(session.get(db.AppMeta, _document_number_key(row.id)).value)
+            self.assertTrue(provenance['paid'])
+            self.assertIsNotNone(provenance['receipt_number_hmac'])
+
     def test_invoice_receipt_both_orders_and_multi_pdf(self):
         for i, order in enumerate((('stripe_invoice', 'stripe_receipt'), ('stripe_receipt', 'stripe_invoice'))):
             # Use a separate seller so both orderings exercise insertion.
