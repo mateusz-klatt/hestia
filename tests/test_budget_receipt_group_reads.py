@@ -78,20 +78,22 @@ class ReceiptGroupStoreReadsTests(AnalyticsCase):
 
         event.listen(self.engine, "before_cursor_execute", before_cursor_execute)
         self.addCleanup(event.remove, self.engine, "before_cursor_execute", before_cursor_execute)
-        first = self.receipts.list("owner", {"linked": True, "limit": 2})
+        linked_page = {"linked": True, "limit": 2, "evidence": "include"}
+        first = self.receipts.list("owner", linked_page)
         rows = first["receipts"]
         self.assertEqual(len(batch_queries), 1)
         self.assertEqual([item["receipt_id"] for item in rows], [_EVIDENCE, _MEMBER_A])
         self.assertIsNotNone(first["next_cursor"])
         for item in rows:
             self.assertTrue(item["linked"])
+            self.assertTrue(item["has_document"])
             self.assertEqual(item["linked_account_id"], self.accounts["a"])
             self.assertEqual(item["linked_entry_ref"], reference_digest(_BANK_REFERENCE))
             self.assertEqual(item["link_group"], {
                 "group_id": _GROUP, "group_status": "needs_review", "group_version": 3,
                 "member_count": 2, "fee_amount": "2", "evidence_receipt_id": _EVIDENCE,
             })
-        second = self.receipts.list("owner", {"linked": True, "limit": 2, "cursor": first["next_cursor"]})
+        second = self.receipts.list("owner", {**linked_page, "cursor": first["next_cursor"]})
         self.assertEqual(len(batch_queries), 2)
         self.assertEqual([item["receipt_id"] for item in second["receipts"]], [_MEMBER_B])
         self.assertIsNone(second["next_cursor"])
@@ -99,10 +101,13 @@ class ReceiptGroupStoreReadsTests(AnalyticsCase):
         self.assertEqual([item["receipt_id"] for item in unlinked], [_UNLINKED])
         self.assertNotIn("link_group", unlinked[0])
         only = self.receipts.list("owner", {"evidence": "only"})["receipts"]
-        self.assertEqual([item["receipt_id"] for item in only], [_ATTACHED])
-        self.assertFalse(only[0]["linked"])
+        self.assertEqual([item["receipt_id"] for item in only], [_EVIDENCE, _ATTACHED])
+        self.assertEqual([item["linked"] for item in only], [True, False])
+        self.assertTrue(all(item["has_document"] for item in only))
+        visible = self.receipts.list("owner", {"linked": True})["receipts"]
+        self.assertEqual([item["receipt_id"] for item in visible], [_MEMBER_A, _MEMBER_B])
         self.assertEqual(self.receipts.list("other", {"linked": True}), {"receipts": [], "next_cursor": None})
-        self.assertEqual(len(batch_queries), 4)
+        self.assertEqual(len(batch_queries), 5)
 
     def test_group_detail_without_evidence_and_grouped_search(self):
         with self.sessions.begin() as session:
@@ -156,6 +161,7 @@ class ReceiptGroupHTTPReadsTests(unittest.IsolatedAsyncioTestCase):
                 api_contract.BudgetReceiptGroupDetailResult.model_validate(body)
                 self.assertEqual([row["receipt_id"] for row in body["members"]], [_MEMBER_A, _MEMBER_B])
                 self.assertEqual(body["evidence"]["receipt_id"], _EVIDENCE)
+                self.assertTrue(body["evidence"]["has_document"])
                 self.assertEqual(body["group"]["member_count"], 2)
                 for item in (body, body["evidence"], *body["members"]):
                     self.assertEqual(item["linked_account_id"], self.alice_id if can_match else None)
@@ -195,7 +201,13 @@ class ReceiptGroupHTTPReadsTests(unittest.IsolatedAsyncioTestCase):
         for version in (None, "0.57.0", "0.58.0", _VERSION):
             with self.subTest(version=version):
                 headers = {} if version is None else {_HEADER: version}
-                listing = await self.client.post(receipt_api.PREFIX + "/list", json={"linked": True},
+                default_listing = await self.client.post(receipt_api.PREFIX + "/list", json={"linked": True},
+                                                         headers=self.headers(origin=True) | headers)
+                self.assertEqual(default_listing.status, 200, await default_listing.text())
+                visible = (await default_listing.json())["receipts"]
+                self.assertEqual([row["receipt_id"] for row in visible], [_MEMBER_A, _MEMBER_B])
+                listing = await self.client.post(receipt_api.PREFIX + "/list",
+                                                 json={"linked": True, "evidence": "include"},
                                                  headers=self.headers(origin=True) | headers)
                 self.assertEqual(listing.status, 200, await listing.text())
                 receipts = (await listing.json())["receipts"]

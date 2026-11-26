@@ -310,10 +310,13 @@ def _group_reservation(owner, account_id, entry_reference):
     )
 
 
+def _group_evidence(owner, receipt_id):
+    return exists().where(ReceiptLinkGroup.owner == owner, ReceiptLinkGroup.evidence_receipt_id == receipt_id)
+
+
 def _receipt_grouped(owner, receipt_id):
     member = exists().where(ReceiptLinkMember.owner == owner, ReceiptLinkMember.receipt_id == receipt_id)
-    evidence = exists().where(ReceiptLinkGroup.owner == owner, ReceiptLinkGroup.evidence_receipt_id == receipt_id)
-    return or_(member, evidence)
+    return or_(member, _group_evidence(owner, receipt_id))
 
 
 def _receipt_in_group(session, owner, receipt_id):
@@ -556,7 +559,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             "forwarded_sender_domain": row.forwarded_sender_domain,
             "gateway": row.gateway, "gateway_status": row.gateway_status, "fee_amount": row.fee_amount,
             "payee_host": row.payee_host, "evidence_for_receipt_id": row.evidence_for_receipt_id,
-            "has_document": row.gateway is None or row.evidence_for_receipt_id is not None,
+            "has_document": row.gateway is None or row.evidence_for_receipt_id is not None or group is not None,
             "card_last4": row.card_last4,
         }
         summary = {key: values[key] for key in _SUMMARY_FIELDS}
@@ -1280,10 +1283,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
             if kind is not None:
                 query_obj = query_obj.where(Receipt.document_kind == kind)
             if not search:
+                attached = or_(Receipt.evidence_for_receipt_id.is_not(None), _group_evidence(owner, Receipt.id))
                 if evidence == "exclude":
-                    query_obj = query_obj.where(Receipt.evidence_for_receipt_id.is_(None))
+                    query_obj = query_obj.where(~attached)
                 elif evidence == "only":
-                    query_obj = query_obj.where(Receipt.evidence_for_receipt_id.is_not(None))
+                    query_obj = query_obj.where(attached)
             if linked is not None:
                 is_linked = or_(Receipt.linked_account_id.is_not(None), _receipt_grouped(owner, Receipt.id))
                 query_obj = query_obj.where(is_linked if linked else ~is_linked)
