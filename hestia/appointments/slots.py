@@ -16,6 +16,7 @@ from .config import BookedAppointment, WARSAW_TZ, WatchCriteria
 from .parser import AppointmentSlot
 
 _DIGEST_DOMAIN = "hestia/appointments/slot/v1"
+_MAX_UTC = datetime.max.replace(tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -41,15 +42,25 @@ def slot_identity_key(slot: AppointmentSlot) -> tuple[str, datetime, str, str, s
     )
 
 
-def slot_sort_key(slot: AppointmentSlot) -> tuple[datetime, str, str, str, str, str]:
-    """Deterministic total ordering independent of input order or timezone representation."""
+def slot_sort_key(slot: AppointmentSlot) -> tuple[object, ...]:
+    """Deterministic total order over all slot fields, independent of input order."""
+    end_utc = _MAX_UTC if slot.end is None else slot.end.astimezone(timezone.utc)
     return (
         slot.start.astimezone(timezone.utc),
         slot.doctor_id,
         slot.location_id,
         slot.specialty_id,
+        slot.slot_id == "",
         slot.slot_id,
         slot.provider,
+        slot.end is None,
+        end_utc,
+        slot.doctor_label is None,
+        slot.doctor_label or "",
+        slot.location_label is None,
+        slot.location_label or "",
+        slot.telemedicine,
+        slot.start.isoformat(),
     )
 
 

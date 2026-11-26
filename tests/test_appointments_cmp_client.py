@@ -300,10 +300,41 @@ class CmpClientTests(TestCase):
         # Unknown error code falls back to provider_http; invalid timeout rejected; default transport initialized.
         self.assertEqual(CmpClientError("unlisted").code, "provider_http")
         self.assertIsInstance(CmpClient().transport, UrllibTransport)
-        for bad_timeout in (0, -1, 121, float("nan"), True):
+        self.assertEqual(CmpClient(transport=FakeTransport([]), timeout=10).timeout, 10.0)
+        for bad_timeout in (0, -1, 121, 10**400, -(10**400), float("nan"), float("inf"), True, "10"):
             with self.subTest(bad_timeout=bad_timeout):
                 with self.assertRaises(ValueError):
                     CmpClient(transport=FakeTransport([]), timeout=bad_timeout)
+
+        # Overflowing startTime in a 200 payload is skipped per entry without crashing get_scheduler.
+        overflow_body = json.dumps({
+            "specialtyId": "spec-01",
+            "days": [
+                {
+                    "date": "2026-12-10",
+                    "slots": [
+                        {
+                            "slotId": "bad-overflow",
+                            "startTime": "0001-01-01T00:00:00+14:00",
+                            "doctorId": "doc-101",
+                            "locationId": "loc-01",
+                        },
+                        {
+                            "slotId": "good-slot",
+                            "startTime": "2026-12-10T10:00:00+01:00",
+                            "doctorId": "doc-101",
+                            "locationId": "loc-01",
+                        },
+                    ],
+                }
+            ],
+        }).encode("utf-8")
+        t_overflow = FakeTransport([HTTPResponse(200, {}, overflow_body)])
+        with self.assertLogs("hestia.appointments.parser", level="WARNING"):
+            parsed = CmpClient(transport=t_overflow).get_scheduler(self.query)
+        self.assertEqual([s.slot_id for s in parsed.slots], ["good-slot"])
+        self.assertEqual(parsed.skipped, 1)
+        self.assertEqual(parsed.warnings, ("invalid_slot_entry",))
 
     def test_parse_retry_after_and_response_header(self) -> None:
         now = datetime(2026, 12, 10, 12, 0, 0, tzinfo=timezone.utc).timestamp()

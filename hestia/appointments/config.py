@@ -102,18 +102,28 @@ def parse_strict_json(raw: bytes) -> object:
     )
 
 
-def parse_warsaw_datetime(value: object) -> datetime:
-    """Parse an ISO-8601 datetime into ``Europe/Warsaw``, rejecting nonexistent DST times."""
+def parse_warsaw_datetime(value: object, *, require_offset: bool = False) -> datetime:
+    """Parse an ISO-8601 datetime into ``Europe/Warsaw``.
+
+    Rejects nonexistent spring-forward times, ambiguous fall-back DST fold times,
+    and naive strings when ``require_offset`` is True.
+    """
     if not isinstance(value, str) or ("T" not in value and " " not in value):
         raise ValueError("Expected ISO-8601 datetime string")
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
-        localized = parsed.replace(tzinfo=WARSAW_TZ)
-        roundtrip = localized.astimezone(timezone.utc).astimezone(WARSAW_TZ).replace(tzinfo=None)
-        if roundtrip != parsed:
+        if require_offset:
+            raise ValueError("Explicit UTC offset required")
+        fold0 = parsed.replace(tzinfo=WARSAW_TZ, fold=0)
+        fold1 = parsed.replace(tzinfo=WARSAW_TZ, fold=1)
+        utc0 = fold0.astimezone(timezone.utc)
+        utc1 = fold1.astimezone(timezone.utc)
+        if utc0.astimezone(WARSAW_TZ).replace(tzinfo=None) != parsed:
             raise ValueError("Nonexistent local time in Europe/Warsaw")
-        return localized
-    return parsed.astimezone(WARSAW_TZ)
+        if utc0 != utc1:
+            raise ValueError("Ambiguous local time in Europe/Warsaw")
+        return utc0.astimezone(WARSAW_TZ)
+    return parsed.astimezone(timezone.utc).astimezone(WARSAW_TZ)
 
 
 def _check_int(value: object, minimum: int, maximum: int, label: str) -> int:
@@ -123,9 +133,15 @@ def _check_int(value: object, minimum: int, maximum: int, label: str) -> int:
 
 
 def _check_number(value: object, minimum: float, maximum: float, label: str) -> float:
-    if type(value) not in (int, float) or not math.isfinite(value) or not minimum <= value <= maximum:
-        raise AppointmentsConfigError(f"Invalid {label}")
-    return float(value)
+    if type(value) is int:
+        if not minimum <= value <= maximum:
+            raise AppointmentsConfigError(f"Invalid {label}")
+        return float(value)
+    if type(value) is float:
+        if not math.isfinite(value) or not minimum <= value <= maximum:
+            raise AppointmentsConfigError(f"Invalid {label}")
+        return value
+    raise AppointmentsConfigError(f"Invalid {label}")
 
 
 def _check_bool(value: object, label: str) -> bool:
@@ -387,7 +403,7 @@ def _parse_booked(raw: object) -> BookedAppointment:
     if not isinstance(raw, dict) or not _BOOKED_REQUIRED <= raw.keys() or raw.keys() - (_BOOKED_REQUIRED | _BOOKED_OPTIONAL):
         raise ValueError
     return BookedAppointment(
-        start=parse_warsaw_datetime(raw["start"]),
+        start=parse_warsaw_datetime(raw["start"], require_offset=True),
         doctor_id=raw.get("doctor_id"),
         location_id=raw.get("location_id"),
         min_improvement_minutes=raw.get("min_improvement_minutes", 0),
@@ -499,7 +515,7 @@ def load_settings(
             token_bytes=token_bytes,
             token_text=credentials.bearer_token,
         )
-    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, OverflowError):
         raise AppointmentsConfigError("Invalid appointments configuration") from None
     return AppointmentsSettings(
         owner=owner,

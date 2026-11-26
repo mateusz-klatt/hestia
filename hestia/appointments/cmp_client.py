@@ -223,7 +223,11 @@ class CmpClient:
         jitter: Callable[[], float] = random.random,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
-        if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 120:
+        if (type(timeout) is int and 0 < timeout <= 120) or (
+            type(timeout) is float and math.isfinite(timeout) and 0 < timeout <= 120
+        ):
+            self.timeout = float(timeout)
+        else:
             raise ValueError("Invalid CMP request timeout")
         self.base_url = _check_https_url(base_url)
         self.transport: Transport = UrllibTransport() if transport is None else transport
@@ -233,7 +237,6 @@ class CmpClient:
         self.wall_clock = wall_clock
         self.sleep = sleep
         self.jitter = jitter
-        self.timeout = float(timeout)
         self._last_dispatch: float | None = None
 
     def new_run(self) -> CmpRun:

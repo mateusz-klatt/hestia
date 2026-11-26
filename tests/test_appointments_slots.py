@@ -185,6 +185,56 @@ class SlotDiffTests(TestCase):
         self.assertEqual(first_order, second_order)
         self.assertEqual(first_order, (dup_a, other))
 
+        # Total-order tie-breaking when identity AND slot_id match: survivor is independent of input order.
+        base = dict(
+            provider="cmp",
+            start=t1_warsaw,
+            doctor_id="doc-101",
+            location_id="loc-01",
+            specialty_id="spec-01",
+            slot_id="same-id",
+        )
+        tie_pairs = [
+            (
+                AppointmentSlot(**base, doctor_label="Dr. Alpha"),
+                AppointmentSlot(**base, doctor_label="Dr. Beta"),
+            ),
+            (
+                AppointmentSlot(**base, doctor_label=None),
+                AppointmentSlot(**base, doctor_label="Dr. Alpha"),
+            ),
+            (
+                AppointmentSlot(**base, location_label="Clinic A"),
+                AppointmentSlot(**base, location_label="Clinic B"),
+            ),
+            (
+                AppointmentSlot(**base, end=datetime(2026, 12, 12, 10, 20, tzinfo=WARSAW_TZ)),
+                AppointmentSlot(**base, end=datetime(2026, 12, 12, 10, 30, tzinfo=WARSAW_TZ)),
+            ),
+            (
+                AppointmentSlot(**base, end=None),
+                AppointmentSlot(**base, end=datetime(2026, 12, 12, 10, 20, tzinfo=WARSAW_TZ)),
+            ),
+            (
+                AppointmentSlot(**base, telemedicine=False),
+                AppointmentSlot(**base, telemedicine=True),
+            ),
+            (
+                AppointmentSlot(**(base | {"slot_id": ""})),
+                AppointmentSlot(**(base | {"slot_id": "non-empty"})),
+            ),
+            (
+                AppointmentSlot(**(base | {"start": t1_warsaw})),
+                AppointmentSlot(**(base | {"start": t1_utc})),
+            ),
+        ]
+        for left, right in tie_pairs:
+            with self.subTest(left=left, right=right):
+                ab = dedupe_and_sort([left, right])
+                ba = dedupe_and_sort([right, left])
+                self.assertEqual(len(ab), 1)
+                self.assertEqual(ab, ba)
+
         # Equivalent UTC/Warsaw representations match across previous and current snapshots.
         diff = diff_slots([dup_b], [dup_a, dup_b, other], self.criteria)
         self.assertEqual(diff.new_slots, (other,))

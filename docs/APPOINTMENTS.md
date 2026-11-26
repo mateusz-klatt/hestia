@@ -71,7 +71,7 @@ No live network calls were made while writing Slice 1. Every wire-level assumpti
 | Request payload | JSON body with `dateFrom` (`YYYY-MM-DD`), `dateTo` (`YYYY-MM-DD`), and optional `specialtyId`, `doctorIds` (list), `locationIds` (list), `serviceId`. | Exact field names and casing (`camelCase` vs `PascalCase`), scalar vs array types (`clinicId` vs `locationIds`), max allowed date span per request, and pagination behavior. |
 | Response envelope | JSON object containing `days` array of `{ "date": "YYYY-MM-DD", "slots": [...] }` (plus optional top-level `specialtyId`). | Exact wrapper key (`days`, `schedules`, `data`, `items`, or root array) and whether empty dates are omitted or returned with `slots: []`. |
 | Slot fields | `slotId`, `startTime` (ISO datetime or `HH:MM` paired with day `date`), optional `endTime`, `doctorId`, `locationId`, `specialtyId`, optional `doctorName`, `locationName`, `available` (bool, default `true`), `telemedicine` (bool, default `false`). | Exact field names, whether doctor/clinic IDs are integers or strings, whether unavailable slots appear in the list, and whether any slot-type flags (e.g. NFZ vs private/commercial) must be filtered. |
-| Timezone semantics | Naive timestamps are wall-clock `Europe/Warsaw`; offset-aware timestamps (`Z` or `+01:00`/`+02:00`) are converted to `Europe/Warsaw`. Nonexistent DST spring-forward local times are rejected. | Whether CMP emits naive Warsaw wall-clock strings, UTC `Z` timestamps, or explicit offsets across CET/CEST transitions. |
+| Timezone semantics | Naive timestamps are wall-clock `Europe/Warsaw`; offset-aware timestamps (`Z` or `+01:00`/`+02:00`) are converted to `Europe/Warsaw`. Both nonexistent DST spring-forward times and ambiguous fall-back DST fold times (without an explicit offset) are rejected per entry with a safe parse warning; out-of-range offsets (`OverflowError`) are also skipped per entry without crashing the poller. | Whether CMP emits naive Warsaw wall-clock strings, UTC `Z` timestamps, or explicit offsets across CET/CEST transitions. |
 | Error & rate-limit contract | `401`/`403` = auth failure (no retry); `429` and `5xx` = retryable with `Retry-After` (delta-seconds or HTTP-date) and exponential backoff; other non-200 = non-retryable. | Whether CMP signals expired auth or rate limits via HTTP status codes or soft HTTP `200` error envelopes, and what headers (`Retry-After`, WAF challenge pages) appear under load. |
 
 ### 3.2 LUX MED (documented only — do not implement in Slice 1)
@@ -166,8 +166,8 @@ Configuration is operator-managed via a local JSON file referenced by `HESTIA_AP
   - `date_from`, `date_to`: required `YYYY-MM-DD`, with `date_from <= date_to` and span `<= 180` days.
   - `time_from`, `time_to`: optional `HH:MM` wall-clock bounds in `Europe/Warsaw` (`time_from <= time_to` when both are set).
   - `service_id`: optional provider visit/service identifier.
-  - `label`: optional short non-sensitive operator tag (max 64 chars). **Operators should use neutral tags** (e.g., `"Checkup A"`) rather than medical specialty or condition names.
-  - `booked_slot`: optional currently booked appointment (`start` as ISO-8601 datetime — naive values interpreted in `Europe/Warsaw`, offset-aware converted to `Europe/Warsaw`; optional `doctor_id`, `location_id`, `min_improvement_minutes` in `0..10080`, `require_same_doctor`, `require_same_location`).
+  - `label`: optional short non-sensitive operator tag (max 64 chars). **Operators should omit `label` or use neutral tags** (e.g., `"Checkup A"`) — never store doctor names, clinic names, medical specialties, or condition names in the config file.
+  - `booked_slot`: optional currently booked appointment (`start` as an ISO-8601 datetime **with an explicit UTC offset** such as `+01:00`, `+02:00`, or `Z` — naive timestamps, nonexistent DST gaps, and ambiguous DST folds are rejected with `AppointmentsConfigError`; optional `doctor_id`, `location_id`, `min_improvement_minutes` in `0..10080`, `require_same_doctor`, `require_same_location`).
   - `only_better_than_booked`: boolean (default `false`; requires `booked_slot` when `true`). When `true`, `notifiable_slots` includes only newly observed slots that beat `booked_slot`; when `false`, all newly observed matching slots are notifiable while `better_slots` highlights those beating `booked_slot`.
 
 ### "Better than currently booked" rule
@@ -203,9 +203,9 @@ To stay polite, predictable, and well within normal human browsing volume:
 Secret handling mirrors `hestia/budget/config.py` (`_read_secret`), `hestia/budget/gmail_config.py`, and `docs/DEPLOY.md`:
 
 - **Host location:** `./data/secrets/` (`chmod 0700`), already mounted at `/data/secrets/` inside the UID/GID `1000:1000` Hestia container (no new Docker volume required).
-- **File permissions:** Provision with `chmod 0400` and owner `1000:1000`. The reader opens with `O_RDONLY | O_NOFOLLOW | O_NONBLOCK`, verifies `S_ISREG`, `st_uid == os.geteuid()`, mode in `(0o400, 0o600)`, and a strict byte ceiling (16 KiB). Symlinks, FIFOs, group/world-readable files, and foreign UIDs fail closed.
+- **File permissions:** Provision key/token files with `chmod 0400` and the operator-editable JSON config with `chmod 0600` (or `chmod 0400` read-only), owned by `1000:1000`. The reader opens with `O_RDONLY | O_NOFOLLOW | O_NONBLOCK`, verifies `S_ISREG`, `st_uid == os.geteuid()`, mode in `(0o400, 0o600)`, and a strict byte ceiling (16 KiB). Symlinks, FIFOs, group/world-readable files, and foreign UIDs fail closed.
 - **Files:**
-  - `/data/secrets/appointments.json` — watch criteria and env var pointers (`HESTIA_APPOINTMENTS_CONFIG`).
+  - `/data/secrets/appointments.json` (mode `0600` or `0400`) — watch criteria (IDs and timestamps only; no names) and env var pointers (`HESTIA_APPOINTMENTS_CONFIG`).
   - `/data/secrets/appointments-cmp.token` — CMP bearer/session token when `auth_mode == "bearer"` (referenced via `auth_token_env`).
   - `/data/secrets/appointments-hmac.key` — 32+ random bytes (`os.urandom(32)`) for keyed slot hashing (referenced via `hmac_key_env`), verified distinct from `HESTIA_SESSION_SECRET` and the auth token.
 - **Zero leakage:** `CmpCredentials` and `AppointmentsSettings` use `repr=False`. Exceptions emit only fixed safe error codes and never echo tokens, file paths, config fields, or raw HTTP payloads. Never commit secrets or paste them into chat/Iris/logs.
@@ -231,11 +231,28 @@ Secret handling mirrors `hestia/budget/config.py` (`_read_secret`), `hestia/budg
    - `first_seen_at REAL NOT NULL`, `last_seen_at REAL NOT NULL`, `notified_at REAL NULL`
    - **No doctor names, clinic names, specialty names, or patient identifiers are stored in SQLite.**
 
+### Stored-hash → `diff_slots` adapter and HMAC persistence boundary (Slice 2)
+
+Because SQLite stores only keyed HMAC digests (`appointments_active_slots`) and never raw `AppointmentSlot` records, Slice 2 bridges persisted hashes and the pure Slice 1 diff engine at the persistence boundary (`store.py` / `poller.py`):
+
+1. **Mandatory keyed HMAC at persistence boundary:** Enabling Slice 2 persistence requires `hmac_key_env` (`/data/secrets/appointments-hmac.key`, >= 32 random bytes, `0400`). Startup fails closed if the key is missing or unsafe. Every persisted `slot_hash` is computed exclusively via `slot_digest(watch.watch_id, slot, hmac_key=settings.hmac_secret)` (never unkeyed SHA-256), preventing offline dictionary reversal against known `(doctor_id, location_id, start_utc)` tuples.
+2. **Adapter from persisted hashes to `diff_slots`:**
+   - On each poll, Slice 2 runs `candidate = diff_slots(previous=(), current=parsed.slots, criteria=watch)` to apply criteria filtering, canonical UTC-instant deduplication, and deterministic total-order sorting, yielding `candidate.active_slots`.
+   - Slice 2 maps each active slot through the HMAC boundary: `current_by_hash = {slot_digest(watch.watch_id, slot, hmac_key=hmac_key): slot for slot in candidate.active_slots}`.
+   - Comparing against the watch's persisted `stored_hashes: set[str]` from `appointments_active_slots` inside one SQLite transaction:
+     - `new_hashes = current_by_hash.keys() - stored_hashes` produces `new_slots` in `candidate.active_slots` order; `better_slots` filters `new_slots` with `is_better_than_booked(slot, watch.booked_slot)` when `booked_slot` is set; `notifiable_slots` equals `better_slots` when `only_better_than_booked` is `true`, otherwise `new_slots`.
+     - `removed_hashes = stored_hashes - current_by_hash.keys()` are hard-deleted immediately from `appointments_active_slots` without ever storing or reconstructing removed slot metadata.
+     - Surviving and new hashes are upserted with `(slot_date, first_seen_at, last_seen_at, notified_at)`.
+   - Rotating `appointments-hmac.key` intentionally invalidates prior hashes (mirroring `HESTIA_BUDGET_RULE_KEY_FILE` in `docs/DEPLOY.md`): old hashes are deleted on the next poll (or within 7 days by the retention sweep), and open slots notify once under the new key.
+
 ### Retention rules
 
-- **Zero slot history:** Whenever a slot disappears in a subsequent poll (`removed_slots`) or its `slot_date` is in the past, its row in `appointments_active_slots` is **hard-deleted immediately** in the same transaction.
-- **Short expiry ceiling:** Even if polling pauses, a startup/periodic sweep purges any `appointments_active_slots` row whose `slot_date < today (Europe/Warsaw)` or `last_seen_at` is older than 7 days.
-- **Watch removal / feature disablement:** Removing a `watch_id` from config prunes its rows on the next maintenance sweep; disabling `HESTIA_APPOINTMENTS_ENABLED` stops polling immediately, and an owner purge action (or schema downgrade) deletes all appointment rows.
+- **Zero slot history:** Whenever a slot disappears in a subsequent poll (`removed_hashes`) or its `slot_date` is in the past, its row in `appointments_active_slots` is **hard-deleted immediately** in the same transaction.
+- **Short active-slot expiry ceiling (7 days):** Any `appointments_active_slots` row whose `slot_date < today (Europe/Warsaw)` or whose `last_seen_at` is older than **7 days** is hard-deleted automatically.
+- **Automatic retention purge when the flag is disabled (`N = 7` days):** Disabling `HESTIA_APPOINTMENTS_ENABLED` stops polling immediately. Both `appointments_watch_state` rows (whose `updated_at` is older than **7 days**) and `appointments_active_slots` rows (whose `slot_date < today (Europe/Warsaw)` or `last_seen_at` is older than **7 days**) are **purged automatically within 7 days** with no manual step required. Removing a `watch_id` from config also prunes its rows on the next maintenance pass, and an explicit owner purge action (or `downgrade_db`) remains available for immediate deletion.
+- **Where the purge runs in Slice 2:** Because the appointments poller does not run while `HESTIA_APPOINTMENTS_ENABLED` is OFF, Slice 2 runs the idempotent `prune_expired_appointments(db, now)` maintenance task in **two always-on server hooks** (guarded only by checking whether the tables exist, never gated on `HESTIA_APPOINTMENTS_ENABLED`):
+  1. **Server startup** in `hestia/server.py` immediately after `init_db()` completes; and
+  2. **Hestia's daily background housekeeping sweep** (once every 24 hours off the asyncio event loop).
 - **Backups:** Encrypted SQLite backups on `holzera` contain only opaque HMAC hashes and coarse dates, minimizing exposure even at rest.
 
 ---
@@ -259,13 +276,17 @@ Hestia already has an owner-private live alerts architecture in `hestia/budget/o
 Information about medical specialties, doctors, or clinic visits sought by a named person can reveal **data concerning health** — a special category of personal data under **GDPR Article 9(1)**. Even on a self-hosted personal instance, Hestia applies strict Art. 9 controls:
 
 1. **Server-side & owner-only:** Polling, parsing, diffing, and storage run exclusively on the owner's server (`holzera`) and are restricted to the single configured `owner` account. No household grants, no delegation, no public endpoints.
-2. **Data minimization & zero history:** Raw portal responses stay strictly in memory and are discarded after parsing. Persisted state stores only keyed HMAC hashes of currently available slots and coarse dates — never historical schedules, never booking confirmations, never PESEL/patient IDs/medical notes.
-3. **Zero sensitive telemetry:** Logs and error diagnostics record only fixed safe error codes (`network`, `rate_limit`, `authorization`, etc.) — never request payloads, response bodies, auth tokens, specialty IDs, or doctor names. Future HTTP routes must use opaque `watch_id`s and `POST` JSON bodies rather than `GET` query parameters so reverse proxies (Apache/Cloudflare) do not log health-related parameters.
-4. **No third-party PII leakage:** Outbound traffic contacts only the explicitly configured medical portal (`ic-api.cmp.med.pl`). Future push/email alerts contain zero medical specifics.
-5. **Mandatory privacy-policy gate before go-live:** **`ui/public/privacy-policy.html` (and `ui/public/terms-of-service.html` if needed) MUST be updated before setting `HESTIA_APPOINTMENTS_ENABLED=1` in production.** The update must document:
+2. **Art. 9 config-file disclosure & minimization:** The local operator config file (`/data/secrets/appointments.json`) stores health-adjacent scheduling criteria that are **GDPR Art. 9-relevant**: portal `specialty_id`, `doctor_ids`, `location_ids`, and (when configured) the exact `booked_slot` timestamp and optional doctor/location ID. To minimize Art. 9 exposure on disk:
+   - store **only opaque portal IDs and timestamps** — never patient names, PESEL, doctor/clinic names, diagnoses, or medical specialty text (omit `label` or use a neutral placeholder);
+   - keep the file strictly owner-only at **mode `0600`** (or `0400` read-only, UID/GID `1000:1000`) inside `0700` `./data/secrets/`, never committed to git or logged.
+3. **Database minimization, zero history & automatic disablement purge:** Raw portal responses stay strictly in memory and are discarded after parsing. SQLite persists only keyed HMAC-SHA256 hashes of currently available slots, coarse dates, and watch health metadata — never slot histories, booking records, or names. Disappeared/past slot hashes are hard-deleted immediately during polling, and when `HESTIA_APPOINTMENTS_ENABLED` is disabled, both `appointments_watch_state` and `appointments_active_slots` are **automatically purged within 7 days** by the Slice 2 startup and daily housekeeping hooks (§8), with immediate manual purge also available.
+4. **Zero sensitive telemetry:** Logs and error diagnostics record only fixed safe error/warning codes (`network`, `rate_limit`, `authorization`, `invalid_slot_entry`, etc.) — never request payloads, response bodies, auth tokens, specialty IDs, or doctor names. Future HTTP routes must use opaque `watch_id`s and `POST` JSON bodies rather than `GET` query parameters so reverse proxies (Apache/Cloudflare) do not log health-related parameters.
+5. **No third-party PII leakage:** Outbound traffic contacts only the explicitly configured medical portal (`ic-api.cmp.med.pl`). Future push/email alerts contain zero medical specifics.
+6. **Mandatory privacy-policy gate before go-live:** **`ui/public/privacy-policy.html` (and `ui/public/terms-of-service.html` if needed) MUST be updated before setting `HESTIA_APPOINTMENTS_ENABLED=1` in production.** The update must document:
    - the optional, default-OFF appointment-availability monitor and its owner-only scope;
+   - that the local operator config file stores Art. 9-relevant scheduling criteria (opaque specialty/doctor/location IDs and any exact booked-slot timestamp, without names) under owner-only `0600`/`0400` permissions;
    - the external portal(s) queried (`ic-api.cmp.med.pl`, and later LUX MED if ever enabled);
-   - that only minimal active slot hashes and watch health metadata are persisted (no medical records, no booking actions, no slot history) and how data is purged on disablement;
+   - that SQLite stores only keyed HMAC active slot hashes and watch health metadata (no medical records, no booking actions, no slot history), and that watch-state and slot hashes are automatically purged within 7 days when disabled (or immediately via owner purge);
    - the GDPR Art. 9 notice for health-adjacent scheduling data.
 
 ---
@@ -298,14 +319,14 @@ Information about medical specialties, doctors, or clinic visits sought by a nam
    umask 077
    python3 -c 'import os,sys; sys.stdout.buffer.write(os.urandom(32))' > ./data/secrets/appointments-hmac.key
    chmod 0400 ./data/secrets/appointments-hmac.key
-   # Create ./data/secrets/appointments.json (and ./data/secrets/appointments-cmp.token if auth_mode=bearer), chmod 0400
-   stat -c '%u:%g %a %s' ./data/secrets/appointments*   # expect 1000:1000 400
+   # Create ./data/secrets/appointments.json (chmod 0600; IDs and times only, no names) and ./data/secrets/appointments-cmp.token (chmod 0400 if auth_mode=bearer)
+   stat -c '%u:%g %a %s' ./data/secrets/appointments*   # expect 1000:1000 600 (config) / 400 (keys/tokens)
    ```
 6. **Owner enables:**
    - Add `HESTIA_APPOINTMENTS_ENABLED=1`, `HESTIA_APPOINTMENTS_CONFIG=/data/secrets/appointments.json`, and any referenced `*_FILE` env vars to `.env`, then recreate the `hestia` container.
    - Verify dry-run/status check reports `configured=true` and observes conservative 10–15 min polling cadence.
 7. **Rollback:**
-   - Remove `HESTIA_APPOINTMENTS_ENABLED` (or set `0`) in `.env` and recreate the container — polling stops immediately. Optionally purge active slot hashes or run `downgrade_db` per `docs/DEPLOY.md`.
+   - Remove `HESTIA_APPOINTMENTS_ENABLED` (or set `0`) in `.env` and recreate the container — polling stops immediately, and Slice 2's startup + daily housekeeping sweep automatically purges `appointments_watch_state` and `appointments_active_slots` within 7 days. For immediate removal, run the owner purge action or `downgrade_db` per `docs/DEPLOY.md`, and delete `./data/secrets/appointments.json` if watches are no longer needed.
 
 ---
 

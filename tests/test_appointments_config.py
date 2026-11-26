@@ -134,7 +134,7 @@ class AppointmentsConfigTests(TestCase):
                     "time_from": "08:00",
                     "time_to": "17:00",
                     "booked_slot": {
-                        "start": "2026-12-20T14:00:00",
+                        "start": "2026-12-20T14:00:00+01:00",
                         "doctor_id": "doc-101",
                         "location_id": "loc-01",
                         "min_improvement_minutes": 60,
@@ -180,10 +180,16 @@ class AppointmentsConfigTests(TestCase):
             {"max_retries": -1},
             {"max_retries": 6},
             {"base_backoff_seconds": 0.5},
+            {"base_backoff_seconds": 0},
+            {"base_backoff_seconds": 10**400},
+            {"base_backoff_seconds": -(10**400)},
             {"base_backoff_seconds": float("nan")},
+            {"base_backoff_seconds": float("inf")},
             {"base_backoff_seconds": True},
             {"base_backoff_seconds": 10.0, "max_backoff_seconds": 5.0},
+            {"max_backoff_seconds": 10**400},
             {"min_request_spacing_seconds": -0.1},
+            {"min_request_spacing_seconds": 10**400},
         ):
             with self.subTest(kwargs=kwargs):
                 with self.assertRaises(AppointmentsConfigError):
@@ -283,6 +289,7 @@ class AppointmentsConfigTests(TestCase):
             self.base_data | {"cmp_base_url": "https://ic-api.cmp.med.pl:99999/api/v1"},
             self.base_data | {"poll_policy": "bad"},
             self.base_data | {"poll_policy": {"unknown_field": 1}},
+            self.base_data | {"poll_policy": {"base_backoff_seconds": 10**400}},
             self.base_data | {"watches": []},
             self.base_data | {"watches": "not-a-list"},
             self.base_data | {"watches": [self.base_data["watches"][0], self.base_data["watches"][0]]},  # dup id
@@ -296,7 +303,10 @@ class AppointmentsConfigTests(TestCase):
             self.base_data | {"watches": [{**self.base_data["watches"][0], "doctor_ids": "doc-1"}]},
             self.base_data | {"watches": [{**self.base_data["watches"][0], "booked_slot": "bad"}]},
             self.base_data | {"watches": [{**self.base_data["watches"][0], "booked_slot": {"start": "2026-12-20"}}]},
+            self.base_data | {"watches": [{**self.base_data["watches"][0], "booked_slot": {"start": "2026-12-20T14:00:00"}}]},
+            self.base_data | {"watches": [{**self.base_data["watches"][0], "booked_slot": {"start": "2026-10-25T02:30:00"}}]},
             self.base_data | {"watches": [{**self.base_data["watches"][0], "booked_slot": {"start": "2026-03-29T02:30:00"}}]},
+            self.base_data | {"watches": [{**self.base_data["watches"][0], "booked_slot": {"start": "0001-01-01T00:00:00+14:00"}}]},
             self.base_data | {"watches": [{**self.base_data["watches"][0], "booked_slot": {"start": 123}}]},
             self.base_data | {"watches": [{**self.base_data["watches"][0], "booked_slot": {"start": "2026-12-20T14:00:00Z", "bad": 1}}]},
             self.base_data | {"auth_token_env": "SYNTHETIC_CMP_TOKEN_FILE"},  # auth_mode=none forbids auth_token_env
@@ -306,6 +316,26 @@ class AppointmentsConfigTests(TestCase):
             with self.subTest(payload=payload):
                 self.write_cfg(payload)
                 self.assert_invalid_load()
+
+        # Explicit UTC offsets inside the Europe/Warsaw DST fold resolve unambiguously.
+        for raw_start, expected_utc_hour in (
+            ("2026-10-25T02:30:00+02:00", 0),
+            ("2026-10-25T02:30:00+01:00", 1),
+        ):
+            self.write_cfg(self.base_data | {
+                "watches": [{**self.base_data["watches"][0], "booked_slot": {"start": raw_start}}],
+            })
+            loaded_fold = load_settings(environ=self.env)
+            assert loaded_fold is not None and loaded_fold.watches[0].booked_slot is not None
+            self.assertEqual(loaded_fold.watches[0].booked_slot.start.astimezone(timezone.utc).hour, expected_utc_hour)
+
+        # Direct parse_warsaw_datetime rejects ambiguous DST fold and nonexistent gap.
+        with self.assertRaises(ValueError):
+            appt_config.parse_warsaw_datetime("2026-10-25T02:30:00")
+        with self.assertRaises(ValueError):
+            appt_config.parse_warsaw_datetime("2026-03-29T02:30:00")
+        with self.assertRaises(ValueError):
+            appt_config.parse_warsaw_datetime("2026-12-20T14:00:00", require_offset=True)
 
     def test_secret_file_permissions_symlinks_hmac_distinctness_and_growth_race(self) -> None:
         # Relative config path rejected.

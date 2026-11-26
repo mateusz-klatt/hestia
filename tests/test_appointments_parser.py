@@ -21,6 +21,7 @@ class CmpParserTests(TestCase):
         result = parse_cmp_scheduler_bytes(raw)
         self.assertEqual(result.empty_days, 2)
         self.assertEqual(result.skipped, 1)  # syn-slot-004 has available=false
+        self.assertEqual(result.warnings, ())
         self.assertEqual(len(result.slots), 3)
 
         first, second, third = result.slots
@@ -49,15 +50,60 @@ class CmpParserTests(TestCase):
 
     def test_edge_cases_fixture_and_dst_handling(self) -> None:
         raw = (FIXTURES / "cmp_scheduler_edge_cases.json").read_bytes()
-        result = parse_cmp_scheduler_bytes(raw)
+        with self.assertLogs("hestia.appointments.parser", level="WARNING") as logs:
+            result = parse_cmp_scheduler_bytes(raw)
         # 2 malformed days + 5 malformed slots in the valid day = 7 skipped; 1 valid slot survives.
         self.assertEqual(result.skipped, 7)
         self.assertEqual(result.empty_days, 0)
+        self.assertEqual(result.warnings, ("invalid_day", "invalid_slots_list") + ("invalid_slot_entry",) * 5)
+        self.assertEqual(len(logs.output), 7)
         self.assertEqual(len(result.slots), 1)
         slot = result.slots[0]
         self.assertEqual(slot.slot_id, "syn-dst-valid")
         # 2026-03-29 03:15 is CEST (+02:00) right after the spring-forward jump.
         self.assertEqual(slot.start.utcoffset().total_seconds(), 7200)
+
+        # Overflowing offsets and ambiguous naive DST fold are skipped per entry with safe warnings.
+        overflow_payload = {
+            "specialtyId": "spec-1",
+            "days": [
+                {
+                    "date": "2026-10-25",
+                    "slots": [
+                        {
+                            "slotId": "syn-overflow-low",
+                            "startTime": "0001-01-01T00:00:00+14:00",
+                            "doctorId": "doc-1",
+                            "locationId": "loc-1",
+                        },
+                        {
+                            "slotId": "syn-overflow-high",
+                            "startTime": "9999-12-31T23:59:59-14:00",
+                            "doctorId": "doc-1",
+                            "locationId": "loc-1",
+                        },
+                        {
+                            "slotId": "syn-ambiguous-fold",
+                            "startTime": "2026-10-25T02:30:00",
+                            "doctorId": "doc-1",
+                            "locationId": "loc-1",
+                        },
+                        {
+                            "slotId": "syn-survivor",
+                            "startTime": "2026-10-25T04:00:00+01:00",
+                            "doctorId": "doc-1",
+                            "locationId": "loc-1",
+                        },
+                    ],
+                }
+            ],
+        }
+        with self.assertLogs("hestia.appointments.parser", level="WARNING") as overflow_logs:
+            overflow_res = parse_cmp_scheduler(overflow_payload)
+        self.assertEqual(overflow_res.skipped, 3)
+        self.assertEqual(overflow_res.warnings, ("invalid_slot_entry",) * 3)
+        self.assertEqual([s.slot_id for s in overflow_res.slots], ["syn-survivor"])
+        self.assertTrue(all("0001-01-01" not in line for line in overflow_logs.output))
 
         # Summer CEST UTC conversion + fall-back ambiguous DST offset preservation.
         dst_payload = {
@@ -135,10 +181,13 @@ class CmpParserTests(TestCase):
                 },
             ]
         }
-        result = parse_cmp_scheduler(payload)
+        with self.assertLogs("hestia.appointments.parser", level="WARNING") as logs:
+            result = parse_cmp_scheduler(payload)
         # Only the ISO-startTime slot in day 1 survives; its labels sanitize to None.
         self.assertEqual(len(result.slots), 1)
         self.assertEqual(result.skipped, 9)
+        self.assertEqual(len(result.warnings), 9)
+        self.assertEqual(len(logs.output), 9)
         self.assertEqual(result.slots[0].end, datetime(2026, 12, 10, 9, 30, tzinfo=WARSAW_TZ))
         self.assertIsNone(result.slots[0].doctor_label)
         self.assertIsNone(result.slots[0].location_label)
