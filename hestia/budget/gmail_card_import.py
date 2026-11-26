@@ -1,7 +1,7 @@
 """Import a newly discovered document once booked card evidence corroborates it."""
 import json
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -9,9 +9,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import delete, func, or_, select
 
 from ..db import AppMeta, BudgetGmailMessage, BudgetReceipt, BudgetReceiptLine
-from .analytics_core import canonical_money
+from .analytics_core import AnalyticsError, canonical_money
 from .gmail_document import ImportedDocument
 from .gmail_payment import _payee_key
+from .receipt_parser import merchant_word_tokens
 from .receipt_reconcile import audit_payload, evidence_json, write_audit
 
 _PREFIX = "budget_gmail_card_wait:"
@@ -45,9 +46,38 @@ def stage(session, owner, item, expires_at):
     session.add(AppMeta(key=waiting_key(owner, item.gmail_id_hmac), value=json.dumps(data)))
 
 
-def _identity(invoice):
-    return (_payee_key(invoice.issuer), (invoice.invoice_number or "").casefold(),
-            invoice.currency, canonical_money(invoice.amount))
+def _amount_key(amount):
+    try:
+        return True, canonical_money(amount)
+    except AnalyticsError:
+        return False, amount
+
+
+def _identity(data, invoice):
+    return (
+        _payee_key(invoice.issuer),
+        merchant_word_tokens(invoice.issuer),
+        invoice.nip,
+        (invoice.invoice_number or "").casefold(),
+        (invoice.receipt_number or "").casefold(),
+        invoice.currency,
+        _amount_key(invoice.amount),
+        invoice.issue_date,
+        None if invoice.issue_date else _received_date(data["received"]),
+        invoice.due_date,
+        invoice.card_last4,
+        invoice.payment_method,
+        getattr(invoice, "document_kind", "invoice"),
+    )
+
+
+def _shared_rfcs(waiting):
+    owners = defaultdict(set)
+    for key, copies in waiting.items():
+        for _, data, _ in copies:
+            if data["rfc"] is not None:
+                owners[data["rfc"]].add(key)
+    return {rfc for rfc, keys in owners.items() if len(keys) > 1}
 
 
 def receipt_document(receipt):
@@ -137,10 +167,13 @@ def _import_copies(store, session, owner, copies, now):
     from .gmail_store import PendingMessage
 
     meta, data, invoice = copies[0]
+    provenance = dict(data["provenance"])
+    provenance["paid"] = any(bool(copy_data["provenance"].get("paid")) for _, copy_data, _ in copies)
+    invoice = replace(invoice, paid=provenance["paid"])
     source_hmac = meta.key.rsplit(":", 1)[1]
     item = PendingMessage(source_hmac, data["received"], data["trust"], "imported",
                           rfc_message_id_hmac=data["rfc"], invoice=invoice, source_kind=data["kind"],
-                          document_provenance=data["provenance"], card_required=True)
+                          document_provenance=provenance, card_required=True)
     receipt_id = store._invoice(session, owner, item, now)
     _record(session, owner, meta.key, data, now, "imported", receipt_id)
     session.delete(meta)
@@ -163,9 +196,11 @@ def settle(store, session, owner, now):
             claims[match.account_id, match.entry_reference][receipt.id] = receipt, match
 
     waiting = _waiting_documents(store, session, owner, now)
+    shared_rfcs = _shared_rfcs(waiting)
     for key, copies in waiting.items():
-        if len({(_identity(invoice), invoice.issue_date, invoice.card_last4, invoice.payment_method)
-                for _, _, invoice in copies}) > 1:
+        if len({_identity(data, invoice) for _, data, invoice in copies}) > 1:
+            continue
+        if any(data["rfc"] in shared_rfcs for _, data, _ in copies):
             continue
         _, data, invoice = copies[0]
         match = match_card_purchase(session, owner, invoice, received_date=_received_date(data["received"]))
