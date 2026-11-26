@@ -351,9 +351,16 @@ class GmailMessageProcessor:
                   or selected.currency != document.currency or Decimal(selected.amount) != Decimal(document.amount)):
                 return _parse_failed(pending, "multiple_documents")
             else:
-                preferred = document if selected.document_kind == "receipt" and document.document_kind == "invoice" else selected
+                same_kind = selected.document_kind == document.document_kind
+                if (same_kind and selected.issue_date and document.issue_date
+                        and selected.issue_date != document.issue_date):
+                    return _parse_failed(pending, "multiple_documents")
+                use_document = ((selected.document_kind == "receipt" and document.document_kind == "invoice")
+                                or (same_kind and selected.issue_date is None and document.issue_date is not None))
+                preferred = document if use_document else selected
+                if use_document:
+                    selected_template = invoice if document.issue_date is None else None
                 selected = replace(preferred, paid=selected.paid or document.paid,
-                                   issue_date=preferred.issue_date or selected.issue_date or document.issue_date,
                                    receipt_number=selected.receipt_number or document.receipt_number)
         if selected is None:
             return replace(failure, diagnostic_reason="pdf_no_text") if no_text else failure

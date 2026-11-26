@@ -738,6 +738,13 @@ class GmailStore(BudgetStore):
                     receipt.raw_nip = item.invoice.nip
                     receipt.version += 1
                     receipt.updated_at = now
+                    attached = session.scalars(select(BudgetReceipt).where(
+                        BudgetReceipt.owner == owner, BudgetReceipt.gateway.is_not(None),
+                        BudgetReceipt.evidence_for_receipt_id == receipt.id,
+                        BudgetReceipt.status == "imported",
+                    )).all()
+                    for gateway_row in attached:
+                        self._attach_evidence(session, owner, gateway_row, revalidate=True)
                     self._attach_gateway_for_document(session, owner, receipt)
                 return "skipped_duplicate"
         return None

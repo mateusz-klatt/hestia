@@ -197,6 +197,87 @@ class DocumentPipeline(unittest.TestCase):
             message = session.get(db.BudgetGmailMessage, (OWNER, receipt.gmail_id_hmac))
             self.assertEqual(session.get(db.BudgetReceipt, gateway_id).evidence_for_receipt_id, message.receipt_id)
 
+    def test_invoice_promotion_revalidates_attached_gateway_in_both_arrival_orders(self):
+        for index, (receipt_first, valid) in enumerate(((True, False), (False, False), (True, True), (False, True))):
+            owner = f'evidence-order-{index}'
+            with self.sessions.begin() as session:
+                session.add(db.User(username=owner, password_hash='synthetic', role='admin'))
+            self.store.transition(owner, 1, 'active')
+            receipt = self.process(self.message([fixture('stripe_receipt').replace(
+                'November 3, 2026', 'November 20, 2026')]))
+            invoice = self.process(self.message([fixture('stripe_invoice') +
+                ('\nDate due November 25, 2026' if valid else '')]))
+            payment = PendingPayment(ImportedPayment('Przykład Studio', 'Synthetic payment', '123', 'EUR', ()),
+                date(2026, 11, 20), 'a' * 64, gateway=True, status='paid',
+                gateway_ref_hmac='b' * 64, gateway_name='Synthetic Gateway')
+            gateway = PendingMessage('c' * 64, self.clock.now, 'direct_allowlist', 'imported', payment=payment)
+            first, last = (receipt, invoice) if receipt_first else (invoice, receipt)
+            self.assertEqual(self.store.commit(owner, 1, {}, (first, gateway)), (2, 0, True))
+            with self.sessions() as session:
+                message = session.get(db.BudgetGmailMessage, (owner, gateway.gmail_id_hmac))
+                gateway_id = message.receipt_id
+                self.assertEqual(session.get(db.BudgetReceipt, gateway_id).evidence_for_receipt_id is not None,
+                                 receipt_first or valid)
+            self.assertEqual(self.store.commit(owner, 1, {}, (last,)), (0, 1, True))
+            with self.sessions() as session:
+                message = session.get(db.BudgetGmailMessage, (owner, first.gmail_id_hmac))
+                self.assertEqual(session.get(db.BudgetReceipt, gateway_id).evidence_for_receipt_id,
+                                 message.receipt_id if valid else None)
+
+    def test_invoice_promotion_preserves_confirmed_gateway_attachment(self):
+        receipt = self.process(self.message([fixture('stripe_receipt').replace(
+            'November 3, 2026', 'November 20, 2026')]))
+        payment = PendingPayment(ImportedPayment('Przykład Studio', 'Synthetic payment', '123', 'EUR', ()),
+            date(2026, 11, 20), 'a' * 64, gateway=True, status='paid',
+            gateway_ref_hmac='b' * 64, gateway_name='Synthetic Gateway')
+        gateway = PendingMessage('c' * 64, self.clock.now, 'direct_allowlist', 'imported', payment=payment)
+        self.assertEqual(self.store.commit(OWNER, 1, {}, (receipt, gateway)), (2, 0, True))
+        with self.sessions.begin() as session:
+            message = session.get(db.BudgetGmailMessage, (OWNER, gateway.gmail_id_hmac))
+            gateway_id = message.receipt_id
+            row = session.get(db.BudgetReceipt, gateway_id)
+            document_id = row.evidence_for_receipt_id
+            self.assertIsNotNone(document_id)
+            row.status, row.payment_method = 'confirmed', 'card'
+        self.assertEqual(self.commit(self.process(self.message([fixture('stripe_invoice')]))), (0, 1, True))
+        with self.sessions() as session:
+            self.assertEqual(session.get(db.BudgetReceipt, gateway_id).evidence_for_receipt_id, document_id)
+
+    def test_same_kind_pdf_date_conflicts_fail_closed_in_both_mime_orders(self):
+        for name in ('stripe_invoice', 'stripe_receipt'):
+            first = fixture(name)
+            second = first.replace('November 3, 2026', 'November 7, 2026')
+            for texts in ((first, second), (second, first)):
+                with self.subTest(name=name, first=texts[0]):
+                    item = self.process(self.message(texts))
+                    self.assertEqual((item.outcome, item.parse_failed_reason), ('parse_failed', 'multiple_documents'))
+        invoice = fixture('stripe_invoice')
+        receipt = fixture('stripe_receipt').replace('Date of issue: November 3, 2026',
+                                                   'Date paid: November 20, 2026')
+        for texts in ((invoice, receipt), (receipt, invoice)):
+            item = self.process(self.message(texts))
+            self.assertEqual((item.invoice.document_kind, item.invoice.issue_date), ('invoice', '2026-11-03'))
+
+    def test_undated_template_never_takes_receipt_payment_date(self):
+        from hestia.budget import gmail_message
+        from hestia.budget.gmail_invoice import ImportedInvoice
+        invoice = ImportedInvoice('Respect Energy', None, 'RE/2026/00042', '123.45',
+                                  'PLN', None, '2026-12-05')
+        self.settings.payment_senders = ()
+        self.settings.sender_allowlist = ('@respectenergy.pl',)
+        self.settings.document_senders = (PaymentSender('@respectenergy.pl', 'Vendor'),)
+        receipt = ('Receipt\nSprzedawca: Respect Energy\nReceipt number REC-42\n'
+                   'Invoice number RE/2026/00042\nDate paid November 20, 2026\nAmount paid 123.45 PLN')
+        for texts, templates in ((['template', receipt], [invoice, None]),
+                                 ([receipt, 'template'], [None, invoice])):
+            with self.subTest(texts=texts):
+                message = self.message(texts, sender='billing@respectenergy.pl')
+                with patch.object(gmail_message, 'extract_invoice', side_effect=templates):
+                    item = self.process(message)
+                self.assertEqual(item.invoice, invoice)
+                self.assertIsNone(item.invoice.issue_date)
+                self.assertIsNone(item.document_provenance)
+
     def test_invoice_receipt_both_orders_and_multi_pdf(self):
         for i, order in enumerate((('stripe_invoice', 'stripe_receipt'), ('stripe_receipt', 'stripe_invoice'))):
             # Use a separate seller so both orderings exercise insertion.
@@ -621,6 +702,11 @@ class DocumentPipeline(unittest.TestCase):
                  'Kwota brutto 123,45 PLN')
         message = self.message(['one', dated], sender='billing@respectenergy.pl')
         with patch.object(gmail_message, 'extract_invoice', side_effect=[invoice, None]):
+            result = self.process(message)
+        self.assertEqual((result.outcome, result.invoice.issue_date), ('imported', '2026-11-21'))
+        self.assertIsNotNone(result.document_provenance)
+        message = self.message([dated, 'one'], sender='billing@respectenergy.pl')
+        with patch.object(gmail_message, 'extract_invoice', side_effect=[None, invoice]):
             result = self.process(message)
         self.assertEqual((result.outcome, result.invoice.issue_date), ('imported', '2026-11-21'))
         self.assertIsNotNone(result.document_provenance)
