@@ -123,7 +123,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.57.0: ID-first matching ("id" strength), receipt card_last4, and no_bank_data period signal.
 # 0.58.0: additive owner-private
 #         appointment_slot & appointment_attention items on BudgetAnalyticsInbox.
-CONTRACT_VERSION = "0.58.0"
+# 0.59.0: group-linked receipt summaries and owner-private receipt group detail.
+CONTRACT_VERSION = "0.59.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -3172,6 +3173,16 @@ class BudgetReceiptLine(BudgetReceiptLineInput):
     raw_name_key: str
 
 
+class BudgetReceiptLinkGroupRef(BaseModel):
+    model_config = _READ
+    group_id: BudgetReceiptId
+    group_status: Literal["confirmed", "needs_review"]
+    group_version: BudgetVersion
+    member_count: Annotated[int, Field(ge=0)]
+    fee_amount: BudgetReceiptMoney | None
+    evidence_receipt_id: BudgetReceiptId | None
+
+
 class BudgetReceiptSummary(BaseModel):
     model_config = _READ
     receipt_id: BudgetReceiptId
@@ -3211,6 +3222,7 @@ class BudgetReceiptSummary(BaseModel):
     evidence_for_receipt_id: BudgetReceiptId | None = None
     has_document: bool = True
     card_last4: Annotated[str, Field(pattern=r"^[0-9]{4}$")] | None = None
+    link_group: Annotated[BudgetReceiptLinkGroupRef | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class BudgetReceiptPaymentEvidence(BaseModel):
@@ -3261,6 +3273,15 @@ class BudgetReceiptDetailResult(BaseModel):
         list[BudgetReceiptCandidate] | None, Field(default=None, json_schema_extra=_OMIT),
     ] = None
     no_bank_data: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
+
+
+class BudgetReceiptGroupDetailResult(BaseModel):
+    model_config = _READ
+    group: BudgetReceiptLinkGroupRef
+    members: list[BudgetReceiptSummary]
+    evidence: BudgetReceiptSummary | None
+    linked_account_id: str | None
+    linked_entry_ref: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None
 
 
 class BudgetReceiptConfirmResult(BaseModel):
@@ -3399,7 +3420,8 @@ class BudgetReceiptGmailStatus(BaseModel):
 _RECEIPT_MODELS = (
     BudgetReceiptParseTextRequest, BudgetReceiptConfirmRequest, BudgetReceiptListRequest,
     BudgetReceiptSearchRequest, BudgetReceiptDeleteRequest, BudgetReceiptParseResult,
-    BudgetReceiptDetailResult, BudgetReceiptConfirmResult, BudgetReceiptListResult, BudgetReceiptDeleteResult,
+    BudgetReceiptDetailResult, BudgetReceiptGroupDetailResult, BudgetReceiptConfirmResult,
+    BudgetReceiptListResult, BudgetReceiptDeleteResult,
     BudgetReceiptDeviceBrowserRequest, BudgetReceiptDevicePairResult, BudgetReceiptDeviceCancelRequest,
     BudgetReceiptDeviceLoginRequest, BudgetReceiptDeviceRedeemRequest,
     BudgetReceiptDeviceRedeemResult, BudgetReceiptDeviceToken, BudgetReceiptDeviceRevokeRequest,
@@ -3852,6 +3874,7 @@ _PATH_ROLES = {
     ("POST", "/api/budget/receipts/list"): "admin",
     ("POST", "/api/budget/receipts/search"): "admin",
     ("GET", "/api/budget/receipts/detail"): "admin",
+    ("GET", "/api/budget/receipts/group/detail"): "admin",
     ("GET", "/api/budget/receipts/image"): "admin",
     ("POST", "/api/budget/receipts/delete"): "admin",
     ("POST", "/api/budget/receipts/device-token/pair-code"): "admin",
@@ -4769,6 +4792,22 @@ def _receipt_paths():
             "parameters": [*receipt_query, contract_version] if name == "detail" else receipt_query,
             "responses": responses,
         }}
+    group_responses = _budget_responses("BudgetReceiptGroupDetailResult")
+    group_responses["404"] = _receipt_error("Unknown or foreign group, or contract version below 0.59.0.")
+    group_responses["409"] = _receipt_error("SQLite users backend is required (budget_requires_sqlite_users).")
+    paths[prefix + "group/detail"] = {"get": {
+        "operationId": "getBudgetReceiptGroupDetail",
+        "summary": "Read an owned receipt link group, its member receipts and optional gateway evidence.",
+        "description": "Browser session and budget.receipts.view required. Transaction account and reference digest "
+                       "also require budget.receipts.match. Requires contract version 0.59.0 or later.",
+        "parameters": [
+            _budget_query("group_id", required=True,
+                          schema={"type": "string", "pattern": r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"},
+                          description="Opaque owned receipt group UUID."),
+            {**contract_version, "required": True, "description": "Receipt group detail is available from 0.59.0."},
+        ],
+        "responses": group_responses,
+    }}
     paths.update(_device_token_paths())
     return paths
 

@@ -59,7 +59,21 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.58.0")
+        self.assertEqual(document["info"]["version"], "0.59.0")
+        # 0.59.0 additive receipt group detail and receipt summary metadata.
+        group_detail = document["paths"].pop("/api/budget/receipts/group/detail")["get"]
+        self.assertEqual(group_detail["x-required-permission"], "legacy_receipts")
+        self.assertEqual([(p["name"], p["in"], p["required"]) for p in group_detail["parameters"]], [
+            ("group_id", "query", True), ("X-Hestia-Contract-Version", "header", True),
+        ])
+        for schema in ("BudgetReceiptSummary", "BudgetReceiptDetail"):
+            schemas[schema]["properties"].pop("link_group")
+        for schema in ("BudgetReceiptLinkGroupRef", "BudgetReceiptGroupDetailResult"):
+            schemas.pop(schema)
+        document["info"]["version"] = "0.58.0"
+        canonical_0_58 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_58).hexdigest(),
+                         "01782d6569fa4812c657d8768533ea2de38f7d8e2af1ea35cae3f6523e4fe048")
         # 0.58.0 additive owner-private appointment_slot & appointment_attention inbox alerts.
         for name in (
             "BudgetAnalyticsInboxAppointmentRef",
@@ -79,6 +93,10 @@ class OpenApiArtifactTests(unittest.TestCase):
             schemas["BudgetAnalyticsInboxKeyRequest"]["properties"]["kind"]["enum"].remove(kind)
         document["paths"]["/api/budget/analytics/inbox"]["get"]["parameters"] = []
         document["paths"]["/api/budget/analytics/inbox-mark"]["post"].pop("parameters")
+        document["info"]["version"] = "0.57.0"
+        canonical_0_57 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_57).hexdigest(),
+                         "d51b08bcb4621fd7f8cd1c2946891c37fcc9b64bbfe399c819c690980196b9d2")
         # 0.57.0 additive card_last4, no_bank_data, and "id" match_strength.
         for name in ("BudgetReceiptSummary", "BudgetReceiptDetail"):
             schemas[name]["properties"].pop("card_last4")

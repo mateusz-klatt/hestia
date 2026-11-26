@@ -1664,6 +1664,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/receipts/group/detail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read an owned receipt link group, its member receipts and optional gateway evidence.
+         * @description Browser session and budget.receipts.view required. Transaction account and reference digest also require budget.receipts.match. Requires contract version 0.59.0 or later.
+         */
+        get: operations["getBudgetReceiptGroupDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/receipts/image": {
         parameters: {
             query?: never;
@@ -6132,6 +6152,7 @@ export interface components {
             invoice_number: string | null;
             /** Lines */
             lines: components["schemas"]["BudgetReceiptLine"][];
+            link_group?: components["schemas"]["BudgetReceiptLinkGroupRef"] | null;
             /** Linked */
             linked: boolean;
             /** Linked Account Id */
@@ -6398,6 +6419,17 @@ export interface components {
             /** Version */
             version: number;
         };
+        /** BudgetReceiptGroupDetailResult */
+        BudgetReceiptGroupDetailResult: {
+            evidence: components["schemas"]["BudgetReceiptSummary"] | null;
+            group: components["schemas"]["BudgetReceiptLinkGroupRef"];
+            /** Linked Account Id */
+            linked_account_id: string | null;
+            /** Linked Entry Ref */
+            linked_entry_ref: string | null;
+            /** Members */
+            members: components["schemas"]["BudgetReceiptSummary"][];
+        };
         /** BudgetReceiptLine */
         BudgetReceiptLine: {
             /** Discount Amount */
@@ -6449,6 +6481,24 @@ export interface components {
             raw_unit: string | null;
             /** Unit Price Raw */
             unit_price_raw: string | null;
+        };
+        /** BudgetReceiptLinkGroupRef */
+        BudgetReceiptLinkGroupRef: {
+            /** Evidence Receipt Id */
+            evidence_receipt_id: string | null;
+            /** Fee Amount */
+            fee_amount: string | null;
+            /** Group Id */
+            group_id: string;
+            /**
+             * Group Status
+             * @enum {string}
+             */
+            group_status: "confirmed" | "needs_review";
+            /** Group Version */
+            group_version: number;
+            /** Member Count */
+            member_count: number;
         };
         /** BudgetReceiptLinkRequest */
         BudgetReceiptLinkRequest: {
@@ -6636,6 +6686,7 @@ export interface components {
              * @default null
              */
             invoice_number: string | null;
+            link_group?: components["schemas"]["BudgetReceiptLinkGroupRef"] | null;
             /** Linked */
             linked: boolean;
             /** Linked Account Id */
@@ -16023,6 +16074,95 @@ export interface operations {
             };
             /** @description Gmail quota, persisted backoff, or the sync cooldown applies. */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    getBudgetReceiptGroupDetail: {
+        parameters: {
+            query: {
+                /** @description Opaque owned receipt group UUID. */
+                group_id: string;
+            };
+            header: {
+                /** @description Receipt group detail is available from 0.59.0. */
+                "X-Hestia-Contract-Version": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptGroupDetailResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Unknown or foreign group, or contract version below 0.59.0. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite users backend is required (budget_requires_sqlite_users). */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -310,10 +310,39 @@ def _group_reservation(owner, account_id, entry_reference):
     )
 
 
-def _receipt_in_group(session, owner, receipt_id):
+def _receipt_grouped(owner, receipt_id):
     member = exists().where(ReceiptLinkMember.owner == owner, ReceiptLinkMember.receipt_id == receipt_id)
     evidence = exists().where(ReceiptLinkGroup.owner == owner, ReceiptLinkGroup.evidence_receipt_id == receipt_id)
-    return session.scalar(select(or_(member, evidence)))
+    return or_(member, evidence)
+
+
+def _receipt_in_group(session, owner, receipt_id):
+    return session.scalar(select(_receipt_grouped(owner, receipt_id)))
+
+
+def _group_links_for_receipts(session, owner, receipt_ids):
+    if not receipt_ids:
+        return {}
+    participants = select(ReceiptLinkMember.receipt_id, ReceiptLinkMember.group_id).where(
+        ReceiptLinkMember.owner == owner, ReceiptLinkMember.receipt_id.in_(receipt_ids),
+    ).union_all(select(ReceiptLinkGroup.evidence_receipt_id, ReceiptLinkGroup.id).where(
+        ReceiptLinkGroup.owner == owner, ReceiptLinkGroup.evidence_receipt_id.in_(receipt_ids),
+    )).subquery()
+    member_count = select(func.count()).where(
+        ReceiptLinkMember.group_id == ReceiptLinkGroup.id, ReceiptLinkMember.owner == owner,
+    ).correlate(ReceiptLinkGroup).scalar_subquery()
+    rows = session.execute(select(participants.c.receipt_id, ReceiptLinkGroup, member_count).join(
+        ReceiptLinkGroup, ReceiptLinkGroup.id == participants.c.group_id,
+    ).where(ReceiptLinkGroup.owner == owner))
+    return {receipt_id: (group, count) for receipt_id, group, count in rows}
+
+
+def _group_ref(group, member_count):
+    return {
+        "group_id": group.id, "group_status": group.status, "group_version": group.version,
+        "member_count": member_count, "fee_amount": group.fee_amount,
+        "evidence_receipt_id": group.evidence_receipt_id,
+    }
 
 
 def _fee_adjusted_total(total_amount, fee_amount):
@@ -504,17 +533,20 @@ class BudgetReceiptStore(BudgetHTTPStore):
             Line.receipt_id == row.id, Line.owner == row.owner)))
         return sum_money((net, negate_money(row.total_amount)))
 
-    def _summary(self, session, row):
+    def _summary(self, session, row, *, group_link=None):
         shop = None if row.shop_id is None else session.get(Shop, row.shop_id)
+        group = None if group_link is None else group_link[0]
+        linked_account_id = row.linked_account_id if group is None else group.account_id
+        linked_entry_reference = row.linked_entry_ref if group is None else group.entry_reference
         values = {
             "receipt_id": row.id, "shop_id": row.shop_id, "chain_key": None if shop is None else shop.chain_key,
             "raw_shop_name": redact_digit_field(row.raw_shop_name), "raw_nip": row.raw_nip,
             "receipt_kind": row.receipt_kind,
             "receipt_date": row.receipt_date, "receipt_time": row.receipt_time, "total_amount": row.total_amount,
             "currency": row.currency, "payment_method": row.payment_method, "status": row.status,
-            "source_kind": row.source_kind, "linked": row.linked_account_id is not None,
-            "linked_account_id": row.linked_account_id if self._match_allowed else None,
-            "linked_entry_ref": entry_reference_digest(row.linked_entry_ref) if self._match_allowed else None,
+            "source_kind": row.source_kind, "linked": linked_account_id is not None,
+            "linked_account_id": linked_account_id if self._match_allowed else None,
+            "linked_entry_ref": entry_reference_digest(linked_entry_reference) if self._match_allowed else None,
             "version": row.version, "created_at": row.created_at, "updated_at": row.updated_at,
             "image_available": row.image_relpath is not None, "image_expires_at": row.image_expires_at,
             "raw_text_expires_at": row.raw_text_expires_at, "math_delta": self._math_delta(session, row),
@@ -527,7 +559,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
             "has_document": row.gateway is None or row.evidence_for_receipt_id is not None,
             "card_last4": row.card_last4,
         }
-        return {key: values[key] for key in _SUMMARY_FIELDS}
+        summary = {key: values[key] for key in _SUMMARY_FIELDS}
+        if group_link is not None:
+            summary["link_group"] = _group_ref(*group_link)
+        return summary
 
     def _detail(self, session, row):
         lines = session.scalars(select(Line).where(Line.receipt_id == row.id, Line.owner == row.owner)
@@ -539,7 +574,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             "receipt_id": item.id, "gateway": item.gateway, "gateway_status": item.gateway_status,
             "total_amount": item.total_amount, "fee_amount": item.fee_amount, "receipt_date": item.receipt_date,
         } for item in evidence]
-        return {**self._summary(session, row), "lines": [_line_dict(line) for line in lines],
+        group_link = _group_links_for_receipts(session, row.owner, [row.id]).get(row.id)
+        return {**self._summary(session, row, group_link=group_link), "lines": [_line_dict(line) for line in lines],
                 "payment_evidence": payment_evidence}
 
     def _purge(self, session, owner, now):
@@ -1249,8 +1285,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 elif evidence == "only":
                     query_obj = query_obj.where(Receipt.evidence_for_receipt_id.is_not(None))
             if linked is not None:
-                query_obj = query_obj.where(Receipt.linked_account_id.is_not(None) if linked
-                                            else Receipt.linked_account_id.is_(None))
+                is_linked = or_(Receipt.linked_account_id.is_not(None), _receipt_grouped(owner, Receipt.id))
+                query_obj = query_obj.where(is_linked if linked else ~is_linked)
             rows = session.scalars(query_obj.order_by(Receipt.receipt_date.desc(), Receipt.id)).all()
             needle = fold_for_match(query.strip()) if search else None
             selected = []
@@ -1265,7 +1301,9 @@ class BudgetReceiptStore(BudgetHTTPStore):
             more = len(selected) > limit
             selected = selected[:limit]
             next_cursor = self._encode_cursor(owner, context, selected[-1]) if more and selected else None
-            return {"receipts": [self._summary(session, row) for row in selected], "next_cursor": next_cursor}
+            links = _group_links_for_receipts(session, owner, [row.id for row in selected])
+            return {"receipts": [self._summary(session, row, group_link=links.get(row.id)) for row in selected],
+                    "next_cursor": next_cursor}
 
     def list(self, owner, values):
         return self._list(owner, values, search=False)
@@ -1312,6 +1350,31 @@ class BudgetReceiptStore(BudgetHTTPStore):
             candidates = self._candidates(session, owner, preview, {}, include_receipt_id=preview.id)
             no_bank_data = False if candidates else self._no_bank_data(session, owner, preview)
         return {"receipt": receipt, "candidates": candidates, "no_bank_data": no_bank_data}
+
+    def group_detail(self, owner, group_id):
+        with self._read(owner, permission=None) as session:
+            owner = self._owner(session, owner, "budget.receipts.view")
+            if not isinstance(group_id, str) or not _UUID.fullmatch(group_id):
+                raise ReceiptError("budget_receipt_not_found", 404)
+            group = session.scalar(select(ReceiptLinkGroup).where(
+                ReceiptLinkGroup.id == group_id, ReceiptLinkGroup.owner == owner,
+            ))
+            if group is None:
+                raise ReceiptError("budget_receipt_not_found", 404)
+            members = session.scalars(select(Receipt).join(
+                ReceiptLinkMember, ReceiptLinkMember.receipt_id == Receipt.id,
+            ).where(
+                ReceiptLinkMember.group_id == group.id, ReceiptLinkMember.owner == owner, Receipt.owner == owner,
+            ).order_by(Receipt.receipt_date.desc(), Receipt.id)).all()
+            evidence = None if group.evidence_receipt_id is None else self._owned(session, owner, group.evidence_receipt_id)
+            group_link = group, len(members)
+            return {
+                "group": _group_ref(*group_link),
+                "members": [self._summary(session, row, group_link=group_link) for row in members],
+                "evidence": None if evidence is None else self._summary(session, evidence, group_link=group_link),
+                "linked_account_id": group.account_id if self._match_allowed else None,
+                "linked_entry_ref": entry_reference_digest(group.entry_reference) if self._match_allowed else None,
+            }
 
     def image(self, owner, receipt_id):
         with self.transaction() as session:
