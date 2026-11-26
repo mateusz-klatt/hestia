@@ -2,7 +2,6 @@
 // image object URLs, and link metadata in React component memory only (never localStorage and
 // never putting receipt fields into GET query strings).
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { components } from "../api/openapi";
 import { t } from "../i18n";
 import type { BudgetResult } from "./api";
 import { labelOf } from "./analytics/model";
@@ -10,6 +9,8 @@ import { formatAmount } from "./model";
 import type { BudgetAccount, BudgetConnection } from "./model";
 import { receiptsApi as defaultReceiptsApi } from "./receipts_api";
 import type { ReceiptsApi } from "./receipts_api";
+import { ReceiptGroupController } from "./receipt_group_controller";
+import type { ReceiptGroupControllerTarget } from "./receipt_group_controller";
 import {
   EMPTY_RECEIPT_FILTER,
   RECEIPT_DOCUMENT_KINDS,
@@ -25,6 +26,7 @@ import {
   RECEIPT_STATUS_KEYS,
   availableLinkOptions,
   buildBulkConfirmRequest,
+  buildBulkGroupPlan,
   buildBulkSelectionPlan,
   buildCandidateSetKey,
   buildConfirmRequest,
@@ -43,6 +45,7 @@ import {
   hasMatchingFieldsChanged,
   isBulkConfirmable,
   isExcludedDraftForBulk,
+  isGroupMemberEligible,
   isReceiptGrouped,
   isRedactedValue,
   isStaleCursorError,
@@ -70,9 +73,12 @@ import type {
   ReceiptDetailResult,
   ReceiptDocumentKind,
   ReceiptFilter,
+  ReceiptGroupCandidate,
+  ReceiptGroupDetailResult,
   ReceiptLineEditField,
   ReceiptLineInput,
   ReceiptLinkExplicitChoice,
+  ReceiptLinkGroupRef,
   ReceiptLinkSessionEntry,
   ReceiptPaymentMethod,
   ReceiptSettledEvent,
@@ -83,8 +89,8 @@ import type {
 
 type AccessBarrier = (result: { ok: boolean; status?: number; error?: string }) => boolean;
 type ReceiptAccessBarrier = (result: Parameters<AccessBarrier>[0], options?: { explicitDisabledOnly?: boolean }) => boolean;
-type ReceiptGroupLink = NonNullable<ReceiptSummary["link_group"]>;
-type ReceiptGroupDetail = components["schemas"]["BudgetReceiptGroupDetailResult"];
+type ReceiptGroupLink = ReceiptLinkGroupRef;
+type ReceiptGroupDetail = ReceiptGroupDetailResult;
 
 const fallbackPendingStores = new WeakMap<ReceiptsApi, PendingReceiptStore>();
 
@@ -116,7 +122,13 @@ type ListState =
 
 type DetailState =
   | { kind: "loading" }
-  | { kind: "ready"; detail: ReceiptDetail; candidates: ReceiptCandidate[]; noBankData: boolean }
+  | {
+      kind: "ready";
+      detail: ReceiptDetail;
+      candidates: ReceiptCandidate[];
+      groupCandidates: ReceiptGroupCandidate[];
+      noBankData: boolean;
+    }
   | { kind: "error" };
 
 type ImageState =
@@ -238,8 +250,18 @@ function confirmErrorText(error: string): string {
     case "budget_receipt_tx_already_linked": return t("budget.receipts.txAlreadyLinked");
     case "budget_receipt_stale_source": return t("budget.receipts.staleSource");
     case "budget_receipt_total_mismatch": return t("budget.receipts.totalMismatch");
+    case "budget_receipt_in_group": return t("budget.receipts.inGroupConflict");
     case "budget_receipt_not_found": return t("budget.receipts.notFound");
     default: return t("budget.receipts.confirmError");
+  }
+}
+
+function pendingActionLabel(kind: ReceiptActionKind): string {
+  switch (kind) {
+    case "confirm": return t("budget.receipts.confirming");
+    case "delete": return t("budget.receipts.deleting");
+    case "group_link": return t("budget.receipts.linkingGroup");
+    case "group_unlink": return t("budget.receipts.unlinkingGroup");
   }
 }
 
@@ -252,12 +274,46 @@ function isConflictOrStaleError(result: { status?: number; error?: string }): bo
 
 function settledOutcome(
   result: { ok: boolean; status?: number; error?: string },
-  successOutcome: "confirmed" | "deleted",
+  successOutcome: "confirmed" | "deleted" | "group_unlinked",
 ): ReceiptSettledEvent["outcome"] {
   if (result.ok) return successOutcome;
   if (result.status === 404) return "not_found";
   if (isConflictOrStaleError(result)) return "conflict";
   return "error";
+}
+
+function acquireGroupParticipantLocks(
+  store: PendingReceiptStore,
+  action: "group_unlink" | "delete",
+  receiptId: string,
+  loadedGroup: ReceiptGroupDetail | null,
+  expectedGroupId: string,
+): Array<{ id: string; token: symbol }> | null {
+  const ids = new Set<string>([receiptId]);
+  if (loadedGroup !== null && loadedGroup.group.group_id === expectedGroupId) {
+    for (const member of loadedGroup.members) ids.add(member.receipt_id);
+    if (loadedGroup.evidence !== null) ids.add(loadedGroup.evidence.receipt_id);
+  }
+  const acquired: Array<{ id: string; token: symbol }> = [];
+  for (const id of ids) {
+    const token = store.tryAcquire(id, action);
+    if (token === null) {
+      for (const prev of acquired) store.release(prev.id, prev.token);
+      return null;
+    }
+    acquired.push({ id, token });
+  }
+  return acquired;
+}
+
+function releaseGroupParticipantLocks(
+  store: PendingReceiptStore,
+  acquired: ReadonlyArray<{ id: string; token: symbol }>,
+  outcome?: ReceiptSettledEvent["outcome"],
+): void {
+  for (const { id, token } of acquired) {
+    store.release(id, token, outcome);
+  }
 }
 
 export function ReceiptsView({
@@ -285,6 +341,8 @@ export function ReceiptsView({
   const [imageState, setImageState] = useState<ImageState>({ kind: "none" });
   const [pendingMap, setPendingMap] = useState<ReadonlyMap<string, ReceiptActionKind>>(() => store.snapshot());
   const [selectedForBulk, setSelectedForBulk] = useState<ReadonlySet<string>>(() => new Set());
+  const [groupControllerTarget, setGroupControllerTarget] = useState<ReceiptGroupControllerTarget | null>(null);
+  const [groupControllerSession, setGroupControllerSession] = useState(0);
   const [bulkConfirmPlan, setBulkConfirmPlan] = useState<{
     targets: ReceiptSummary[];
     excludedNeedsReview: number;
@@ -318,6 +376,7 @@ export function ReceiptsView({
   const bulkCancelledRef = useRef(false);
   const bulkRunGenRef = useRef(0);
   const actorKeyRef = useRef(actorKey);
+  const groupReturnFocusRef = useRef<HTMLButtonElement | null>(null);
 
   useLayoutEffect(() => {
     openReceiptIdRef.current = selectedId;
@@ -354,6 +413,9 @@ export function ReceiptsView({
     receiptLinkMemoryRef.current.clear();
     staleCursorReloadedRef.current = false;
     resetDrawer();
+    setGroupControllerTarget(null);
+    setGroupControllerSession((current) => current + 1);
+    groupReturnFocusRef.current = null;
     setSelectedForBulk(new Set());
     setBulkConfirmPlan(null);
     setBulkProgress(null);
@@ -692,9 +754,16 @@ export function ReceiptsView({
       }
       const receipt = result.data.receipt;
       const candidates = result.data.candidates ?? [];
+      const groupCandidates = result.data.group_candidates ?? [];
       loadedReceiptIdRef.current = receipt.receipt_id;
       latestReadyCandidatesRef.current = { receiptId: receipt.receipt_id, candidates };
-      setDetailState({ kind: "ready", detail: receipt, candidates, noBankData: result.data.no_bank_data === true });
+      setDetailState({
+        kind: "ready",
+        detail: receipt,
+        candidates,
+        groupCandidates,
+        noBankData: result.data.no_bank_data === true,
+      });
       if (receipt.image_available) {
         const imgToken = ++imageGeneration.current;
         setImageState({ kind: "loading" });
@@ -729,6 +798,7 @@ export function ReceiptsView({
 
   const openReceipt = useCallback((receiptId: string, trigger?: HTMLButtonElement) => {
     if (bulkProgress !== null
+      || groupControllerTarget !== null
       || (openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null)
       || openReceiptIdRef.current === receiptId) return;
     if (openReceiptIdRef.current === null) receiptDrawerTriggerRef.current = trigger ?? null;
@@ -738,14 +808,15 @@ export function ReceiptsView({
     setDetailState({ kind: "loading" });
     setNotice(null);
     setSelectedId(receiptId);
-  }, [store, bulkProgress]);
+  }, [store, bulkProgress, groupControllerTarget]);
 
   const closeDetail = useCallback(() => {
-    if (openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null) return;
+    if (groupControllerTarget !== null
+      || (openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null)) return;
     const trigger = receiptDrawerTriggerRef.current;
     resetDrawer();
     trigger?.focus();
-  }, [store, resetDrawer]);
+  }, [store, resetDrawer, groupControllerTarget]);
 
   const resolveDetailDraft = useCallback((
     detail: ReceiptDetail,
@@ -831,7 +902,11 @@ export function ReceiptsView({
   const visibleMerchantActions = merchantGroups.length === 1
     ? merchantGroups
     : merchantGroups.filter((group) => group.confirmableIds.length >= 2 || merchantGroups.length <= 3);
-  const bulkBusy = bulkProgress !== null || drawerActionBusy !== null;
+  const groupWritesAvailable = receiptsApi.receiptGroupCandidates !== undefined && receiptsApi.linkReceiptGroup !== undefined;
+  const bulkGroupPlan = buildBulkGroupPlan(shownRows, selectedForBulk);
+  const anyPending = pendingMap.size > 0;
+  const bulkBusy = bulkProgress !== null || drawerActionBusy !== null || groupControllerTarget !== null;
+  const bulkControlsDisabled = bulkBusy || anyPending;
 
   const formatMerchantsLine = (merchants: readonly string[]): string => {
     const shown = merchants.slice(0, 5);
@@ -1114,7 +1189,7 @@ export function ReceiptsView({
                     type="checkbox"
                     name="select_all_loaded"
                     checked={allConfirmableSelected}
-                    disabled={bulkBusy || confirmableRows.length === 0}
+                    disabled={bulkControlsDisabled || confirmableRows.length === 0}
                     onChange={toggleSelectAllLoaded}
                   />
                   <span>{t("budget.receipts.selectAllLoaded")}</span>
@@ -1122,7 +1197,7 @@ export function ReceiptsView({
                 <button
                   type="button"
                   className="budget-primary"
-                  disabled={bulkBusy || selectionPlan.confirmable.length === 0}
+                  disabled={bulkControlsDisabled || selectionPlan.confirmable.length === 0}
                   onClick={() => {
                     setBulkConfirmPlan({
                       targets: selectionPlan.confirmable,
@@ -1140,17 +1215,32 @@ export function ReceiptsView({
                 {selectedForBulk.size > 0 ? (
                   <button
                     type="button"
-                    disabled={bulkBusy}
+                    disabled={bulkControlsDisabled}
                     onClick={() => { setSelectedForBulk(new Set()); }}
                   >
                     {t("budget.receipts.clearSelection")}
+                  </button>
+                ) : null}
+                {groupWritesAvailable ? (
+                  <button
+                    type="button"
+                    disabled={bulkControlsDisabled || !bulkGroupPlan.eligible}
+                    onClick={(event) => {
+                      const anchor = bulkGroupPlan.selected[0];
+                      if (!bulkGroupPlan.eligible || anchor === undefined) return;
+                      groupReturnFocusRef.current = event.currentTarget;
+                      setGroupControllerSession((current) => current + 1);
+                      setGroupControllerTarget({ kind: "bulk", anchor, selectedRows: bulkGroupPlan.selected });
+                    }}
+                  >
+                    {t("budget.receipts.bulkLinkGroupAction")}
                   </button>
                 ) : null}
                 {visibleMerchantActions.map((group) => (
                   <button
                     key={group.key}
                     type="button"
-                    disabled={bulkBusy}
+                    disabled={bulkControlsDisabled}
                     onClick={() => {
                       const groupSet = new Set(group.confirmableIds);
                       setBulkConfirmPlan({
@@ -1166,6 +1256,9 @@ export function ReceiptsView({
                   </button>
                 ))}
               </div>
+              {groupWritesAvailable && selectedForBulk.size >= 2 && !bulkGroupPlan.eligible ? (
+                <p className="budget-muted" role="note">{t("budget.receipts.bulkLinkGroupHint")}</p>
+              ) : null}
               {shownNeedsReviewCount > 0 ? (
                 <p className="budget-muted" role="note">
                   {t("budget.receipts.bulkExcludedReview", { count: shownNeedsReviewCount })}
@@ -1181,6 +1274,7 @@ export function ReceiptsView({
                 {shownRows.map((row) => {
                   const rowPending = pendingMap.get(row.receipt_id) ?? null;
                   const rowConfirmable = isBulkConfirmable(row);
+                  const rowSelectable = rowConfirmable || (groupWritesAvailable && isGroupMemberEligible(row));
                   const rowMerchantText = receiptMerchantGroupKey(row, formatWithNip) ?? t("budget.receipts.unknownMerchant");
                   return (
                     <li key={row.receipt_id} className="budget-entry budget-receipt-row">
@@ -1190,8 +1284,8 @@ export function ReceiptsView({
                           className="budget-receipt-row-check"
                           name={`select_receipt_${row.receipt_id}`}
                           aria-label={t("budget.receipts.selectRow", { merchant: rowMerchantText })}
-                          checked={rowConfirmable && selectedForBulk.has(row.receipt_id)}
-                          disabled={bulkBusy || !rowConfirmable}
+                          checked={rowSelectable && selectedForBulk.has(row.receipt_id)}
+                          disabled={bulkControlsDisabled || !rowSelectable}
                           onChange={() => { toggleRowSelection(row.receipt_id); }}
                         />
                         <span className="budget-muted">
@@ -1228,12 +1322,12 @@ export function ReceiptsView({
                         ) : <ReceiptGroupBadge group={row.link_group} />}
                         {rowPending === null ? null : (
                           <span className="budget-chip budget-muted" role="status">
-                            {rowPending === "confirm" ? t("budget.receipts.confirming") : t("budget.receipts.deleting")}
+                            {pendingActionLabel(rowPending)}
                           </span>
                         )}
                         <button
                           type="button"
-                          disabled={bulkBusy}
+                          disabled={bulkBusy || (anyPending && rowPending === null)}
                           onClick={(event) => { openReceipt(row.receipt_id, event.currentTarget); }}
                         >
                           {t("budget.receipts.open")}
@@ -1272,6 +1366,7 @@ export function ReceiptsView({
           detailState={detailState}
           imageState={imageState}
           actionBusy={drawerActionBusy}
+          groupControllerOpen={groupControllerTarget !== null}
           isOpenReceipt={(receiptId) => openReceiptIdRef.current === receiptId}
           getLatestCandidates={getLatestCandidates}
           resolveDetailDraft={resolveDetailDraft}
@@ -1279,14 +1374,34 @@ export function ReceiptsView({
           onAccessLoss={checkBarrier}
           onClose={closeDetail}
           onOpenReceipt={openReceipt}
+          onOpenGroupCandidates={(detail, trigger) => {
+            if (bulkBusy) return;
+            groupReturnFocusRef.current = trigger;
+            setGroupControllerSession((current) => current + 1);
+            setGroupControllerTarget({ kind: "candidates", anchor: detail });
+          }}
+          onReviewGroupProposal={(detail, proposal, trigger) => {
+            if (bulkBusy) return;
+            groupReturnFocusRef.current = trigger;
+            setGroupControllerSession((current) => current + 1);
+            setGroupControllerTarget({ kind: "proposal", anchor: detail, proposal });
+          }}
           onRetryDetail={() => { setDetailRefresh((current) => current + 1); }}
           onConfirmed={(updated) => {
             receiptLinkMemoryRef.current.delete(`${actorKey}:${updated.receipt_id}`);
             const floorToken = ++detailGeneration.current;
             receiptFloorGenRef.current.set(updated.receipt_id, floorToken);
             latestReadyCandidatesRef.current = { receiptId: updated.receipt_id, candidates: [] };
-            setDetailState({ kind: "ready", detail: updated, candidates: [], noBankData: false });
+            setDetailState({ kind: "ready", detail: updated, candidates: [], groupCandidates: [], noBankData: false });
             setNotice(t("budget.receipts.confirmSuccess"));
+            reloadList();
+          }}
+          onGroupUnlinked={(receiptId) => {
+            receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
+            const floorToken = ++detailGeneration.current;
+            receiptFloorGenRef.current.set(receiptId, floorToken);
+            setNotice(t("budget.receipts.groupUnlinkSuccess"));
+            setDetailRefresh((current) => current + 1);
             reloadList();
           }}
           onConflictOrStale={(receiptId) => {
@@ -1304,14 +1419,63 @@ export function ReceiptsView({
             setNotice(t("budget.receipts.notFound"));
             reloadList();
           }}
-          onDeleted={(receiptId) => {
+          onDeleted={(receiptId, dissolvedGroup = false) => {
             receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
             const floorToken = ++detailGeneration.current;
             receiptFloorGenRef.current.set(receiptId, floorToken);
             resetDrawer();
+            if (dissolvedGroup) setNotice(t("budget.receipts.dissolveDeleteSuccess"));
             reloadList();
           }}
           onMutationError={reloadList}
+        />
+      )}
+
+      {groupControllerTarget === null ? null : (
+        <ReceiptGroupController
+          key={`${actorKey}:${String(groupControllerSession)}`}
+          api={receiptsApi}
+          store={store}
+          target={groupControllerTarget}
+          actorKey={actorKey}
+          accounts={accounts}
+          connections={connections}
+          locale={locale}
+          revision={revision}
+          onAccessLoss={checkBarrier}
+          onClose={() => {
+            setGroupControllerTarget(null);
+            const opener = groupReturnFocusRef.current;
+            groupReturnFocusRef.current = null;
+            if (opener?.isConnected === true) opener.focus();
+          }}
+          onPartialConfirm={(affectedIds) => {
+            reloadList();
+            const openId = openReceiptIdRef.current;
+            if (openId !== null && affectedIds.includes(openId)) {
+              receiptFloorGenRef.current.set(openId, ++detailGeneration.current);
+              setDetailRefresh((current) => current + 1);
+            }
+          }}
+          onGroupLinked={(_result, affectedIds) => {
+            setGroupControllerTarget(null);
+            setSelectedForBulk((current) => {
+              const next = new Set(current);
+              for (const id of affectedIds) next.delete(id);
+              return next;
+            });
+            setNotice(t("budget.receipts.groupLinkSuccess"));
+            reloadList();
+            const openId = openReceiptIdRef.current;
+            if (openId !== null && affectedIds.includes(openId)) {
+              receiptLinkMemoryRef.current.delete(`${actorKey}:${openId}`);
+              receiptFloorGenRef.current.set(openId, ++detailGeneration.current);
+              setDetailRefresh((current) => current + 1);
+            }
+            const opener = groupReturnFocusRef.current;
+            groupReturnFocusRef.current = null;
+            if (opener?.isConnected === true) opener.focus();
+          }}
         />
       )}
     </section>
@@ -1319,7 +1483,16 @@ export function ReceiptsView({
 }
 
 interface DrawerProps {
-  api: Pick<ReceiptsApi, "confirmReceipt" | "deleteReceipt" | "fetchReceiptLinkGroupDetail">;
+  api: Pick<
+    ReceiptsApi,
+    | "confirmReceipt"
+    | "deleteReceipt"
+    | "fetchReceiptLinkGroupDetail"
+    | "receiptGroupCandidates"
+    | "linkReceiptGroup"
+    | "unlinkReceiptGroup"
+    | "isAuthorizationLocked"
+  >;
   store: PendingReceiptStore;
   accounts: readonly BudgetAccount[];
   connections: readonly BudgetConnection[];
@@ -1327,6 +1500,7 @@ interface DrawerProps {
   detailState: DetailState;
   imageState: ImageState;
   actionBusy: ReceiptActionKind | null;
+  groupControllerOpen: boolean;
   isOpenReceipt: (receiptId: string) => boolean;
   getLatestCandidates: (receiptId: string) => readonly ReceiptCandidate[] | null;
   resolveDetailDraft: (
@@ -1337,11 +1511,14 @@ interface DrawerProps {
   onAccessLoss: ReceiptAccessBarrier;
   onClose: () => void;
   onOpenReceipt: (receiptId: string) => void;
+  onOpenGroupCandidates: (detail: ReceiptDetail, trigger: HTMLButtonElement | null) => void;
+  onReviewGroupProposal: (detail: ReceiptDetail, proposal: ReceiptGroupCandidate, trigger: HTMLButtonElement | null) => void;
   onRetryDetail: () => void;
   onConfirmed: (receipt: ReceiptDetail) => void;
+  onGroupUnlinked: (receiptId: string) => void;
   onConflictOrStale: (receiptId: string) => void;
   onNotFound: (receiptId: string) => void;
-  onDeleted: (receiptId: string) => void;
+  onDeleted: (receiptId: string, dissolvedGroup?: boolean) => void;
   onMutationError: () => void;
 }
 
@@ -1377,15 +1554,40 @@ function ReceiptGroupDocumentRow({ receipt, current, locale, onOpenReceipt }: {
   );
 }
 
-function ReceiptGroupSection({ api, group, receipt, accounts, connections, locale, onOpenReceipt, onAccessLoss }: {
-  api: Pick<ReceiptsApi, "fetchReceiptLinkGroupDetail">;
+function ReceiptGroupSection({
+  api,
+  group,
+  receipt,
+  accounts,
+  connections,
+  locale,
+  actionBusy,
+  confirmingDissolve,
+  actionError,
+  onOpenReceipt,
+  onAccessLoss,
+  onGroupDetailLoaded,
+  onUnlinkGroup,
+  onStartDissolveDelete,
+  onConfirmDissolveDelete,
+  onCancelDissolveDelete,
+}: {
+  api: Pick<ReceiptsApi, "fetchReceiptLinkGroupDetail" | "unlinkReceiptGroup">;
   group: ReceiptGroupLink;
   receipt: ReceiptDetail;
   accounts: readonly BudgetAccount[];
   connections: readonly BudgetConnection[];
   locale: string;
+  actionBusy: ReceiptActionKind | null;
+  confirmingDissolve: boolean;
+  actionError: string | null;
   onOpenReceipt: (receiptId: string) => void;
   onAccessLoss: ReceiptAccessBarrier;
+  onGroupDetailLoaded: (detail: ReceiptGroupDetail) => void;
+  onUnlinkGroup: (groupVersion: number) => void;
+  onStartDissolveDelete: () => void;
+  onConfirmDissolveDelete: (groupVersion: number) => void;
+  onCancelDissolveDelete: () => void;
 }) {
   const { group_id: groupId } = group;
   const [state, setState] = useState<
@@ -1399,12 +1601,15 @@ function ReceiptGroupSection({ api, group, receipt, accounts, connections, local
     setState({ kind: "loading" });
     void api.fetchReceiptLinkGroupDetail(groupId).then((result) => {
       if (onAccessLoss(result, { explicitDisabledOnly: true }) || !active) return;
-      setState(result.ok && result.data.group.group_id === groupId
-        ? { kind: "ready", detail: result.data }
-        : { kind: "error" });
+      if (result.ok && result.data.group.group_id === groupId) {
+        onGroupDetailLoaded(result.data);
+        setState({ kind: "ready", detail: result.data });
+      } else {
+        setState({ kind: "error" });
+      }
     });
     return () => { active = false; };
-  }, [api, groupId, onAccessLoss, attempt]);
+  }, [api, groupId, onAccessLoss, onGroupDetailLoaded, attempt]);
 
   const title = t("budget.receipts.linkedGroupSection");
   const groupDetail = state.kind === "ready" ? state.detail : null;
@@ -1432,6 +1637,9 @@ function ReceiptGroupSection({ api, group, receipt, accounts, connections, local
           })}</span>
         )}
       </div>
+      {currentGroup.group_status === "needs_review" ? (
+        <p className="budget-notice" role="note">{t("budget.receipts.groupNeedsReviewNote")}</p>
+      ) : null}
       {api.fetchReceiptLinkGroupDetail === undefined ? (
         <p className="budget-muted">{t("budget.receipts.detailError")}</p>
       ) : state.kind === "loading" ? (
@@ -1462,6 +1670,55 @@ function ReceiptGroupSection({ api, group, receipt, accounts, connections, local
           )}
         </>
       )}
+
+      {actionError === null ? null : <p className="budget-notice" role="alert">{actionError}</p>}
+
+      <div className="budget-actions">
+        {api.unlinkReceiptGroup === undefined ? null : (
+          <button
+            type="button"
+            disabled={actionBusy !== null}
+            onClick={() => { onUnlinkGroup(currentGroup.group_version); }}
+          >
+            {actionBusy === "group_unlink"
+              ? t("budget.receipts.unlinkingGroup")
+              : t("budget.receipts.unlinkGroupAction")}
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={actionBusy !== null}
+          onClick={onStartDissolveDelete}
+        >
+          {t("budget.receipts.dissolveDeleteAction")}
+        </button>
+      </div>
+
+      {confirmingDissolve ? (
+        <div className="budget-notice budget-receipt-delete-dialog" role="alertdialog" aria-label={t("budget.receipts.dissolveDeleteTitle")}>
+          <p><strong>{t("budget.receipts.dissolveDeleteTitle")}</strong></p>
+          <p className="budget-muted">{t("budget.receipts.dissolveDeleteBody")}</p>
+          <div className="budget-actions">
+            <button
+              type="button"
+              className="budget-primary"
+              disabled={actionBusy !== null}
+              onClick={() => { onConfirmDissolveDelete(currentGroup.group_version); }}
+            >
+              {actionBusy === "delete"
+                ? t("budget.receipts.deleting")
+                : t("budget.receipts.dissolveDeleteConfirm")}
+            </button>
+            <button
+              type="button"
+              disabled={actionBusy !== null}
+              onClick={onCancelDissolveDelete}
+            >
+              {t("budget.main.cancel")}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1475,6 +1732,7 @@ function ReceiptDetailDrawer({
   detailState,
   imageState,
   actionBusy,
+  groupControllerOpen,
   isOpenReceipt,
   getLatestCandidates,
   resolveDetailDraft,
@@ -1482,8 +1740,11 @@ function ReceiptDetailDrawer({
   onAccessLoss,
   onClose,
   onOpenReceipt,
+  onOpenGroupCandidates,
+  onReviewGroupProposal,
   onRetryDetail,
   onConfirmed,
+  onGroupUnlinked,
   onConflictOrStale,
   onNotFound,
   onDeleted,
@@ -1492,11 +1753,17 @@ function ReceiptDetailDrawer({
   const [confirmDraft, setConfirmDraft] = useState<ReceiptConfirmDraft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [confirmingDissolve, setConfirmingDissolve] = useState(false);
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
   const keepActionErrorRef = useRef(false);
   const drawerMountedRef = useRef(true);
+  const groupDetailRef = useRef<ReceiptGroupDetail | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const linkChoicesRef = useRef<HTMLFieldSetElement | null>(null);
+
+  const handleGroupDetailLoaded = useCallback((loaded: ReceiptGroupDetail) => {
+    groupDetailRef.current = loaded;
+  }, []);
 
   useLayoutEffect(() => { closeButtonRef.current?.focus(); }, []);
 
@@ -1507,14 +1774,15 @@ function ReceiptDetailDrawer({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && actionBusy === null) onClose();
+      if (event.key === "Escape" && actionBusy === null && !groupControllerOpen) onClose();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => { document.removeEventListener("keydown", onKeyDown); };
-  }, [onClose, actionBusy]);
+  }, [onClose, actionBusy, groupControllerOpen]);
 
   useEffect(() => {
     if (detailState.kind === "ready" && !isReceiptGrouped(detailState.detail)) {
+      groupDetailRef.current = null;
       const resolved = resolveDetailDraft(detailState.detail, detailState.candidates);
       setConfirmDraft(resolved.draft);
       setSuggestionDismissed(!resolved.showSuggestedBanner);
@@ -1526,17 +1794,34 @@ function ReceiptDetailDrawer({
         setActionError(null);
       }
       setConfirmingDelete(false);
+      setConfirmingDissolve(false);
+    } else if (detailState.kind === "ready") {
+      if (groupDetailRef.current?.group.group_id !== detailState.detail.link_group?.group_id) {
+        groupDetailRef.current = null;
+      }
+      setSuggestionDismissed(false);
+      setConfirmDraft(null);
+      if (keepActionErrorRef.current) {
+        keepActionErrorRef.current = false;
+      } else {
+        setActionError(null);
+      }
+      setConfirmingDelete(false);
+      setConfirmingDissolve(false);
     } else if (detailState.kind === "loading") {
       setSuggestionDismissed(false);
       setConfirmDraft(null);
       if (!keepActionErrorRef.current) setActionError(null);
       setConfirmingDelete(false);
+      setConfirmingDissolve(false);
     } else {
+      groupDetailRef.current = null;
       setSuggestionDismissed(false);
       keepActionErrorRef.current = false;
       setConfirmDraft(null);
       setActionError(null);
       setConfirmingDelete(false);
+      setConfirmingDissolve(false);
     }
   }, [detailState, resolveDetailDraft]);
 
@@ -1632,9 +1917,11 @@ function ReceiptDetailDrawer({
           onNotFound(detail.receipt_id);
           return;
         }
-        setActionError(isConflictOrStaleError(result)
-          ? t("budget.receipts.conflict")
-          : t("budget.receipts.deleteError"));
+        setActionError(result.error === "budget_receipt_in_group"
+          ? t("budget.receipts.inGroupConflict")
+          : isConflictOrStaleError(result)
+            ? t("budget.receipts.conflict")
+            : t("budget.receipts.deleteError"));
         if (isConflictOrStaleError(result)) {
           keepActionErrorRef.current = true;
           onConflictOrStale(detail.receipt_id);
@@ -1644,9 +1931,114 @@ function ReceiptDetailDrawer({
         }
         return;
       }
-      onDeleted(detail.receipt_id);
+      onDeleted(detail.receipt_id, false);
     } finally {
       store.release(detail.receipt_id, lockToken, handledInMountedDrawer ? undefined : outcome);
+    }
+  };
+
+  const submitUnlinkGroup = async (detail: ReceiptDetail, groupVersion: number) => {
+    const group = detail.link_group;
+    if (group == null || api.unlinkReceiptGroup === undefined || !isOpenReceipt(detail.receipt_id)) return;
+    if (api.isAuthorizationLocked?.() === true) {
+      setActionError(t("budget.main.serverChanged"));
+      return;
+    }
+    const acquired = acquireGroupParticipantLocks(
+      store,
+      "group_unlink",
+      detail.receipt_id,
+      groupDetailRef.current,
+      group.group_id,
+    );
+    if (acquired === null) {
+      setActionError(t("budget.receipts.groupBusyError"));
+      return;
+    }
+    keepActionErrorRef.current = false;
+    setActionError(null);
+    let outcome: ReceiptSettledEvent["outcome"] = "error";
+    let handledInMountedDrawer = false;
+    try {
+      const result = await api.unlinkReceiptGroup({
+        group_id: group.group_id,
+        expected_version: groupVersion,
+      });
+      outcome = settledOutcome(result, "group_unlinked");
+      const stillOpen = drawerMountedRef.current && isOpenReceipt(detail.receipt_id);
+      if (onAccessLoss(result, { explicitDisabledOnly: true }) || !stillOpen) return;
+      handledInMountedDrawer = true;
+      if (!result.ok) {
+        if (result.status === 404 || isConflictOrStaleError(result)) {
+          setActionError(t("budget.receipts.conflict"));
+          keepActionErrorRef.current = true;
+          onConflictOrStale(detail.receipt_id);
+          return;
+        }
+        setActionError(t("budget.receipts.groupUnlinkError"));
+        onMutationError();
+        return;
+      }
+      setConfirmingDissolve(false);
+      onGroupUnlinked(detail.receipt_id);
+    } finally {
+      releaseGroupParticipantLocks(store, acquired, handledInMountedDrawer ? undefined : outcome);
+    }
+  };
+
+  const submitDissolveDelete = async (detail: ReceiptDetail, groupVersion: number) => {
+    const group = detail.link_group;
+    if (group == null || !isOpenReceipt(detail.receipt_id)) return;
+    if (api.isAuthorizationLocked?.() === true) {
+      setActionError(t("budget.main.serverChanged"));
+      return;
+    }
+    const acquired = acquireGroupParticipantLocks(
+      store,
+      "delete",
+      detail.receipt_id,
+      groupDetailRef.current,
+      group.group_id,
+    );
+    if (acquired === null) {
+      setActionError(t("budget.receipts.groupBusyError"));
+      return;
+    }
+    keepActionErrorRef.current = false;
+    setActionError(null);
+    let outcome: ReceiptSettledEvent["outcome"] = "error";
+    let handledInMountedDrawer = false;
+    try {
+      const result = await api.deleteReceipt({
+        receipt_id: detail.receipt_id,
+        expected_version: detail.version,
+        dissolve_group: true,
+        expected_group_version: groupVersion,
+      });
+      outcome = settledOutcome(result, "deleted");
+      const stillOpen = drawerMountedRef.current && isOpenReceipt(detail.receipt_id);
+      if (onAccessLoss(result) || !stillOpen) return;
+      handledInMountedDrawer = true;
+      if (!result.ok) {
+        if (result.status === 404) {
+          onNotFound(detail.receipt_id);
+          return;
+        }
+        setActionError(isConflictOrStaleError(result)
+          ? t("budget.receipts.conflict")
+          : t("budget.receipts.deleteError"));
+        if (isConflictOrStaleError(result)) {
+          setConfirmingDissolve(false);
+          keepActionErrorRef.current = true;
+          onConflictOrStale(detail.receipt_id);
+        } else {
+          onMutationError();
+        }
+        return;
+      }
+      onDeleted(detail.receipt_id, true);
+    } finally {
+      releaseGroupParticipantLocks(store, acquired, handledInMountedDrawer ? undefined : outcome);
     }
   };
 
@@ -1695,7 +2087,7 @@ function ReceiptDetailDrawer({
     <div
       className="modal-overlay budget-receipt-overlay"
       onClick={(event) => {
-        if (event.target === event.currentTarget && actionBusy === null) onClose();
+        if (event.target === event.currentTarget && actionBusy === null && !groupControllerOpen) onClose();
       }}
     >
       <div className="modal-card budget-receipt-drawer" role="dialog" aria-modal="true" aria-label={title}>
@@ -1714,7 +2106,7 @@ function ReceiptDetailDrawer({
             <button type="button" onClick={onRetryDetail}>{t("budget.receipts.retry")}</button>
           </div>
         ) : (() => {
-          const { detail, candidates } = detailState;
+          const { detail, candidates, groupCandidates } = detailState;
           const group = detail.link_group;
           const currentCandidateSetKey = buildCandidateSetKey(detail, candidates);
           const storedKeepCandidate = findCurrentLinkedCandidate(detail, candidates);
@@ -1739,10 +2131,16 @@ function ReceiptDetailDrawer({
           const showCandidateRadios = detail.status !== "confirmed" && candidates.length > 0;
           const tokensDisabledByEdit = matchingChanged && (showKeepRadio || showCandidateRadios || detail.linked);
           const disableTokens = actionBusy !== null || !linkOptions.paymentAllowsLink || matchingChanged;
+          const strongSingleCandidate = preselectedCandidate(detail, candidates, draftMethod);
           const suggestedCandidate = activeDraft === null || suggestionDismissed || !linkOptions.canPickCandidates
             ? null
-            : preselectedCandidate(detail, candidates, draftMethod);
+            : strongSingleCandidate;
           const bannerCandidate = activeDraft?.linkChoice === "candidate:0" ? suggestedCandidate : null;
+          const canGroupWrites = api.receiptGroupCandidates !== undefined && api.linkReceiptGroup !== undefined;
+          const canGroupReceipt = group == null && canGroupWrites && isGroupMemberEligible(detail);
+          const groupProposal = canGroupReceipt && linkOptions.paymentAllowsLink && strongSingleCandidate === null
+            ? (groupCandidates[0] ?? null)
+            : null;
 
           return (
             <div className="budget-receipt-drawer-body">
@@ -1869,6 +2267,61 @@ function ReceiptDetailDrawer({
                 );
               })(bannerCandidate)}
 
+              {groupProposal === null ? null : ((proposal) => {
+                const accountText = receiptAccountLabel(
+                  accounts,
+                  connections,
+                  proposal.account_id,
+                  t("budget.main.account"),
+                );
+                const { primaryDate, bookingDayMonth, displayDistance } = suggestedCandidateDates(proposal, detail);
+                const baseDate = primaryDate ?? t("budget.receipts.noDate");
+                const dateText = bookingDayMonth === null
+                  ? baseDate
+                  : `${baseDate} ${t("budget.receipts.bookingDateNote", { date: bookingDayMonth })}`;
+                const daysText = displayDistance === 0
+                  ? t("budget.receipts.candidateSameDay")
+                  : t("budget.receipts.candidateDays", { days: displayDistance });
+                const amountText = formatAmount(
+                  proposal.amount,
+                  proposal.currency,
+                  locale,
+                  proposal.credit_debit_indicator,
+                );
+                const memberCount = Math.max(proposal.member_receipt_ids.length, proposal.member_receipts.length);
+                return (
+                  <section
+                    className="budget-notice budget-receipt-group-proposal"
+                    aria-label={t("budget.receipts.groupProposalHeading")}
+                  >
+                    <p>
+                      <strong>
+                        {t("budget.receipts.groupProposalSummary", {
+                          count: memberCount,
+                          amount: amountText,
+                        })}
+                      </strong>
+                    </p>
+                    <div className="budget-entry-main">
+                      <span className="budget-muted">{dateText}</span>
+                      <span className="budget-entry-text">{accountText} ({daysText})</span>
+                      <strong className={proposal.credit_debit_indicator === "DBIT" ? "is-debit" : "is-credit"}>
+                        {amountText}
+                      </strong>
+                    </div>
+                    <div className="budget-actions">
+                      <button
+                        type="button"
+                        disabled={actionBusy !== null || groupControllerOpen}
+                        onClick={(event) => { onReviewGroupProposal(detail, proposal, event.currentTarget); }}
+                      >
+                        {t("budget.receipts.reviewGroupAction")}
+                      </button>
+                    </div>
+                  </section>
+                );
+              })(groupProposal)}
+
               <dl className="budget-receipt-meta">
                 <dt>{t("budget.receipts.date")}</dt>
                 <dd>{detail.receipt_date ?? t("budget.receipts.noDate")}</dd>
@@ -1954,8 +2407,16 @@ function ReceiptDetailDrawer({
                   accounts={accounts}
                   connections={connections}
                   locale={locale}
+                  actionBusy={actionBusy}
+                  confirmingDissolve={confirmingDissolve}
+                  actionError={actionError}
                   onOpenReceipt={onOpenReceipt}
                   onAccessLoss={onAccessLoss}
+                  onGroupDetailLoaded={handleGroupDetailLoaded}
+                  onUnlinkGroup={(groupVersion) => { void submitUnlinkGroup(detail, groupVersion); }}
+                  onStartDissolveDelete={() => { setConfirmingDissolve(true); setActionError(null); }}
+                  onConfirmDissolveDelete={(groupVersion) => { void submitDissolveDelete(detail, groupVersion); }}
+                  onCancelDissolveDelete={() => { setConfirmingDissolve(false); }}
                 />
               ) : <section className="budget-receipt-section" aria-label={t("budget.receipts.linkSection")}>
                 <h5>{t("budget.receipts.linkSection")}</h5>
@@ -2000,7 +2461,20 @@ function ReceiptDetailDrawer({
                     )}
                   </div>
                 ) : (
-                  <p className="budget-muted">{t("budget.receipts.unlinkedState")}</p>
+                  <>
+                    <p className="budget-muted">{t("budget.receipts.unlinkedState")}</p>
+                    {canGroupReceipt ? (
+                      <div className="budget-actions">
+                        <button
+                          type="button"
+                          disabled={actionBusy !== null || groupControllerOpen}
+                          onClick={(event) => { onOpenGroupCandidates(detail, event.currentTarget); }}
+                        >
+                          {t("budget.receipts.groupWithOthersAction")}
+                        </button>
+                      </div>
+                    ) : null}
+                  </>
                 )}
               </section>}
 

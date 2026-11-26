@@ -14,7 +14,10 @@ export { RECEIPT_CONTRACT_HEADERS };
 export type ReceiptsApi = Pick<
   BudgetApi,
   "receiptsList" | "receiptsSearch" | "receiptDetail" | "receiptImage" | "confirmReceipt" | "deleteReceipt"
-> & Partial<Pick<BudgetApi, "fetchReceiptLinkGroupDetail" | "isAuthorizationLocked">>;
+> & Partial<Pick<
+  BudgetApi,
+  "fetchReceiptLinkGroupDetail" | "receiptGroupCandidates" | "linkReceiptGroup" | "unlinkReceiptGroup" | "isAuthorizationLocked"
+>>;
 
 export function createReceiptsApi(api: ReceiptsApi = budgetApi): ReceiptsApi {
   return {
@@ -23,6 +26,12 @@ export function createReceiptsApi(api: ReceiptsApi = budgetApi): ReceiptsApi {
     receiptDetail: (receiptId: string) => api.receiptDetail(receiptId),
     ...(api.fetchReceiptLinkGroupDetail === undefined ? {}
       : { fetchReceiptLinkGroupDetail: api.fetchReceiptLinkGroupDetail.bind(api) }),
+    ...(api.receiptGroupCandidates === undefined ? {}
+      : { receiptGroupCandidates: api.receiptGroupCandidates.bind(api) }),
+    ...(api.linkReceiptGroup === undefined ? {}
+      : { linkReceiptGroup: api.linkReceiptGroup.bind(api) }),
+    ...(api.unlinkReceiptGroup === undefined ? {}
+      : { unlinkReceiptGroup: api.unlinkReceiptGroup.bind(api) }),
     receiptImage: (receiptId: string) => api.receiptImage(receiptId),
     confirmReceipt: (request: ReceiptConfirmRequest) => api.confirmReceipt(request),
     deleteReceipt: (request: ReceiptDeleteRequest) => api.deleteReceipt(request),

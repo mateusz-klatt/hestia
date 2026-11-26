@@ -20,6 +20,12 @@ import type {
   ReceiptDeleteRequest,
   ReceiptDeleteResult,
   ReceiptDetailResult,
+  ReceiptGroupCandidatesResult,
+  ReceiptGroupDetailResult,
+  ReceiptGroupLinkRequest,
+  ReceiptGroupLinkResult,
+  ReceiptGroupUnlinkRequest,
+  ReceiptGroupUnlinkResult,
   ReceiptListRequest,
   ReceiptListResult,
   ReceiptSearchRequest,
@@ -347,16 +353,27 @@ export function createBudgetApi(expectedActor: string | null = null) {
     readReceipts<ReceiptDetailResult>(url("receipts/detail", { receipt_id: receiptId })),
   /** Reads the stored members and evidence of an owned receipt group. */
   fetchReceiptLinkGroupDetail: (groupId: string) =>
-    call<components["schemas"]["BudgetReceiptGroupDetailResult"]>(url("receipts/group/detail", { group_id: groupId }),
+    call<ReceiptGroupDetailResult>(url("receipts/group/detail", { group_id: groupId }),
       { headers: RECEIPT_GROUP_CONTRACT_HEADERS }),
+  /** Queries receipt-anchored M:1 group transaction candidates and eligible members via POST JSON (no legacy downgrade). */
+  receiptGroupCandidates: (receiptId: string) =>
+    post<ReceiptGroupCandidatesResult>("receipts/group/candidates", { receipt_id: receiptId },
+      RECEIPT_GROUP_CONTRACT_HEADERS, false),
+  /** Links 2..8 confirmed receipts (and optional standalone gateway evidence) to one bank transaction. */
+  linkReceiptGroup: (body: ReceiptGroupLinkRequest) =>
+    post<ReceiptGroupLinkResult>("receipts/group/link", body, RECEIPT_GROUP_CONTRACT_HEADERS, true),
+  /** Unlinks an M:1 receipt group with group expected_version CAS, restoring members to confirmed unlinked. */
+  unlinkReceiptGroup: (body: ReceiptGroupUnlinkRequest) =>
+    post<ReceiptGroupUnlinkResult>("receipts/group/unlink", body, RECEIPT_GROUP_CONTRACT_HEADERS, true),
   /** Fetches the owner-private WebP receipt image only when image_available is true. */
   receiptImage: (receiptId: string) => callBinary(url("receipts/image", { receipt_id: receiptId }), "image/webp"),
   /** Confirms receipt metadata, line items, and optional transaction link with expected_version CAS. */
   confirmReceipt: (body: ReceiptConfirmRequest) =>
     post<ReceiptConfirmResult>("receipts/confirm", body, RECEIPT_CONTRACT_HEADERS, true),
-  /** Deletes an owned receipt with expected_version CAS. */
+  /** Deletes an owned receipt with expected_version CAS (and optional group dissolution CAS). */
   deleteReceipt: (body: ReceiptDeleteRequest) =>
-    post<ReceiptDeleteResult>("receipts/delete", body, {}, true),
+    post<ReceiptDeleteResult>("receipts/delete", body,
+      body.dissolve_group ? RECEIPT_GROUP_CONTRACT_HEADERS : {}, true),
   setSelected: (account: BudgetAccount, selected: boolean) =>
     post<{ account: BudgetAccount }>("account-selection",
       { account_id: account.id, selected, expected_version: account.control_version }),
@@ -391,5 +408,12 @@ export function createBudgetApi(expectedActor: string | null = null) {
   };
 }
 
+export interface ReceiptGroupWriteApi {
+  receiptGroupCandidates: (receiptId: string) => Promise<BudgetResult<ReceiptGroupCandidatesResult>>;
+  linkReceiptGroup: (body: ReceiptGroupLinkRequest) => Promise<BudgetResult<ReceiptGroupLinkResult>>;
+  unlinkReceiptGroup: (body: ReceiptGroupUnlinkRequest) => Promise<BudgetResult<ReceiptGroupUnlinkResult>>;
+}
+
 export const budgetApi = createBudgetApi();
-export type BudgetApi = ReturnType<typeof createBudgetApi>;
+export type BudgetGroupCapableApi = ReturnType<typeof createBudgetApi>;
+export type BudgetApi = Omit<BudgetGroupCapableApi, keyof ReceiptGroupWriteApi> & Partial<ReceiptGroupWriteApi>;
