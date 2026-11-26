@@ -200,11 +200,13 @@ class PaymentExtractionTests(unittest.TestCase):
         body = "Wartość zamówienia: 21,90 PLN"
         notice = "Potwierdzenie anulowania zamówienia"
         for subject in (notice, notice + " we Example", notice + " w sklepie Example.",
-                        notice.upper().replace(" ", "\u00a0"), notice + " nr 12345"):
+                        notice.upper().replace(" ", "\u00a0"), notice + " nr 12345",
+                        notice.replace("ó", "&oacute;"), notice.replace("ó", "&amp;oacute;")):
             with self.subTest(subject=subject):
                 self.assertIsNone(_extract(body, subject))
         for subject in ("Prośba o " + notice.lower(), "Jak uzyskać " + notice.lower() + "?",
-                        notice + "?", notice + " nie jest dostępne", notice + " we Example nie zostało wysłane",
+                        notice + "?", notice.replace("ó", "&#243;") + "?", notice + " nie jest dostępne",
+                        notice + " we Example nie zostało wysłane",
                         "Nie otrzymano: " + notice, notice.ljust(256) + " nie dotarło"):
             with self.subTest(subject=subject):
                 self.assertEqual(_extract(body, subject).total_amount, "21.9")

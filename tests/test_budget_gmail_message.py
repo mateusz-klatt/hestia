@@ -114,8 +114,9 @@ class GmailMessageProcessorTests(unittest.TestCase):
         inner.add_attachment(b"%PDF-synthetic", maintype="application", subtype="pdf")
         attached = _email(OWNER, "Notatka do zamówienia.")
         attached.add_attachment(inner)
+        encoded = notice.replace("ó", "&amp;oacute;")
         inline = _email(SPOUSE, "Notatka.\n---------- Forwarded message ---------\n"
-                        f"From: {inner['From']}\nSubject: {notice}\n\nWartość zamówienia: 21,90 PLN")
+                        f"From: {inner['From']}\nSubject: {encoded}\n\nWartość zamówienia: 21,90 PLN")
         for message in (inner, attached, inline):
             with self.subTest(sender=message["From"]):
                 pending = self._process(_metadata(message), _raw(message))
