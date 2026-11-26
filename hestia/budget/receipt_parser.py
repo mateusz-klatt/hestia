@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
 import re
 import unicodedata
 
@@ -89,12 +90,26 @@ _DISCOUNT_AMOUNT = re.compile(
     rf"(?<![^\s:])(?P<amount>{_NUMBER})\s*(?:(?:PLN|Z[Łł])\s*)?(?:[A-G])?\Z",
     re.IGNORECASE | re.ASCII,
 )
+_SPLIT_DISCOUNT_AMOUNT = re.compile(
+    rf"(?P<amount>-{_OCR_ITEM_PRICE})\s+(?P<ptu>[A-G])\Z", re.IGNORECASE | re.ASCII,
+)
+_PRINT_SERIAL = re.compile(r"\s*nr\s+wydr\.?\s+[0-9]{6}/[0-9]{4}\s*\Z", re.IGNORECASE | re.ASCII)
+_DECIMAL_QUANTITY = re.compile(r"[0-9]+[.,][0-9]+\Z", re.ASCII)
+_UNNAMED_ITEM = "Pozycja bez nazwy"
 _REFUND_WORD = re.compile(r"\bzwrot(?:u|owi|em|y|ow|om|ami|ach)?\b")
 _MASTERCARD_PAYMENT = re.compile(r"^[ \t]*platnosc(?:[ \t]+|[ \t]*:[ \t]*)mastercard\b", re.MULTILINE)
 _UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.ASCII)
-_SHORT_AMOUNT = r"[+-]?[0-9]{1,9}(?:[.,][0-9]{1,4})?"
+_ARITHMETIC_AMOUNT = r"[0-9]{1,9}(?:[.,][0-9]{1,4})?"
+_SHORT_AMOUNT = rf"[+-]?{_ARITHMETIC_AMOUNT}"
+_BOUNDED_ARITHMETIC_AMOUNT = re.compile(_ARITHMETIC_AMOUNT, re.ASCII)
+_FISCAL_CALCULATION = re.compile(
+    rf"(?P<quantity>{_ARITHMETIC_AMOUNT})\s*(?P<unit>{_UNITS})\s*[x×*]\s*"
+    rf"(?P<unit_price>{_ARITHMETIC_AMOUNT})(?:\s*=\s*|\s+)(?P<gross>{_ARITHMETIC_AMOUNT})"
+    r"\s*(?:PLN\s*)?(?P<ptu>[A-G])\Z",
+    re.IGNORECASE | re.ASCII,
+)
 _CURRENCY_AMOUNT = re.compile(
     rf"(?<![A-Z0-9])(?:PLN|EUR|USD|GBP|CHF)\s*{_SHORT_AMOUNT}(?![0-9])"
     rf"|(?<![0-9]){_SHORT_AMOUNT}\s*(?:PLN|EUR|USD|GBP|CHF)(?![A-Z0-9])",
@@ -544,8 +559,16 @@ def _mask_structured(line):
 
 def _secret_lines(text):
     bad = set()
-    masked = "\n".join(_mask_structured(line) for line in text.split("\n"))
-    _mark_digit_runs(masked, bad)
+    lines = text.split("\n")
+    masked = [_mask_structured(line) for line in lines]
+    for index in range(1, len(lines)):
+        if _PRINT_SERIAL.fullmatch(lines[index - 1]):
+            calculation = _verified_bare_calculation(lines[index].strip())
+            if calculation is not None and _DECIMAL_QUANTITY.fullmatch(calculation["quantity"]):
+                # The serial remains redacted. Start a separate digit run on the corroborated sale row.
+                bad.add(index - 1)
+                masked[index] = "x" + masked[index]
+    _mark_digit_runs("\n".join(masked), bad)
     _mark_ibans(text, bad)
     return bad
 
@@ -907,11 +930,64 @@ def _item_match(value):
     })
 
 
+def _reconciled_gross(match):
+    if match is None:
+        return None
+    amounts = (match["quantity"], match["unit_price"], match["gross"])
+    if not all(value and _BOUNDED_ARITHMETIC_AMOUNT.fullmatch(value) for value in amounts):
+        return None
+    quantity, unit_price, gross = (Decimal(value.replace(",", ".")) for value in amounts)
+    if min(quantity, unit_price, gross) <= 0:
+        return None
+    rounded = (quantity * unit_price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return gross if rounded == gross else None
+
+
+def _verified_bare_calculation(value):
+    match = _FISCAL_CALCULATION.fullmatch(value)
+    return match if _reconciled_gross(match) is not None else None
+
+
+def _can_split_discount_item(item, gross, following):
+    discount = _SPLIT_DISCOUNT_AMOUNT.fullmatch(following)
+    if discount is None or item["ptu"] is None or item["ptu"].upper() != discount["ptu"].upper():
+        return False
+    amount = Decimal(discount["amount"].replace(",", ".")).copy_abs()
+    return 0 < amount <= gross
+
+
+def _item_rows(lines):
+    rows = iter(" ".join(raw.split()) for raw in lines)
+    value = next(rows, None)
+    while value is not None:
+        following = next(rows, None)
+        prefix = _DISCOUNT_PREFIX.match(value)
+        if prefix is not None and not any(
+            marker in fold_text(value) for marker in ("kupon", "bon ", "rabat cal", "rabat na ")
+        ):
+            name_and_price = value[prefix.end():].strip()
+            item = _named_unit_match(name_and_price) or _item_match(name_and_price)
+            has_arithmetic_tail = (item is not None and item["quantity"] is not None
+                                   and item["unit_price"] is not None and not item["gross"].startswith("-"))
+            if has_arithmetic_tail or _tail_match(name_and_price, (_OCR_ITEM_TAIL,)) is not None:
+                gross = _reconciled_gross(item)
+                if gross is not None and following is not None and _can_split_discount_item(item, gross, following):
+                    yield name_and_price
+                    yield "OPUST " + following
+                    following = next(rows, None)
+                else:
+                    # A product's gross amount cannot stand in for a discount.
+                    yield ""
+                value = following
+                continue
+        yield value
+        value = following
+
+
 def _parse_lines(lines):
-    result, pending = [], None
-    for raw in lines:
-        value = " ".join(raw.split())
-        if not value:
+    result, pending, pending_index = [], None, -2
+    for index, value in enumerate(_item_rows(lines)):
+        if not value or value == _REMOVED:
             continue
         discount_prefix = _DISCOUNT_PREFIX.match(value)
         discount = _DISCOUNT_AMOUNT.search(value[discount_prefix.end():]) if discount_prefix else None
@@ -933,26 +1009,30 @@ def _parse_lines(lines):
         elif match is not None:
             name = (match["name"] or "").strip() or pending or match["unit"]
         else:
-            match = _item_match(value)
-            name = None
+            match = _verified_bare_calculation(value)
             if match is not None:
-                name = match["name"]
+                name = pending if pending_index == index - 1 else _UNNAMED_ITEM
             else:
-                calculation = _CALCULATION.fullmatch(value)
-                if calculation is not None and pending:
-                    match, name = calculation, pending
+                match = _item_match(value)
+                name = None
+                if match is not None:
+                    name = match["name"]
+                else:
+                    calculation = _CALCULATION.fullmatch(value)
+                    if calculation is not None and pending:
+                        match, name = calculation, pending
         if match is None or name is None:
             key = fold_text(value)
             if (re.search(r"[A-Za-zĄ-ż]", value) and len(value) <= MAX_LINE_NAME_LEN
                     and not any(marker in key for marker in (
-                        "suma", "sprzedaz", "ptu", "karta", "gotowka", "blik", "paragon", "nip", "zwrot",
+                        "suma", "sprzedaz", "ptu", "karta", "gotowka", "blik", "paragon", "nip", "zwrot", "nr wydr",
                     ))):
-                pending = value
+                pending, pending_index = value, index
             continue
         if match["ptu"] is None and match["quantity"] is None:
             key = fold_text(name)
             if "kaucja" not in key and not any(token in key for token in ("kupon", "bon ", "rabat cal", "rabat na ")):
-                pending = value
+                pending, pending_index = value, index
                 continue
         if len(result) >= MAX_RECEIPT_LINES:
             raise ReceiptError()

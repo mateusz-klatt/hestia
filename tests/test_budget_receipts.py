@@ -209,6 +209,75 @@ NR KARTY ****5555
         self.assertEqual((regular["raw_name"], regular["unit_price_raw"], regular["gross_line_total"]),
                          ("PŁYN", "6.25", "6"))
 
+    def test_recovers_lost_names_and_split_discounts_from_fiscal_rows(self):
+        parsed = parse_receipt(
+            "SKLEP TESTOWY\nNr wydr. 123456/4321\n"
+            "7,19L * 5,32 38,25 B\n"
+            "PŁYN TESTOWY 1szt * 24,80 24,80 A\n"
+            "1szt * 6,25 6,25 A\nOPUST WODA 200ml -1,25 A\n"
+            "OPUST WODA 200ml, szt Iszt * 6,25 6,25 A\n-1,25 A\n"
+            "SUMA PLN 73,05\nOPAKOWANIA ZWROTNE WYDANIA\nKAUCJA 2 * 0.50 1,000\n"
+            "DO ZAPŁATY 74,05\nPłatność Mastercard-C 74,05\n"
+        )
+        self.assertEqual((parsed["receipt_kind"], parsed["payment_method"], parsed["math_delta"]),
+                         ("purchase", "card", "0"))
+        fuel, liquid, first_drink, second_drink, deposit = parsed["lines"]
+        self.assertEqual((fuel["raw_name"], fuel["quantity"], fuel["raw_unit"], fuel["unit_price_raw"],
+                          fuel["gross_line_total"], fuel["ptu_code"]),
+                         ("Pozycja bez nazwy", "7.19", "l", "5.32", "38.25", "B"))
+        self.assertEqual((liquid["gross_line_total"], liquid["discount_amount"]), ("24.8", "0"))
+        self.assertEqual((first_drink["raw_name"], second_drink["raw_name"]),
+                         ("Pozycja bez nazwy", "WODA 200ml, szt"))
+        for drink in (first_drink, second_drink):
+            self.assertEqual((drink["quantity"], drink["raw_unit"], drink["gross_line_total"],
+                              drink["discount_amount"], drink["net_line_total"]),
+                             ("1", "szt", "6.25", "1.25", "5"))
+        self.assertEqual((deposit["line_kind"], deposit["quantity"], deposit["net_line_total"]), ("deposit", "2", "1"))
+
+    def test_recovered_arithmetic_uses_only_an_adjacent_product_label(self):
+        parsed = parse_receipt(
+            "SKLEP TESTOWY\nPARAGON FISKALNY\n1szt * 3,00 3,00 A\n"
+            "MIÓD\n1kg * 7,00 7,00 A\n"
+            "2szt * 4,00 9,00 A\nSUMA PLN 19,00\n"
+        )
+        unnamed, named, gross_only = parsed["lines"]
+        self.assertEqual((unnamed["raw_name"], named["raw_name"], named["raw_unit"]),
+                         ("Pozycja bez nazwy", "MIÓD", "kg"))
+        self.assertEqual((gross_only["raw_name"], gross_only["raw_unit"], gross_only["gross_line_total"]),
+                         ("2szt * 4,00", None, "9"))
+
+    def test_only_splits_discount_with_corroborating_row(self):
+        for suspect, legacy_discount in (
+            ("OPUST WODA 2szt * 3,00 6,00 A", "0"),
+            ("OPUST WODA 2szt * 3,00 6,00 A\n\n-1,00 A", "0"),
+            ("OPUST WODA 2szt * 3,00 6,00 A\n-1,00 B", "0"),
+            ("OPUST WODA 2szt * 3,00 6,00 A\n-6,25 A", "0"),
+            ("OPUST WODA 2szt * 3,00 6,00\n-1,00 A", "0"),
+            ("OPUST WODA 2szt * 3,00 7,00 A\n-1,00 A", "0"),
+            ("OPUST WODA Iszt * 3,00 7,00 A\n-1,00 A", "0"),
+            ("OPUST WODA 1szt * 0,00 0,00 A\n-1,00 A", "0"),
+            ("OPUST WODA 2szt * 0,50 -1,00 A\n-1,00 A", "1"),
+            ("OPUST WODA 2,00 A\n-1,00 A", "2"),
+            ("OPUST WODA -2,00 A\n-1,00 A", "2"),
+            ("OPUST WODA\n-1,00 A", "0"),
+        ):
+            with self.subTest(suspect=suspect):
+                parsed = parse_receipt("SKLEP TESTOWY\nKUBEK 1szt * 20,00 20,00 A\n" + suspect)
+                [item] = parsed["lines"]
+                self.assertEqual((item["raw_name"], item["discount_amount"]), ("KUBEK", legacy_discount))
+        parsed = parse_receipt("SKLEP TESTOWY\nKUBEK 1szt * 20,00 20,00 A\nRABAT NA KOSZYK -2,00 A\n-1,00 A\n")
+        self.assertEqual([item["line_kind"] for item in parsed["lines"]], ["item", "basket_discount"])
+
+    def test_print_serial_boundary_keeps_number_redaction_for_unverified_rows(self):
+        header = "Nr wydr. 411111/1111\n"
+        good_row = "11,11L * 2,00 22,22 A"
+        self.assertEqual(redact_pan(header + good_row), "[usunięto]\n" + good_row)
+        for row in ("111111", "11,11L * 2,00 22,21 A", "11,11 * 2,00 22,22 A", "11,11L * 2,00 22,22",
+                    "11,11L 2,00 22,22 A", "12L * 2,00 24,00 A", "1,0L * 12341234 A",
+                    "411111111111,11L * 0,01 4111111111,11 A"):
+            with self.subTest(row=row):
+                self.assertEqual(redact_pan(header + row), "[usunięto]\n[usunięto]")
+
     def test_redact_pan_accepts_unicode_separators(self):
         groups = ("5351", "0055", "5555", "5555")
         digits = "".join(groups)
