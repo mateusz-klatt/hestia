@@ -67,8 +67,22 @@ class CmpClientError(Exception):
 class CmpRunLimitError(CmpClientError):
     """Raised when a poll run reaches its per-run request cap."""
 
-    def __init__(self) -> None:
-        super().__init__("run_limit", retryable=False)
+    def __init__(
+        self,
+        *,
+        attempted: bool = False,
+        cause_code: str = "run_limit",
+        http_status: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
+        self.attempted = attempted
+        self.cause_code = cause_code
+        super().__init__(
+            "run_limit",
+            http_status=http_status,
+            retryable=False,
+            retry_after=retry_after,
+        )
 
 
 @dataclass(frozen=True)
@@ -291,7 +305,12 @@ class CmpClient:
                 retry_after=retry_after,
             )
         if active_run.requests_made >= active_run.max_requests:
-            raise CmpRunLimitError()
+            raise CmpRunLimitError(
+                attempted=True,
+                cause_code=code,
+                http_status=response.status,
+                retry_after=retry_after,
+            )
         return delay
 
     def get_scheduler(
@@ -309,7 +328,7 @@ class CmpClient:
         attempt = 0
         while True:
             if active_run.requests_made >= active_run.max_requests:
-                raise CmpRunLimitError()
+                raise CmpRunLimitError(attempted=False)
             self._wait_spacing()
             self._last_dispatch = self.monotonic()
             active_run.requests_made += 1
@@ -325,7 +344,7 @@ class CmpClient:
                 if attempt >= self.policy.max_retries:
                     raise CmpClientError("network", retryable=True) from None
                 if active_run.requests_made >= active_run.max_requests:
-                    raise CmpRunLimitError() from None
+                    raise CmpRunLimitError(attempted=True, cause_code="network") from None
                 self.sleep(self._backoff_delay(attempt))
                 attempt += 1
                 continue

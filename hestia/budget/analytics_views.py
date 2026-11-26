@@ -1336,8 +1336,27 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
         )
         return entries
 
+    def _prune_expired_appointment_alerts(self, owner, evaluated_at):
+        from ..appointments.config import is_enabled
+        from ..appointments.store import AppointmentsStore
+
+        if not is_enabled():
+            return
+        AppointmentsStore(self.sessions, clock=lambda: evaluated_at).prune_expired_alerts(owner)
+
+    def _inbox_appointment_entries(self, session, owner, evaluated_at, *, prune_expired=True):
+        from ..appointments.notify import active_inbox_entries
+
+        return active_inbox_entries(
+            session,
+            owner,
+            now=evaluated_at,
+            session_secret=self._cursor_secret,
+            prune_expired=prune_expired,
+        )
+
     def _evaluate_active_inbox(self, session, owner, evaluated_at, evaluation_date, *, use_cache, kinds=None):
-        selected = set(inbox_mod.INBOX_KINDS) if kinds is None else kinds
+        selected = set(inbox_mod.LEGACY_INBOX_KINDS) if kinds is None else kinds
         entries = []
         try:
             if inbox_mod.KIND_DEVICE in selected:
@@ -1348,6 +1367,17 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 entries.extend(self._inbox_mortgage_entries(session, owner, evaluation_date))
             if inbox_mod.KIND_SPENDING in selected:
                 entries.extend(self._inbox_spending_entries(session, owner, evaluation_date[:7], use_cache=use_cache))
+            if (
+                inbox_mod.KIND_APPOINTMENT_SLOT in selected
+                or inbox_mod.KIND_APPOINTMENT_ATTENTION in selected
+            ):
+                entries.extend(
+                    entry
+                    for entry in self._inbox_appointment_entries(
+                        session, owner, evaluated_at, prune_expired=not use_cache
+                    )
+                    if entry["kind"] in selected
+                )
         except inbox_mod.OwnerInboxDataError:
             raise AnalyticsError(_DATA_ERROR, 500) from None
         return entries
@@ -1367,25 +1397,33 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             raise AnalyticsError(_DATA_ERROR, 500) from None
         return state, reads_revision, read_rows, tuples, reads_version
 
-    def inbox(self, owner):
+    def inbox(self, owner, *, include_appointments=False):
         """Pure read-only live active alerts inbox evaluated in one SQLite read snapshot."""
         evaluated_at = float(self._now())
         evaluation_date = datetime.fromtimestamp(evaluated_at, timezone.utc).date().isoformat()
+        kinds = set(inbox_mod.INBOX_KINDS) if include_appointments else set(inbox_mod.LEGACY_INBOX_KINDS)
+        if include_appointments:
+            self._prune_expired_appointment_alerts(owner, evaluated_at)
         with _read_lock, self._read(owner, permission=None) as session:
             _, reads_revision, read_rows, tuples, reads_version = self._inbox_read_state(session, owner)
-            active = self._evaluate_active_inbox(session, owner, evaluated_at, evaluation_date, use_cache=True)
+            active = self._evaluate_active_inbox(
+                session, owner, evaluated_at, evaluation_date, use_cache=True, kinds=kinds,
+            )
             read_map = {(kind, subject_id, milestone): read_at for kind, subject_id, milestone, read_at in tuples}
             try:
                 items = inbox_mod.build_inbox_items(active, read_map)
             except inbox_mod.OwnerInboxDataError:
                 raise AnalyticsError(_DATA_ERROR, 500) from None
+            budget_reads_count = sum(
+                row.kind not in inbox_mod.APPOINTMENT_INBOX_KINDS for row in read_rows
+            )
             return {
                 "evaluation_date": evaluation_date,
                 "evaluation_timezone": "UTC",
                 "evaluated_at": evaluated_at,
                 "reads_revision": reads_revision,
                 "reads_version": reads_version,
-                "reads_count": len(read_rows),
+                "reads_count": budget_reads_count,
                 "reads_cap": inbox_mod.MAX_INBOX_READS,
                 "unread_count": sum(not item["read"] for item in items),
                 "rule_version": inbox_mod.RULE_VERSION,
@@ -1401,7 +1439,9 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
         active_keys = {(entry["kind"], entry["subject_id"], entry["milestone"]) for entry in active}
         if any(key not in active_keys for key in changed_keys):
             raise AnalyticsError("budget_analytics_source_changed", 409)
-        if len(read_rows) + len(changed_keys) > inbox_mod.MAX_INBOX_READS:
+        budget_existing = sum(row.kind not in inbox_mod.APPOINTMENT_INBOX_KINDS for row in read_rows)
+        budget_added = sum(kind not in inbox_mod.APPOINTMENT_INBOX_KINDS for kind, _, _ in changed_keys)
+        if budget_added and budget_existing + budget_added > inbox_mod.MAX_INBOX_READS:
             raise AnalyticsError(_LIMIT_ERROR, 413)
         for kind, subject_id, milestone in changed_keys:
             session.add(db.BudgetOwnerInboxRead(
@@ -1418,6 +1458,8 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
     def _record_inbox_mark_audit(self, session, owner, changed_keys, read, old_revision, new_revision):
         action = "mark_read" if read else "mark_unread"
         for kind, subject_id, milestone in changed_keys:
+            if kind in inbox_mod.APPOINTMENT_INBOX_KINDS:
+                continue
             token = inbox_mod.opaque_key_token(kind, subject_id, milestone)
             self._analytics_audit(
                 session, owner, "owner_inbox_read", token, action,
@@ -1425,13 +1467,15 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 {"key_token": token, "kind": kind, "reads_revision": new_revision, "read": read},
             )
 
-    def mark_inbox(self, owner, *, items, read, expected_reads_version):
+    def mark_inbox(self, owner, *, items, read, expected_reads_version, include_appointments=False):
         """Atomically mark or unmark 1..100 inbox alert keys under anti-ABA reads_version CAS."""
         if (type(read) is not bool
                 or not isinstance(expected_reads_version, str)
                 or not inbox_mod._HEX64.fullmatch(expected_reads_version)):
             raise AnalyticsError()
         keys = inbox_mod.validate_mark_items(items)
+        if not include_appointments and any(kind in inbox_mod.APPOINTMENT_INBOX_KINDS for kind, _, _ in keys):
+            raise AnalyticsError()
         with self.transaction(owner) as session:
             self._owner(session, owner)
             state, reads_revision, read_rows, tuples, current_version = self._inbox_read_state(session, owner)
@@ -1440,10 +1484,13 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             existing_by_key = {(row.kind, row.subject_id, row.milestone): row for row in read_rows}
             changed_keys = [key for key in keys if (key not in existing_by_key if read else key in existing_by_key)]
             if not changed_keys:
+                budget_reads_count = sum(
+                    row.kind not in inbox_mod.APPOINTMENT_INBOX_KINDS for row in read_rows
+                )
                 return {
                     "read": read, "changed": False, "changed_count": 0,
                     "reads_revision": reads_revision, "reads_version": current_version,
-                    "reads_count": len(read_rows), "reads_cap": inbox_mod.MAX_INBOX_READS,
+                    "reads_count": budget_reads_count, "reads_cap": inbox_mod.MAX_INBOX_READS,
                 }
             now = float(self._now())
             new_tuples = (
@@ -1458,10 +1505,13 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             session.flush()
             new_version = inbox_mod.reads_version_digest(owner, new_revision, new_tuples)
             self._record_inbox_mark_audit(session, owner, changed_keys, read, reads_revision, new_revision)
+            budget_reads_count = sum(
+                row[0] not in inbox_mod.APPOINTMENT_INBOX_KINDS for row in new_tuples
+            )
             return {
                 "read": read, "changed": True, "changed_count": len(changed_keys),
                 "reads_revision": new_revision, "reads_version": new_version,
-                "reads_count": len(new_tuples), "reads_cap": inbox_mod.MAX_INBOX_READS,
+                "reads_count": budget_reads_count, "reads_cap": inbox_mod.MAX_INBOX_READS,
             }
 
     @staticmethod

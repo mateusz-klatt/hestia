@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 import hmac
 import json
 import math
@@ -21,10 +21,16 @@ from zoneinfo import ZoneInfo
 
 FLAG = "HESTIA_APPOINTMENTS_ENABLED"
 CONFIG_FILE = "HESTIA_APPOINTMENTS_CONFIG"
+SECRETS_DIR = "HESTIA_APPOINTMENTS_SECRETS_DIR"
 CMP_BASE_URL = "https://ic-api.cmp.med.pl/api/v1"
 WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 SUPPORTED_PROVIDERS = frozenset({"cmp"})
 SUPPORTED_AUTH_MODES = frozenset({"none", "bearer"})
+DEFAULT_ACTIVE_START = time(6, 0)
+DEFAULT_ACTIVE_END = time(23, 0)
+DEFAULT_SLOT_TTL_SECONDS = 7 * 86400
+DEFAULT_ALERT_TTL_SECONDS = 86400
+DISABLE_RETENTION_SECONDS = 7 * 86400
 
 _MAX_CONFIG_BYTES = 16 * 1024
 _MAX_TOKEN_BYTES = 16 * 1024
@@ -47,6 +53,15 @@ _POLICY_FIELDS = frozenset({
     "base_backoff_seconds",
     "max_backoff_seconds",
     "min_request_spacing_seconds",
+    "active_start",
+    "active_end",
+    "circuit_breaker_threshold",
+    "failure_backoff_base_seconds",
+    "failure_backoff_max_seconds",
+    "slot_ttl_seconds",
+    "alert_ttl_seconds",
+    "notify_window_seconds",
+    "notify_max_per_window",
 })
 _WATCH_REQUIRED = frozenset({"watch_id", "provider", "date_from", "date_to"})
 _WATCH_OPTIONAL = frozenset({
@@ -59,6 +74,8 @@ _WATCH_OPTIONAL = frozenset({
     "booked_slot",
     "only_better_than_booked",
     "label",
+    "specialty_label",
+    "clinic_label",
 })
 _BOOKED_REQUIRED = frozenset({"start"})
 _BOOKED_OPTIONAL = frozenset({
@@ -209,15 +226,35 @@ def _check_abs_path(value: object, label: str) -> str:
     return text
 
 
-def _read_secret(path: str, *, max_bytes: int = _MAX_CONFIG_BYTES) -> bytes:
-    """Safely read a regular, owner-only (0400/0600), non-symlink file with bounded size."""
+def _check_secret_dir(path: str, secrets_dir: str | Path | None) -> None:
+    if secrets_dir is None:
+        return
+    root = Path(secrets_dir)
+    if not root.is_absolute():
+        raise AppointmentsConfigError("Invalid secrets_dir")
+    try:
+        resolved_root = root.resolve(strict=False)
+        resolved_target = Path(path).resolve(strict=False)
+        if not resolved_target.is_relative_to(resolved_root) or resolved_target == resolved_root:
+            raise ValueError
+    except ValueError:
+        raise AppointmentsConfigError("Cannot safely read appointments secret file") from None
+
+
+def _read_secret(
+    path: str,
+    *,
+    max_bytes: int = _MAX_CONFIG_BYTES,
+    allowed_modes: tuple[int, ...] = (0o400, 0o600),
+) -> bytes:
+    """Safely read a regular, owner-only, non-symlink file with bounded size."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         try:
             info = os.fstat(fd)
             if (not stat.S_ISREG(info.st_mode)
                     or info.st_uid != os.geteuid()
-                    or stat.S_IMODE(info.st_mode) not in (0o400, 0o600)
+                    or stat.S_IMODE(info.st_mode) not in allowed_modes
                     or info.st_size > max_bytes):
                 raise ValueError
             chunks: list[bytes] = []
@@ -239,7 +276,7 @@ def _read_secret(path: str, *, max_bytes: int = _MAX_CONFIG_BYTES) -> bytes:
 
 @dataclass(frozen=True)
 class PollPolicy:
-    """Conservative, ToS-friendly polling and backoff ceilings."""
+    """Conservative, ToS-friendly polling, quiet-hours, backoff, TTL, and notify ceilings."""
 
     min_interval_seconds: int = 600
     max_interval_seconds: int = 900
@@ -248,6 +285,15 @@ class PollPolicy:
     base_backoff_seconds: float = 2.0
     max_backoff_seconds: float = 60.0
     min_request_spacing_seconds: float = 1.0
+    active_start: time = DEFAULT_ACTIVE_START
+    active_end: time = DEFAULT_ACTIVE_END
+    circuit_breaker_threshold: int = 5
+    failure_backoff_base_seconds: int = 900
+    failure_backoff_max_seconds: int = 21600
+    slot_ttl_seconds: int = DEFAULT_SLOT_TTL_SECONDS
+    alert_ttl_seconds: int = DEFAULT_ALERT_TTL_SECONDS
+    notify_window_seconds: int = 3600
+    notify_max_per_window: int = 5
 
     def __post_init__(self) -> None:
         min_iv = _check_int(self.min_interval_seconds, 300, 86400, "poll_policy")
@@ -257,6 +303,17 @@ class PollPolicy:
         base_b = _check_number(self.base_backoff_seconds, 1.0, 60.0, "poll_policy")
         max_b = _check_number(self.max_backoff_seconds, base_b, 600.0, "poll_policy")
         spacing = _check_number(self.min_request_spacing_seconds, 0.0, 60.0, "poll_policy")
+        if (type(self.active_start) is not time or self.active_start.tzinfo is not None
+                or type(self.active_end) is not time or self.active_end.tzinfo is not None
+                or self.active_start >= self.active_end):
+            raise AppointmentsConfigError("Invalid poll_policy")
+        _check_int(self.circuit_breaker_threshold, 1, 50, "poll_policy")
+        fail_base = _check_int(self.failure_backoff_base_seconds, 60, 86400, "poll_policy")
+        _check_int(self.failure_backoff_max_seconds, fail_base, 604800, "poll_policy")
+        slot_ttl = _check_int(self.slot_ttl_seconds, 3600, 30 * 86400, "poll_policy")
+        _check_int(self.alert_ttl_seconds, 300, min(86400, slot_ttl), "poll_policy")
+        _check_int(self.notify_window_seconds, 60, 86400, "poll_policy")
+        _check_int(self.notify_max_per_window, 1, 50, "poll_policy")
         object.__setattr__(self, "max_interval_seconds", max_iv)
         object.__setattr__(self, "base_backoff_seconds", base_b)
         object.__setattr__(self, "max_backoff_seconds", max_b)
@@ -267,6 +324,33 @@ class PollPolicy:
         factor = max(0.0, min(1.0, float(jitter())))
         span = self.max_interval_seconds - self.min_interval_seconds
         return float(self.min_interval_seconds) + span * factor
+
+    def is_active_window(self, now: float) -> bool:
+        """Return True iff ``now`` falls inside ``[active_start, active_end)`` in ``Europe/Warsaw``."""
+        local = datetime.fromtimestamp(now, timezone.utc).astimezone(WARSAW_TZ)
+        return self.active_start <= local.time() < self.active_end
+
+    def seconds_until_active(self, now: float) -> float:
+        """Return 0 during the active Warsaw window, else seconds until the next ``active_start``."""
+        if self.is_active_window(now):
+            return 0.0
+        local = datetime.fromtimestamp(now, timezone.utc).astimezone(WARSAW_TZ)
+        target_date = local.date() if local.time() < self.active_start else local.date() + timedelta(days=1)
+        target = datetime.combine(target_date, self.active_start, tzinfo=WARSAW_TZ)
+        return max(0.0, target.timestamp() - now)
+
+    def failure_backoff_delay(
+        self,
+        consecutive_failures: int,
+        *,
+        retry_after: float | None = None,
+    ) -> float:
+        """Compute capped exponential backoff after consecutive watch failures."""
+        exponent = max(0, consecutive_failures - 1)
+        delay = float(min(self.failure_backoff_max_seconds, self.failure_backoff_base_seconds * (2 ** exponent)))
+        if retry_after is not None and math.isfinite(retry_after) and retry_after > 0:
+            return float(max(delay, retry_after))
+        return delay
 
 
 @dataclass(frozen=True)
@@ -314,6 +398,8 @@ class WatchCriteria:
     booked_slot: BookedAppointment | None = None
     only_better_than_booked: bool = False
     label: str | None = None
+    specialty_label: str | None = None
+    clinic_label: str | None = None
 
     def __post_init__(self) -> None:
         _check_id(self.watch_id, "watch_id")
@@ -344,6 +430,10 @@ class WatchCriteria:
             raise AppointmentsConfigError("only_better_than_booked requires booked_slot")
         if self.label is not None:
             _check_text(self.label, "label", limit=64)
+        if self.specialty_label is not None:
+            _check_text(self.specialty_label, "specialty_label", limit=64)
+        if self.clinic_label is not None:
+            _check_text(self.clinic_label, "clinic_label", limit=64)
 
 
 @dataclass(frozen=True, repr=False)
@@ -432,20 +522,34 @@ def _parse_watch(raw: object) -> WatchCriteria:
         booked_slot=None if booked_raw is None else _parse_booked(booked_raw),
         only_better_than_booked=raw.get("only_better_than_booked", False),
         label=raw.get("label"),
+        specialty_label=raw.get("specialty_label"),
+        clinic_label=raw.get("clinic_label"),
     )
 
 
 def _parse_policy(raw: object) -> PollPolicy:
     if not isinstance(raw, dict) or raw.keys() - _POLICY_FIELDS:
         raise ValueError
-    return PollPolicy(**raw)
+    parsed = dict(raw)
+    if "active_start" in parsed:
+        parsed["active_start"] = _parse_time(parsed["active_start"])
+    if "active_end" in parsed:
+        parsed["active_end"] = _parse_time(parsed["active_end"])
+    return PollPolicy(**parsed)
 
 
-def _load_credentials(data: dict[str, object], env: Mapping[str, str]) -> tuple[CmpCredentials, bytes]:
+def _load_credentials(
+    data: dict[str, object],
+    env: Mapping[str, str],
+    *,
+    secret_modes: tuple[int, ...] = (0o400, 0o600),
+    secrets_dir: str | Path | None = None,
+) -> tuple[CmpCredentials, bytes]:
     auth_mode = data.get("auth_mode", "none")
     if auth_mode == "bearer":
         token_path = _check_abs_path(_env_ref(data, env, "auth_token_env"), "auth_token_file")
-        token_bytes = _read_secret(token_path, max_bytes=_MAX_TOKEN_BYTES)
+        _check_secret_dir(token_path, secrets_dir)
+        token_bytes = _read_secret(token_path, max_bytes=_MAX_TOKEN_BYTES, allowed_modes=secret_modes)
         token = _check_token(token_bytes.decode("ascii").strip("\r\n"))
         return CmpCredentials(auth_mode="bearer", bearer_token=token), token_bytes
     if "auth_token_env" in data:
@@ -460,11 +564,17 @@ def _load_hmac_secret(
     session_secret: bytes,
     token_bytes: bytes,
     token_text: str | None,
+    require_hmac: bool = False,
+    secret_modes: tuple[int, ...] = (0o400, 0o600),
+    secrets_dir: str | Path | None = None,
 ) -> bytes | None:
     if "hmac_key_env" not in data:
+        if require_hmac:
+            raise ValueError
         return None
     hmac_path = _check_abs_path(_env_ref(data, env, "hmac_key_env"), "hmac_key_file")
-    hmac_secret = _read_secret(hmac_path, max_bytes=_MAX_TOKEN_BYTES)
+    _check_secret_dir(hmac_path, secrets_dir)
+    hmac_secret = _read_secret(hmac_path, max_bytes=_MAX_TOKEN_BYTES, allowed_modes=secret_modes)
     if (len(hmac_secret) < _MIN_HMAC_BYTES
             or (session_secret and hmac.compare_digest(hmac_secret, session_secret))
             or (token_bytes and hmac.compare_digest(hmac_secret, token_bytes))
@@ -478,6 +588,8 @@ def load_settings(
     environ: Mapping[str, str] | None = None,
     session_secret: bytes = b"",
     require_enabled: bool = True,
+    require_runtime_secrets: bool = False,
+    secrets_dir: str | Path | None = None,
 ) -> AppointmentsSettings | None:
     """Load operator appointments settings; returns None when flag is OFF or config path is unset."""
     env = os.environ if environ is None else environ
@@ -486,8 +598,13 @@ def load_settings(
     path = env.get(CONFIG_FILE)
     if not path:
         return None
+    effective_secrets_dir: str | Path | None = (
+        env.get(SECRETS_DIR) if secrets_dir is None else secrets_dir
+    )
+    secret_modes = (0o400,) if require_runtime_secrets else (0o400, 0o600)
     try:
         config_path = _check_abs_path(path, "appointments_config")
+        _check_secret_dir(config_path, effective_secrets_dir)
         data = parse_strict_json(_read_secret(config_path, max_bytes=_MAX_CONFIG_BYTES))
         if (not isinstance(data, dict)
                 or not _TOP_REQUIRED <= data.keys()
@@ -507,13 +624,21 @@ def load_settings(
                 raise ValueError
             watch_ids.add(watch.watch_id)
             watches.append(watch)
-        credentials, token_bytes = _load_credentials(data, env)
+        credentials, token_bytes = _load_credentials(
+            data,
+            env,
+            secret_modes=secret_modes,
+            secrets_dir=effective_secrets_dir,
+        )
         hmac_secret = _load_hmac_secret(
             data,
             env,
             session_secret=session_secret,
             token_bytes=token_bytes,
             token_text=credentials.bearer_token,
+            require_hmac=require_runtime_secrets,
+            secret_modes=secret_modes,
+            secrets_dir=effective_secrets_dir,
         )
     except (OSError, ValueError, TypeError, KeyError, RecursionError, OverflowError):
         raise AppointmentsConfigError("Invalid appointments configuration") from None
@@ -524,4 +649,20 @@ def load_settings(
         poll_policy=poll_policy,
         watches=tuple(watches),
         hmac_secret=hmac_secret,
+    )
+
+
+def load_runtime_settings(
+    *,
+    environ: Mapping[str, str] | None = None,
+    session_secret: bytes = b"",
+    secrets_dir: str | Path | None = None,
+) -> AppointmentsSettings | None:
+    """Load settings enforcing Slice 2 runtime prerequisites (flag ON + strict 0400 secrets)."""
+    return load_settings(
+        environ=environ,
+        session_secret=session_secret,
+        require_enabled=True,
+        require_runtime_secrets=True,
+        secrets_dir=secrets_dir,
     )

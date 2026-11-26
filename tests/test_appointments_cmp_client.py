@@ -239,7 +239,7 @@ class CmpClientTests(TestCase):
         self.assertEqual(clock.sleeps, [1.5])
 
     def test_run_request_cap_and_non_retryable_errors(self) -> None:
-        # Cap hit mid-retry on HTTP 503 raises CmpRunLimitError without sleeping.
+        # Cap hit mid-retry on HTTP 503 raises CmpRunLimitError(attempted=True, cause_code='provider_http') without sleeping.
         clock = FakeClock()
         t_cap_http = FakeTransport([HTTPResponse(503, {}, b"")])
         c_cap_http = CmpClient(
@@ -247,28 +247,34 @@ class CmpClientTests(TestCase):
             policy=PollPolicy(max_requests_per_run=1, max_retries=3, min_request_spacing_seconds=0.0),
             sleep=clock.sleep,
         )
-        with self.assertRaises(CmpRunLimitError):
+        with self.assertRaises(CmpRunLimitError) as ctx_cap_http:
             c_cap_http.get_scheduler(self.query)
+        self.assertTrue(ctx_cap_http.exception.attempted)
+        self.assertEqual((ctx_cap_http.exception.cause_code, ctx_cap_http.exception.http_status), ("provider_http", 503))
         self.assertEqual(clock.sleeps, [])
 
-        # Cap hit mid-retry on TransportError raises CmpRunLimitError without sleeping.
+        # Cap hit mid-retry on TransportError raises CmpRunLimitError(attempted=True, cause_code='network') without sleeping.
         t_cap_net = FakeTransport([TransportError("reset")])
         c_cap_net = CmpClient(
             transport=t_cap_net,
             policy=PollPolicy(max_requests_per_run=1, max_retries=3, min_request_spacing_seconds=0.0),
             sleep=clock.sleep,
         )
-        with self.assertRaises(CmpRunLimitError):
+        with self.assertRaises(CmpRunLimitError) as ctx_cap_net:
             c_cap_net.get_scheduler(self.query)
+        self.assertTrue(ctx_cap_net.exception.attempted)
+        self.assertEqual(ctx_cap_net.exception.cause_code, "network")
         self.assertEqual(clock.sleeps, [])
 
-        # Cap already exhausted before dispatching raises CmpRunLimitError without calling transport.
+        # Cap already exhausted before dispatching raises CmpRunLimitError(attempted=False) without calling transport.
         t_exhausted = FakeTransport([])
         c_exhausted = CmpClient(transport=t_exhausted, policy=PollPolicy(max_requests_per_run=1))
         exhausted_run = c_exhausted.new_run()
         exhausted_run.requests_made = 1
-        with self.assertRaises(CmpRunLimitError):
+        with self.assertRaises(CmpRunLimitError) as ctx_exhausted:
             c_exhausted.get_scheduler(self.query, run=exhausted_run)
+        self.assertFalse(ctx_exhausted.exception.attempted)
+        self.assertEqual(ctx_exhausted.exception.cause_code, "run_limit")
         self.assertEqual(t_exhausted.calls, [])
 
         # 401/403 fail fast without retry and flag authorization attention.

@@ -679,7 +679,8 @@ class BudgetOwnerInboxRead(Base):
     __table_args__ = (
         Index("ix_budget_owner_inbox_reads_owner", "owner"),
         CheckConstraint(
-            "kind IN ('consent_renewal', 'mortgage_due', 'spending_limit', 'device_added')",
+            "kind IN ('consent_renewal', 'mortgage_due', 'spending_limit', 'device_added', "
+            "'appointment_slot', 'appointment_attention')",
             name="ck_budget_owner_inbox_reads_kind",
         ),
         CheckConstraint(
@@ -1220,6 +1221,144 @@ class BudgetGmailMessage(Base):
     outcome: Mapped[str]
     receipt_id: Mapped[str | None]
     created_at: Mapped[float]
+
+
+class AppointmentsWatchState(Base):
+    """Minimal per-watch health, opaque config key (never doctor/clinic/specialty IDs), and backoff state."""
+
+    __tablename__ = "appointments_watch_state"
+    __table_args__ = (
+        Index("ix_appointments_watch_state_updated", "updated_at"),
+        CheckConstraint("length(watch_id) BETWEEN 1 AND 64", name="ck_appointments_watch_state_watch_id"),
+        CheckConstraint("provider IN ('cmp')", name="ck_appointments_watch_state_provider"),
+        CheckConstraint(
+            "last_status IN ('ok', 'backoff', 'auth_attention', 'circuit_open', 'error')",
+            name="ck_appointments_watch_state_last_status",
+        ),
+        CheckConstraint(
+            "last_error_code IS NULL OR last_error_code IN "
+            "('network', 'rate_limit', 'provider_http', 'authorization', 'invalid_response', 'run_limit')",
+            name="ck_appointments_watch_state_last_error_code",
+        ),
+        CheckConstraint("consecutive_failures >= 0", name="ck_appointments_watch_state_failures"),
+        CheckConstraint("last_run_at IS NULL OR last_run_at >= 0", name="ck_appointments_watch_state_last_run_at"),
+        CheckConstraint("next_poll_at IS NULL OR next_poll_at >= 0", name="ck_appointments_watch_state_next_poll_at"),
+        CheckConstraint(
+            "cooldown_until IS NULL OR cooldown_until >= 0",
+            name="ck_appointments_watch_state_cooldown_until",
+        ),
+        CheckConstraint(
+            "attention_notified_at IS NULL OR attention_notified_at >= 0",
+            name="ck_appointments_watch_state_attention_notified_at",
+        ),
+        CheckConstraint(
+            "notify_window_start_at IS NULL OR notify_window_start_at >= 0",
+            name="ck_appointments_watch_state_notify_window_start",
+        ),
+        CheckConstraint("notify_window_count >= 0", name="ck_appointments_watch_state_notify_window_count"),
+        CheckConstraint("updated_at >= 0", name="ck_appointments_watch_state_updated_at"),
+    )
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"), primary_key=True)
+    watch_id: Mapped[str] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(server_default=text("'cmp'"))
+    last_status: Mapped[str] = mapped_column(server_default=text("'ok'"))
+    last_error_code: Mapped[str | None]
+    consecutive_failures: Mapped[int] = mapped_column(server_default=text("0"))
+    last_run_at: Mapped[float | None]
+    next_poll_at: Mapped[float | None]
+    cooldown_until: Mapped[float | None]
+    attention_notified_at: Mapped[float | None]
+    notify_window_start_at: Mapped[float | None]
+    notify_window_count: Mapped[int] = mapped_column(server_default=text("0"))
+    updated_at: Mapped[float]
+
+
+class AppointmentsActiveSlot(Base):
+    """Current active appointment slot HMAC hashes + coarse day bucket only (no IDs, names, or exact times)."""
+
+    __tablename__ = "appointments_active_slots"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["owner", "watch_id"],
+            ["appointments_watch_state.owner", "appointments_watch_state.watch_id"],
+            name="fk_appointments_active_slots_watch",
+            ondelete="CASCADE",
+        ),
+        Index("ix_appointments_active_slots_expiry", "expires_at", "slot_date"),
+        CheckConstraint(
+            "length(slot_hash) = 64 AND slot_hash NOT GLOB '*[^0-9a-f]*'",
+            name="ck_appointments_active_slots_hash",
+        ),
+        CheckConstraint(
+            "length(slot_date) = 10 AND slot_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'",
+            name="ck_appointments_active_slots_date",
+        ),
+        CheckConstraint("better_than_booked IN (0, 1)", name="ck_appointments_active_slots_better"),
+        CheckConstraint("pending_notify IN (0, 1)", name="ck_appointments_active_slots_pending"),
+        CheckConstraint("first_seen_at >= 0", name="ck_appointments_active_slots_first_seen"),
+        CheckConstraint("last_seen_at >= 0", name="ck_appointments_active_slots_last_seen"),
+        CheckConstraint("expires_at >= last_seen_at", name="ck_appointments_active_slots_expires"),
+        CheckConstraint("notified_at IS NULL OR notified_at >= 0", name="ck_appointments_active_slots_notified"),
+    )
+    owner: Mapped[str] = mapped_column(primary_key=True)
+    watch_id: Mapped[str] = mapped_column(primary_key=True)
+    slot_hash: Mapped[str] = mapped_column(primary_key=True)
+    slot_date: Mapped[str]
+    better_than_booked: Mapped[bool] = mapped_column(server_default=text("0"))
+    pending_notify: Mapped[bool] = mapped_column(server_default=text("0"))
+    first_seen_at: Mapped[float]
+    last_seen_at: Mapped[float]
+    expires_at: Mapped[float]
+    notified_at: Mapped[float | None]
+
+
+class AppointmentsInboxAlert(Base):
+    """Minimal metadata-only owner-inbox slot alert (zero human text or exact time at rest)."""
+
+    __tablename__ = "appointments_inbox_alerts"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["owner", "watch_id", "slot_hash"],
+            [
+                "appointments_active_slots.owner",
+                "appointments_active_slots.watch_id",
+                "appointments_active_slots.slot_hash",
+            ],
+            name="fk_appointments_inbox_alerts_slot",
+            ondelete="CASCADE",
+        ),
+        Index("ix_appointments_inbox_alerts_expires", "expires_at"),
+        CheckConstraint(
+            "length(slot_date) = 10 AND slot_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'",
+            name="ck_appointments_inbox_alerts_date",
+        ),
+        CheckConstraint(
+            "alert_kind IN ('better_slot', 'new_slot')",
+            name="ck_appointments_inbox_alerts_kind",
+        ),
+        CheckConstraint("created_at >= 0", name="ck_appointments_inbox_alerts_created"),
+        CheckConstraint("expires_at >= created_at", name="ck_appointments_inbox_alerts_expires"),
+    )
+    owner: Mapped[str] = mapped_column(primary_key=True)
+    watch_id: Mapped[str] = mapped_column(primary_key=True)
+    slot_hash: Mapped[str] = mapped_column(primary_key=True)
+    slot_date: Mapped[str]
+    alert_kind: Mapped[str] = mapped_column(server_default=text("'new_slot'"))
+    created_at: Mapped[float]
+    expires_at: Mapped[float]
+
+
+class AppointmentsPollerState(Base):
+    """Persisted round-robin watch start cursor preventing starvation under per-run request caps."""
+
+    __tablename__ = "appointments_poller_state"
+    __table_args__ = (
+        CheckConstraint("next_watch_index >= 0", name="ck_appointments_poller_state_index"),
+        CheckConstraint("updated_at >= 0", name="ck_appointments_poller_state_updated"),
+    )
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"), primary_key=True)
+    next_watch_index: Mapped[int] = mapped_column(server_default=text("0"))
+    updated_at: Mapped[float]
 
 
 metadata = Base.metadata

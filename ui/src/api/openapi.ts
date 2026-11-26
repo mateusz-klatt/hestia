@@ -3098,7 +3098,7 @@ export interface components {
              */
             evaluation_timezone: "UTC";
             /** Items */
-            items: (components["schemas"]["BudgetAnalyticsInboxConsentItem"] | components["schemas"]["BudgetAnalyticsInboxMortgageItem"] | components["schemas"]["BudgetAnalyticsInboxSpendingLimitItem"] | components["schemas"]["BudgetAnalyticsInboxDeviceItem"])[];
+            items: (components["schemas"]["BudgetAnalyticsInboxConsentItem"] | components["schemas"]["BudgetAnalyticsInboxMortgageItem"] | components["schemas"]["BudgetAnalyticsInboxSpendingLimitItem"] | components["schemas"]["BudgetAnalyticsInboxDeviceItem"] | components["schemas"]["BudgetAnalyticsInboxAppointmentSlotItem"] | components["schemas"]["BudgetAnalyticsInboxAppointmentAttentionItem"])[];
             /** Reads Cap */
             reads_cap: number;
             /** Reads Count */
@@ -3111,6 +3111,76 @@ export interface components {
             rule_version: number;
             /** Unread Count */
             unread_count: number;
+        };
+        /** BudgetAnalyticsInboxAppointmentAttentionItem */
+        BudgetAnalyticsInboxAppointmentAttentionItem: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "appointment_attention";
+            /** Milestone */
+            milestone: string;
+            params: components["schemas"]["BudgetAnalyticsInboxAppointmentAttentionParams"];
+            /** Read */
+            read: boolean;
+            /** Read At */
+            read_at: number | null;
+            ref: components["schemas"]["BudgetAnalyticsInboxAppointmentRef"];
+            /** Subject Id */
+            subject_id: string;
+        };
+        /** BudgetAnalyticsInboxAppointmentAttentionParams */
+        BudgetAnalyticsInboxAppointmentAttentionParams: {
+            /** Consecutive Failures */
+            consecutive_failures: number;
+            /**
+             * Error Code
+             * @enum {string}
+             */
+            error_code: "network" | "rate_limit" | "provider_http" | "authorization" | "invalid_response" | "run_limit";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "circuit_open" | "authorization";
+        };
+        /** BudgetAnalyticsInboxAppointmentRef */
+        BudgetAnalyticsInboxAppointmentRef: {
+            /** Watch Id */
+            watch_id: string;
+        };
+        /** BudgetAnalyticsInboxAppointmentSlotItem */
+        BudgetAnalyticsInboxAppointmentSlotItem: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "appointment_slot";
+            /** Milestone */
+            milestone: string;
+            params: components["schemas"]["BudgetAnalyticsInboxAppointmentSlotParams"];
+            /** Read */
+            read: boolean;
+            /** Read At */
+            read_at: number | null;
+            ref: components["schemas"]["BudgetAnalyticsInboxAppointmentRef"];
+            /** Subject Id */
+            subject_id: string;
+        };
+        /** BudgetAnalyticsInboxAppointmentSlotParams */
+        BudgetAnalyticsInboxAppointmentSlotParams: {
+            /** Better Than Booked */
+            better_than_booked: boolean;
+            /** Date */
+            date: string;
+            /** Message */
+            message: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "better_slot" | "new_slot";
         };
         /** BudgetAnalyticsInboxConsentItem */
         BudgetAnalyticsInboxConsentItem: {
@@ -3203,7 +3273,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "consent_renewal" | "mortgage_due" | "spending_limit" | "device_added";
+            kind: "consent_renewal" | "mortgage_due" | "spending_limit" | "device_added" | "appointment_slot" | "appointment_attention";
             /** Milestone */
             milestone: string;
             /** Subject Id */
@@ -9670,7 +9740,10 @@ export interface operations {
     getBudgetAnalyticsInbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Negotiate owner-private appointment_slot and appointment_attention inbox items starting at 0.58.0. Earlier versions or an omitted header receive only legacy inbox kinds. */
+                "X-Hestia-Contract-Version"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -9762,7 +9835,10 @@ export interface operations {
     markBudgetAnalyticsInbox: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Negotiate owner-private appointment_slot and appointment_attention inbox mark keys starting at 0.58.0. */
+                "X-Hestia-Contract-Version"?: string;
+            };
             path?: never;
             cookie?: never;
         };

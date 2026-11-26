@@ -1,8 +1,8 @@
 """Medical appointment slot monitoring (default OFF via HESTIA_APPOINTMENTS_ENABLED).
 
-Slice 1 provides operator configuration, the CMP response parser, the pure slot-diff
-engine, and the transport-injected CMP client. Nothing is wired into Hestia's web app,
-database, or background scheduler until Slice 2.
+Provides operator configuration, the CMP response parser, the pure slot-diff engine,
+the transport-injected CMP client, minimal SQLite HMAC persistence, owner_inbox
+notifications, the flag-gated off-loop poller, and always-on purge-on-disable hooks.
 """
 from __future__ import annotations
 
@@ -24,7 +24,13 @@ from .cmp_client import (
 from .config import (
     CMP_BASE_URL,
     CONFIG_FILE,
+    DEFAULT_ACTIVE_END,
+    DEFAULT_ACTIVE_START,
+    DEFAULT_ALERT_TTL_SECONDS,
+    DEFAULT_SLOT_TTL_SECONDS,
+    DISABLE_RETENTION_SECONDS,
     FLAG,
+    SECRETS_DIR,
     WARSAW_TZ,
     AppointmentsConfigError,
     AppointmentsSettings,
@@ -33,7 +39,17 @@ from .config import (
     PollPolicy,
     WatchCriteria,
     is_enabled,
+    load_runtime_settings,
     load_settings,
+)
+from .notify import (
+    AppointmentNotifier,
+    AttentionNotification,
+    NotifyBatchResult,
+    SlotNotification,
+    active_inbox_entries,
+    format_slot_message,
+    resolve_config_labels,
 )
 from .parser import (
     AppointmentSlot,
@@ -41,6 +57,16 @@ from .parser import (
     ParseResult,
     parse_cmp_scheduler,
     parse_cmp_scheduler_bytes,
+)
+from .poller import (
+    APPOINTMENTS_KEY,
+    HOUSEKEEPING_INTERVAL_SECONDS,
+    AppointmentsPollerService,
+    AppointmentsRunner,
+    PollCycleResult,
+    ServiceSlot,
+    build_service,
+    register,
 )
 from .slots import (
     SlotDiff,
@@ -52,11 +78,31 @@ from .slots import (
     slot_identity_key,
     slot_sort_key,
 )
+from .store import (
+    ActiveSlotRecord,
+    AppointmentsStore,
+    AppointmentsStoreError,
+    FailureResult,
+    InboxAlertRecord,
+    PurgeResult,
+    ReconcileResult,
+    WatchStateSnapshot,
+    diff_with_stored_hashes,
+    prune_expired_appointments,
+)
 
 __all__ = [
+    "APPOINTMENTS_KEY",
+    "ActiveSlotRecord",
+    "AppointmentNotifier",
     "AppointmentSlot",
     "AppointmentsConfigError",
+    "AppointmentsPollerService",
+    "AppointmentsRunner",
     "AppointmentsSettings",
+    "AppointmentsStore",
+    "AppointmentsStoreError",
+    "AttentionNotification",
     "BookedAppointment",
     "CMP_BASE_URL",
     "CONFIG_FILE",
@@ -67,28 +113,52 @@ __all__ = [
     "CmpRun",
     "CmpRunLimitError",
     "CmpSchedulerQuery",
+    "DEFAULT_ACTIVE_END",
+    "DEFAULT_ACTIVE_START",
+    "DEFAULT_ALERT_TTL_SECONDS",
+    "DEFAULT_SLOT_TTL_SECONDS",
     "DEFAULT_TIMEOUT_SECONDS",
+    "DISABLE_RETENTION_SECONDS",
     "FLAG",
+    "FailureResult",
+    "HOUSEKEEPING_INTERVAL_SECONDS",
     "HTTPResponse",
+    "InboxAlertRecord",
     "MAX_RESPONSE_BYTES",
+    "NotifyBatchResult",
     "ParseResult",
+    "PollCycleResult",
     "PollPolicy",
+    "PurgeResult",
+    "ReconcileResult",
     "SCHEDULER_PATH",
+    "SECRETS_DIR",
+    "ServiceSlot",
     "SlotDiff",
+    "SlotNotification",
     "Transport",
     "TransportError",
     "UrllibTransport",
     "WARSAW_TZ",
     "WatchCriteria",
+    "WatchStateSnapshot",
+    "active_inbox_entries",
+    "build_service",
     "dedupe_and_sort",
     "diff_slots",
+    "diff_with_stored_hashes",
+    "format_slot_message",
     "is_better_than_booked",
     "is_enabled",
+    "load_runtime_settings",
     "load_settings",
     "matches_criteria",
     "parse_cmp_scheduler",
     "parse_cmp_scheduler_bytes",
     "parse_retry_after",
+    "prune_expired_appointments",
+    "register",
+    "resolve_config_labels",
     "slot_digest",
     "slot_identity_key",
     "slot_sort_key",

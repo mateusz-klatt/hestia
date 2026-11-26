@@ -121,7 +121,9 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.55.0: additive match_strength ("nip" | "distinctive" | "generic" | "none") on BudgetReceiptCandidate.
 # 0.56.0: Gmail PDF no-text and multiple-document parse diagnostics.
 # 0.57.0: ID-first matching ("id" strength), receipt card_last4, and no_bank_data period signal.
-CONTRACT_VERSION = "0.57.0"
+# 0.58.0: additive owner-private
+#         appointment_slot & appointment_attention items on BudgetAnalyticsInbox.
+CONTRACT_VERSION = "0.58.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2540,7 +2542,14 @@ class BudgetAnalyticsMortgages(BaseModel):
     reminders: list[BudgetAnalyticsMortgageReminder]
 
 
-BudgetAnalyticsInboxKind = Literal["consent_renewal", "mortgage_due", "spending_limit", "device_added"]
+BudgetAnalyticsInboxKind = Literal[
+    "consent_renewal",
+    "mortgage_due",
+    "spending_limit",
+    "device_added",
+    "appointment_slot",
+    "appointment_attention",
+]
 BudgetAnalyticsInboxMilestone = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9:_-]+$")]
 
 
@@ -2654,9 +2663,52 @@ class BudgetAnalyticsInboxDeviceItem(BudgetAnalyticsInboxItemBase):
     params: BudgetAnalyticsInboxDeviceParams
 
 
+class BudgetAnalyticsInboxAppointmentRef(BaseModel):
+    model_config = _READ
+    watch_id: str
+
+
+class BudgetAnalyticsInboxAppointmentSlotParams(BaseModel):
+    model_config = _READ
+    status: Literal["better_slot", "new_slot"]
+    date: Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")]
+    message: Annotated[str, Field(min_length=1, max_length=256)]
+    better_than_booked: bool
+
+
+class BudgetAnalyticsInboxAppointmentSlotItem(BudgetAnalyticsInboxItemBase):
+    kind: Literal["appointment_slot"]
+    ref: BudgetAnalyticsInboxAppointmentRef
+    params: BudgetAnalyticsInboxAppointmentSlotParams
+
+
+class BudgetAnalyticsInboxAppointmentAttentionParams(BaseModel):
+    model_config = _READ
+    status: Literal["circuit_open", "authorization"]
+    error_code: Literal[
+        "network",
+        "rate_limit",
+        "provider_http",
+        "authorization",
+        "invalid_response",
+        "run_limit",
+    ]
+    consecutive_failures: Annotated[int, Field(ge=1)]
+
+
+class BudgetAnalyticsInboxAppointmentAttentionItem(BudgetAnalyticsInboxItemBase):
+    kind: Literal["appointment_attention"]
+    ref: BudgetAnalyticsInboxAppointmentRef
+    params: BudgetAnalyticsInboxAppointmentAttentionParams
+
+
 BudgetAnalyticsInboxItem = Annotated[
-    BudgetAnalyticsInboxConsentItem | BudgetAnalyticsInboxMortgageItem | BudgetAnalyticsInboxSpendingLimitItem
-    | BudgetAnalyticsInboxDeviceItem,
+    BudgetAnalyticsInboxConsentItem
+    | BudgetAnalyticsInboxMortgageItem
+    | BudgetAnalyticsInboxSpendingLimitItem
+    | BudgetAnalyticsInboxDeviceItem
+    | BudgetAnalyticsInboxAppointmentSlotItem
+    | BudgetAnalyticsInboxAppointmentAttentionItem,
     Field(discriminator="kind"),
 ]
 
@@ -5017,7 +5069,12 @@ def _analytics_paths():
         ("recurring", "getBudgetAnalyticsRecurring", "BudgetAnalyticsRecurring", [currency]),
         ("spending-limits", "getBudgetAnalyticsSpendingLimits", "BudgetAnalyticsSpendingLimits", [month, currency]),
         ("mortgages", "getBudgetAnalyticsMortgages", "BudgetAnalyticsMortgages", []),
-        ("inbox", "getBudgetAnalyticsInbox", "BudgetAnalyticsInbox", []),
+        ("inbox", "getBudgetAnalyticsInbox", "BudgetAnalyticsInbox", [{
+            "name": "X-Hestia-Contract-Version", "in": "header", "required": False,
+            "description": "Negotiate owner-private appointment_slot and appointment_attention inbox items "
+                           "starting at 0.58.0. Earlier versions or an omitted header receive only legacy inbox kinds.",
+            "schema": {"type": "string", "pattern": r"^0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$"},
+        }]),
         ("quarantine", "getBudgetAnalyticsQuarantine", "BudgetAnalyticsQuarantine",
          [_budget_query("account_id", description="Optional owned local account ID filter.")]),
         ("forecast", "getBudgetAnalyticsForecast", "BudgetAnalyticsForecast", [horizon, currency]),
@@ -5168,6 +5225,12 @@ def _analytics_paths():
     }
     for path, (summary, description) in batch_overrides.items():
         paths[prefix + path]["post"].update(summary=summary, description=description)
+    paths[prefix + "inbox-mark"]["post"]["parameters"] = [{
+        "name": "X-Hestia-Contract-Version", "in": "header", "required": False,
+        "description": "Negotiate owner-private appointment_slot and appointment_attention inbox mark keys "
+                       "starting at 0.58.0.",
+        "schema": {"type": "string", "pattern": r"^0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$"},
+    }]
     paths[prefix + "inbox-mark"]["post"]["summary"] = "Mark or unmark owner-private inbox alerts (atomic anti-ABA CAS)"
     paths[prefix + "inbox-mark"]["post"]["description"] = (
         "Requires the exact admin owner, browser cookie and configured HTTPS Origin. Atomically marks or unmarks "
