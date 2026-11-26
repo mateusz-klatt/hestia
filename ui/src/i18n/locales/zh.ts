@@ -269,6 +269,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "收据与凭证",
   "budget.main.disabled": "此服务器尚未启用预算功能。",
   "budget.main.denied": "只有预算所有者才能查看。",
+  "budget.main.sessionUpgrade": "您的会话需要刷新 — 请重新登录。",
+  "budget.main.relogin": "重新登录",
   "budget.main.error": "无法加载预算。请重试。",
   "budget.main.empty": "尚未配置银行连接。",
   "budget.main.account": "账户",

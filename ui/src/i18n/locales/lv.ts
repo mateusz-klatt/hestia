@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Čeki un dokumenti",
   "budget.main.disabled": "Budžets šajā serverī nav iespējots.",
   "budget.main.denied": "Budžetu var skatīt tikai tā īpašnieks.",
+  "budget.main.sessionUpgrade": "Jūsu sesija ir jāatjaunina — lūdzu, pierakstieties vēlreiz.",
+  "budget.main.relogin": "Pierakstīties vēlreiz",
   "budget.main.error": "Neizdevās ielādēt budžetu. Mēģiniet vēlreiz.",
   "budget.main.empty": "Nav konfigurētu bankas savienojumu.",
   "budget.main.account": "Konts",

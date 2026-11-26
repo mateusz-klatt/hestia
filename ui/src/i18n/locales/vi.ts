@@ -269,6 +269,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Biên lai và chứng từ",
   "budget.main.disabled": "Ngân sách chưa được bật trên máy chủ này.",
   "budget.main.denied": "Chỉ chủ ngân sách mới có thể xem.",
+  "budget.main.sessionUpgrade": "Phiên làm việc của bạn cần được làm mới — vui lòng đăng nhập lại.",
+  "budget.main.relogin": "Đăng nhập lại",
   "budget.main.error": "Không tải được ngân sách. Hãy thử lại.",
   "budget.main.empty": "Chưa thiết lập kết nối ngân hàng nào.",
   "budget.main.account": "Tài khoản",

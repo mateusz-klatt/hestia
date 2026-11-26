@@ -269,6 +269,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "ပြေစာနှင့် စာရွက်စာတမ်းများ",
   "budget.main.disabled": "ဤဆာဗာတွင် ဘတ်ဂျက်ကို ဖွင့်မထားပါ။",
   "budget.main.denied": "ဘတ်ဂျက်ပိုင်ရှင်သာ ကြည့်နိုင်သည်။",
+  "budget.main.sessionUpgrade": "သင့်ဆက်ရှင်ကို ပြန်လည်စတင်ရန် လိုအပ်ပါသည် — ကျေးဇူးပြု၍ ထပ်မံဝင်ရောက်ပါ။",
+  "budget.main.relogin": "ထပ်မံဝင်ရောက်ပါ",
   "budget.main.error": "ဘတ်ဂျက်ကို မတင်နိုင်ပါ။ ထပ်စမ်းပါ။",
   "budget.main.empty": "ဘဏ်ချိတ်ဆက်မှု မသတ်မှတ်ရသေးပါ။",
   "budget.main.account": "အကောင့်",

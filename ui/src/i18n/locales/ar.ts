@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "الإيصالات والمستندات",
   "budget.main.disabled": "الميزانية غير مفعّلة على هذا الخادم.",
   "budget.main.denied": "لا يمكن عرض الميزانية إلا لمالكها.",
+  "budget.main.sessionUpgrade": "تحتاج جلستك إلى تحديث — يُرجى تسجيل الدخول مجددًا.",
+  "budget.main.relogin": "تسجيل الدخول مجددًا",
   "budget.main.error": "تعذّر تحميل الميزانية. حاول مجددًا.",
   "budget.main.empty": "لم تُضبط أي اتصالات بالبنوك.",
   "budget.main.account": "الحساب",

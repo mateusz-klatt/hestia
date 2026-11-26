@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Fiskalni računi i dokumenti",
   "budget.main.disabled": "Budžet nije omogućen na ovom serveru.",
   "budget.main.denied": "Budžet može vidjeti samo njegov vlasnik.",
+  "budget.main.sessionUpgrade": "Vašu sesiju je potrebno osvježiti — prijavite se ponovo.",
+  "budget.main.relogin": "Prijavi se ponovo",
   "budget.main.error": "Nije moguće učitati budžet. Pokušajte ponovo.",
   "budget.main.empty": "Nije postavljena nijedna veza s bankom.",
   "budget.main.account": "Račun",

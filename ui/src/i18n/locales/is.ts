@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Kvittanir og skjöl",
   "budget.main.disabled": "Fjárhagsáætlun er ekki virk á þessum þjóni.",
   "budget.main.denied": "Aðeins eigandi fjárhagsáætlunarinnar getur skoðað hana.",
+  "budget.main.sessionUpgrade": "Endurnýja þarf lotuna þína — skráðu þig inn aftur.",
+  "budget.main.relogin": "Skrá inn aftur",
   "budget.main.error": "Ekki tókst að hlaða fjárhagsáætlun. Reyndu aftur.",
   "budget.main.empty": "Engar bankatengingar hafa verið settar upp.",
   "budget.main.account": "Reikningur",

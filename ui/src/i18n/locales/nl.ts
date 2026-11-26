@@ -267,6 +267,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Bonnen en documenten",
   "budget.main.disabled": "Het budget is niet ingeschakeld op deze server.",
   "budget.main.denied": "Alleen de eigenaar van het budget kan het bekijken.",
+  "budget.main.sessionUpgrade": "Je sessie moet worden vernieuwd — meld je opnieuw aan.",
+  "budget.main.relogin": "Opnieuw aanmelden",
   "budget.main.error": "Het budget kon niet worden geladen. Probeer het opnieuw.",
   "budget.main.empty": "Er zijn geen bankverbindingen ingesteld.",
   "budget.main.account": "Rekening",

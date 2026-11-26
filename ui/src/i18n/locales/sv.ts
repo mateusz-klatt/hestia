@@ -267,6 +267,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Kvitton och underlag",
   "budget.main.disabled": "Budgeten är inte aktiverad på den här servern.",
   "budget.main.denied": "Endast budgetens ägare kan se den.",
+  "budget.main.sessionUpgrade": "Din session behöver uppdateras — logga in igen.",
+  "budget.main.relogin": "Logga in igen",
   "budget.main.error": "Budgeten kunde inte läsas in. Försök igen.",
   "budget.main.empty": "Inga bankanslutningar är konfigurerade.",
   "budget.main.account": "Konto",

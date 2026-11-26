@@ -289,6 +289,8 @@ const en = {
   "budget.main.views.receipts": "Receipts and documents",
   "budget.main.disabled": "The budget is not enabled on this server.",
   "budget.main.denied": "Only the budget's owner can view it.",
+  "budget.main.sessionUpgrade": "Your session needs a refresh — please sign in again.",
+  "budget.main.relogin": "Sign in again",
   "budget.main.error": "The budget could not be loaded. Try again.",
   "budget.main.empty": "No bank connections are configured.",
   "budget.main.account": "Account",

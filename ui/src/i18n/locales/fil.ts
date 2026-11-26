@@ -269,6 +269,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Mga resibo at dokumento",
   "budget.main.disabled": "Hindi naka-enable ang badyet sa server na ito.",
   "budget.main.denied": "Tanging may-ari ng badyet ang maaaring tumingin nito.",
+  "budget.main.sessionUpgrade": "Kailangang i-refresh ang iyong session — mangyaring mag-sign in ulit.",
+  "budget.main.relogin": "Mag-sign in ulit",
   "budget.main.error": "Hindi ma-load ang badyet. Subukan ulit.",
   "budget.main.empty": "Walang naka-configure na koneksyon sa bangko.",
   "budget.main.account": "Account",

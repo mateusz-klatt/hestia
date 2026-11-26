@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Чеки и документы",
   "budget.main.disabled": "Бюджет на этом сервере не включён.",
   "budget.main.denied": "Просматривать бюджет может только его владелец.",
+  "budget.main.sessionUpgrade": "Вашу сессию необходимо обновить — пожалуйста, войдите снова.",
+  "budget.main.relogin": "Войти снова",
   "budget.main.error": "Не удалось загрузить бюджет. Повторите попытку.",
   "budget.main.empty": "Подключения к банкам не настроены.",
   "budget.main.account": "Счёт",

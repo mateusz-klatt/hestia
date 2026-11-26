@@ -271,6 +271,8 @@ const pl: Partial<Messages> = {
   "budget.main.views.receipts": "Paragony i dowody",
   "budget.main.disabled": "Budżet nie jest włączony na tym serwerze.",
   "budget.main.denied": "Budżet widzi tylko jego właściciel.",
+  "budget.main.sessionUpgrade": "Twoja sesja wymaga odświeżenia — zaloguj się ponownie.",
+  "budget.main.relogin": "Zaloguj się ponownie",
   "budget.main.error": "Nie udało się wczytać budżetu. Spróbuj ponownie.",
   "budget.main.empty": "Brak skonfigurowanych połączeń z bankiem.",
   "budget.main.account": "Konto",

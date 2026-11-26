@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Kvitai ir dokumentai",
   "budget.main.disabled": "Biudžetas šiame serveryje neįjungtas.",
   "budget.main.denied": "Biudžetą gali peržiūrėti tik jo savininkas.",
+  "budget.main.sessionUpgrade": "Jūsų seansą reikia atnaujinti — prisijunkite iš naujo.",
+  "budget.main.relogin": "Prisijungti iš naujo",
   "budget.main.error": "Nepavyko įkelti biudžeto. Bandykite dar kartą.",
   "budget.main.empty": "Nesukonfigūruota jokių banko ryšių.",
   "budget.main.account": "Sąskaita",

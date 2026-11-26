@@ -2,11 +2,12 @@
 // under the server's quotas and never talks to a bank from the browser. Data live only in component state.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { logout } from "../api/client";
 import { currentLocale, t, tPlural } from "../i18n";
 import { budgetApi, createBudgetApi } from "./api";
 import type { AuthorizationCapabilities, BudgetApi, BudgetResult } from "./api";
 import { ACTIVE_JOB, KINDS, accountLabel, defaultCreditLimitCurrency, effectiveState, formatAmount, freshness,
-  hasActiveJob, idempotencyKey, isAccessLoss, isComponentLimit, latestJob, limitState, newer,
+  hasActiveJob, idempotencyKey, isAccessLoss, isComponentLimit, isSessionUpgradeRequired, latestJob, limitState, newer,
   normalizeCreditCurrencyInput, normalizeCreditLimitInput, otherObservedCurrencies, presetRange, OPEN_FLOW, READY_FLOW,
   consentIntent, safeAuthorizationUrl, transactionDate, transactionText, validRange, when } from "./model";
 import type { BudgetAccount, BudgetBalances, BudgetCapabilities, BudgetConnection, BudgetCreditLimitValue, BudgetJob,
@@ -49,7 +50,7 @@ function serverMonthToToday(month: string): (() => Date) | undefined {
   return () => new Date(year, monthIndex, 15, 12);
 }
 
-type Load = "loading" | "ready" | "disabled" | "denied" | "error" | "serverChanged";
+type Load = "loading" | "ready" | "disabled" | "denied" | "error" | "serverChanged" | "sessionUpgrade";
 
 function failureText(error: string): string {
   switch (error) {
@@ -82,12 +83,16 @@ export interface BudgetProps {
   principal?: string | null;
   /** Leaves the page for the bank's authorization screen (tests inject a recorder). */
   navigate?: (url: string) => void;
+  /** Runs after logout when signing in again for a v2 session (tests inject a recorder). */
+  onLogout?: () => void;
   /** Where the standalone completion page lives. */
   completeUrl?: string;
 }
 
 export function Budget({ active, api: providedApi, receiptsApi: providedReceiptsApi, pollMs = 2000, principal,
-  navigate = (url) => { window.location.assign(url); }, completeUrl = "/budget/connect/complete" }: BudgetProps) {
+  navigate = (url) => { window.location.assign(url); },
+  onLogout = () => { window.location.reload(); },
+  completeUrl = "/budget/connect/complete" }: BudgetProps) {
   const api = useMemo<BudgetApi>(
     () => providedApi ?? (principal === undefined || principal === null ? budgetApi : createBudgetApi(principal)),
     [providedApi, principal],
@@ -95,6 +100,8 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   const effectiveReceiptsApi = providedReceiptsApi ?? api;
   const locale = currentLocale();
   const [load, setLoad] = useState<Load>("loading");
+  const [sessionUpgrade, setSessionUpgrade] = useState(false);
+  const [reloggingIn, setReloggingIn] = useState(false);
   const [connections, setConnections] = useState<BudgetConnection[]>([]);
   const [capabilities, setCapabilities] = useState<BudgetCapabilities | null>(null);
   const [authorization, setAuthorization] = useState<AuthorizationCapabilities | null>(null);
@@ -172,6 +179,8 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined);
       setView("accounts");
       setDevicesFocus(0);
+      setSessionUpgrade(false);
+      setReloggingIn(false);
       setLoad("loading");
     }
     lifecycle.current += 1;
@@ -208,9 +217,16 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
     setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined); setView("accounts");
     setDevicesFocus(0);
-    setLoad(next ?? (disabled ? "disabled" : "denied"));
+    const target = next ?? (disabled ? "disabled" : "denied");
+    setSessionUpgrade(target === "sessionUpgrade");
+    setReloggingIn(false);
+    setLoad(target);
   }, [api]);
   const barrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
+    if (isSessionUpgradeRequired(result)) {
+      if (alive.current) setSessionUpgrade(true);
+      return false;
+    }
     if (!isAccessLoss(result) && !(!result.ok && result.error === "budget_actor_changed")) return false;
     if (alive.current) invalidate(!result.ok && result.error === "budget_disabled");
     return true;
@@ -218,6 +234,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
 
   const reload = useCallback(async () => {
     const token = ++generation.current;
+    setSessionUpgrade(false);
     // Each response passes the barrier as soon as it arrives; a slow sibling cannot delay clearing.
     const watch = <T,>(request: Promise<BudgetResult<T>>) => request.then((result) => {
       // A lost-access answer clears the view even when a newer load has started since.
@@ -228,6 +245,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     if (!alive.current || token !== generation.current) return;
     if (!me.ok) {
       if (me.status === 404) invalidate(false, "serverChanged");
+      else if (isSessionUpgradeRequired(me)) invalidate(false, "sessionUpgrade");
       else {
         api.setAuthorizationLocked(true);
         setAuthorizationLocked(true);
@@ -256,7 +274,11 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     ]);
     if (token !== generation.current) return;
     if (!connected.ok || !listed.ok) {
-      setLoad("error");
+      if (isSessionUpgradeRequired(connected) || isSessionUpgradeRequired(listed)) {
+        invalidate(false, "sessionUpgrade");
+      } else {
+        setLoad("error");
+      }
       return;
     }
     setConnections((current) => newer(current, connected.data.connections));
@@ -276,6 +298,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     if (!alive.current || barrier(result)) return false;
     if (!result.ok) {
       if (result.status === 404) invalidate(false, "serverChanged");
+      else if (isSessionUpgradeRequired(result)) invalidate(false, "sessionUpgrade");
       else {
         api.setAuthorizationLocked(true);
         setAuthorizationLocked(true);
@@ -431,7 +454,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     if (!alive.current || started !== epoch.current || barrier(result)) return null;
     setBusy((current) => { const next = new Set(current); next.delete(key); return next; });
     if (!result.ok) {
-      setNotice(failureText(result.error));
+      if (!isSessionUpgradeRequired(result)) setNotice(failureText(result.error));
       if (result.error === "budget_version_conflict") await reload();
     }
     return result;
@@ -486,7 +509,9 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     const started = epoch.current;
     // Each read passes the access barrier as soon as it arrives; a hanging sibling cannot delay clearing.
     const watch = <T,>(request: Promise<BudgetResult<T>>) => request.then((result) => {
-      if (alive.current && started === epoch.current) barrier(result);
+      if (alive.current && started === epoch.current && (!cancelled || !isSessionUpgradeRequired(result))) {
+        barrier(result);
+      }
       return result;
     });
     void Promise.all([watch(api.consentStatus()), watch(api.consentPending())]).then(([status, open]) => {
@@ -504,7 +529,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     // Leave for the bank only if this is still the same visible budget for the same principal.
     if (result === null || !activeRef.current || lifecycle.current !== ticket) return;
     if (!result.ok) {
-      setNotice(consentFailureText(result.error));
+      if (!isSessionUpgradeRequired(result)) setNotice(consentFailureText(result.error));
       // An unfinished flow already exists: reload so its banner (finish / cancel) appears.
       if (result.error === "budget_consent_in_progress") await reload();
       return;
@@ -533,6 +558,11 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     });
     return () => { cancelled = true; };
   }, [active, showLimits, revision, api, barrier]);
+
+  const relogin = useCallback(() => {
+    setReloggingIn(true);
+    void logout().then(onLogout);
+  }, [onLogout]);
 
   if (!active) return null;
   const shownLoad: Load = principal === committedPrincipal ? load : "loading";
@@ -585,6 +615,18 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       </div>
     </header>
   );
+  const showSessionUpgrade = principal === committedPrincipal && (sessionUpgrade || shownLoad === "sessionUpgrade");
+  const upgradeBanner = showSessionUpgrade ? (
+    <div className="budget-notice budget-session-upgrade" role="alert">
+      <span>{t("budget.main.sessionUpgrade")}</span>
+      <button type="button" className="budget-primary" disabled={reloggingIn} onClick={relogin}>
+        {t("budget.main.relogin")}
+      </button>
+    </div>
+  ) : null;
+  if (shownLoad === "sessionUpgrade") {
+    return <section className="budget-app">{header}{upgradeBanner}</section>;
+  }
   if (shownLoad !== "ready") {
     const message = { loading: t("budget.main.loading"), disabled: t("budget.main.disabled"), denied: t("budget.main.denied"), error: t("budget.main.error") }[shownLoad];
     return <section className="budget-app">{header}<p className="budget-status" role="status">{message}</p></section>;
@@ -593,6 +635,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   return (
     <section className="budget-app">
       {header}
+      {upgradeBanner}
       {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
       {showLimits ? <p className="budget-muted">{t("budget.main.limitsIntro")}</p> : null}
       {showConsentHealth && consentEnabled ? (
@@ -1069,10 +1112,18 @@ function AccountDetail({ account, label, api, locale, revision, onAccessLoss, on
   );
 }
 
-export function mountBudget(element: HTMLElement, principal: string | null): { setActive: (active: boolean) => void; destroy: () => void } {
+export function mountBudget(
+  element: HTMLElement,
+  principal: string | null,
+  onLogout?: () => void,
+): { setActive: (active: boolean) => void; destroy: () => void } {
   const root = createRoot(element);
   return {
-    setActive: (active) => { root.render(<Budget active={active} principal={principal} />); },
+    setActive: (active) => {
+      root.render(onLogout === undefined
+        ? <Budget active={active} principal={principal} />
+        : <Budget active={active} principal={principal} onLogout={onLogout} />);
+    },
     destroy: () => { root.unmount(); },
   };
 }

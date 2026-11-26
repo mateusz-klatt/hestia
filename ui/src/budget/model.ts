@@ -207,8 +207,16 @@ export function otherObservedCurrencies(account: BudgetAccount): string[] {
   return (account.observed_balance_currencies ?? []).filter((currency) => currency !== declared);
 }
 
+/** A refusal that means a legacy browser session must sign in again under sessions-v2. */
+export function isSessionUpgradeRequired(result: { ok: boolean; status?: number; error?: string }): boolean {
+  return !result.ok && result.status === 401
+    && (result.error === "budget_browser_session_upgrade_required"
+      || result.error === "browser_session_upgrade_required");
+}
+
 /** A refusal that means "not this owner any more" (signed out, lost ledger capability) or "feature disabled". */
 export function isAccessLoss(result: { ok: boolean; status?: number; error?: string }): boolean {
+  if (isSessionUpgradeRequired(result)) return false;
   return !result.ok && (result.status === 401 || result.status === 403 || result.error === "budget_disabled");
 }
 

@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Makbuzlar ve belgeler",
   "budget.main.disabled": "Bu sunucuda bütçe etkin değil.",
   "budget.main.denied": "Bütçeyi yalnızca sahibi görüntüleyebilir.",
+  "budget.main.sessionUpgrade": "Oturumunuzun yenilenmesi gerekiyor — lütfen tekrar oturum açın.",
+  "budget.main.relogin": "Tekrar oturum aç",
   "budget.main.error": "Bütçe yüklenemedi. Tekrar deneyin.",
   "budget.main.empty": "Yapılandırılmış banka bağlantısı yok.",
   "budget.main.account": "Hesap",

@@ -269,6 +269,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "レシート・証憑",
   "budget.main.disabled": "このサーバーでは予算機能が有効になっていません。",
   "budget.main.denied": "予算を表示できるのは所有者のみです。",
+  "budget.main.sessionUpgrade": "セッションの更新が必要です — もう一度サインインしてください。",
+  "budget.main.relogin": "もう一度サインイン",
   "budget.main.error": "予算を読み込めませんでした。もう一度お試しください。",
   "budget.main.empty": "銀行接続が設定されていません。",
   "budget.main.account": "口座",

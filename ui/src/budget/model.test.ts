@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { account, component, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetJob, BudgetTransaction } from "./model";
 import { OPEN_FLOW, READY_FLOW, accountLabel, consentIntent, effectiveState, safeAuthorizationUrl, formatAmount, formatEstimate, freshness, hasActiveJob, idempotencyKey, isAccessLoss,
-  isComponentLimit, latestJob, limitState, newer, otherObservedCurrencies, presetRange, transactionDate,
+  isComponentLimit, isSessionUpgradeRequired, latestJob, limitState, newer, otherObservedCurrencies, presetRange, transactionDate,
   transactionText, validRange, when } from "./model";
 
 function job(changes: Partial<BudgetJob> = {}): BudgetJob {
@@ -107,6 +107,13 @@ describe("labels, dates and ranges", () => {
 describe("access loss and version-aware merges", () => {
   it("recognises lost principal and disabled feature only", () => {
     expect(isAccessLoss({ ok: false, status: 401, error: "x" })).toBe(true);
+    expect(isAccessLoss({ ok: false, status: 401, error: "budget_browser_session_upgrade_required" })).toBe(false);
+    expect(isAccessLoss({ ok: false, status: 401, error: "browser_session_upgrade_required" })).toBe(false);
+    expect(isSessionUpgradeRequired({ ok: false, status: 401, error: "budget_browser_session_upgrade_required" })).toBe(true);
+    expect(isSessionUpgradeRequired({ ok: false, status: 401, error: "browser_session_upgrade_required" })).toBe(true);
+    expect(isSessionUpgradeRequired({ ok: false, status: 401, error: "budget_http_401" })).toBe(false);
+    expect(isSessionUpgradeRequired({ ok: false, status: 403, error: "budget_browser_session_upgrade_required" })).toBe(false);
+    expect(isSessionUpgradeRequired({ ok: true })).toBe(false);
     expect(isAccessLoss({ ok: false, status: 403, error: "x" })).toBe(true);
     expect(isAccessLoss({ ok: false, status: 404, error: "budget_disabled" })).toBe(true);
     expect(isAccessLoss({ ok: false, status: 404, error: "budget_not_found" })).toBe(false);

@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Nyugták és bizonylatok",
   "budget.main.disabled": "A költségvetés nincs engedélyezve ezen a szerveren.",
   "budget.main.denied": "A költségvetést csak a tulajdonosa tekintheti meg.",
+  "budget.main.sessionUpgrade": "A munkamenet frissítésre szorul — kérjük, jelentkezzen be újra.",
+  "budget.main.relogin": "Újra bejelentkezés",
   "budget.main.error": "A költségvetés nem tölthető be. Próbálja újra.",
   "budget.main.empty": "Nincs beállítva banki kapcsolat.",
   "budget.main.account": "Számla",

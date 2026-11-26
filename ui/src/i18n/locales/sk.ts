@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Pokladničné doklady a dokumenty",
   "budget.main.disabled": "Rozpočet nie je na tomto serveri povolený.",
   "budget.main.denied": "Rozpočet môže zobraziť iba jeho vlastník.",
+  "budget.main.sessionUpgrade": "Vašu reláciu je potrebné obnoviť — prihláste sa prosím znova.",
+  "budget.main.relogin": "Prihlásiť sa znova",
   "budget.main.error": "Rozpočet sa nepodarilo načítať. Skúste to znova.",
   "budget.main.empty": "Nie sú nastavené žiadne bankové pripojenia.",
   "budget.main.account": "Účet",
