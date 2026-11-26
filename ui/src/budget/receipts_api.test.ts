@@ -312,6 +312,132 @@ describe("receipts api", () => {
       status: 503,
       error: "budget_server_changed",
     });
+    expect(await receiptsApi.receiptGroupCandidates?.("rec-42")).toEqual({
+      ok: false,
+      status: 503,
+      error: "budget_server_changed",
+    });
+    expect(await receiptsApi.linkReceiptGroup?.({
+      link: { account_id: "acc-1", entry_reference: "a".repeat(64), candidate_token: "tok" },
+      members: [{ receipt_id: "r1", expected_version: 1 }, { receipt_id: "r2", expected_version: 1 }],
+    })).toEqual({
+      ok: false,
+      status: 503,
+      error: "budget_server_changed",
+    });
+    expect(await receiptsApi.unlinkReceiptGroup?.({ group_id: "grp-1", expected_version: 1 })).toEqual({
+      ok: false,
+      status: 503,
+      error: "budget_server_changed",
+    });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("posts M:1 group candidates at contract 0.59.0 with zero legacy downgrade and respects actor/lock rules", async () => {
+    const payload = {
+      anchor_receipt_id: "rec-1",
+      transactions: [],
+      proposals: [],
+      eligible_receipts: [],
+      eligible_evidence: [],
+      no_bank_data: false,
+    };
+    const fetchMock = respond(200, payload);
+    const gate = createBudgetApi("owner");
+    await gate.capabilities();
+    const client = createReceiptsApi(gate);
+
+    gate.setAuthorizationLocked(true);
+    expect(await client.receiptGroupCandidates?.("rec-1")).toEqual({ ok: true, data: payload });
+    const req = sent(fetchMock, 1);
+    expect(req.url.pathname).toBe("/api/budget/receipts/group/candidates");
+    expect(req.init.method).toBe("POST");
+    expect(req.init.credentials).toBe("same-origin");
+    expect(req.init.cache).toBe("no-store");
+    expect(new Headers(req.init.headers).get(CONTRACT_HEADER)).toBe("0.59.0");
+    expect(new Headers(req.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
+    expect(JSON.parse(req.init.body as string)).toEqual({ receipt_id: "rec-1" });
+
+    fetchMock.mockImplementationOnce(() => Promise.resolve(
+      new Response(JSON.stringify({ error: { code: VERSION_ERROR } }), { status: 400 }),
+    ));
+    expect(await client.receiptGroupCandidates?.("rec-1")).toMatchObject({
+      ok: false, status: 400, error: VERSION_ERROR,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("gates M:1 group/link, group/unlink, and dissolve_group delete with 0.59.0, expected actor, and auth lock", async () => {
+    const linkResp = {
+      ok: true,
+      group: { group_id: "grp-1", group_version: 1, group_status: "confirmed", member_count: 2, evidence_receipt_id: null, fee_amount: null },
+      members: [],
+      evidence: null,
+      linked_account_id: "acc-1",
+      linked_entry_ref: "a".repeat(64),
+    };
+    const unlinkResp = { ok: true, unlinked: true, group_id: "grp-1", members: [], evidence: null };
+    const fetchMock = respond(200, linkResp);
+    const gate = createBudgetApi("owner");
+    await gate.capabilities();
+    const client = createReceiptsApi(gate);
+
+    const linkBody = {
+      link: { account_id: "acc-1", entry_reference: "a".repeat(64), candidate_token: "tok-group-1" },
+      members: [{ receipt_id: "r-1", expected_version: 2 }, { receipt_id: "r-2", expected_version: 3 }],
+      evidence_receipt_id: "ev-1",
+      evidence_expected_version: 4,
+      fee_amount: "0.50",
+    };
+    expect(await client.linkReceiptGroup?.(linkBody)).toEqual({ ok: true, data: linkResp });
+    const linkReq = sent(fetchMock, 1);
+    expect(linkReq.url.pathname).toBe("/api/budget/receipts/group/link");
+    expect(new Headers(linkReq.init.headers).get(CONTRACT_HEADER)).toBe("0.59.0");
+    expect(new Headers(linkReq.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
+    expect(JSON.parse(linkReq.init.body as string)).toEqual(linkBody);
+
+    fetchMock.mockImplementationOnce(() => Promise.resolve(new Response(JSON.stringify(unlinkResp), { status: 200 })));
+    expect(await client.unlinkReceiptGroup?.({ group_id: "grp-1", expected_version: 1 })).toEqual({
+      ok: true, data: unlinkResp,
+    });
+    const unlinkReq = sent(fetchMock, 2);
+    expect(unlinkReq.url.pathname).toBe("/api/budget/receipts/group/unlink");
+    expect(new Headers(unlinkReq.init.headers).get(CONTRACT_HEADER)).toBe("0.59.0");
+    expect(new Headers(unlinkReq.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
+    expect(JSON.parse(unlinkReq.init.body as string)).toEqual({ group_id: "grp-1", expected_version: 1 });
+
+    fetchMock.mockImplementationOnce(() => Promise.resolve(
+      new Response(JSON.stringify({ ok: true, deleted: true }), { status: 200 }),
+    ));
+    expect(await client.deleteReceipt({
+      receipt_id: "r-1",
+      expected_version: 2,
+      dissolve_group: true,
+      expected_group_version: 5,
+    })).toEqual({ ok: true, data: { ok: true, deleted: true } });
+    const delReq = sent(fetchMock, 3);
+    expect(delReq.url.pathname).toBe("/api/budget/receipts/delete");
+    expect(new Headers(delReq.init.headers).get(CONTRACT_HEADER)).toBe("0.59.0");
+    expect(JSON.parse(delReq.init.body as string)).toEqual({
+      receipt_id: "r-1",
+      expected_version: 2,
+      dissolve_group: true,
+      expected_group_version: 5,
+    });
+
+    fetchMock.mockImplementationOnce(() => Promise.resolve(
+      new Response(JSON.stringify({ error: { code: VERSION_ERROR } }), { status: 400 }),
+    ));
+    expect(await client.linkReceiptGroup?.(linkBody)).toMatchObject({ ok: false, status: 400, error: VERSION_ERROR });
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+
+    gate.setAuthorizationLocked(true);
+    expect(await client.linkReceiptGroup?.(linkBody)).toEqual({
+      ok: false, status: 503, error: "budget_server_changed",
+    });
+    expect(await client.unlinkReceiptGroup?.({ group_id: "grp-1", expected_version: 1 })).toEqual({
+      ok: false, status: 503, error: "budget_server_changed",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 });
