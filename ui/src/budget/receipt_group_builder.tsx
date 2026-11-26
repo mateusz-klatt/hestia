@@ -70,6 +70,7 @@ interface ReceiptGroupBuilderProps {
   labels: ReceiptGroupBuilderLabels;
   locale: string;
   accountLabel?: string | null;
+  disabled?: boolean;
   onConfirm: (selection: ReceiptGroupSelection) => void;
 }
 
@@ -107,7 +108,7 @@ export function ReceiptGroupBuilder(props: ReceiptGroupBuilderProps) {
   );
 }
 
-function GroupReview({ pool, labels, locale, accountLabel, onConfirm }: ReceiptGroupBuilderProps) {
+function GroupReview({ pool, labels, locale, accountLabel, disabled = false, onConfirm }: ReceiptGroupBuilderProps) {
   const headingId = useId();
   const countId = useId();
   const importedId = useId();
@@ -174,7 +175,7 @@ function GroupReview({ pool, labels, locale, accountLabel, onConfirm }: ReceiptG
               <input
                 type="checkbox"
                 checked={checked}
-                disabled={!checked && selected.length >= MAX_MEMBERS}
+                disabled={disabled || (!checked && selected.length >= MAX_MEMBERS)}
                 onChange={(event) => {
                   const next = new Map(selected.map((row) => [row.receipt_id, row.version]));
                   if (event.currentTarget.checked) next.set(member.receipt_id, member.version);
@@ -205,6 +206,7 @@ function GroupReview({ pool, labels, locale, accountLabel, onConfirm }: ReceiptG
                 <input
                   type="checkbox"
                   checked={selectedEvidence?.receipt_id === gateway.receipt_id}
+                  disabled={disabled}
                   onChange={(event) => {
                     setEvidenceChoice(event.currentTarget.checked ? reviewedReceipt(gateway) : null);
                   }}
@@ -231,10 +233,10 @@ function GroupReview({ pool, labels, locale, accountLabel, onConfirm }: ReceiptG
       <div className="budget-actions">
         <button
           type="button"
-          disabled={!canConfirm}
+          disabled={disabled || !canConfirm}
           aria-describedby={imported ? importedId : undefined}
           onClick={() => {
-            if (canConfirm) {
+            if (!disabled && canConfirm) {
               onConfirm({
                 transaction,
                 members: selected.map(reviewedReceipt),

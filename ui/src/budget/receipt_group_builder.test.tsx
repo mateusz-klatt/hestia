@@ -90,14 +90,18 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function render(pool: Omit<ReceiptGroupPool, "anchor_receipt_id">): Promise<void> {
+async function render(
+  pool: Omit<ReceiptGroupPool, "anchor_receipt_id"> & { anchor_receipt_id?: string },
+  disabled = false,
+): Promise<void> {
   await act(async () => {
     root.render(
       <ReceiptGroupBuilder
-        pool={{ ...pool, anchor_receipt_id: pool.members[0]?.receipt_id ?? "" }}
+        pool={{ anchor_receipt_id: pool.members[0]?.receipt_id ?? "", ...pool }}
         labels={labels}
         locale="en-US"
         accountLabel="Synthetic account"
+        disabled={disabled}
         onConfirm={onConfirm}
       />,
     );
@@ -341,5 +345,30 @@ describe("ReceiptGroupBuilder", () => {
     expect(onConfirm.mock.calls[0]?.[0].evidence).toEqual(
       { receipt_id: "alternate", expected_version: 5, status: "confirmed", fee_amount: null },
     );
+  });
+
+  it("locks all checkboxes and confirmation while disabled during pending writes", async () => {
+    const pool: ReceiptGroupPool = {
+      transaction,
+      anchor_receipt_id: "A",
+      members: [member("A", "0.10"), member("B", "0.20")],
+      evidence: [gateway()],
+    };
+    await render(pool, false);
+    await click(checkbox("Shop A"));
+    await click(checkbox("Shop B"));
+    expect(confirmButton().disabled).toBe(false);
+
+    await render(pool, true);
+    expect(checkbox("Shop A").disabled).toBe(true);
+    expect(checkbox("Shop B").disabled).toBe(true);
+    expect(checkbox("Synthetic Gateway").disabled).toBe(true);
+    expect(confirmButton().disabled).toBe(true);
+    await click(confirmButton());
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    await render(pool, false);
+    expect(checkbox("Shop A").disabled).toBe(false);
+    expect(confirmButton().disabled).toBe(false);
   });
 });

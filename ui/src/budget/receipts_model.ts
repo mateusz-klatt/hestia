@@ -16,11 +16,104 @@ export type ReceiptCandidate = Schemas["BudgetReceiptCandidate"];
 export type ReceiptLinkRequest = Schemas["BudgetReceiptLinkRequest"];
 export type ReceiptConfirmRequest = Schemas["BudgetReceiptConfirmRequest"];
 export type ReceiptConfirmResult = Schemas["BudgetReceiptConfirmResult"];
-export type ReceiptDeleteRequest = Schemas["BudgetReceiptDeleteRequest"];
-export type ReceiptDeleteResult = Schemas["BudgetReceiptDeleteResult"];
-export type ReceiptDetailResult = Schemas["BudgetReceiptDetailResult"];
+export type ReceiptDetailResult = Omit<Schemas["BudgetReceiptDetailResult"], "group_candidates"> & {
+  group_candidates?: ReceiptGroupCandidate[] | null;
+};
 export type ReceiptListResult = Schemas["BudgetReceiptListResult"];
+export type ReceiptLinkGroupRef = Schemas["BudgetReceiptLinkGroupRef"];
+export type ReceiptGroupDetailResult = Schemas["BudgetReceiptGroupDetailResult"];
 
+export type ReceiptDeleteRequest = Schemas["BudgetReceiptDeleteRequest"] & {
+  dissolve_group?: boolean;
+  expected_group_version?: number | null;
+};
+
+export interface ReceiptGroupTransactionCandidate {
+  account_id: string;
+  entry_reference: string;
+  amount: string;
+  currency: string;
+  credit_debit_indicator: "DBIT" | "CRDT";
+  transaction_date: string | null;
+  booking_date: string | null;
+  value_date: string | null;
+  merchant_token_hit: boolean;
+  match_strength: ReceiptCandidate["match_strength"];
+  date_distance: number;
+  evidence_fingerprint: string;
+  candidate_token: string;
+}
+
+export interface ReceiptGroupCandidate {
+  account_id: string;
+  entry_reference: string;
+  amount: string;
+  currency: string;
+  credit_debit_indicator: "DBIT" | "CRDT";
+  transaction_date: string | null;
+  booking_date: string | null;
+  value_date: string | null;
+  match_strength: ReceiptCandidate["match_strength"];
+  date_distance: number;
+  evidence_fingerprint: string;
+  candidate_token: string;
+  fee_amount: string | null;
+  evidence_receipt_id: string | null;
+  members_sum: string;
+  member_receipt_ids: string[];
+  member_receipts: ReceiptSummary[];
+  evidence?: ReceiptSummary | null;
+}
+
+export interface ReceiptGroupCandidatesRequest {
+  receipt_id: string;
+}
+
+export interface ReceiptGroupCandidatesResult {
+  anchor_receipt_id: string;
+  transactions: ReceiptGroupTransactionCandidate[];
+  proposals: ReceiptGroupCandidate[];
+  eligible_receipts: ReceiptSummary[];
+  eligible_evidence: ReceiptSummary[];
+  no_bank_data?: boolean | null;
+}
+
+export interface ReceiptGroupMemberInput {
+  receipt_id: string;
+  expected_version: number;
+}
+
+export interface ReceiptGroupLinkRequest {
+  link: ReceiptLinkRequest;
+  members: ReceiptGroupMemberInput[];
+  evidence_receipt_id?: string | null;
+  evidence_expected_version?: number | null;
+  fee_amount?: string | null;
+}
+
+export interface ReceiptGroupLinkResult {
+  ok: true;
+  group: ReceiptLinkGroupRef;
+  members: ReceiptSummary[];
+  evidence: ReceiptSummary | null;
+  linked_account_id: string | null;
+  linked_entry_ref: string | null;
+}
+
+export interface ReceiptGroupUnlinkRequest {
+  group_id: string;
+  expected_version: number;
+}
+
+export interface ReceiptGroupUnlinkResult {
+  ok: true;
+  unlinked: true;
+  group_id: string;
+  members: ReceiptSummary[];
+  evidence: ReceiptSummary | null;
+}
+
+export type ReceiptDeleteResult = Schemas["BudgetReceiptDeleteResult"];
 export type ReceiptListRequest = Partial<Schemas["BudgetReceiptListRequest"]>;
 type RawReceiptSearchRequest = Schemas["BudgetReceiptSearchRequest"];
 export type ReceiptSearchRequest =
@@ -32,6 +125,10 @@ export type ReceiptSourceKind = ReceiptSummary["source_kind"];
 export type ReceiptPaymentMethod = ReceiptConfirmRequest["payment_method"];
 export type ReceiptKind = ReceiptConfirmRequest["receipt_kind"];
 export type ReceiptLineKind = ReceiptLineInput["line_kind"];
+
+export function isReceiptGrouped(receipt: Pick<ReceiptSummary, "link_group">): boolean {
+  return receipt.link_group != null;
+}
 
 export const RECEIPT_STATUSES: readonly ReceiptStatus[] = ["imported", "needs_review", "confirmed", "draft"];
 export const RECEIPT_DOCUMENT_KINDS: readonly ReceiptDocumentKind[] = ["receipt", "invoice", "payment_confirmation"];
@@ -292,12 +389,12 @@ export function receiptAccountLabel(
 
 // ---- Per-status link actions, confirm validation & exact decimal arithmetic ----
 
-export type ReceiptActionKind = "confirm" | "delete";
+export type ReceiptActionKind = "confirm" | "delete" | "group_link" | "group_unlink";
 
 export interface ReceiptSettledEvent {
   receiptId: string;
   kind: ReceiptActionKind;
-  outcome: "confirmed" | "deleted" | "not_found" | "conflict" | "error";
+  outcome: "confirmed" | "deleted" | "group_linked" | "group_unlinked" | "not_found" | "conflict" | "error";
 }
 
 export interface PendingReceiptStore {
@@ -539,25 +636,26 @@ export function hasMatchingFieldsChanged(
 
 /** Models the exact link transitions `receipt_store.confirm` and `receipt_store.detail` support per status. */
 export function availableLinkOptions(
-  detail: Pick<ReceiptDetail, "status" | "linked" | "linked_account_id" | "linked_entry_ref">,
+  detail: Pick<ReceiptDetail, "status" | "linked" | "linked_account_id" | "linked_entry_ref" | "link_group">,
   candidates: readonly ReceiptCandidate[],
   paymentMethod: ReceiptPaymentMethod,
   matchingFieldsChanged = false,
 ): ReceiptLinkOptions {
-  const paymentAllowsLink = paymentMethod !== "cash" && paymentMethod !== "mixed";
-  const tokensValid = paymentAllowsLink && !matchingFieldsChanged;
-  const currentCandidate = findCurrentLinkedCandidate(detail, candidates);
-
-  if (detail.status === "confirmed") {
+  const grouped = isReceiptGrouped(detail);
+  const paymentAllowsLink = !grouped && paymentMethod !== "cash" && paymentMethod !== "mixed";
+  if (grouped || detail.status === "confirmed") {
     return {
       paymentAllowsLink,
       matchingFieldsChanged,
       canKeep: false,
       canPickCandidates: false,
-      mustUnlinkToConfirm: detail.linked,
+      mustUnlinkToConfirm: !grouped && detail.linked,
       currentCandidate: null,
     };
   }
+
+  const tokensValid = paymentAllowsLink && !matchingFieldsChanged;
+  const currentCandidate = findCurrentLinkedCandidate(detail, candidates);
 
   const canKeep = tokensValid && detail.linked && currentCandidate !== null;
   return {
@@ -580,14 +678,14 @@ export function isStrongMatchStrength(strength: ReceiptCandidate["match_strength
  * `"nip"` or `"distinctive"`.
  */
 export function preselectedCandidate(
-  detail: Pick<ReceiptDetail, "status" | "linked" | "linked_account_id" | "linked_entry_ref">,
+  detail: Pick<ReceiptDetail, "status" | "linked" | "linked_account_id" | "linked_entry_ref" | "link_group">,
   candidates: readonly ReceiptCandidate[],
   paymentMethod: ReceiptPaymentMethod,
 ): ReceiptCandidate | null {
   if (detail.status !== "imported" && detail.status !== "draft" && detail.status !== "needs_review") {
     return null;
   }
-  if (detail.linked || detail.linked_account_id !== null || detail.linked_entry_ref !== null) {
+  if (isReceiptGrouped(detail) || detail.linked || detail.linked_account_id !== null || detail.linked_entry_ref !== null) {
     return null;
   }
   if (paymentMethod === "cash" || paymentMethod === "mixed") {
@@ -1057,6 +1155,7 @@ export function buildConfirmRequest(
   candidates: readonly ReceiptCandidate[],
   summaryFallbackName = "Document",
 ): { ok: true; request: ReceiptConfirmRequest } | { ok: false; errorKey: MessageKey } {
+  if (isReceiptGrouped(detail)) return { ok: false, errorKey: "budget.receipts.invalidForm" };
   const origShop = (detail.raw_shop_name ?? "").trim();
   const shopName = draft.rawShopName.trim();
   const shopEdited = shopName !== origShop;
@@ -1228,14 +1327,14 @@ export function isGmailImportSource(sourceKind: ReceiptSourceKind): boolean {
 
 /** Only unlinked Gmail imports (`email` / `attachment` with `imported` status) support bulk confirm. */
 export function isBulkConfirmable(
-  receipt: Pick<ReceiptSummary, "status" | "source_kind" | "linked">,
+  receipt: Pick<ReceiptSummary, "status" | "source_kind" | "linked" | "link_group">,
 ): boolean {
-  return !receipt.linked && receipt.status === "imported" && isGmailImportSource(receipt.source_kind);
+  return !isReceiptGrouped(receipt) && !receipt.linked && receipt.status === "imported" && isGmailImportSource(receipt.source_kind);
 }
 
 /** True for OCR / paste / live-text drafts and non-Gmail items excluded from bulk confirm (distinct from `needs_review`). */
 export function isExcludedDraftForBulk(
-  receipt: Pick<ReceiptSummary, "status" | "source_kind" | "linked">,
+  receipt: Pick<ReceiptSummary, "status" | "source_kind" | "linked" | "link_group">,
 ): boolean {
   return !isBulkConfirmable(receipt) && receipt.status !== "needs_review" && receipt.status !== "confirmed";
 }
@@ -1365,14 +1464,14 @@ export function buildBulkSelectionPlan(
 export function uniqueIdCandidate(
   detail: Pick<
     ReceiptDetail,
-    "status" | "linked" | "linked_account_id" | "linked_entry_ref" | "payment_method" | "evidence_for_receipt_id"
+    "status" | "linked" | "linked_account_id" | "linked_entry_ref" | "payment_method" | "evidence_for_receipt_id" | "link_group"
   >,
   candidates: readonly ReceiptCandidate[],
 ): { candidate: ReceiptCandidate; index: number } | null {
   if (detail.status !== "imported" || detail.evidence_for_receipt_id !== null) {
     return null;
   }
-  if (detail.linked || detail.linked_account_id !== null || detail.linked_entry_ref !== null) {
+  if (isReceiptGrouped(detail) || detail.linked || detail.linked_account_id !== null || detail.linked_entry_ref !== null) {
     return null;
   }
   if (detail.payment_method === "cash" || detail.payment_method === "mixed") {
@@ -1452,5 +1551,218 @@ export function buildPlainBulkConfirmRequest(
 
 export function formatBulkErrorBucket(status: number | undefined, error: string): string {
   return status !== undefined && status > 0 ? `${String(status)} ${error}` : error;
+}
+
+// ---- M:1 receipt grouping eligibility, selection plans & safe write builders ----
+
+export const GROUP_MIN_MEMBERS = 2;
+export const GROUP_MAX_MEMBERS = 8;
+export const GROUP_MAX_SPAN_DAYS = 14;
+
+/** True when a receipt can participate as a member of an M:1 group (confirmed or imported). */
+export function isGroupMemberEligible(
+  receipt: Pick<
+    ReceiptSummary,
+    | "status"
+    | "linked"
+    | "linked_account_id"
+    | "linked_entry_ref"
+    | "link_group"
+    | "gateway"
+    | "evidence_for_receipt_id"
+    | "payment_method"
+    | "receipt_kind"
+    | "currency"
+    | "receipt_date"
+    | "total_amount"
+  >,
+): boolean {
+  if (isReceiptGrouped(receipt)) return false;
+  if (receipt.linked || receipt.linked_account_id !== null || receipt.linked_entry_ref !== null) return false;
+  if (receipt.status !== "confirmed" && receipt.status !== "imported") return false;
+  if (receipt.gateway != null || receipt.evidence_for_receipt_id != null) return false;
+  if (receipt.payment_method === "cash" || receipt.payment_method === "mixed") return false;
+  if (receipt.currency === null || !/^[A-Z]{3}$/.test(receipt.currency)) return false;
+  if (receipt.receipt_date === null || !validIsoDate(receipt.receipt_date)) return false;
+  if (receipt.total_amount === null) return false;
+  const normalized = normalizeDecimalInput(receipt.total_amount);
+  return normalized !== null && (compareDecimalStrings(normalized, "0") ?? -1) > 0;
+}
+
+export interface BulkGroupSelectionPlan {
+  readonly selected: ReceiptSummary[];
+  readonly eligible: boolean;
+  readonly reason: "none" | "count" | "ineligible" | "mismatch";
+  readonly currency: string | null;
+  readonly receiptKind: ReceiptKind | null;
+}
+
+/** Validates whether 2..8 list-selected receipts share one currency and kind for M:1 group review. */
+export function buildBulkGroupPlan(
+  rows: readonly ReceiptSummary[],
+  selectedIds: ReadonlySet<string>,
+): BulkGroupSelectionPlan {
+  const selected = rows.filter((row) => selectedIds.has(row.receipt_id));
+  if (selected.length === 0) {
+    return { selected, eligible: false, reason: "none", currency: null, receiptKind: null };
+  }
+  if (selected.length < GROUP_MIN_MEMBERS || selected.length > GROUP_MAX_MEMBERS) {
+    return { selected, eligible: false, reason: "count", currency: null, receiptKind: null };
+  }
+  if (selected.some((row) => !isGroupMemberEligible(row))) {
+    return { selected, eligible: false, reason: "ineligible", currency: null, receiptKind: null };
+  }
+  const first = selected[0];
+  if (first === undefined || first.currency === null) {
+    return { selected, eligible: false, reason: "ineligible", currency: null, receiptKind: null };
+  }
+  const sameScope = selected.every(
+    (row) => row.currency === first.currency && row.receipt_kind === first.receipt_kind,
+  );
+  if (!sameScope) {
+    return { selected, eligible: false, reason: "mismatch", currency: null, receiptKind: null };
+  }
+  return {
+    selected,
+    eligible: true,
+    reason: "none",
+    currency: first.currency,
+    receiptKind: first.receipt_kind,
+  };
+}
+
+/** True when all supplied ISO dates are valid and span at most `maxDays` calendar days. */
+export function isGroupDateSpanValid(
+  dates: readonly (string | null | undefined)[],
+  maxDays = GROUP_MAX_SPAN_DAYS,
+): boolean {
+  if (dates.length === 0) return false;
+  let minDay = Number.POSITIVE_INFINITY;
+  let maxDay = Number.NEGATIVE_INFINITY;
+  for (const raw of dates) {
+    const day = parseIsoDayNumber(raw);
+    if (day === null) return false;
+    if (day < minDay) minDay = day;
+    if (day > maxDay) maxDay = day;
+  }
+  return maxDay - minDay <= maxDays;
+}
+
+export function groupTransactionFromProposal(
+  proposal: ReceiptGroupCandidate,
+): ReceiptGroupTransactionCandidate {
+  return {
+    account_id: proposal.account_id,
+    entry_reference: proposal.entry_reference,
+    amount: proposal.amount,
+    currency: proposal.currency,
+    credit_debit_indicator: proposal.credit_debit_indicator,
+    transaction_date: proposal.transaction_date,
+    booking_date: proposal.booking_date,
+    value_date: proposal.value_date,
+    merchant_token_hit: proposal.match_strength !== "none",
+    match_strength: proposal.match_strength,
+    date_distance: proposal.date_distance,
+    evidence_fingerprint: proposal.evidence_fingerprint,
+    candidate_token: proposal.candidate_token,
+  };
+}
+
+/** Merges anchor, server eligible receipts, and optional bulk-selected rows, keeping fresher versions. */
+export function mergeGroupPoolMembers(
+  anchor: ReceiptSummary | null,
+  eligibleReceipts: readonly ReceiptSummary[],
+  extraMembers: readonly ReceiptSummary[] = [],
+): ReceiptSummary[] {
+  const byId = new Map<string, ReceiptSummary>();
+  if (anchor !== null) byId.set(anchor.receipt_id, anchor);
+  for (const row of eligibleReceipts) {
+    const prev = byId.get(row.receipt_id);
+    if (prev === undefined || row.version >= prev.version) byId.set(row.receipt_id, row);
+  }
+  for (const row of extraMembers) {
+    const prev = byId.get(row.receipt_id);
+    if (prev === undefined || row.version > prev.version) byId.set(row.receipt_id, row);
+  }
+  return [...byId.values()];
+}
+
+/** Builds a sequential unlinked pre-confirm (`link: null`) payload for an imported group member or evidence row. */
+export function buildGroupPreConfirmRequest(
+  detail: ReceiptDetail,
+  expectedVersion: number,
+  summaryFallbackName: string,
+): { ok: true; request: ReceiptConfirmRequest } | { ok: false; errorCode: string } {
+  if (detail.version !== expectedVersion || detail.status !== "imported") {
+    return { ok: false, errorCode: "budget_receipt_conflict" };
+  }
+  if (
+    isReceiptGrouped(detail)
+    || detail.linked
+    || detail.linked_account_id !== null
+    || detail.linked_entry_ref !== null
+    || detail.evidence_for_receipt_id !== null
+  ) {
+    return { ok: false, errorCode: "budget_receipt_tx_already_linked" };
+  }
+  if (detail.payment_method === "cash" || detail.payment_method === "mixed") {
+    return { ok: false, errorCode: "budget_receipt_invalid_request" };
+  }
+  const draft = draftFromDetail(detail, []);
+  draft.linkChoice = "unlink";
+  draft.selectedCandidate = null;
+  draft.keepBinding = null;
+  if (detail.lines.length === 0) {
+    if (detail.document_kind !== "invoice") {
+      return { ok: false, errorCode: "budget_receipt_total_mismatch" };
+    }
+    const normalizedTotal = detail.total_amount === null ? null : normalizeDecimalInput(detail.total_amount);
+    if (normalizedTotal === null) {
+      return { ok: false, errorCode: "budget_receipt_invalid_request" };
+    }
+    draft.lines.push(
+      synthesizeInvoiceSummaryLine(detail, detail.raw_shop_name ?? "", normalizedTotal, summaryFallbackName),
+    );
+  }
+  const built = buildConfirmRequest(detail, draft, [], summaryFallbackName);
+  if (!built.ok) {
+    return {
+      ok: false,
+      errorCode: built.errorKey === "budget.receipts.totalMismatch"
+        ? "budget_receipt_total_mismatch"
+        : "budget_receipt_invalid_request",
+    };
+  }
+  return { ok: true, request: built.request };
+}
+
+export function positiveGroupFee(amount: string | null | undefined): string | null {
+  if (amount == null) return null;
+  const normalized = normalizeDecimalInput(amount);
+  return normalized !== null && (compareDecimalStrings(normalized, "0") ?? -1) > 0 ? normalized : null;
+}
+
+export function buildGroupLinkRequest(params: {
+  transaction: Pick<ReceiptGroupTransactionCandidate, "account_id" | "entry_reference" | "candidate_token">;
+  members: readonly ReceiptGroupMemberInput[];
+  evidence?: (ReceiptGroupMemberInput & { fee_amount?: string | null }) | null;
+}): ReceiptGroupLinkRequest {
+  const fee = positiveGroupFee(params.evidence?.fee_amount);
+  return {
+    link: {
+      account_id: params.transaction.account_id,
+      entry_reference: params.transaction.entry_reference,
+      candidate_token: params.transaction.candidate_token,
+    },
+    members: params.members.map((member) => ({
+      receipt_id: member.receipt_id,
+      expected_version: member.expected_version,
+    })),
+    ...(params.evidence == null ? {} : {
+      evidence_receipt_id: params.evidence.receipt_id,
+      evidence_expected_version: params.evidence.expected_version,
+      ...(fee === null ? {} : { fee_amount: fee }),
+    }),
+  };
 }
 
