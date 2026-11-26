@@ -269,6 +269,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Resit dan dokumen",
   "budget.main.disabled": "Belanjawan tidak didayakan pada pelayan ini.",
   "budget.main.denied": "Hanya pemilik belanjawan boleh melihatnya.",
+  "budget.main.sessionUpgrade": "Sesi anda perlu disegarkan — sila log masuk semula.",
+  "budget.main.relogin": "Log masuk semula",
   "budget.main.error": "Belanjawan tidak dapat dimuatkan. Cuba lagi.",
   "budget.main.empty": "Tiada sambungan bank dikonfigurasikan.",
   "budget.main.account": "Akaun",

@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Kvitteringer og dokumenter",
   "budget.main.disabled": "Budsjettet er ikke aktivert på denne serveren.",
   "budget.main.denied": "Bare budsjettets eier kan se det.",
+  "budget.main.sessionUpgrade": "Økten din må oppdateres — logg inn på nytt.",
+  "budget.main.relogin": "Logg inn på nytt",
   "budget.main.error": "Budsjettet kunne ikke lastes. Prøv igjen.",
   "budget.main.empty": "Ingen bankforbindelser er konfigurert.",
   "budget.main.account": "Konto",

@@ -269,6 +269,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Dëftesat dhe dokumentet",
   "budget.main.disabled": "Buxheti nuk është aktivizuar në këtë server.",
   "budget.main.denied": "Vetëm pronari i buxhetit mund ta shohë atë.",
+  "budget.main.sessionUpgrade": "Sesioni juaj ka nevojë për rifreskim — ju lutemi hyni përsëri.",
+  "budget.main.relogin": "Hyr përsëri",
   "budget.main.error": "Buxheti nuk mund të ngarkohej. Provoni përsëri.",
   "budget.main.empty": "Nuk është konfiguruar asnjë lidhje bankare.",
   "budget.main.account": "Llogaria",

@@ -269,6 +269,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "ใบเสร็จและเอกสาร",
   "budget.main.disabled": "ยังไม่ได้เปิดใช้งบประมาณบนเซิร์ฟเวอร์นี้",
   "budget.main.denied": "เฉพาะเจ้าของงบประมาณเท่านั้นที่ดูได้",
+  "budget.main.sessionUpgrade": "เซสชันของคุณต้องได้รับการรีเฟรช — กรุณาลงชื่อเข้าใช้อีกครั้ง",
+  "budget.main.relogin": "ลงชื่อเข้าใช้อีกครั้ง",
   "budget.main.error": "โหลดงบประมาณไม่ได้ ลองอีกครั้ง",
   "budget.main.empty": "ยังไม่ได้ตั้งค่าการเชื่อมต่อธนาคาร",
   "budget.main.account": "บัญชี",

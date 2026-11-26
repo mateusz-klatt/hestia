@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "رسیدها و اسناد",
   "budget.main.disabled": "بودجه در این سرور فعال نیست.",
   "budget.main.denied": "فقط مالک بودجه می‌تواند آن را ببیند.",
+  "budget.main.sessionUpgrade": "نشست شما نیاز به تازه‌سازی دارد — لطفاً دوباره وارد شوید.",
+  "budget.main.relogin": "ورود دوباره",
   "budget.main.error": "بارگیری بودجه ممکن نشد. دوباره تلاش کنید.",
   "budget.main.empty": "هیچ اتصال بانکی پیکربندی نشده است.",
   "budget.main.account": "حساب",

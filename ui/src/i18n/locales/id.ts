@@ -269,6 +269,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Struk dan dokumen",
   "budget.main.disabled": "Anggaran tidak diaktifkan di server ini.",
   "budget.main.denied": "Hanya pemilik anggaran yang dapat melihatnya.",
+  "budget.main.sessionUpgrade": "Sesi Anda perlu diperbarui — silakan masuk lagi.",
+  "budget.main.relogin": "Masuk lagi",
   "budget.main.error": "Anggaran tidak dapat dimuat. Coba lagi.",
   "budget.main.empty": "Belum ada koneksi bank yang dikonfigurasi.",
   "budget.main.account": "Rekening",

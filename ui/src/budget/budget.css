@@ -6,6 +6,7 @@
 .budget-primary { background: color-mix(in srgb, var(--accent) 75%, #000); color: #fff; border-color: var(--accent); font-weight: 600; }
 .budget-status { color: var(--fg-soft); }
 .budget-notice { border-inline-start: 3px solid var(--accent); padding: .5rem .75rem; background: var(--accent-soft); }
+.budget-session-upgrade { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; }
 .budget-connection { border: 1px solid var(--border); border-radius: .7rem; padding: .9rem 1rem; background: var(--surface); display: grid; gap: .6rem; }
 .budget-connection > header { display: flex; justify-content: space-between; align-items: center; gap: .75rem; flex-wrap: wrap; }
 .budget-connection h3 { margin: 0; font-size: 1.15rem; font-weight: 600; }

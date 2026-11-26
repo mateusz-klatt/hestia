@@ -269,6 +269,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Անդորրագրեր և փաստաթղթեր",
   "budget.main.disabled": "Այս սերվերում բյուջեն միացված չէ։",
   "budget.main.denied": "Բյուջեն կարող է դիտել միայն դրա սեփականատերը։",
+  "budget.main.sessionUpgrade": "Ձեր սեանսը թարմացման կարիք ունի — խնդրում ենք կրկին մուտք գործել։",
+  "budget.main.relogin": "Կրկին մուտք գործել",
   "budget.main.error": "Չհաջողվեց բեռնել բյուջեն։ Փորձեք կրկին։",
   "budget.main.empty": "Բանկային կապեր կազմաձևված չեն։",
   "budget.main.account": "Հաշիվ",

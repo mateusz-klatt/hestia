@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "收據與憑證",
   "budget.main.disabled": "此伺服器尚未啟用預算功能。",
   "budget.main.denied": "只有預算擁有者可以查看。",
+  "budget.main.sessionUpgrade": "您的工作階段需要重新整理 — 請重新登入。",
+  "budget.main.relogin": "重新登入",
   "budget.main.error": "無法載入預算。請重試。",
   "budget.main.empty": "尚未設定銀行連線。",
   "budget.main.account": "帳戶",

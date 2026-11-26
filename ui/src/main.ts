@@ -183,10 +183,10 @@ const live = new LiveController(
 );
 
 /** Wire up the live app (events, intervals, initial fetch). Called only once authenticated. */
-function startApp(canEditCalendar: boolean): void {
+function startApp(canEditCalendar: boolean, onLogout: () => void): void {
   const calendar = mountCalendar(el("calendar-root"), canEditCalendar);
   // Budget visibility follows live own-ledger capability, not the legacy role projection.
-  const budget = canViewBudget ? mountBudget(el("budget-root"), currentUsername) : null;
+  const budget = canViewBudget ? mountBudget(el("budget-root"), currentUsername, onLogout) : null;
   const audit = renderAuditFeed(el("audit-feed"), fetchAudit, () => latestDevices);
   const rf433 = renderRf433(el("rf433"), fetchRf433);
   const dbStats = renderDbStats(el("dbstats"), fetchDbStats);
@@ -398,10 +398,11 @@ void (async () => {
   canViewBudget = discovered.ok ? discovered.data.own_budget?.can_view === true : discovered.status === 404;
   // Always render the user/settings chip; auth-off (me.user === null) shows a settings-only menu
   // (language + temperature scale, no logout — see renderUser).
+  const onLogout = (): void => {
+    location.reload();
+  };
   const userOpts = {
-    onLogout: () => {
-      location.reload();
-    },
+    onLogout,
     // Editing shared room icons + whole-home "all" membership is admin-only (both write the shared
     // registry: POST /api/rooms/icons and POST /api/name) — the entries only show for admins.
     ...(isAdmin
@@ -441,5 +442,5 @@ void (async () => {
     changePassword: changeOwnPassword, // 🔑 in the ⚙ menu — verifies the current password server-side
   };
   renderUser(el("auth"), me.user, me.user !== null ? authedUserOpts : userOpts);
-  startApp(canEditCalendar);
+  startApp(canEditCalendar, onLogout);
 })();

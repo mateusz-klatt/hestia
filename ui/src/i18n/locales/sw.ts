@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Risiti na nyaraka",
   "budget.main.disabled": "Bajeti haijawezeshwa kwenye seva hii.",
   "budget.main.denied": "Ni mmiliki wa bajeti pekee anayeweza kuiona.",
+  "budget.main.sessionUpgrade": "Kipindi chako kinahitaji kuonyeshwa upya — tafadhali ingia tena.",
+  "budget.main.relogin": "Ingia tena",
   "budget.main.error": "Bajeti haikuweza kupakiwa. Jaribu tena.",
   "budget.main.empty": "Hakuna miunganisho ya benki iliyowekwa.",
   "budget.main.account": "Akaunti",

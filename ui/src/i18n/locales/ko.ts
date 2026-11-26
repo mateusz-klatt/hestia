@@ -269,6 +269,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "영수증 및 증빙",
   "budget.main.disabled": "이 서버에서 예산 기능이 활성화되어 있지 않습니다.",
   "budget.main.denied": "예산 소유자만 볼 수 있습니다.",
+  "budget.main.sessionUpgrade": "세션을 새로 고쳐야 합니다 — 다시 로그인하세요.",
+  "budget.main.relogin": "다시 로그인",
   "budget.main.error": "예산을 불러오지 못했습니다. 다시 시도하세요.",
   "budget.main.empty": "설정된 은행 연결이 없습니다.",
   "budget.main.account": "계좌",

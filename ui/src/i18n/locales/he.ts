@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "קבלות ומסמכים",
   "budget.main.disabled": "התקציב אינו מופעל בשרת זה.",
   "budget.main.denied": "רק בעלי התקציב יכולים לצפות בו.",
+  "budget.main.sessionUpgrade": "יש לרענן את ההפעלה שלך — יש להתחבר מחדש.",
+  "budget.main.relogin": "התחברות מחדש",
   "budget.main.error": "לא ניתן לטעון את התקציב. יש לנסות שוב.",
   "budget.main.empty": "לא הוגדרו חיבורים לבנקים.",
   "budget.main.account": "חשבון",

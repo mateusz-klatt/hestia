@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Bonuri fiscale și documente",
   "budget.main.disabled": "Bugetul nu este activat pe acest server.",
   "budget.main.denied": "Doar proprietarul bugetului îl poate vedea.",
+  "budget.main.sessionUpgrade": "Sesiunea dvs. trebuie actualizată — autentificați-vă din nou.",
+  "budget.main.relogin": "Autentificați-vă din nou",
   "budget.main.error": "Bugetul nu a putut fi încărcat. Încercați din nou.",
   "budget.main.empty": "Nu sunt configurate conexiuni bancare.",
   "budget.main.account": "Cont",

@@ -267,6 +267,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Recibos y documentos",
   "budget.main.disabled": "El presupuesto no está habilitado en este servidor.",
   "budget.main.denied": "Solo el propietario del presupuesto puede verlo.",
+  "budget.main.sessionUpgrade": "Tu sesión necesita actualizarse — vuelve a iniciar sesión.",
+  "budget.main.relogin": "Volver a iniciar sesión",
   "budget.main.error": "No se pudo cargar el presupuesto. Inténtalo de nuevo.",
   "budget.main.empty": "No hay conexiones bancarias configuradas.",
   "budget.main.account": "Cuenta",

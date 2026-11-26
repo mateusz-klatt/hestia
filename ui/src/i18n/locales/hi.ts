@@ -269,6 +269,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "रसीदें और दस्तावेज़",
   "budget.main.disabled": "इस सर्वर पर बजट सक्षम नहीं है।",
   "budget.main.denied": "केवल बजट का स्वामी इसे देख सकता है।",
+  "budget.main.sessionUpgrade": "आपके सत्र को रीफ़्रेश करने की आवश्यकता है — कृपया फिर से साइन इन करें।",
+  "budget.main.relogin": "फिर से साइन इन करें",
   "budget.main.error": "बजट लोड नहीं हो सका। फिर कोशिश करें।",
   "budget.main.empty": "कोई बैंक कनेक्शन कॉन्फ़िगर नहीं है।",
   "budget.main.account": "खाता",

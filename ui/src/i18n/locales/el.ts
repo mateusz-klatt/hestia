@@ -269,6 +269,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Αποδείξεις και παραστατικά",
   "budget.main.disabled": "Ο προϋπολογισμός δεν είναι ενεργοποιημένος σε αυτόν τον διακομιστή.",
   "budget.main.denied": "Μόνο ο ιδιοκτήτης του προϋπολογισμού μπορεί να τον δει.",
+  "budget.main.sessionUpgrade": "Η συνεδρία σας χρειάζεται ανανέωση — παρακαλούμε συνδεθείτε ξανά.",
+  "budget.main.relogin": "Σύνδεση ξανά",
   "budget.main.error": "Δεν ήταν δυνατή η φόρτωση του προϋπολογισμού. Δοκιμάστε ξανά.",
   "budget.main.empty": "Δεν έχουν ρυθμιστεί τραπεζικές συνδέσεις.",
   "budget.main.account": "Λογαριασμός",

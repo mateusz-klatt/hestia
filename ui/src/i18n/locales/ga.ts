@@ -269,6 +269,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Admhálacha agus doiciméid",
   "budget.main.disabled": "Níl an buiséad cumasaithe ar an bhfreastalaí seo.",
   "budget.main.denied": "Ní féidir ach le húinéir an bhuiséid é a fheiceáil.",
+  "budget.main.sessionUpgrade": "Ní mór do sheisiún a athnuachan — sínigh isteach arís, le do thoil.",
+  "budget.main.relogin": "Sínigh isteach arís",
   "budget.main.error": "Níorbh fhéidir an buiséad a lódáil. Bain triail eile as.",
   "budget.main.empty": "Níl aon nasc bainc cumraithe.",
   "budget.main.account": "Cuntas",

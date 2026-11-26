@@ -2455,3 +2455,178 @@ describe("receipts tab & capability gate", () => {
     expect(host.querySelector(".budget-views")).toBeNull();
   });
 });
+
+describe("session upgrade prompt", () => {
+  const consentCaps = { ...capabilities, consent: true };
+
+  it("shows the session-upgrade banner instead of denied on consent/status upgrade error with can_view=true, keeping loaded data", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: { ...consentCaps, analytics: true } }));
+    api.monthlyBudgetCharts.mockImplementation(() => ok(monthlyBudgetChartsOf({
+      summary: { start_budget: "5000", spent: "200", remaining: "4800" },
+    })));
+    api.consentStatus.mockImplementation(() => fail(401, "budget_browser_session_upgrade_required"));
+    api.consentPending.mockImplementation(() => fail(401, "budget_browser_session_upgrade_required"));
+
+    await render(api, true, "owner");
+    const banner = host.querySelector(".budget-session-upgrade");
+    expect(banner?.textContent).toContain("Your session needs a refresh — please sign in again.");
+    expect(banner?.querySelector("button")?.textContent).toBe("Sign in again");
+    expect(host.textContent).not.toContain("Only the budget's owner");
+    expect(host.textContent).toContain("5,000.00 PLN");
+
+    await loadLocale("pl");
+    await render(api, true, "owner");
+    const plBanner = host.querySelector(".budget-session-upgrade");
+    expect(plBanner?.textContent).toContain("Twoja sesja wymaga odświeżenia — zaloguj się ponownie.");
+    expect(plBanner?.querySelector("button")?.textContent).toBe("Zaloguj się ponownie");
+    expect(host.textContent).not.toContain("Budżet widzi tylko jego właściciel.");
+    expect(host.textContent.replace(/\s/g, " ")).toContain("5 000,00 PLN");
+  });
+
+  it("keeps loaded Accounts and sibling consent data when only consent/status requires session upgrade", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: consentCaps }));
+    api.consentStatus.mockImplementation(() => fail(401, "budget_browser_session_upgrade_required"));
+    api.consentPending.mockImplementation(() => ok({
+      pending: [{
+        id: "flow-1", connection_id: "bank", intent: "connect", status: "staged", error: null,
+        created_at: 1, expires_at: 2, candidate_consent_id: null,
+      }],
+    }));
+
+    await render(api, true, "owner");
+    expect(host.querySelector(".budget-session-upgrade")?.textContent).toContain("Your session needs a refresh");
+    expect(host.textContent).not.toContain("Only the budget's owner");
+    expect(host.textContent).toContain("Synthetic Current ••0001");
+    expect(host.querySelector(".budget-pending")?.textContent).toContain("Synthetic Bank");
+  });
+
+  it.each([
+    { own_budget: { ...authorization.own_budget, can_view: false } },
+    { own_budget: null },
+  ])("still shows denied when capabilities deny can_view (%j)", async (override) => {
+    const api = fakeApi();
+    api.capabilities.mockImplementation(() => ok({ ...authorization, ...override }));
+    await render(api, true, "owner");
+    expect(host.textContent).toContain("Only the budget's owner");
+    expect(host.querySelector(".budget-session-upgrade")).toBeNull();
+    expect(api.connections).not.toHaveBeenCalled();
+  });
+
+  it("maps budget_browser_session_upgrade_required from connections, capabilities, mutations, analytics, limits, and QR to sessionUpgrade without denied", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementationOnce(() => fail(401, "budget_browser_session_upgrade_required"));
+    await render(api, true, "owner");
+    expect(host.querySelector(".budget-session-upgrade")?.textContent).toContain("Your session needs a refresh");
+    expect(host.textContent).not.toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("could not be loaded");
+
+    // Recover on reload, then hit upgrade error on a mutation (Pause) -> keeps data and clears busy state.
+    await click(button("Reload"));
+    expect(host.querySelector(".budget-session-upgrade")).toBeNull();
+    expect(host.textContent).toContain("Synthetic Current ••0001");
+
+    api.setPaused.mockImplementationOnce(() => fail(401, "budget_browser_session_upgrade_required"));
+    await click(button("Pause"));
+    expect(host.querySelector(".budget-session-upgrade")).not.toBeNull();
+    expect(host.textContent).not.toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("Could not save");
+    expect(host.textContent).toContain("Synthetic Current ••0001");
+    expect(button("Pause").disabled).toBe(false);
+
+    // Limits route upgrade error keeps accounts intact and shows banner.
+    await click(button("Reload"));
+    expect(host.querySelector(".budget-session-upgrade")).toBeNull();
+    api.limits.mockImplementationOnce(() => fail(401, "budget_browser_session_upgrade_required"));
+    await click(button("Download limits"));
+    expect(host.querySelector(".budget-session-upgrade")).not.toBeNull();
+    expect(host.textContent).not.toContain("Only the budget's owner");
+    expect(host.textContent).toContain("Synthetic Current ••0001");
+
+    // Capabilities route upgrade error clears data into sessionUpgrade (never denied).
+    api.capabilities.mockImplementationOnce(() => fail(401, "budget_browser_session_upgrade_required"));
+    await click(button("Reload"));
+    expect(host.querySelector(".budget-session-upgrade")).not.toBeNull();
+    expect(host.textContent).not.toContain("Only the budget's owner");
+    expect(host.textContent).not.toContain("Synthetic Current");
+
+    // Monthly budget charts upgrade error shows banner without denied.
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: { ...capabilities, analytics: true } }));
+    api.monthlyBudgetCharts.mockImplementationOnce(() => fail(401, "budget_browser_session_upgrade_required"));
+    await click(button("Reload"));
+    await click(button("Monthly budget"));
+    expect(host.querySelector(".budget-session-upgrade")).not.toBeNull();
+    expect(host.textContent).not.toContain("Only the budget's owner");
+
+    // LoginQr upgrade error (browser_session_upgrade_required) also shows banner without denied.
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities }));
+    api.authFeatures.mockImplementation(() => ok({
+      auth_contract: 2, features: ["qr_login"], qr_origin: "https://home.example",
+    }));
+    api.issueQrLoginCode.mockImplementationOnce(() => fail(401, "browser_session_upgrade_required"));
+    await click(button("Reload"));
+    await click(button("Show sign-in QR code"));
+    expect(host.querySelector(".budget-session-upgrade")).not.toBeNull();
+    expect(host.textContent).not.toContain("Only the budget's owner");
+    expect(button("Show sign-in QR code").disabled).toBe(false);
+  });
+
+  it("shows session-upgrade banner instead of denied when receiptsList returns budget_browser_session_upgrade_required", async () => {
+    const api = fakeApi();
+    const rApi: ReceiptsApi = {
+      receiptsList: vi.fn<ReceiptsApi["receiptsList"]>(() => fail(401, "budget_browser_session_upgrade_required")),
+      receiptsSearch: vi.fn<ReceiptsApi["receiptsSearch"]>(() => ok({ receipts: [], next_cursor: null })),
+      receiptDetail: vi.fn<ReceiptsApi["receiptDetail"]>(),
+      receiptImage: vi.fn<ReceiptsApi["receiptImage"]>(),
+      confirmReceipt: vi.fn<ReceiptsApi["confirmReceipt"]>(),
+      deleteReceipt: vi.fn<ReceiptsApi["deleteReceipt"]>(),
+    };
+    await act(async () => {
+      root.render(<Budget active api={api} receiptsApi={rApi} pollMs={5} principal="owner" />);
+      await Promise.resolve();
+    });
+    await settle();
+    await click(button("Receipts and documents"));
+    expect(host.querySelector(".budget-session-upgrade")).not.toBeNull();
+    expect(host.textContent).not.toContain("Only the budget's owner");
+    expect(host.textContent).toContain("Receipts could not be loaded.");
+  });
+
+  it("calls the logout path (POST /api/logout) and onLogout when clicking the re-login button", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: consentCaps }));
+    api.consentStatus.mockImplementation(() => fail(401, "budget_browser_session_upgrade_required"));
+
+    let resolveLogout!: (response: Response) => void;
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { resolveLogout = resolve; }));
+    vi.stubGlobal("fetch", fetchMock);
+    const onLogout = vi.fn();
+
+    await act(async () => {
+      root.render(<Budget active api={api} pollMs={5} principal="owner" onLogout={onLogout} />);
+      await Promise.resolve();
+    });
+    await settle();
+
+    const reloginBtn = button("Sign in again");
+    await act(async () => {
+      reloginBtn.click();
+      await Promise.resolve();
+    });
+
+    expect(reloginBtn.disabled).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [target, init] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(target.pathname).toBe("/api/logout");
+    expect(init.method).toBe("POST");
+    expect(onLogout).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveLogout(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+      await Promise.resolve();
+    });
+    await settle();
+    expect(onLogout).toHaveBeenCalledTimes(1);
+  });
+});

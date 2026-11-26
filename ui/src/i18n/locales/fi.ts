@@ -268,6 +268,8 @@ const messages: Partial<Messages> = {
   "budget.main.views.receipts": "Kuitit ja tositteet",
   "budget.main.disabled": "Budjetti ei ole käytössä tällä palvelimella.",
   "budget.main.denied": "Vain budjetin omistaja voi tarkastella sitä.",
+  "budget.main.sessionUpgrade": "Istuntosi täytyy päivittää — kirjaudu sisään uudelleen.",
+  "budget.main.relogin": "Kirjaudu uudelleen",
   "budget.main.error": "Budjettia ei voitu ladata. Yritä uudelleen.",
   "budget.main.empty": "Pankkiyhteyksiä ei ole määritetty.",
   "budget.main.account": "Tili",
