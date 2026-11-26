@@ -408,10 +408,14 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       }
       return result;
     };
+    const fetchReceiptLinkGroupDetail = effectiveReceiptsApi.fetchReceiptLinkGroupDetail?.bind(effectiveReceiptsApi);
     return {
       receiptsList: (request) => runWithGate(() => effectiveReceiptsApi.receiptsList(request), false, true),
       receiptsSearch: (request) => runWithGate(() => effectiveReceiptsApi.receiptsSearch(request), false, true),
       receiptDetail: (receiptId) => runWithGate(() => effectiveReceiptsApi.receiptDetail(receiptId), false, false),
+      ...(fetchReceiptLinkGroupDetail === undefined ? {} : {
+        fetchReceiptLinkGroupDetail: (groupId: string) => runWithGate(() => fetchReceiptLinkGroupDetail(groupId), false, false),
+      }),
       receiptImage: (receiptId) => runWithGate(() => effectiveReceiptsApi.receiptImage(receiptId), false, false),
       confirmReceipt: (request) => runWithGate(() => effectiveReceiptsApi.confirmReceipt(request), true, false),
       deleteReceipt: (request) => runWithGate(() => effectiveReceiptsApi.deleteReceipt(request), true, false),

@@ -116,6 +116,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     receiptsList: vi.fn<BudgetApi["receiptsList"]>(() => ok({ receipts: [], next_cursor: null })),
     receiptsSearch: vi.fn<BudgetApi["receiptsSearch"]>(() => ok({ receipts: [], next_cursor: null })),
     receiptDetail: vi.fn<BudgetApi["receiptDetail"]>(),
+    fetchReceiptLinkGroupDetail: vi.fn<BudgetApi["fetchReceiptLinkGroupDetail"]>(),
     receiptImage: vi.fn<BudgetApi["receiptImage"]>(),
     confirmReceipt: vi.fn<BudgetApi["confirmReceipt"]>(),
     deleteReceipt: vi.fn<BudgetApi["deleteReceipt"]>(),
@@ -1768,6 +1769,37 @@ describe("receipts tab & capability gate", () => {
     expect(host.querySelector(".budget-views")).not.toBeNull();
     await click(button("Receipts and documents"));
     expect(host.textContent).toContain("Tab Integration Market");
+  });
+
+  it("loads a grouped receipt's documents through the Budget receipt adapter", async () => {
+    const api = fakeApi();
+    const receiptId = "11111111-1111-4111-8111-111111111111";
+    const seed = await fakeReceiptsApi().receiptDetail(receiptId);
+    if (!seed.ok) throw new Error("receipt fixture unavailable");
+    const group = {
+      group_id: "22222222-2222-4222-8222-222222222222",
+      group_status: "confirmed",
+      group_version: 3,
+      member_count: 2,
+      fee_amount: null,
+      evidence_receipt_id: null,
+    } as const;
+    const receipt = { ...seed.data.receipt, status: "confirmed", linked: true, link_group: group } as const;
+    const sibling = { ...receipt, receipt_id: "33333333-3333-4333-8333-333333333333", raw_shop_name: "Synthetic Group Peer" };
+    api.receiptsList.mockResolvedValue({ ok: true, data: { receipts: [receipt], next_cursor: null } });
+    api.receiptDetail.mockResolvedValue({ ok: true, data: { receipt, candidates: [] } });
+    api.fetchReceiptLinkGroupDetail.mockResolvedValue({
+      ok: true,
+      data: { group, members: [receipt, sibling], evidence: null, linked_account_id: null, linked_entry_ref: null },
+    });
+
+    await render(api, true, "owner");
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Grouped (2)");
+    expect(api.fetchReceiptLinkGroupDetail).not.toHaveBeenCalled();
+    await click(button("Details"));
+    expect(api.fetchReceiptLinkGroupDetail).toHaveBeenCalledExactlyOnceWith(group.group_id);
+    expect(host.querySelector('[aria-label="Documents in group"]')?.textContent).toContain("Synthetic Group Peer");
   });
 
   it("keeps Budget intact on 404 disabled, but clears all Budget on unmounted 401/403 from a receipt read", async () => {
