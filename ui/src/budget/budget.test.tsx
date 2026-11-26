@@ -9,9 +9,10 @@ import { Budget } from "./budget";
 import type { ReceiptsApi } from "./receipts_api";
 import { account, componentLimit, connection, sharedLimit } from "./fixtures";
 import type { BudgetAccount, BudgetBalances, BudgetJob, BudgetTransaction, BudgetTransactions } from "./model";
-import { entriesOf, entry, forecastCurrencyTotal, forecastItem, forecastOf, inboxConsentItem, inboxMarkSaved, inboxOf,
-  monthlyBudgetChartsOf, monthlyBudgetOf, mortgageReminder, mortgageSchedule, mortgagesOf, overviewOf, quarantineOf,
-  recurringHint, recurringOf, spendingLimit, spendingLimitsOf, spendingLimitStatus, transfersOf } from "./analytics/fixtures";
+import { entriesOf, entry, forecastCurrencyTotal, forecastItem, forecastOf, inboxConsentItem, inboxMarkSaved,
+  inboxMortgageItem, inboxOf, inboxSpendingLimitItem, monthlyBudgetChartsOf, monthlyBudgetOf, mortgageReminder,
+  mortgageSchedule, mortgagesOf, overviewOf, quarantineOf, recurringHint, recurringOf, spendingLimit,
+  spendingLimitsOf, spendingLimitStatus, transfersOf } from "./analytics/fixtures";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
 
@@ -161,6 +162,17 @@ function button(text: string): HTMLButtonElement {
 async function click(element: HTMLElement): Promise<void> {
   await act(async () => { element.click(); await Promise.resolve(); });
   await settle();
+}
+function moreToggle(): HTMLButtonElement {
+  const toggle = host.querySelector<HTMLButtonElement>(".budget-nav-more-toggle");
+  if (toggle === null) throw new Error("more navigation toggle missing");
+  return toggle;
+}
+async function openSecondaryView(text: string): Promise<void> {
+  if (moreToggle().getAttribute("aria-expanded") !== "true") {
+    await click(moreToggle());
+  }
+  await click(button(text));
 }
 
 describe("budget view states", () => {
@@ -1119,7 +1131,7 @@ describe("analytics views", () => {
     api.rules.mockClear();
     const checks = api.capabilities.mock.calls.length;
     api.capabilities.mockImplementation(() => fail(404, "budget_http_404"));
-    await click(button("Categories and rules"));
+    await openSecondaryView("Categories and rules");
     expect(api.capabilities).toHaveBeenCalledTimes(checks + 1);
     expect(api.categories).not.toHaveBeenCalled();
     expect(api.rules).not.toHaveBeenCalled();
@@ -1194,15 +1206,19 @@ describe("analytics views", () => {
 
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
     await click(button("Reload"));
-    const tabs = [...host.querySelectorAll(".budget-views button")].map((item) => item.textContent);
-    expect(tabs[0]).toBe("Monthly budget");
+    const primaryTabs = [...host.querySelectorAll(".budget-views button")].map((item) => item.textContent);
+    expect(primaryTabs[0]).toBe("Monthly budget");
     expect(button("Monthly budget").getAttribute("aria-pressed")).toBe("true");
     expect(api.monthlyBudgetCharts).toHaveBeenCalledTimes(1);
-    expect(tabs.indexOf("Quarantine")).toBe(tabs.indexOf("Forecast") + 1);
+    expect(primaryTabs).not.toContain("Quarantine");
+    await click(moreToggle());
+    const secondaryTabs = [...host.querySelectorAll(".budget-nav-more button")].map((item) => item.textContent);
+    expect(secondaryTabs.indexOf("Quarantine")).toBe(secondaryTabs.indexOf("Forecast") + 1);
     await click(button("Quarantine"));
     expect(api.quarantine).toHaveBeenCalledWith(undefined);
     expect(host.textContent).toContain("All entries are included in totals.");
     expect(button("Quarantine").getAttribute("aria-pressed")).toBe("true");
+    expect(moreToggle().getAttribute("aria-expanded")).toBe("false");
 
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities }));
     await click(button("Reload"));
@@ -1384,6 +1400,7 @@ describe("analytics views", () => {
 
     api.connections.mockImplementationOnce(() => ok({ connections: [connection], capabilities: analysis }));
     await click(button("Reload"));
+    await click(moreToggle());
     expect(button("Mortgages").nextElementSibling).toBe(button("Forecast"));
     expect(api.forecast).toHaveBeenCalledWith(2, "PLN");
     await click(button("Forecast"));
@@ -1434,24 +1451,24 @@ describe("analytics views", () => {
     expect(host.querySelector(".budget-total")?.textContent).toContain("40.50 PLN");
     expect(host.textContent).not.toContain("Synthetic Current ••0001");
     expect(button("Month").getAttribute("aria-pressed")).toBe("true");
-    await click(button("Categories and rules"));
+    await openSecondaryView("Categories and rules");
     expect(api.rules).toHaveBeenCalledTimes(1);
     expect(host.textContent).toContain("No categories yet.");
     api.recurring.mockImplementation(() => ok(recurringOf([recurringHint({ label: "Synthetic Fiber" })])));
-    await click(button("Recurring"));
+    await openSecondaryView("Recurring");
     expect(api.recurring).toHaveBeenCalledTimes(2);
     expect(host.textContent).toContain("Synthetic Fiber");
     expect(button("Recurring").getAttribute("aria-pressed")).toBe("true");
     api.spendingLimits.mockImplementation((period) => ok(spendingLimitsOf(
       period, [spendingLimit()], [spendingLimitStatus({ period, name: "Synthetic Food" })])));
-    await click(button("Spending limits"));
+    await openSecondaryView("Spending limits");
     expect(api.spendingLimits).toHaveBeenCalledTimes(1);
     expect(host.textContent).toContain("Synthetic Food");
     expect(button("Spending limits").getAttribute("aria-pressed")).toBe("true");
     await click(button("Open Categories and rules"));
     expect(button("Categories and rules").getAttribute("aria-pressed")).toBe("true");
     api.mortgages.mockImplementation(() => ok(mortgagesOf([mortgageSchedule()], [mortgageReminder()])));
-    await click(button("Mortgages"));
+    await openSecondaryView("Mortgages");
     expect(api.mortgages).toHaveBeenCalledTimes(2);
     expect(host.textContent).toContain("Synthetic Home Loan");
     expect(button("Mortgages").getAttribute("aria-pressed")).toBe("true");
@@ -1460,7 +1477,7 @@ describe("analytics views", () => {
     expect(api.inbox).toHaveBeenCalledTimes(1);
     expect(host.textContent).toContain("Synthetic Bank");
     expect(button("Inbox").getAttribute("aria-pressed")).toBe("true");
-    await click(button("Accounts"));
+    await openSecondaryView("Accounts");
     expect(host.textContent).toContain("Synthetic Current ••0001");
     expect(host.querySelector(".budget-month")).toBeNull();
   });
@@ -1472,7 +1489,7 @@ describe("analytics views", () => {
       api.quarantine.mockImplementation(() => fail(status, error));
       await render(api);
       expect(button("Monthly budget").getAttribute("aria-pressed")).toBe("true");
-      await click(button("Quarantine"));
+      await openSecondaryView("Quarantine");
       expect(host.textContent).toContain("Only the budget's owner");
       expect(host.querySelector(".budget-views")).toBeNull();
       expect(host.querySelector(".budget-entries")).toBeNull();
@@ -1510,7 +1527,7 @@ describe("analytics views", () => {
     api.mortgages.mockImplementationOnce(() => ok(mortgagesOf()))
       .mockImplementation(() => fail(403, "budget_forbidden"));
     await render(api);
-    await click(button("Mortgages"));
+    await openSecondaryView("Mortgages");
     expect(host.textContent).toContain("Only the budget's owner");
     expect(host.querySelector(".budget-views")).toBeNull();
   });
@@ -1528,7 +1545,7 @@ describe("analytics views", () => {
       api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
       api.forecast.mockImplementation(() => ok({ ...data, totals: [total], months }));
       await render(api);
-      await click(button("Forecast"));
+      await openSecondaryView("Forecast");
       expect(host.textContent).toContain(label);
       expect(host.textContent).toContain(`${amount} PLN`);
 
@@ -1547,7 +1564,7 @@ describe("analytics views", () => {
     api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
     api.spendingLimits.mockImplementation(() => fail(401, "budget_http_401"));
     await render(api);
-    await click(button("Spending limits"));
+    await openSecondaryView("Spending limits");
     expect(host.textContent).toContain("Only the budget's owner");
     expect(host.querySelector(".budget-views")).toBeNull();
   });
@@ -1558,7 +1575,7 @@ describe("analytics views", () => {
     api.recurring.mockImplementationOnce(() => ok(recurringOf()))
       .mockImplementation(() => fail(403, "budget_forbidden"));
     await render(api);
-    await click(button("Recurring"));
+    await openSecondaryView("Recurring");
     expect(host.textContent).toContain("Only the budget's owner");
     expect(host.querySelector(".budget-views")).toBeNull();
   });
@@ -1584,7 +1601,7 @@ describe("analytics views", () => {
       ? overviewOf(period, { months: [{ month: `${period}-01`, currencies: overviewOf(period).currencies }] })
       : overviewOf(period)));
     await render(api);
-    await click(button("Year"));
+    await openSecondaryView("Year");
     const year = String(new Date().getFullYear());
     expect(api.overview).toHaveBeenLastCalledWith(year);
     const open = host.querySelector<HTMLButtonElement>(".budget-year button");
@@ -1786,9 +1803,9 @@ describe("receipts tab & capability gate", () => {
     // Start slow receipt read, switch to Accounts before it returns 401, and verify barrier still clears Budget.
     const slowRead = deferred<Loaded<ReceiptsApi["receiptsList"]>>();
     vi.mocked(rApi.receiptsList).mockImplementationOnce(() => slowRead.promise);
-    await click(button("Accounts"));
+    await openSecondaryView("Accounts");
     await click(button("Receipts and documents"));
-    await click(button("Accounts"));
+    await openSecondaryView("Accounts");
     expect(host.textContent).toContain("Synthetic Current");
 
     await act(async () => {
@@ -1810,7 +1827,7 @@ describe("receipts tab & capability gate", () => {
     expect(host.textContent).toContain("Tab Integration Market");
 
     // 1. Listing 403 when capability refresh now revokes can_use_receipts hides only Receipts; ledger stays intact.
-    await click(button("Accounts"));
+    await openSecondaryView("Accounts");
     const listCallsBefore403 = vi.mocked(rApi.receiptsList).mock.calls.length;
     vi.mocked(rApi.receiptsList).mockImplementationOnce(() => fail(403, "budget_forbidden"));
     api.capabilities
@@ -1838,7 +1855,7 @@ describe("receipts tab & capability gate", () => {
 
     // 3. Transient listing 403 when capabilities still report can_use_receipts=true marks receipts unavailable without looping,
     //    then Reload (confirming can_use_receipts=true even with unchanged capabilities) clears receiptUnavailable & remounts panel.
-    await click(button("Accounts"));
+    await openSecondaryView("Accounts");
     const callsBeforeForbiddenLoop = vi.mocked(rApi.receiptsList).mock.calls.length;
     vi.mocked(rApi.receiptsList).mockImplementationOnce(() => fail(403, "budget_origin_required"));
     await click(button("Receipts and documents"));
@@ -2057,7 +2074,7 @@ describe("receipts tab & capability gate", () => {
     expect(rApi.confirmReceipt).toHaveBeenCalledTimes(1);
 
     // Leave Receipts to Accounts, then return -> lock survives unmount and still blocks re-submit.
-    await click(button("Accounts"));
+    await openSecondaryView("Accounts");
     await click(button("Receipts and documents"));
     expect(host.textContent).toContain("Confirming…");
     await click(button("Details"));
@@ -2637,5 +2654,275 @@ describe("session upgrade prompt", () => {
     });
     await settle();
     expect(onLogout).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("simple everyday navigation", () => {
+  const analysis = { ...capabilities, analytics: true };
+
+  async function keyDown(target: EventTarget, key: string): Promise<KeyboardEvent> {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    await act(async () => {
+      target.dispatchEvent(event);
+      await Promise.resolve();
+    });
+    await settle();
+    return event;
+  }
+
+  it("shows only the four primary screens and More by default, gating Receipts on authorization", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    await render(api, true, "owner");
+
+    const toggle = moreToggle();
+    expect(toggle.textContent).toBe("Load more");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    const panelId = toggle.getAttribute("aria-controls");
+    expect(panelId).toBeTruthy();
+    expect(document.getElementById(panelId ?? "")).toBeNull();
+
+    expect([...host.querySelectorAll(".budget-views button")].map((item) => item.textContent)).toEqual([
+      "Monthly budget",
+      "Month",
+      "Inbox",
+      "Receipts and documents",
+      "Load more",
+    ]);
+    for (const secondary of [
+      "Accounts", "Year", "Spending limits", "Recurring",
+      "Mortgages", "Forecast", "Quarantine", "Categories and rules",
+    ]) {
+      expect([...host.querySelectorAll("button")].some((item) => item.textContent === secondary)).toBe(false);
+    }
+
+    // Revoking receipts removes Receipts from primary tabs without pulling secondary views into the bar.
+    api.capabilities.mockImplementation(() => ok({
+      ...authorization,
+      own_budget: { ...authorization.own_budget, can_use_receipts: false },
+    }));
+    await click(button("Reload"));
+    expect([...host.querySelectorAll(".budget-views button")].map((item) => item.textContent)).toEqual([
+      "Monthly budget",
+      "Month",
+      "Inbox",
+      "Load more",
+    ]);
+
+    // Polish locale uses translated primary labels and budget.main.more ("Pokaż więcej").
+    api.capabilities.mockImplementation(() => ok(authorization));
+    await loadLocale("pl");
+    await render(api, true, "owner");
+    await click(button("Wczytaj ponownie"));
+    expect([...host.querySelectorAll(".budget-views button")].map((item) => item.textContent)).toEqual([
+      "Budżet miesiąca",
+      "Miesiąc",
+      "Skrzynka",
+      "Paragony i dowody",
+      "Pokaż więcej",
+    ]);
+    await click(moreToggle());
+    expect([...host.querySelectorAll(".budget-nav-more button")].map((item) => item.textContent)).toEqual([
+      "Konta",
+      "Rok",
+      "Limity wydatków",
+      "Cykliczne",
+      "Hipoteka",
+      "Prognoza",
+      "Kwarantanna",
+      "Kategorie i reguły",
+    ]);
+  });
+
+  it("places the eight secondary views under More, keeps the active secondary screen apparent and reachable without duplicates, and preserves drill-downs", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: { ...analysis, consent: true } }));
+    const data = forecastOf();
+    api.forecast.mockImplementation(() => ok({
+      ...data,
+      summary: { ...data.summary, overdue_mortgage_schedule_count: 1 },
+    }));
+    api.inbox.mockImplementation(() => ok(inboxOf([
+      inboxConsentItem(),
+      inboxMortgageItem(),
+      inboxSpendingLimitItem(),
+    ])));
+    await render(api, true, "owner");
+
+    await click(moreToggle());
+    expect(moreToggle().getAttribute("aria-expanded")).toBe("true");
+    const panelId = moreToggle().getAttribute("aria-controls");
+    const panel = panelId === null ? null : document.getElementById(panelId);
+    expect(panel).not.toBeNull();
+    expect([...(panel?.querySelectorAll("button") ?? [])].map((item) => item.textContent)).toEqual([
+      "Accounts",
+      "Year",
+      "Spending limits",
+      "Recurring",
+      "Mortgages",
+      "Forecast",
+      "Quarantine",
+      "Categories and rules",
+    ]);
+
+    // Selecting Forecast closes More and surfaces Forecast in the nav bar with aria-pressed="true".
+    await click(button("Forecast"));
+    expect(moreToggle().getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector(".budget-nav-more")).toBeNull();
+    expect(host.querySelectorAll(".budget-nav-current")).toHaveLength(1);
+    expect(button("Forecast").getAttribute("aria-pressed")).toBe("true");
+
+    // Re-opening More highlights Forecast inside the panel without rendering a duplicate button.
+    await click(moreToggle());
+    expect(host.querySelectorAll(".budget-nav-current")).toHaveLength(0);
+    expect([...host.querySelectorAll(".budget-views button")].filter((item) => item.textContent === "Forecast")).toHaveLength(1);
+    expect(button("Forecast").getAttribute("aria-pressed")).toBe("true");
+
+    // Forecast -> Mortgages drill-down closes More and keeps Mortgages apparent and reachable.
+    await click(button("Open mortgage reminders"));
+    expect(moreToggle().getAttribute("aria-expanded")).toBe("false");
+    expect(button("Mortgages").getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector(".budget-nav-current")?.textContent).toBe("Mortgages");
+
+    // Inbox -> Accounts (with Consent status), Mortgages, and Spending limits links stay intact.
+    await click(button("Inbox"));
+    expect(host.querySelector(".budget-nav-current")).toBeNull();
+    await click(button("Open Consent status"));
+    expect(button("Accounts").getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector(".budget-consent-health")).not.toBeNull();
+
+    await click(button("Inbox"));
+    await click(button("Open Mortgages"));
+    expect(button("Mortgages").getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector(".budget-nav-current")?.textContent).toBe("Mortgages");
+
+    await click(button("Inbox"));
+    await click(button("Open Spending limits"));
+    expect(button("Spending limits").getAttribute("aria-pressed")).toBe("true");
+    await click(button("Open Categories and rules"));
+    expect(button("Categories and rules").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("resets rule prefill when opening Rules via navigation after a Month transaction drill-down", async () => {
+    const api = fakeApi();
+    const key = "c".repeat(64);
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    api.analyticsTransactions.mockImplementation((period) => ok(entriesOf(period, [
+      entry("rent", { account_id: "local-a", counterparty_account_key: key, counterparty_account: "PL** … 5678" }),
+    ])));
+    await render(api, true, "owner");
+
+    await click(button("Month"));
+    const details = host.querySelector<HTMLButtonElement>(".budget-entry-open");
+    if (details === null) throw new Error("transaction details trigger missing");
+    await click(details);
+    await click(button("Create rule from recipient account"));
+    expect(button("Categories and rules").getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector<HTMLInputElement>('.budget-rule-editor input[name="value"]')?.value).toBe("PL** … 5678");
+
+    // Leaving Rules and returning via More navigation resets focusRule cleanly.
+    await click(button("Monthly budget"));
+    await openSecondaryView("Categories and rules");
+    expect(host.querySelector(".budget-rule-editor")).toBeNull();
+  });
+
+  it("supports keyboard navigation, Escape focus restoration, outside click, and session/capability resets", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    await render(api, true, "owner");
+
+    const toggle = moreToggle();
+    toggle.focus();
+    expect(document.activeElement).toBe(toggle);
+
+    // ArrowDown on collapsed More opens the panel and moves focus to the first secondary item.
+    await keyDown(toggle, "ArrowDown");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    const panelButtons = [...host.querySelectorAll<HTMLButtonElement>(".budget-nav-more button")];
+    expect(panelButtons).toHaveLength(8);
+    expect(document.activeElement).toBe(panelButtons[0]);
+
+    // ArrowRight / ArrowDown / ArrowLeft / Home / End navigate within the secondary disclosure.
+    await keyDown(panelButtons[0] as HTMLButtonElement, "ArrowRight");
+    expect(document.activeElement).toBe(panelButtons[1]);
+    await keyDown(panelButtons[1] as HTMLButtonElement, "ArrowDown");
+    expect(document.activeElement).toBe(panelButtons[2]);
+    await keyDown(panelButtons[2] as HTMLButtonElement, "ArrowLeft");
+    expect(document.activeElement).toBe(panelButtons[1]);
+    await keyDown(panelButtons[1] as HTMLButtonElement, "End");
+    expect(document.activeElement).toBe(panelButtons[7]);
+    await keyDown(panelButtons[7] as HTMLButtonElement, "ArrowRight");
+    expect(document.activeElement).toBe(panelButtons[0]);
+    await keyDown(panelButtons[0] as HTMLButtonElement, "ArrowUp");
+    expect(document.activeElement).toBe(panelButtons[7]);
+    await keyDown(panelButtons[7] as HTMLButtonElement, "Home");
+    expect(document.activeElement).toBe(panelButtons[0]);
+
+    // Escape inside the panel closes it and restores focus to More.
+    await keyDown(panelButtons[0] as HTMLButtonElement, "Escape");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector(".budget-nav-more")).toBeNull();
+    expect(document.activeElement).toBe(toggle);
+
+    // Keyboard activation (focus inside panel + detail=0 click) closes More and returns focus to More.
+    await keyDown(toggle, "ArrowDown");
+    const reopenedButtons = [...host.querySelectorAll<HTMLButtonElement>(".budget-nav-more button")];
+    const yearBtn = reopenedButtons[1] as HTMLButtonElement;
+    yearBtn.focus();
+    await click(yearBtn);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(button("Year").getAttribute("aria-pressed")).toBe("true");
+    expect(document.activeElement).toBe(toggle);
+
+    // RTL reverses ArrowLeft/ArrowRight direction inside the panel.
+    const navEl = host.querySelector<HTMLElement>(".budget-nav");
+    if (navEl !== null) navEl.style.direction = "rtl";
+    await click(toggle);
+    const rtlButtons = [...host.querySelectorAll<HTMLButtonElement>(".budget-nav-more button")];
+    rtlButtons[0]?.focus();
+    await keyDown(rtlButtons[0] as HTMLButtonElement, "ArrowLeft");
+    expect(document.activeElement).toBe(rtlButtons[1]);
+    await keyDown(rtlButtons[1] as HTMLButtonElement, "ArrowRight");
+    expect(document.activeElement).toBe(rtlButtons[0]);
+    if (navEl !== null) navEl.style.direction = "";
+
+    // Escape while focus is outside the nav closes More without stealing focus from an external button.
+    const reloadBtn = button("Reload");
+    reloadBtn.focus();
+    await keyDown(document, "Escape");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(reloadBtn);
+
+    // Outside click closes More.
+    await click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    await click(host);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    // Switching principal closes an open More disclosure cleanly.
+    await click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    api.capabilities.mockImplementation(() => ok({ ...authorization, user: "partner" }));
+    await render(api, true, "partner");
+    expect(moreToggle().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("enforces 44px touch targets, line wrapping, and no truncation or horizontal overflow rules in navigation.css", async () => {
+    const fsModule = "node:fs";
+    const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as {
+      readFileSync: (path: string, encoding: "utf8") => string;
+    };
+    const css = readFileSync("src/budget/navigation.css", "utf8");
+    expect(css).toMatch(/\.budget-app\s+\.budget-nav\s+button\s*\{[^}]*min-height:\s*2\.75rem/);
+    expect(css).toMatch(/\.budget-app\s+\.budget-nav\s+button\s*\{[^}]*min-width:\s*2\.75rem/);
+    expect(css).toMatch(/\.budget-app\s+\.budget-nav\s+button\s*\{[^}]*max-width:\s*100%/);
+    expect(css).toMatch(/\.budget-app\s+\.budget-nav\s+button\s*\{[^}]*white-space:\s*normal/);
+    expect(css).toMatch(/\.budget-app\s+\.budget-nav\s+button\s*\{[^}]*overflow-wrap:\s*anywhere/);
+    expect(css).toMatch(/\.budget-nav-bar\s*\{[^}]*flex-wrap:\s*wrap/);
+    expect(css).toMatch(/\.budget-nav-more\s*\{[^}]*flex-wrap:\s*wrap/);
+    expect(css).toMatch(/@media\s*\(max-width:\s*640px\)/);
+    expect(css).toMatch(/@media\s*\(max-width:\s*360px\)/);
+    expect(css).not.toMatch(/text-overflow:\s*ellipsis/);
+    expect(css).not.toMatch(/white-space:\s*nowrap/);
   });
 });
