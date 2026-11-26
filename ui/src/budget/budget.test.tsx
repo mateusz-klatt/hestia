@@ -2676,7 +2676,7 @@ describe("simple everyday navigation", () => {
     await render(api, true, "owner");
 
     const toggle = moreToggle();
-    expect(toggle.textContent).toBe("Load more");
+    expect(toggle.textContent).toBe("More");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     const panelId = toggle.getAttribute("aria-controls");
     expect(panelId).toBeTruthy();
@@ -2687,7 +2687,7 @@ describe("simple everyday navigation", () => {
       "Month",
       "Inbox",
       "Receipts and documents",
-      "Load more",
+      "More",
     ]);
     for (const secondary of [
       "Accounts", "Year", "Spending limits", "Recurring",
@@ -2706,10 +2706,10 @@ describe("simple everyday navigation", () => {
       "Monthly budget",
       "Month",
       "Inbox",
-      "Load more",
+      "More",
     ]);
 
-    // Polish locale uses translated primary labels and budget.main.more ("Pokaż więcej").
+    // The disclosure uses the dedicated options label in Polish.
     api.capabilities.mockImplementation(() => ok(authorization));
     await loadLocale("pl");
     await render(api, true, "owner");
@@ -2719,7 +2719,7 @@ describe("simple everyday navigation", () => {
       "Miesiąc",
       "Skrzynka",
       "Paragony i dowody",
-      "Pokaż więcej",
+      "Więcej",
     ]);
     await click(moreToggle());
     expect([...host.querySelectorAll(".budget-nav-more button")].map((item) => item.textContent)).toEqual([

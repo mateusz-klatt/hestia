@@ -946,6 +946,7 @@ function BudgetNavigation({
           </button>
         ))}
         <button ref={moreTriggerRef} type="button" className="budget-nav-more-toggle"
+          aria-label={t("budget.main.moreOptions")}
           aria-expanded={moreOpen} aria-controls={morePanelId}
           data-secondary-active={secondaryActive ? "true" : undefined}
           onClick={() => {
@@ -959,7 +960,7 @@ function BudgetNavigation({
               onOpenChange(true);
             }
           }}>
-          {t("budget.main.more")}
+          {t("budget.main.moreOptions")}
         </button>
         {!moreOpen && secondaryActive ? (
           <button type="button" className="budget-nav-current" aria-pressed="true"
@@ -970,7 +971,7 @@ function BudgetNavigation({
       </div>
       {moreOpen ? (
         <div ref={morePanelRef} id={morePanelId} className="budget-nav-more" role="group"
-          aria-label={t("budget.main.more")} onKeyDown={handleMorePanelKeyDown}>
+          aria-label={t("budget.main.moreOptions")} onKeyDown={handleMorePanelKeyDown}>
           {SECONDARY_VIEWS.map((item) => (
             <button type="button" key={item} aria-pressed={shownView === item}
               onClick={(event) => {
