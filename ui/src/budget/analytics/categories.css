@@ -1,0 +1,243 @@
+/* Scoped styles for the Budget Categories panel and tree editor. */
+.budget-category-list {
+  border-bottom: 1px solid var(--border);
+}
+
+.budget-entry.budget-category {
+  padding-block: .18rem;
+  min-width: 0;
+}
+
+.budget-entry.budget-category .budget-category-row {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  padding: .45rem .55rem;
+  border: 0;
+  border-radius: .45rem;
+  background: transparent;
+  color: var(--fg);
+  text-align: start;
+}
+
+.budget-category-row:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface));
+}
+
+.budget-category-row:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, var(--fg));
+  outline-offset: -2px;
+}
+
+.budget-category-row .budget-cat-swatch {
+  width: .85rem;
+  height: .85rem;
+  border-radius: .25rem;
+  margin-inline-end: 0;
+}
+
+.budget-category-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.budget-entry.budget-category[data-depth="0"] .budget-category-name strong {
+  font-weight: 650;
+}
+
+.budget-entry.budget-category:not([data-depth="0"]) .budget-category-name strong {
+  font-weight: 500;
+}
+
+.budget-category-chevron {
+  flex: 0 0 auto;
+  width: .45rem;
+  height: .45rem;
+  border: solid var(--fg-soft);
+  border-width: 1.5px 1.5px 0 0;
+  transform: rotate(45deg);
+  margin-inline-end: .2rem;
+  opacity: .7;
+}
+
+:dir(rtl) .budget-category-chevron {
+  transform: rotate(-135deg);
+}
+
+.budget-category-editor {
+  display: grid;
+  gap: .65rem;
+  padding: .6rem .65rem;
+  margin-block: .2rem;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  background: color-mix(in srgb, var(--accent-soft) 24%, var(--surface));
+  min-width: 0;
+}
+
+.budget-category-editor-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .55rem;
+  align-items: end;
+  min-width: 0;
+}
+
+.budget-category-editor label,
+.budget-category-create label {
+  min-width: 0;
+}
+
+.budget-category-editor input:not([type="range"]),
+.budget-category-editor select,
+.budget-category-create input,
+.budget-category-create select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 2.4rem;
+  padding: .35rem .55rem;
+}
+
+.budget-category-editor-color {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: .5rem .75rem;
+  min-width: 0;
+}
+
+.budget-category-editor-color label {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.budget-category-editor-color .budget-entry-facts {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.budget-category-editor-color .budget-cat-swatch {
+  width: .9rem;
+  height: .9rem;
+  margin-inline-end: 0;
+}
+
+.budget-category-editor-color input[type="range"] {
+  flex: 1 1 6rem;
+  width: 100%;
+  min-width: 5rem;
+  max-width: 100%;
+  accent-color: var(--accent);
+}
+
+.budget-category-editor-color output {
+  font-variant-numeric: tabular-nums;
+  min-width: 2.5rem;
+}
+
+.budget-category-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem;
+}
+
+.budget-category-editor-lifecycle {
+  border-top: 1px solid var(--border);
+  padding-top: .55rem;
+  display: grid;
+  gap: .35rem;
+  justify-items: start;
+}
+
+.budget-category-editor-lifecycle p {
+  margin: 0;
+}
+
+.budget-category-archive {
+  color: color-mix(in srgb, var(--err) 85%, #000);
+  border-color: color-mix(in srgb, var(--err) 40%, var(--border-strong));
+}
+
+.budget-category-create {
+  padding-top: .35rem;
+}
+
+.budget-category-options {
+  border-top: 1px solid var(--border);
+  padding-top: .45rem;
+  font-size: .85rem;
+  color: var(--fg-soft);
+  min-width: 0;
+}
+
+.budget-category-options summary {
+  cursor: pointer;
+  padding-block: .35rem;
+  font-weight: 500;
+}
+
+.budget-category-options summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, var(--fg));
+  outline-offset: 2px;
+}
+
+.budget-category-options-body {
+  display: grid;
+  gap: .5rem;
+  justify-items: start;
+  padding-top: .4rem;
+  min-width: 0;
+}
+
+.budget-category-options-body p {
+  margin: 0;
+}
+
+.budget-category-palette {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+  max-width: 100%;
+}
+
+.budget-category-palette li {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .2rem .5rem;
+  border: 1px solid var(--border);
+  border-radius: .45rem;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: .8rem;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.budget-category-palette .budget-cat-swatch {
+  margin-inline-end: 0;
+}
+
+@media (max-width: 560px) {
+  .budget-category-editor-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .budget-category-create {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .budget-category-create > button {
+    justify-self: start;
+  }
+}
