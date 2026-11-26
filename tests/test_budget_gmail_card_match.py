@@ -9,7 +9,7 @@ from uuid import uuid4
 from hestia import db
 from hestia.budget import analytics_views, bank_metadata
 from hestia.budget.analytics_core import AnalyticsError, financial_fingerprint
-from hestia.budget.gmail_card_match import match_card_purchase
+from hestia.budget.gmail_card_match import card_purchase_candidates, match_card_purchase
 from hestia.budget.gmail_config import CARD_ACCOUNTS_ENV
 from hestia.budget.gmail_document import ImportedDocument
 from hestia.budget.receipt_reconcile import evidence_json, reconcile_receipt_links
@@ -92,6 +92,11 @@ class CardPurchaseTests(AnalyticsCase):
         self.assertIsNone(self.match())
         self.ledger("another-charge", account="d")
         self.assertIsNone(self.match())
+        with self.sessions() as session:
+            candidates = card_purchase_candidates(session, "owner", DOCUMENT)
+        purchases = {candidate.transaction_key[1]: candidate.available_purchase for candidate in candidates}
+        self.assertIsNone(purchases["group-charge"])
+        self.assertEqual(purchases["another-charge"].entry_reference, "another-charge")
 
         with self.sessions.begin() as session:
             session.get(db.BudgetReceiptLinkGroup, group_id).status = "needs_review"
@@ -197,6 +202,11 @@ class CardPurchaseTests(AnalyticsCase):
         self.assertEqual(self.match(document).entry_reference, "one")
         self.ledger("youtube", lines=["Card purchase", "GOOGLE*YouTube"], amount="14.99")
         self.assertIsNone(self.match(document))
+        with self.sessions() as session:
+            candidates = card_purchase_candidates(session, "owner", document)
+        purchases = {candidate.transaction_key[1]: candidate.available_purchase for candidate in candidates}
+        self.assertEqual(purchases["one"].entry_reference, "one")
+        self.assertIsNone(purchases["youtube"])
 
     def test_card_suffix_limits_eligible_accounts_and_overrides_no_bank_suffix(self):
         document = replace(DOCUMENT, card_last4="0123")
@@ -420,3 +430,60 @@ class CardPurchaseTests(AnalyticsCase):
             from hestia.budget.gmail_card_match import still_matches_card
 
             self.assertFalse(still_matches_card(session, session.get(db.BudgetReceipt, "known")))
+
+    def test_candidate_enumeration_exposes_occupied_and_fx_filtered_candidates(self):
+        first = self.ledger("t1")
+        second = self.ledger("t2", account="d")
+        with self.sessions() as session:
+            candidates = card_purchase_candidates(session, "owner", DOCUMENT)
+        self.assertEqual(
+            sorted((item.transaction_key[1], item.available_purchase is None) for item in candidates),
+            [("t1", False), ("t2", False)],
+        )
+        self.assertIsNone(self.match())
+
+        self.confirm(next(item.available_purchase for item in candidates
+                          if item.transaction_key == (self.accounts["a"], "t1")))
+        with self.sessions() as session:
+            candidates_after = card_purchase_candidates(session, "owner", DOCUMENT)
+            included = card_purchase_candidates(session, "owner", DOCUMENT, include_receipt_id="known")
+        self.assertEqual(
+            sorted((item.transaction_key[1], item.available_purchase is None) for item in candidates_after),
+            [("t1", True), ("t2", False)],
+        )
+        self.assertEqual(
+            sorted((item.transaction_key[1], item.available_purchase is None) for item in included),
+            [("t1", False), ("t2", False)],
+        )
+        self.assertIsNone(self.match())
+
+        fx_doc = replace(DOCUMENT, currency="EUR", amount="10")
+        with self.sessions.begin() as session:
+            session.add(db.BudgetTransactionMetadata(
+                account_id=self.accounts["a"],
+                entry_reference="t1",
+                owner="owner",
+                ledger_fingerprint=financial_fingerprint(first),
+                source="api",
+                observed_at=self.now,
+                version=1,
+                payload_json=json.dumps({"exchange_rate": None}),
+            ))
+            session.add(db.BudgetTransactionMetadata(
+                account_id=self.accounts["d"],
+                entry_reference="t2",
+                owner="owner",
+                ledger_fingerprint=financial_fingerprint(second),
+                source="api",
+                observed_at=self.now,
+                version=1,
+                payload_json=json.dumps(
+                    {"exchange_rate": {"instructed_amount": {"amount": "10.00", "currency": "EUR"}}}
+                ),
+            ))
+        with self.sessions() as session:
+            fx_candidates = card_purchase_candidates(session, "owner", fx_doc)
+        candidate, = fx_candidates
+        self.assertEqual(candidate.transaction_key, (self.accounts["d"], "t2"))
+        self.assertEqual(candidate.available_purchase.entry_reference, "t2")
+        self.assertEqual(self.match(fx_doc).entry_reference, "t2")

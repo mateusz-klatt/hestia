@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 
 from ..db import AppMeta, BudgetGmailMessage, BudgetReceipt, BudgetReceiptLine
 from .analytics_core import AnalyticsError, canonical_money
@@ -67,17 +67,24 @@ def _identity(data, invoice):
         invoice.due_date,
         invoice.card_last4,
         invoice.payment_method,
-        getattr(invoice, "document_kind", "invoice"),
+        invoice.document_kind,
     )
 
 
+def _matching_variants(copies):
+    variants = {}
+    for _, data, invoice in copies:
+        variants.setdefault(_identity(data, invoice), (data, invoice))
+    return variants
+
+
 def _shared_rfcs(waiting):
-    owners = defaultdict(set)
+    groups_by_rfc = defaultdict(set)
     for key, copies in waiting.items():
         for _, data, _ in copies:
             if data["rfc"] is not None:
-                owners[data["rfc"]].add(key)
-    return {rfc for rfc, keys in owners.items() if len(keys) > 1}
+                groups_by_rfc[data["rfc"]].add(key)
+    return {rfc for rfc, keys in groups_by_rfc.items() if len(keys) > 1}
 
 
 def receipt_document(receipt):
@@ -99,14 +106,24 @@ def _record(session, owner, key, data, now, outcome, receipt_id=None):
 
 
 def _pending_receipts(session, owner):
+    from .gmail_store import _document_number_key
+
+    auto_promoted = and_(
+        BudgetReceipt.version == 2,
+        BudgetReceipt.document_kind == "invoice",
+        func.json_extract(AppMeta.value, "$.auto_promoted_version") == 2,
+    )
     return session.execute(select(BudgetReceipt, BudgetGmailMessage.internal_date).join(
         BudgetGmailMessage, (BudgetGmailMessage.receipt_id == BudgetReceipt.id)
-        & (BudgetGmailMessage.owner == BudgetReceipt.owner)).where(
-        BudgetReceipt.owner == owner, BudgetReceipt.status == "imported", BudgetReceipt.version == 1,
+        & (BudgetGmailMessage.owner == BudgetReceipt.owner)).outerjoin(
+        AppMeta, AppMeta.key == _document_number_key(BudgetReceipt.id)).where(
+        BudgetReceipt.owner == owner, BudgetReceipt.status == "imported",
+        or_(BudgetReceipt.version == 1, auto_promoted),
         BudgetReceipt.gateway.is_(None), BudgetReceipt.evidence_for_receipt_id.is_(None),
         BudgetReceipt.linked_account_id.is_(None), BudgetReceipt.forwarded_manually == 0,
         BudgetReceipt.raw_shop_name.is_not(None), BudgetReceipt.total_amount.is_not(None),
-        BudgetReceipt.currency.is_not(None), BudgetReceipt.receipt_kind == "purchase"))
+        BudgetReceipt.currency.is_not(None), BudgetReceipt.receipt_kind == "purchase",
+    ).order_by(BudgetGmailMessage.internal_date))
 
 
 def _confirm(session, owner, receipt, match, now):
@@ -145,22 +162,49 @@ def _existing_document(session, owner, invoice, provenance):
     return "parse_failed" if "parse_failed" in outcomes else next(iter(outcomes), None)
 
 
+def _duplicate_rfc(store, session, owner, rfc_hmac):
+    from .gmail_store import _linked_manual_forward
+
+    if rfc_hmac is None:
+        return False
+    if store._duplicate(session, owner, rfc_hmac):
+        return True
+    return session.scalar(select(BudgetGmailMessage.gmail_id_hmac).where(
+        BudgetGmailMessage.owner == owner, BudgetGmailMessage.rfc_message_id_hmac == rfc_hmac,
+        BudgetGmailMessage.outcome == "skipped_duplicate", ~_linked_manual_forward(),
+    ).limit(1)) is not None
+
+
 def _waiting_documents(store, session, owner, now):
-    groups = defaultdict(list)
+    staged = defaultdict(list)
     rows = session.scalars(select(AppMeta).where(AppMeta.key.startswith(_prefix(owner))).order_by(AppMeta.key))
     for meta in rows:
         data = json.loads(meta.value)
         invoice = ImportedDocument(**data["invoice"])
-        outcome = ("skipped_duplicate" if store._duplicate(session, owner, data["rfc"]) else
-                   _existing_document(session, owner, invoice, data["provenance"]))
-        if outcome:
-            _record(session, owner, meta.key, data, now, outcome)
-            session.delete(meta)
+        reference = data["provenance"]["number_hmac"] or data["rfc"] or meta.key
+        key = data["provenance"]["seller_key"], reference
+        staged[key].append((meta, data, invoice))
+    shared_rfcs = _shared_rfcs(staged)
+    groups = {}
+    pruned = []
+    for key, copies in staged.items():
+        # Pruning a conflicting copy could make the remaining copy look corroborated.
+        if len(_matching_variants(copies)) > 1:
+            groups[key] = copies
+            continue
+        _, data, invoice = copies[0]
+        if any(_duplicate_rfc(store, session, owner, data["rfc"]) for _, data, _ in copies):
+            outcome = "skipped_duplicate"
         else:
-            reference = data["provenance"]["number_hmac"] or data["rfc"] or meta.key
-            key = data["provenance"]["seller_key"], reference
-            groups[key].append((meta, data, invoice))
-    return groups
+            outcome = _existing_document(session, owner, invoice, data["provenance"])
+        if outcome:
+            pruned.extend((meta, data, outcome) for meta, data, _ in copies)
+        else:
+            groups[key] = copies
+    for meta, data, outcome in pruned:
+        _record(session, owner, meta.key, data, now, outcome)
+        session.delete(meta)
+    return groups, shared_rfcs
 
 
 def _import_copies(store, session, owner, copies, now):
@@ -183,37 +227,64 @@ def _import_copies(store, session, owner, copies, now):
     return session.get(BudgetReceipt, receipt_id)
 
 
+def _record_claims(claims, claims_by_document, document, candidates):
+    for candidate in candidates:
+        tx_key = candidate.transaction_key
+        claims[tx_key].setdefault(document, candidate.available_purchase)
+        claims_by_document[document].add(tx_key)
+
+
+def _waiting_candidates(session, owner, copies, *, shared_rfcs):
+    from .gmail_card_match import card_purchase_candidates
+
+    variants = _matching_variants(copies)
+    contested = len(variants) > 1 or any(data["rfc"] in shared_rfcs for _, data, _ in copies)
+    candidates = []
+    for data, invoice in variants.values():
+        candidates.extend(card_purchase_candidates(
+            session, owner, invoice, received_date=_received_date(data["received"]),
+        ))
+    return not contested, candidates
+
+
 def settle(store, session, owner, now):
     # The receipt candidate store also uses Gmail ledger retention.
-    from .gmail_card_match import match_card_purchase
+    from .gmail_card_match import card_purchase_candidates
 
     expire_waiting(session, owner, now)
     claims = defaultdict(dict)
+    claims_by_document = defaultdict(set)
+    receipts = {}
     for receipt, stamp in _pending_receipts(session, owner):
-        match = match_card_purchase(session, owner, receipt_document(receipt), received_date=_received_date(stamp),
-                                    include_receipt_id=receipt.id)
-        if match:
-            claims[match.account_id, match.entry_reference][receipt.id] = receipt, match
+        document = ("receipt", receipt.id)
+        receipts[receipt.id] = receipt
+        candidates = card_purchase_candidates(
+            session, owner, receipt_document(receipt), received_date=_received_date(stamp),
+            include_receipt_id=receipt.id,
+        )
+        _record_claims(claims, claims_by_document, document, candidates)
 
-    waiting = _waiting_documents(store, session, owner, now)
-    shared_rfcs = _shared_rfcs(waiting)
+    waiting, shared_rfcs = _waiting_documents(store, session, owner, now)
+    contested = set()
     for key, copies in waiting.items():
-        if len({_identity(data, invoice) for _, data, invoice in copies}) > 1:
-            continue
-        if any(data["rfc"] in shared_rfcs for _, data, _ in copies):
-            continue
-        _, data, invoice = copies[0]
-        match = match_card_purchase(session, owner, invoice, received_date=_received_date(data["received"]))
-        if match:
-            claims[match.account_id, match.entry_reference][key] = None, match
+        document = ("waiting", key)
+        can_settle, candidates = _waiting_candidates(session, owner, copies, shared_rfcs=shared_rfcs)
+        _record_claims(claims, claims_by_document, document, candidates)
+        if not can_settle:
+            contested.add(document)
 
     created = 0
-    for entries in claims.values():
-        if len(entries) != 1:
+    for claimers in claims.values():
+        if len(claimers) != 1:
             continue
-        identity, (receipt, match) = next(iter(entries.items()))
-        if receipt is None:
-            receipt = _import_copies(store, session, owner, waiting[identity], now)
+        document, match = next(iter(claimers.items()))
+        if match is None or document in contested or len(claims_by_document[document]) != 1:
+            continue
+        kind, key = document
+        if kind == "receipt":
+            receipt = receipts[key]
+        else:
+            receipt = _import_copies(store, session, owner, waiting[key], now)
             created += 1
         _confirm(session, owner, receipt, match, now)
     return created
