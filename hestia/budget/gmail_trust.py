@@ -344,6 +344,8 @@ def _split_inline_forward(lines):
             return _INVALID_FORWARD
         if name == "od":
             name = "from"
+        elif name == "data":
+            name = "date"
         elif name == "temat":
             name = "subject"
         if name in fields:
@@ -367,6 +369,8 @@ def _inline_forward(text):
     original["From"] = address
     if fields.get("subject"):
         original["Subject"] = fields["subject"]
+    if fields.get("date"):
+        original["Date"] = fields["date"]
     if fields.get("message-id"):
         original["Message-ID"] = fields["message-id"]
     original.set_content("\n".join(lines[index:]))

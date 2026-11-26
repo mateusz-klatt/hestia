@@ -318,12 +318,22 @@ class GmailMessageProcessorTests(unittest.TestCase):
         self.assertEqual(pending.rfc_message_id_hmac,
                          digest(SECRET, RFC_MESSAGE_DOMAIN, "inline-shop-42@shop.example.test"))
 
-        # HTML without a forward marker is still checked if present on an inline forward.
+        # Zero or multiple markers in the rendered outer HTML skip the fallback and require manual review.
         no_marker_html_msg = _email(OWNER, plain, rfc_id="<outer-inline-nomarker@gmail.com>")
         no_marker_html_msg.add_alternative("<p>Razem: 51,00 PLN</p>", subtype="html")
         pending = self._process(_metadata(no_marker_html_msg), _raw(no_marker_html_msg))
-        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.payment.fields.total_amount),
-                         ("imported", False, "51"))
+        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.payment),
+                         ("imported", True, None))
+
+        two_marker_html = html.replace(
+            "<p>Razem: 42,50 PLN</p>",
+            "<p>Quoted ---------- Wiadomość przekazana dalej ----------</p><p>Razem: 42,50 PLN</p>",
+        )
+        two_marker_msg = _email(OWNER, plain, rfc_id="<outer-inline-two-markers@gmail.com>")
+        two_marker_msg.add_alternative(two_marker_html, subtype="html")
+        pending = self._process(_metadata(two_marker_msg), _raw(two_marker_msg))
+        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.payment),
+                         ("imported", True, None))
 
         # Explicit plain rejection does NOT fall back to outer HTML; neither does plain-only missing total or HTML-only.
         rejected_plain = plain.replace("Order confirmed without table.", "Payment failed")

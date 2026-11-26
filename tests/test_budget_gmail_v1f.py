@@ -1,7 +1,7 @@
 """Synthetic v1f gateway payment evidence: status, refs, fees, hosts, merge and evidence."""
 import base64
 from dataclasses import replace
-from datetime import date
+from datetime import UTC, date, datetime
 from email.message import EmailMessage
 import json
 from pathlib import Path
@@ -18,7 +18,8 @@ from hestia.budget.gmail_invoice import extract_invoice
 from hestia.budget.gmail_payment import ImportedPayment, inspect_payment
 from hestia.budget.gmail_store import (DAY as SECONDS_PER_DAY, GATEWAY_REF_DOMAIN, ORDER_REFERENCE_DOMAIN,
                                        PAYMENT_SENDER_DOMAIN, PROVENANCE_TTL, RFC_MESSAGE_DOMAIN, GmailStore,
-                                       PendingMessage, PendingPayment, _failed_gateway_key, digest, retain_imports)
+                                       PendingMessage, PendingPayment, _failed_gateway_key, _gateway_ref_key, digest,
+                                       receipt_ref_hmacs, retain_imports)
 from hestia.budget.gmail_trust import PaymentSender
 from hestia.budget.receipt_parser import ReceiptError
 from hestia.budget.receipt_store import BudgetReceiptStore
@@ -237,6 +238,18 @@ class V1fExtractionTests(unittest.TestCase):
             with self.subTest(block=block):
                 self.assertEqual(_inspect_text(base + block, "Potwierdzenie", provider="autopay").gateway_ref, expected)
 
+    def test_autopay_dual_refs_keep_payment_number_primary_and_transaction_secondary(self):
+        base = "Kwota transakcji: 5,00 PLN\n"
+        for block, primary, secondary in (
+            ("Numer płatności: pay-123\nIdentyfikator transakcji: tx-456", "PAY-123", "TX-456"),
+            ("Numer płatności:\npay-789\nIdentyfikator transakcji:\ntx-012", "PAY-789", "TX-012"),
+            ("Numer płatności: PAY-ONLY-123", "PAY-ONLY-123", None),
+            ("Identyfikator transakcji: TX-ONLY-456", "TX-ONLY-456", None),
+        ):
+            with self.subTest(block=block):
+                inspected = _inspect_text(base + block, "Potwierdzenie", provider="autopay")
+                self.assertEqual((inspected.gateway_ref, inspected.gateway_ref_secondary), (primary, secondary))
+
     def test_autopay_payment_number_and_on_behalf_of_payee_align_registered_and_paid(self):
         registered_body = (
             "Numer płatności: ABcd_123456_PL_22_11_2026\n"
@@ -372,11 +385,12 @@ DAY = date(2026, 11, 12)
 
 
 def _gateway_payment(*, merchant="T-MOBILE POLSKA S.A.", total="101.5", currency="PLN", status="paid",
-                     ref=_ref("ref-1"), gateway="Example Pay", fee="1.5", host=None, day=DAY,
-                     description="Faktura 501234567890"):
-    fields = ImportedPayment(merchant, description, total, currency, (), fee_amount=fee, payee_host=host)
+                     ref=_ref("ref-1"), secondary_ref=None, gateway="Example Pay", fee="1.5", host=None, day=DAY,
+                     description="Faktura 501234567890", payee_from_config=False):
+    fields = ImportedPayment(merchant, description, total, currency, (), payee_from_config=payee_from_config,
+                             fee_amount=fee, payee_host=host)
     return PendingPayment(fields, day, "a" * 64, gateway=True, status=status,
-                          gateway_ref_hmac=ref, gateway_name=gateway)
+                          gateway_ref_hmac=ref, gateway_ref_secondary_hmac=secondary_ref, gateway_name=gateway)
 
 
 def _shop_payment(*, merchant="Sklep Przykładowy", total="66", currency="PLN", day=DAY):
@@ -438,6 +452,133 @@ class V1fStoreTests(unittest.TestCase):
             audit = session.scalar(select(db.BudgetAnalyticsAudit).where(
                 db.BudgetAnalyticsAudit.action == "gateway_upgrade"))
             self.assertEqual((audit.subject_type, audit.subject_id), ("receipt", row.id))
+
+    def test_autopay_dual_refs_merge_in_both_arrival_orders(self):
+        for index, paid_first in enumerate((False, True), start=1):
+            with self.subTest(paid_first=paid_first):
+                gateway = f"Example Pay {index}"
+                transaction_ref = _ref(f"transaction-{index}")
+                payment_ref = _ref(f"payment-{index}")
+                registered = _gateway_payment(total="40", fee=None, status="registered", ref=transaction_ref,
+                                              gateway=gateway)
+                paid = _gateway_payment(total="40", fee=None, ref=payment_ref, secondary_ref=transaction_ref,
+                                        gateway=gateway)
+                first, second = (paid, registered) if paid_first else (registered, paid)
+                self.assertEqual(self._commit(self._message(index * 2 - 1, payment=first)), (1, 0, True))
+                self.assertEqual(self._commit(self._message(index * 2, payment=second)), (0, 1, True))
+                (row,) = [row for row in self._receipts() if row.gateway == gateway]
+                self.assertEqual((row.gateway_status, row.gateway_ref_hmac, row.version),
+                                 ("paid", payment_ref, 1 if paid_first else 2))
+                self.assertEqual(self._message_row(index * 2).outcome, "skipped_duplicate")
+                with self.sessions() as session:
+                    self.assertEqual(session.get(db.AppMeta, _gateway_ref_key(row.id)).value, transaction_ref)
+
+    def test_dual_ref_confirmed_registration_changes_only_status_when_totals_match(self):
+        for index, paid_total in enumerate(("120", "121.5"), start=1):
+            with self.subTest(paid_total=paid_total):
+                gateway = f"Confirmed Pay {index}"
+                transaction_ref = _ref(f"confirmed-transaction-{index}")
+                registered = _gateway_payment(total="120", fee="0", status="registered", ref=transaction_ref,
+                                              gateway=gateway)
+                self.assertEqual(self._commit(self._message(index * 3 - 2, payment=registered)), (1, 0, True))
+                row = next(row for row in self._receipts() if row.gateway == gateway)
+                self._confirm(row.id)
+                paid = _gateway_payment(total=paid_total, fee="0", ref=_ref(f"confirmed-payment-{index}"),
+                                        secondary_ref=transaction_ref, gateway=gateway)
+                self.assertEqual(self._commit(self._message(index * 3 - 1, payment=paid)), (0, 1, True))
+                row = next(row for row in self._receipts() if row.gateway == gateway)
+                self.assertEqual((row.gateway_status, row.gateway_ref_hmac, row.total_amount, row.fee_amount,
+                                  row.raw_shop_name, row.version, row.updated_at),
+                                 ("paid" if paid_total == "120" else "registered", transaction_ref, "120", "0",
+                                  "T-MOBILE POLSKA S.A.", 1, row.created_at))
+                with self.sessions() as session:
+                    self.assertIsNone(session.get(db.AppMeta, _gateway_ref_key(row.id)))
+
+    def test_merge_gateway_rejects_incompatible_payees_before_either_upgrade(self):
+        for index, confirmed in enumerate((False, True), start=1):
+            with self.subTest(confirmed=confirmed):
+                gateway = f"Payee Guard {index}"
+                ref = _ref(f"payee-guard-{index}")
+                registered = _gateway_payment(merchant="SKLEP JEDEN", total="120", fee="0", status="registered",
+                                              ref=ref, gateway=gateway)
+                self.assertEqual(self._commit(self._message(index * 2 - 1, payment=registered)), (1, 0, True))
+                row = next(row for row in self._receipts() if row.gateway == gateway)
+                if confirmed:
+                    self._confirm(row.id)
+                paid = _gateway_payment(merchant="SKLEP DWA", total="120", fee="0", ref=ref, gateway=gateway)
+                self.assertEqual(self._commit(self._message(index * 2, payment=paid)), (0, 1, True))
+                row = next(row for row in self._receipts() if row.gateway == gateway)
+                self.assertEqual((row.gateway_status, row.raw_shop_name, row.total_amount, row.version, row.updated_at),
+                                 ("registered", "SKLEP JEDEN", "120", 1, row.created_at))
+                with self.sessions() as session:
+                    self.assertIsNone(session.scalar(select(db.BudgetAnalyticsAudit).where(
+                        db.BudgetAnalyticsAudit.subject_id == row.id,
+                        db.BudgetAnalyticsAudit.action == "gateway_upgrade")))
+
+    def test_merge_gateway_accepts_empty_stored_and_config_incoming_payees(self):
+        for index, stored_empty in enumerate((True, False), start=1):
+            with self.subTest(stored_empty=stored_empty):
+                gateway = f"Compatible Pay {index}"
+                registered = _gateway_payment(
+                    merchant=gateway if stored_empty else "SKLEP PRZYKŁADOWY", total="120", fee="0",
+                    status="registered", ref=_ref(f"compatible-{index}"), gateway=gateway,
+                    payee_from_config=stored_empty,
+                )
+                paid = _gateway_payment(
+                    merchant="SKLEP PRZYKŁADOWY" if stored_empty else gateway, total="121.5",
+                    ref=_ref(f"compatible-{index}"), gateway=gateway, payee_from_config=not stored_empty,
+                )
+                self.assertEqual(self._commit(self._message(index * 2 - 1, payment=registered)), (1, 0, True))
+                self.assertEqual(self._commit(self._message(index * 2, payment=paid)), (0, 1, True))
+                row = next(row for row in self._receipts() if row.gateway == gateway)
+                self.assertEqual((row.gateway_status, row.raw_shop_name, row.total_amount, row.version),
+                                 ("paid", paid.fields.merchant, "121.5", 2))
+
+    def test_receipt_ref_hmacs_returns_gateway_refs_and_empty_for_shop_rows(self):
+        gateway = _gateway_payment(ref=_ref("accessor-primary"), secondary_ref=_ref("accessor-secondary"))
+        self.assertEqual(self._commit(self._message(1, payment=gateway), self._message(2, payment=_shop_payment())),
+                         (2, 0, True))
+        with self.sessions() as session:
+            gateway_row = session.scalar(select(db.BudgetReceipt).where(db.BudgetReceipt.gateway.is_not(None)))
+            shop_row = session.scalar(select(db.BudgetReceipt).where(db.BudgetReceipt.gateway.is_(None)))
+            self.assertEqual(receipt_ref_hmacs(session, gateway_row),
+                             frozenset({_ref("accessor-primary"), _ref("accessor-secondary")}))
+            self.assertEqual(receipt_ref_hmacs(session, shop_row), frozenset())
+
+    def test_secondary_gateway_ref_expires_with_receipt_provenance(self):
+        paid = _gateway_payment(ref=_ref("retained-primary"), secondary_ref=_ref("retained-secondary"))
+        self.assertEqual(self._commit(self._message(1, payment=paid)), (1, 0, True))
+        (row,) = self._receipts()
+        key = _gateway_ref_key(row.id)
+        self._confirm(row.id)
+        with self.sessions() as session:
+            self.assertEqual(session.get(db.AppMeta, key).value, _ref("retained-secondary"))
+        self.clock.now += PROVENANCE_TTL + 1
+        self.store.retain("owner", 1)
+        with self.sessions() as session:
+            self.assertIsNotNone(session.get(db.BudgetReceipt, row.id))
+            self.assertIsNone(session.get(db.AppMeta, key))
+
+    def test_failed_dual_refs_remove_one_row_block_both_and_paid_clears_both(self):
+        transaction_ref = _ref("failed-transaction")
+        payment_ref = _ref("failed-payment")
+        registered = _gateway_payment(total="75", fee=None, status="registered", ref=transaction_ref)
+        self.assertEqual(self._commit(self._message(1, payment=registered)), (1, 0, True))
+        failed = ("Example Pay", payment_ref, transaction_ref)
+        self.assertEqual(self._commit(self._message(2, outcome="skipped_non_receipt", failed_gateway=failed)),
+                         (0, 1, True))
+        self.assertEqual(self._receipts(), [])
+        keys = {_failed_gateway_key("owner", "Example Pay", ref) for ref in (payment_ref, transaction_ref)}
+        with self.sessions() as session:
+            self.assertTrue(all(session.get(db.AppMeta, key) is not None for key in keys))
+        for index, ref in enumerate((transaction_ref, payment_ref), start=3):
+            blocked = _gateway_payment(total="75", fee=None, status="registered", ref=ref)
+            self.assertEqual(self._commit(self._message(index, payment=blocked)), (0, 1, True))
+            self.assertEqual(self._message_row(index).outcome, "skipped_non_receipt")
+        paid = _gateway_payment(total="75", fee=None, ref=payment_ref, secondary_ref=transaction_ref)
+        self.assertEqual(self._commit(self._message(5, payment=paid)), (1, 0, True))
+        with self.sessions() as session:
+            self.assertTrue(all(session.get(db.AppMeta, key) is None for key in keys))
 
     def test_registered_only_stays_registered_and_repeats_skip(self):
         registered = _gateway_payment(total="120", fee="0", status="registered")
@@ -946,6 +1087,16 @@ class V1fMessageTests(unittest.TestCase):
         self.assertEqual((payment.fields.fee_amount, payment.fields.payee_host), ("1", "shop.example.test"))
         self.assertEqual(payment.sender_hmac, digest(_SECRET, PAYMENT_SENDER_DOMAIN, "@gateway.example.test"))
 
+    def test_autopay_dual_refs_cross_processing_boundary_only_as_hmacs(self):
+        body = ("Płatność zakończona sukcesem\nNumer płatności:\nPAY-123456\n"
+                "Identyfikator transakcji: TX-654321\nOdbiorca: SKLEP PRZYKŁADOWY\n"
+                "Kwota transakcji: 66,00 PLN")
+        pending = self._process(body, "Przekazaliśmy Twoją płatność")
+        self.assertEqual(pending.outcome, "imported")
+        self.assertEqual((pending.payment.gateway_ref_hmac, pending.payment.gateway_ref_secondary_hmac),
+                         (digest(_SECRET, GATEWAY_REF_DOMAIN, "PAY-123456"),
+                          digest(_SECRET, GATEWAY_REF_DOMAIN, "TX-654321")))
+
     def test_failed_payment_marks_the_gateway_reference(self):
         body = "Status transakcji: straciła ważność\nIdentyfikator transakcji: AB12-CDE-FGH-IJK\nKwota transakcji: 75 PLN"
         pending = self._process(body, "Transakcja straciła ważność", sender="receipts@paynow.example.test")
@@ -1165,6 +1316,45 @@ class V1f2ForwardedPaymentTests(unittest.TestCase):
                 self.assertEqual((fallback.trust_path, fallback.outcome, fallback.forwarded_manually,
                                   fallback.payment, fallback.failed_gateway, fallback.rfc_message_id_hmac),
                                  ("owner_forward", "imported", True, None, None, None))
+
+    def test_forwarded_payment_uses_inner_date_across_warsaw_midnight(self):
+        outer = datetime(2026, 11, 25, 23, 30, tzinfo=UTC)
+        inline = self._email(
+            "owner@gmail.com",
+            "---------- Forwarded message ---------\n"
+            "From: Example Shop <orders@shop.example.test>\n"
+            "Date: Wed, 25 Nov 2026 23:30:00 +0200\n"
+            "Subject: Order #880900100\n"
+            "Message-ID: <inner-date@shop.example.test>\n\n"
+            "Łącznie: 20,00 PLN",
+            rfc_id="<outer-inner-date@gmail.com>",
+        )
+        pending = self._process(inline, gmail_id="inner-date",
+                                internal_date=str(int(outer.timestamp() * 1000)))
+        self.assertEqual((pending.outcome, pending.forwarded_manually), ("imported", False))
+        self.assertEqual(pending.payment.receipt_date, date(2026, 11, 25))
+        self.assertEqual(pending.internal_date, outer.timestamp())
+
+    def test_forwarded_payment_falls_back_to_outer_date_for_missing_bad_or_old_inner_date(self):
+        outer = datetime(2026, 11, 25, 23, 30, tzinfo=UTC)
+        for label, date_header in (
+            ("missing", None),
+            ("garbage", "not a date"),
+            ("old", "Wed, 01 Oct 2025 12:00:00 +0000"),
+            ("naive", "Wed, 25 Nov 2026 23:30:00"),
+        ):
+            with self.subTest(case=label):
+                inner = self._email("orders@shop.example.test", "Łącznie: 20,00 PLN",
+                                    subject="Order #880900100", rfc_id=f"<inner-date-{label}@shop.example.test>")
+                if date_header is not None:
+                    inner["Date"] = date_header
+                forwarded = self._email("spouse@gmail.com", "Forwarding", rfc_id=f"<outer-date-{label}@gmail.com>")
+                forwarded.add_attachment(inner)
+                pending = self._process(forwarded, gmail_id=f"inner-date-{label}",
+                                        internal_date=str(int(outer.timestamp() * 1000)))
+                self.assertEqual((pending.outcome, pending.forwarded_manually), ("imported", False))
+                self.assertEqual(pending.payment.receipt_date, date(2026, 11, 26))
+                self.assertEqual(pending.internal_date, outer.timestamp())
 
     def test_forwarded_and_direct_copy_dedupe_in_both_orders_via_inner_rfc_message_id(self):
         inner_rfc_id = "<orig-p24-dedupe@przelewy24.example.test>"

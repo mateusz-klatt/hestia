@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import base64
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from email import policy
 from email.errors import MessageError
 from email.parser import BytesParser
+from email.utils import parsedate_to_datetime
 import logging
 import re
 from zoneinfo import ZoneInfo
@@ -26,6 +27,10 @@ MAX_MESSAGE_BYTES = 10 * 1024 * 1024
 _MAX_BASE64_CHARS = 4 * ((MAX_MESSAGE_BYTES + 2) // 3)
 _INTERNAL_DATE = re.compile(r"[0-9]{1,19}\Z", re.ASCII)
 _WARSAW = ZoneInfo("Europe/Warsaw")
+_OUTER_FORWARD_MARKERS = (
+    "---------- Forwarded message ---------",
+    "---------- Wiadomość przekazana dalej ----------",
+)
 _ISSUER_SENDER_DOMAINS = {
     "T-Mobile": ("t-mobile.pl",),
     "Orange": ("orange.pl", "orange.com"),
@@ -159,6 +164,29 @@ def _has_rfc822_attachment(message):
     return any(part.get_content_type() == "message/rfc822" for part in mime_parts(message))
 
 
+def _payment_receipt_date(message, pending):
+    try:
+        outer = datetime.fromtimestamp(pending.internal_date, _WARSAW)
+    except (OverflowError, OSError, ValueError):
+        return None
+    fallback = outer.date()
+    if pending.trust_path not in ("spouse_forward", "owner_forward"):
+        return fallback
+    headers = message.get_all("Date", ())
+    if len(headers) != 1:
+        return fallback
+    try:
+        inner = parsedate_to_datetime(str(headers[0]))
+        if inner.tzinfo is None:
+            return fallback
+        inner = inner.astimezone(UTC)
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    if outer - inner > timedelta(days=400):
+        return fallback
+    return inner.astimezone(_WARSAW).date()
+
+
 class GmailMessageProcessor:
     def __init__(self, settings, worker):
         self.settings = settings
@@ -213,6 +241,8 @@ class GmailMessageProcessor:
         except WorkerRejected as error:
             return _parse_failed(pending, _worker_reason(error)), True, False
         if cut_inline:
+            if sum(text.count(marker) for marker in _OUTER_FORWARD_MARKERS) != 1:
+                return pending, False, False
             text = inline_forward_body(text)
         if not text.strip():
             return pending, True, True
@@ -222,17 +252,18 @@ class GmailMessageProcessor:
             return pending, True, True
         secret = self.settings.hmac_secret
         if inspected.reject_reason == "failed":
-            if sender.gateway and inspected.gateway_ref is not None:
-                ref_hmac = digest(secret, GATEWAY_REF_DOMAIN, inspected.gateway_ref)
+            ref_hmacs = tuple(digest(secret, GATEWAY_REF_DOMAIN, ref) for ref in (
+                inspected.gateway_ref, inspected.gateway_ref_secondary,
+            ) if ref is not None)
+            if sender.gateway and ref_hmacs:
                 return replace(pending, outcome="skipped_non_receipt",
-                               failed_gateway=(sender.merchant, ref_hmac)), False, False
+                               failed_gateway=(sender.merchant, *ref_hmacs)), False, False
             return pending, False, False
         payment = inspected.payment
         if payment is None:
             return pending, False, False
-        try:
-            receipt_date = datetime.fromtimestamp(pending.internal_date, _WARSAW).date()
-        except (OverflowError, OSError, ValueError):
+        receipt_date = _payment_receipt_date(message, pending)
+        if receipt_date is None:
             return pending, False, False
         if any(abs((body_date - receipt_date).days) > 3 for body_date in payment.body_dates):
             return pending, False, False
@@ -247,6 +278,8 @@ class GmailMessageProcessor:
             status=inspected.status,
             gateway_ref_hmac=(digest(secret, GATEWAY_REF_DOMAIN, inspected.gateway_ref)
                               if inspected.gateway_ref is not None else None),
+            gateway_ref_secondary_hmac=(digest(secret, GATEWAY_REF_DOMAIN, inspected.gateway_ref_secondary)
+                                        if inspected.gateway_ref_secondary is not None else None),
             gateway_name=sender.merchant if sender.gateway else None,
         )
         return replace(pending, outcome="imported", payment=provenance,
