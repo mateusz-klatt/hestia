@@ -56,6 +56,11 @@ _MARKER = re.compile(
     r"|shipped|out\s+for\s+delivery)\b",
     re.IGNORECASE,
 )
+# Only an affirmative merchant subject, optionally naming its shop or order number.
+_ORDER_CANCELLATION_SUBJECT = re.compile(
+    r"(?:potwierdzenie anulowania zamówienia)(?: (?:nr\.? |#)[0-9][0-9-]{0,31})?"
+    r"(?: (?:w|we) (?:sklepie )?[^\W_][\w-]*(?:\.[\w-]+)*)?[.!]?", re.IGNORECASE,
+)
 _REFUND_SUBJECT = re.compile(r"\b(?:zwrot|refund|korekta|faktura\s++korygująca|credit\s++note)\b", re.IGNORECASE)
 _REFUND_NOTICE = re.compile(
     r"(?:Zwrot\s++(?:środków|płatności|pieniędzy|za\s++zamówienie)|Twój\s++zwrot|Otrzymaliśmy\s++zwrot"
@@ -857,6 +862,11 @@ def _subject_text(subject: str) -> str:
     return " ".join(_normalize_receipt_text(bounded)[:256].split())
 
 
+def confirms_order_cancellation(subject: str) -> bool:
+    # Do not treat a truncated question, qualification or negation as a definitive notice.
+    return len(subject) <= 256 and _ORDER_CANCELLATION_SUBJECT.fullmatch(_subject_text(subject)) is not None
+
+
 def _shorten_url(match: re.Match[str]) -> str:
     authority = match["authority"].rpartition("@")[2]
     if authority.startswith("["):
@@ -892,6 +902,7 @@ def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gate
         if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
             return PaymentInspection()
         provider = provider if gateway else None
+        cancellation = any(confirms_order_cancellation(subject) for subject in subjects)
         subjects = tuple(_subject_text(subject) for subject in subjects)
         # Shorten link tokens before invoice normalization applies its per-line cap.
         shortened = _HTTP_URL.sub(_shorten_url, text)
@@ -909,7 +920,7 @@ def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gate
             body = "\n".join(raw)
             if _CARD_VERIFICATION.search(body) and _CARD_VERIFICATION_CANCEL.search(body):
                 return PaymentInspection(reject_reason="card_verification")
-        if any(_subject_rejected(subject, provider) for subject in subjects):
+        if cancellation or any(_subject_rejected(subject, provider) for subject in subjects):
             return PaymentInspection()
         if any(_body_marker(line, provider) for line in raw):
             return PaymentInspection()

@@ -106,6 +106,44 @@ class GmailMessageProcessorTests(unittest.TestCase):
         )
         return _email("orders@billing.shop.example.test", text, **body_options)
 
+    def test_cancellation_notice_skips_new_purchase_for_direct_and_forwarded_original(self):
+        notice = "Potwierdzenie anulowania zamówienia we Example"
+        inner = self._payment_email("Wartość zamówienia: 21,90 PLN")
+        self.settings.document_senders = self.settings.payment_senders
+        inner["Subject"] = notice
+        inner.add_attachment(b"%PDF-synthetic", maintype="application", subtype="pdf")
+        attached = _email(OWNER, "Notatka do zamówienia.")
+        attached.add_attachment(inner)
+        inline = _email(SPOUSE, "Notatka.\n---------- Forwarded message ---------\n"
+                        f"From: {inner['From']}\nSubject: {notice}\n\nWartość zamówienia: 21,90 PLN")
+        for message in (inner, attached, inline):
+            with self.subTest(sender=message["From"]):
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual((pending.outcome, pending.invoice, pending.payment, pending.forwarded_manually),
+                                 ("skipped_non_receipt", None, None, False))
+        self.worker.parse.assert_not_called()
+
+        purchase = self._payment_email("Wartość zamówienia: 21,90 PLN")
+        purchase["Subject"] = "Zamówienie opłacone"
+        cover = _email(OWNER, "Proszę sprawdzić.")
+        cover["Subject"] = notice
+        cover.add_attachment(purchase)
+        self.assertEqual(self._process(_metadata(cover), _raw(cover)).payment.fields.total_amount, "21.9")
+
+    def test_order_cancellation_preserves_gateway_terminal_failure(self):
+        self.settings.payment_senders = (PaymentSender("@gateway.example.test", "PayNow", gateway=True,
+                                                      provider="paynow"),)
+        body = ("Twoja transakcja AB12-CDE-FGH-IJK straciła ważność.\n"
+                "Kwota transakcji: 21,90 PLN")
+        inner = _email("alert@gateway.example.test", body)
+        inner["Subject"] = "Potwierdzenie anulowania zamówienia"
+        outer = _email(OWNER, "Proszę sprawdzić.")
+        outer.add_attachment(inner)
+        for message in (inner, outer):
+            pending = self._process(_metadata(message), _raw(message))
+            self.assertEqual((pending.outcome, pending.payment, pending.failed_gateway[0]),
+                             ("skipped_non_receipt", None, "PayNow"))
+
     def test_payment_uses_warsaw_internal_date_and_decoded_subject(self):
         message = self._payment_email("Amount paid: 123,45 PLN\nDate paid: 2026-11-22")
         message["Subject"] = "=?utf-8?q?Op=C5=82ata_za_us=C5=82ug=C4=99?="

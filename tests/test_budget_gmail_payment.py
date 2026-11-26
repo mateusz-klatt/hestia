@@ -196,6 +196,20 @@ class PaymentExtractionTests(unittest.TestCase):
             self.assertIsNone(_extract("Total 2 PLN", f"Example {marker}"))
         self.assertIsNone(_extract("Potwierdzenie rozpoczęcia transakcji\nTotal 2 PLN"))
 
+    def test_completed_order_cancellation_subject_skips_only_an_affirmative_notice(self):
+        body = "Wartość zamówienia: 21,90 PLN"
+        notice = "Potwierdzenie anulowania zamówienia"
+        for subject in (notice, notice + " we Example", notice + " w sklepie Example.",
+                        notice.upper().replace(" ", "\u00a0"), notice + " nr 12345"):
+            with self.subTest(subject=subject):
+                self.assertIsNone(_extract(body, subject))
+        for subject in ("Prośba o " + notice.lower(), "Jak uzyskać " + notice.lower() + "?",
+                        notice + "?", notice + " nie jest dostępne", notice + " we Example nie zostało wysłane",
+                        "Nie otrzymano: " + notice, notice.ljust(256) + " nie dotarło"):
+            with self.subTest(subject=subject):
+                self.assertEqual(_extract(body, subject).total_amount, "21.9")
+        self.assertEqual(_extract(body + "\nJak anulować zamówienie?", "Potwierdzenie zamówienia").total_amount, "21.9")
+
     def test_refund_and_correction_markers(self):
         for marker in ("zwrot", "refund", "korekta", "faktura korygująca", "credit note"):
             with self.subTest(subject=marker):
