@@ -380,6 +380,171 @@ NR KARTY ****5555
         confirmed = self.receipts.confirm("owner", confirm_values(parsed))["receipt"]
         self.assertEqual((confirmed["status"], confirmed["total_amount"]), ("confirmed", "5"))
 
+    def test_iban_registry_structure_and_bounds_cover_swift_formats(self):
+        import re
+        from hestia.budget import receipt_parser
+
+        def with_check_digits(country, bban):
+            for check in range(100):
+                candidate = f"{country}{check:02d}{bban}"
+                if receipt_parser._iban_checksum(candidate.upper()):
+                    return candidate
+            raise AssertionError(f"no check digits for {country}")
+
+        spec_re = re.compile(r"([0-9]+)!([nac])", re.ASCII)
+        self.assertEqual(len(receipt_parser._IBAN_BBAN_SPECS), 89)
+        for country, spec in receipt_parser._IBAN_BBAN_SPECS.items():
+            self.assertRegex(country, r"^[A-Z]{2}$")
+            expected_len, mask = receipt_parser._IBAN_COUNTRY_SPECS[country]
+            self.assertGreaterEqual(expected_len, receipt_parser._IBAN_MIN)
+            self.assertLessEqual(expected_len, receipt_parser._IBAN_MAX)
+            parts = spec_re.findall(spec)
+            self.assertEqual("".join(f"{count}!{kind}" for count, kind in parts), spec)
+            sample_bban = "".join(
+                ("0" * int(count)) if kind == "n" else ("A" * int(count)) if kind == "a" else ("A" * int(count))
+                for count, kind in parts
+            )
+            valid = with_check_digits(country, sample_bban)
+            with self.subTest(country=country, case="valid"):
+                self.assertTrue(receipt_parser._iban_shape(valid))
+                self.assertEqual(redact_pan(valid), "[usunięto]")
+                self.assertFalse(receipt_parser._iban_shape(valid[:-1]))
+                self.assertFalse(receipt_parser._iban_shape(valid + "0"))
+                self.assertFalse(receipt_parser._iban_shape(valid.lower()))
+            wrong_char = "A" if mask[-1] == "n" else "0" if mask[-1] == "a" else "!"
+            mutated = with_check_digits(country, sample_bban[:-1] + wrong_char) if wrong_char != "!" else valid[:-1] + "!"
+            self.assertFalse(receipt_parser._iban_shape(mutated), country)
+
+        # PL keeps fixed 26 digits even without mod-97, while rejecting wrong lengths or non-digits.
+        self.assertTrue(receipt_parser._iban_shape("PL" + "0" * 26))
+        self.assertFalse(receipt_parser._iban_shape(with_check_digits("PL", "0" * 16)))
+        self.assertFalse(receipt_parser._iban_shape(with_check_digits("PL", "A" * 24)))
+        # Alphanumeric !c permits lowercase in _iban_shape while !a requires uppercase and rejects punctuation.
+        self.assertTrue(receipt_parser._iban_shape(with_check_digits("MT", "MALT01100abcdefghijklmnopqr")))
+        self.assertFalse(receipt_parser._iban_shape(with_check_digits("MT", "malt01100ABCDEFGHIJKLMNOPQR")))
+        self.assertFalse(receipt_parser._iban_shape(with_check_digits("MT", "MALT01100ABCDEFGHIJKLMNOPQ") + "!"))
+        for bad in ("", "A", "PL", "NR0017NIP0000001494", "MT77MALT01100TFOJOFWVWEUBO", "PL6110901014000007121981287Ł"):
+            self.assertFalse(receipt_parser._iban_shape(bad), bad)
+
+    def test_iban_boundary_rejects_nr0017_nip_and_cashregister_payment_false_positives(self):
+        # Synthetic NR0017 + checksum-valid NIP fixture ("NR0017NIP0000001494" passes mod-97).
+        nr_short = "SKLEP TESTOWY\nNR 0017\nNIP 0000001494\nSUMA PLN 5,00"
+        self.assertEqual(redact_pan(nr_short), nr_short)
+        parsed_short = parse_receipt(nr_short)
+        self.assertEqual(parsed_short["raw_shop_name"], "SKLEP TESTOWY")
+        self.assertEqual(parsed_short["raw_nip"], "0000001494")
+        self.assertEqual(parsed_short["total_amount"], "5")
+        self.assertEqual(parse_receipt(redact_pan(nr_short)), parsed_short)
+
+        nr_full = (
+            "SKLEP TESTOWY\nNR 0017\nNIP 0000001494\nPARAGON FISKALNY\n"
+            "2026-11-20 12:34\nKUBEK 1szt * 5,00 5,00 A\nSUMA PLN 5,00\n"
+        )
+        self.assertEqual(redact_pan(nr_full), nr_full)
+        draft = self.receipts.parse_text("owner", nr_full, source_kind="local_ocr")
+        self.assertEqual((draft["draft"]["raw_shop_name"], draft["draft"]["raw_nip"], draft["draft"]["total_amount"]),
+                         ("SKLEP TESTOWY", "0000001494", "5"))
+        confirmed = self.receipts.confirm("owner", confirm_values(draft))["receipt"]
+        self.assertEqual((confirmed["status"], confirmed["raw_nip"], confirmed["total_amount"]),
+                         ("confirmed", "0000001494", "5"))
+
+        # Checksum-valid short cash register + PŁATNOŚĆ / PLATNOSC traps (unknown and exact country lengths).
+        traps = (
+            ("KS 310001", "PŁATNOŚĆ"),
+            ("MT 00", "PŁATNOŚĆ"),
+            ("NO 83001", "PLATNOSC"),
+            ("BE 270001", "PLATNOSC"),
+            ("NL 92000001", "PLATNOSC"),
+            ("AT 8800000001", "PLATNOSC"),
+            ("PL 90 001122AABBCCDDEE", "PLATNOSC"),
+        )
+        for register_line, payment_line in traps:
+            with self.subTest(register_line=register_line, payment_line=payment_line):
+                receipt = (
+                    f"SKLEP TESTOWY\n{register_line}\n{payment_line}\n"
+                    "PARAGON FISKALNY\nKUBEK 1szt * 5,00 5,00 A\nSUMA PLN 5,00\n"
+                )
+                self.assertEqual(redact_pan(receipt), receipt)
+                parsed = parse_receipt(receipt)
+                self.assertEqual(parsed["raw_shop_name"], "SKLEP TESTOWY")
+                self.assertEqual(parsed["math_delta"], "0")
+                self.assertEqual(len(parsed["lines"]), 1)
+                self.assertEqual(parse_receipt(redact_pan(receipt)), parsed)
+
+    def test_iban_foreign_wrapped_last_line_and_headers_preserve_shop_name(self):
+        import time
+
+        # Valid foreign IBANs across formats (single line, wrapped onto last line, and before headers).
+        foreign_cases = (
+            ("IBAN DE89 3704 0044 0532 0130 00", "[usunięto]"),
+            ("IBAN FR14 2004 1010 0505 0001 3M02 606", "[usunięto]"),
+            ("IBAN NO93 8601 1117 947", "[usunięto]"),
+            ("IBAN MT86 MALT 01100 ABCDEFGH\nIJKLMNOPQR", "[usunięto]\n[usunięto]"),
+            ("IBAN MT77MALT01100TFOJOFWVWEUBO\nIPZVU", "[usunięto]\n[usunięto]"),
+            ("IBAN DE89-3704\n0044\t0532\n0130 00", "[usunięto]\n[usunięto]\n[usunięto]"),
+            ("IBAN PL61 1090 1014\n0000 0712 1981 2874", "[usunięto]\n[usunięto]"),
+        )
+        for account_block, expected_block in foreign_cases:
+            with self.subTest(account_block=account_block):
+                at_end = f"SKLEP TESTOWY\nPARAGON FISKALNY\nSUMA PLN 5,00\n{account_block}"
+                expected_end = f"SKLEP TESTOWY\nPARAGON FISKALNY\nSUMA PLN 5,00\n{expected_block}"
+                redacted = redact_pan(at_end)
+                self.assertEqual(redacted, expected_end)
+                self.assertEqual(redact_pan(redacted), redacted)
+                parsed = parse_receipt(at_end)
+                self.assertEqual(parsed["raw_shop_name"], "SKLEP TESTOWY")
+                self.assertEqual(parse_receipt(redacted), parsed)
+
+                mid_receipt = f"SKLEP TESTOWY\n{account_block}\nPARAGON FISKALNY\nKUBEK 1szt * 5,00 5,00 A\nSUMA PLN 5,00"
+                redacted_mid = redact_pan(mid_receipt)
+                self.assertEqual(
+                    redacted_mid,
+                    f"SKLEP TESTOWY\n{expected_block}\nPARAGON FISKALNY\nKUBEK 1szt * 5,00 5,00 A\nSUMA PLN 5,00",
+                )
+                parsed_mid = parse_receipt(mid_receipt)
+                self.assertEqual((parsed_mid["raw_shop_name"], parsed_mid["math_delta"]), ("SKLEP TESTOWY", "0"))
+                self.assertEqual(parse_receipt(redacted_mid), parsed_mid)
+
+        # Shop preface IBAN never leaks; non-IBAN headers and failed prefixes do not swallow shop_name or later IBANs.
+        for trap in (
+            "SKLEP PL 0012\nNIP 0000001494\nPARAGON FISKALNY\nKUBEK 1szt * 5,00 5,00 A\nSUMA PLN 5,00",
+            "SKLEP NO 83001\nPLATNOSC\nPARAGON FISKALNY\nKUBEK 1szt * 5,00 5,00 A\nSUMA PLN 5,00",
+        ):
+            parsed_trap = parse_receipt(trap)
+            self.assertTrue(parsed_trap["raw_shop_name"].startswith("SKLEP "))
+            self.assertEqual(redact_pan(trap), trap)
+
+        prefixed = (
+            "NR KASY 0017\nNIP 0000001494\nSKLEP TESTOWY\nPARAGON FISKALNY\n"
+            "KUBEK 1szt * 5,00 5,00 A\nSUMA PLN 5,00\n"
+        )
+        parsed_prefixed = parse_receipt(prefixed)
+        self.assertEqual((parsed_prefixed["raw_shop_name"], parsed_prefixed["raw_nip"], parsed_prefixed["math_delta"]),
+                         ("SKLEP TESTOWY", "0000001494", "0"))
+
+        self.assertEqual(
+            redact_pan("SK00\nPL61 1090 1014 0000 0712 1981 2874\nNR KARTY 4111 1111\n1111 1111"),
+            "SK00\n[usunięto]\n[usunięto]\n[usunięto]",
+        )
+        self.assertEqual(redact_pan("NO 00\nDE89370400440532013000"), "NO 00\n[usunięto]")
+        self.assertEqual(
+            redact_pan("IBAN MT86MALT01100ABCDEFGHIJKLMNOPQR\nSKLEP TESTOWY\nPARAGON FISKALNY"),
+            "[usunięto]\nSKLEP TESTOWY\nPARAGON FISKALNY",
+        )
+        for glued_mt in (
+            "IBAN MT86MALT01100ABCDEFGHIJKLMNOPQRzł",
+            "IBAN MT86MALT01100ABCDEFGHIJKLMNOPQRł",
+            "IBAN MT86MALT01100ABCDEFGHIJKLMNOPQR ł",
+        ):
+            self.assertEqual(redact_pan(glued_mt), glued_mt)
+        self.assertEqual(redact_pan("IBAN MT86MALT01100ABCDEFGHIJKLMNOPQR\nzł"), "[usunięto]\nzł")
+
+        # Bounded token work on repetitive country-code-shaped 32 KiB noise.
+        noise = ("SK00 " * 100 + "\n") * 60
+        started = time.perf_counter()
+        self.assertEqual(redact_pan(noise), noise)
+        self.assertLess(time.perf_counter() - started, 0.5)
+
     def test_normalised_text_redacts_pans_hidden_by_unicode(self):
         expected = "[usunięto]\n[usunięto]"
         for sep in ("\r\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"):
