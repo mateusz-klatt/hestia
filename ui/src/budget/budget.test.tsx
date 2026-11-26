@@ -1373,7 +1373,7 @@ describe("analytics views", () => {
     const freshLinks = [...host.querySelectorAll("button")].filter((item) => item.textContent === "View transactions");
     await click(freshLinks[0] as HTMLButtonElement);
     expect(host.querySelector<HTMLInputElement>('input[name="provisional"]')).toBeNull();
-    expect(host.querySelectorAll(".budget-entries .budget-entry")).toHaveLength(6);
+    expect(host.querySelectorAll(".budget-transaction-table tbody tr")).toHaveLength(6);
   });
 
   it("offers Forecast after Mortgages only while analytics is enabled", async () => {
