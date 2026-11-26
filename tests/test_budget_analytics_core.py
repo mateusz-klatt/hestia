@@ -4,10 +4,10 @@ from types import SimpleNamespace
 import unicodedata
 import unittest
 
-from hestia.budget.analytics_core import (AnalyticsError, CLASSIFICATION_VERSION, canonical_money, compare_money,
-    compatible_kind, compile_rules, default_effective_kind, effective_date, financial_fingerprint,
-    first_matching_rule, match_rule, match_texts, negate_money, owned_identities, pair_fingerprint, parse_period,
-    projection_digest, rule_matches, sum_money)
+from hestia.budget.analytics_core import (AnalyticsError, CLASSIFICATION_VERSION, bank_card_transfer_allowed,
+    canonical_money, compare_money, compatible_kind, compile_rules, default_effective_kind, effective_date,
+    financial_fingerprint, first_matching_rule, identity_pair_set, is_bank_card_repayment, match_rule, match_texts,
+    negate_money, owned_identities, pair_fingerprint, parse_period, projection_digest, rule_matches, sum_money)
 
 
 def payload(**changes):
@@ -250,7 +250,7 @@ class PeriodAndRuleTests(unittest.TestCase):
         self.assertEqual(match_rule(disabled_only, crdt, match_texts(crdt)), (None, "unclassified_credit"))
         self.assertEqual(match_rule(disabled_only, dbit, match_texts(dbit)), (None, "expense"))
 
-        self.assertEqual(CLASSIFICATION_VERSION, 2)
+        self.assertEqual(CLASSIFICATION_VERSION, 3)
         # Any primary CRDT rule (income/refund/auto/excluded) beats expense fallback regardless of priority.
         for primary, expected_kind in ((inc_low, "income"), (ref_low, "refund"),
                                        (auto_low, "unclassified_credit"), (excl_low, "excluded")):
@@ -259,3 +259,83 @@ class PeriodAndRuleTests(unittest.TestCase):
                 self.assertTrue(mixed_safe)
                 self.assertEqual(match_rule(mixed, crdt, match_texts(crdt)), (primary, expected_kind))
                 self.assertEqual(match_rule(mixed, dbit, match_texts(dbit)), (exp_high, "expense"))
+
+    def test_bank_card_repayment_detection_and_scope_guards(self):
+        positives = (
+            ("standard", payload(remittance_information=["Spłata karty kredytowej"]), None),
+            ("nfd", payload(remittance_information=[unicodedata.normalize("NFD", "Spłata karty kredytowej")]), None),
+            ("abbrev caps", payload(remittance_information=["SPŁATA KARTY KRED."]), None),
+            ("multiline auto", payload(remittance_information=["Auto-spłata", "KARTY KREDYTOWEJ"]), None),
+            ("automatyczna", payload(remittance_information=["Automatyczna spłata karty"]), None),
+            ("autosplata", payload(remittance_information=["Autospłata zadłużenia karty"]), None),
+            ("na karcie", payload(remittance_information=["Spłata zadłużenia na karcie kredytowej"]), None),
+            ("minimal visa", payload(remittance_information=["Spłata minimalna karty Visa"]), None),
+            ("partial mc", payload(remittance_information=["Spłata częściowa karty Mastercard"]), None),
+            ("english", payload(remittance_information=["Credit card repayment"]), None),
+            ("english of", payload(remittance_information=["Repayment of the credit card"]), None),
+            ("creditor name", payload(remittance_information=["Przelew własny"]),
+             {"creditor_name": "Konto spłaty karty kredytowej"}),
+            ("omitted amount", {"credit_debit_indicator": "DBIT", "remittance_information": ["Spłata karty kredytowej"]}, None),
+        )
+        for name, body, metadata in positives:
+            with self.subTest(positive=name):
+                self.assertTrue(is_bank_card_repayment(body, metadata))
+                self.assertEqual(default_effective_kind(body, metadata), "transfer")
+
+        negatives = (
+            ("non dict", None, None),
+            ("credit refund", payload(credit_debit_indicator="CRDT", remittance_information=["Spłata karty kredytowej"]), None),
+            ("pending status", payload(status="PDNG", remittance_information=["Spłata karty kredytowej"]), None),
+            ("zero amount", payload(amount="0", remittance_information=["Spłata karty kredytowej"]), None),
+            ("bad amount", payload(amount="invalid", remittance_information=["Spłata karty kredytowej"]), None),
+            ("mcc present", payload(remittance_information=["Spłata karty kredytowej"]), {"mcc": "5411"}),
+            ("empty texts", payload(remittance_information=[]), {"creditor_name": ""}),
+            ("purchase platnosc", payload(remittance_information=["Płatność kartą kredytową - Sklep"]), None),
+            ("purchase zakup", payload(remittance_information=["Sklep zakupy kartą kredytową"]), None),
+            ("ordinary transakcja", payload(remittance_information=["Transakcja kartą kredytową"]), None),
+            ("annual fee", payload(remittance_information=["Opłata za spłatę karty kredytowej"]), None),
+            ("commission", payload(remittance_information=["Prowizja za autospłatę karty"]), None),
+            ("interest", payload(remittance_information=["Odsetki od karty kredytowej"]), None),
+            ("insurance", payload(remittance_information=["Ubezpieczenie spłaty karty kredytowej"]), None),
+            ("refund wording", payload(remittance_information=["Zwrot na kartę kredytową"]), None),
+            ("cancelled", payload(remittance_information=["Anulowanie spłaty karty kredytowej"]), None),
+            ("cash withdrawal", payload(remittance_information=["Wypłata z karty kredytowej"]), None),
+            ("loan from card", payload(remittance_information=["Spłata pożyczki z karty kredytowej"]), None),
+            ("debit card auto", payload(remittance_information=["Autospłata karty debetowej"]), None),
+            ("gift card auto", payload(remittance_information=["Autospłata karty podarunkowej"]), None),
+            ("city card auto", payload(remittance_information=["Autospłata karty miejskiej"]), None),
+            ("english fee", payload(remittance_information=["Credit card repayment fee"]), None),
+            ("english payment", payload(remittance_information=["Credit card payment - Coffee"]), None),
+        )
+        for name, body, metadata in negatives:
+            with self.subTest(negative=name):
+                self.assertFalse(is_bank_card_repayment(body, metadata))
+                if isinstance(body, dict):
+                    self.assertNotEqual(default_effective_kind(body, metadata), "transfer")
+
+        repay = payload(remittance_information=["Spłata karty kredytowej"])
+        self.assertEqual(default_effective_kind(repay, None, allow_bank_transfer=False), "expense")
+
+        id_card = identity("CARD-1")
+        id_off = identity("OFF-1")
+        id_ext = identity("EXT-9")
+        acct_ids = {
+            "main": identity_pair_set(()),
+            "card": identity_pair_set((id_card,)),
+            "off": identity_pair_set((id_off,)),
+        }
+        self.assertFalse(bank_card_transfer_allowed("main", None, selected_accounts=frozenset({"main"}), account_identities=acct_ids))
+        self.assertTrue(bank_card_transfer_allowed("main", None, selected_accounts=frozenset({"main", "card"}), account_identities=acct_ids))
+        self.assertTrue(bank_card_transfer_allowed(
+            "main", {"creditor_accounts": [id_card]}, selected_accounts=frozenset({"main", "card"}), account_identities=acct_ids))
+        self.assertFalse(bank_card_transfer_allowed(
+            "main", {"creditor_accounts": [id_off]}, selected_accounts=frozenset({"main", "card"}), account_identities=acct_ids))
+        self.assertTrue(bank_card_transfer_allowed(
+            "main", {"creditor_accounts": [id_ext]}, selected_accounts=frozenset({"main", "card"}), account_identities=acct_ids))
+
+        exp_rule = {"id": "r1", "enabled": True, "kind": "expense", "field": "description",
+                    "operator": "contains", "value": "spłata", "category_id": "cat-1", "priority": 1}
+        compiled_exp, _ = compile_rules([exp_rule])
+        texts = match_texts(repay)
+        self.assertEqual(match_rule(compiled_exp, repay, texts, default_kind="transfer"), (exp_rule, "expense"))
+        self.assertEqual(match_rule([], repay, texts, default_kind="transfer"), (None, "transfer"))
