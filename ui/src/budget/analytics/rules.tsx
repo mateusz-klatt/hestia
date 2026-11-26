@@ -12,6 +12,7 @@ import { ANALYTICS_ERROR, CATEGORY_NAME_MAX, KIND_CHOICES, RELOAD_ERRORS, RULE_F
   RULE_KIND_KEYS, RULE_OPERATORS, RULE_OPERATOR_KEYS, RULE_PRIORITY_MAX, RULE_VALUE_MAX,
   accountName as nameOf, labelOf, ruleCandidate, validCandidate, validCategoryName } from "./model";
 import type { AnalyticsCategory, AnalyticsRule, KindChoice, RuleCandidate, RulePreview } from "./model";
+import "./categories.css";
 
 type Loss = (result: { ok: boolean; status?: number; error?: string }) => boolean;
 type Listed<T> = T[] | "loading" | "error";
@@ -121,8 +122,36 @@ function CategoriesPanel({ categories, api, run, locale, onSaved, epoch }: Categ
   } | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const editNameRef = useRef<HTMLInputElement>(null);
+  const rowRefs = useRef(new Map<string, HTMLButtonElement>());
+  const focusTarget = useRef<{ type: "editor" | "row"; id: string; onlyIfLost?: boolean } | null>(null);
+
   // A reload settles whatever was pending: its answer is discarded, so its controls must not stay locked.
   useEffect(() => { setBusy(false); }, [epoch]);
+
+  useEffect(() => {
+    const target = focusTarget.current;
+    if (target === null) return;
+    if (target.type === "editor") {
+      if (renaming?.id === target.id && editNameRef.current !== null) {
+        focusTarget.current = null;
+        editNameRef.current.focus();
+      }
+      return;
+    }
+    if (renaming !== null) return;
+    if (categories === "error") {
+      focusTarget.current = null;
+      return;
+    }
+    if (Array.isArray(categories)) {
+      const row = rowRefs.current.get(target.id);
+      focusTarget.current = null;
+      if (row !== undefined && (!target.onlyIfLost || document.activeElement === null || document.activeElement === document.body)) {
+        row.focus();
+      }
+    }
+  }, [renaming, categories]);
 
   const save = async <T,>(action: () => Promise<BudgetResult<T>>, done: () => void) => {
     setBusy(true);
@@ -143,6 +172,32 @@ function CategoriesPanel({ categories, api, run, locale, onSaved, epoch }: Categ
     ...(changes.color_hue === undefined ? {} : { color_hue: changes.color_hue }),
   });
 
+  const openEditor = (category: AnalyticsCategory) => {
+    focusTarget.current = { type: "editor", id: category.id };
+    setNotice(null);
+    setRenaming({
+      id: category.id, name: category.name, parent: category.parent_id ?? "",
+      hue: category.color_hue ?? 20, hueChange: "keep",
+    });
+  };
+  const closeEditor = (id: string) => {
+    focusTarget.current = { type: "row", id };
+    setRenaming(null);
+  };
+  const closeAfterSave = (id: string) => {
+    focusTarget.current = { type: "row", id, onlyIfLost: true };
+    setRenaming(null);
+  };
+
+  const categoryList = Array.isArray(categories) ? categories : [];
+  const categoryColors = buildCategoryColors(categoryList);
+  const createParentChoices = parentChoices(categoryList, null, locale);
+  const effectiveDraftParent = draftParent !== "" && createParentChoices.some((choice) => choice.id === draftParent)
+    ? draftParent : "";
+  const activeRoots = categoryList
+    .filter((category) => category.parent_id === null && !category.archived)
+    .sort((left, right) => left.name.localeCompare(right.name, locale) || left.id.localeCompare(right.id));
+
   const categoriesTitle = t("budget.rules.categories");
   const nameLabel = t("budget.rules.name");
   const parentLabel = t("budget.rules.parent");
@@ -153,44 +208,61 @@ function CategoriesPanel({ categories, api, run, locale, onSaved, epoch }: Categ
   return (
     <section className="budget-entries" aria-label={categoriesTitle}>
       <h4>{categoriesTitle}</h4>
-      <button type="button" disabled={busy || !Array.isArray(categories)
-        || !categories.some((category) => category.parent_id === null && !category.archived)}
-        onClick={() => { void save(() => api.spreadCategoryColors(), () => undefined); }}>{t("budget.rules.spreadColors")}</button>
       {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
       {categories === "loading" ? <p className="budget-muted" role="status">{t("budget.rules.loading")}</p> : null}
       {categories === "error" ? <p className="budget-notice" role="alert">{t("budget.rules.error")}</p> : null}
       {Array.isArray(categories) && categories.length === 0 ? <p className="budget-muted">{t("budget.rules.noCategories")}</p> : null}
-      {Array.isArray(categories) && categories.length > 0 ? (() => {
-        const categoryColors = buildCategoryColors(categories);
-        return (
-          <ul className="budget-entry-list">
-            {listCategoryTree(categories, locale).map(({ category, depth, has_children }) => {
-              const archiveBlocked = has_children && !category.archived;
-              return (
-                <li key={category.id} className="budget-entry budget-category" data-depth={depth}>
-                  {renaming?.id === category.id ? (
-                    <form className="budget-entry-editor" onSubmit={(event) => {
+      {Array.isArray(categories) && categories.length > 0 ? (
+        <ul className="budget-entry-list budget-category-list">
+          {listCategoryTree(categories, locale).map(({ category, depth, has_children }) => {
+            const archiveBlocked = has_children && !category.archived;
+            const isEditing = renaming?.id === category.id;
+            const editChoices = isEditing ? parentChoices(categories, category.id, locale) : [];
+            const editParent = isEditing && (renaming.parent === "" || editChoices.some((choice) => choice.id === renaming.parent))
+              ? renaming.parent : "";
+            const previewColor = isEditing && editParent === ""
+              ? (renaming.hueChange === "set"
+                ? { background: categoryHueToHex(renaming.hue), hatched: false }
+                : renaming.hueChange === "keep" && category.parent_id === null
+                  ? categoryColors.get(category.id)
+                  : buildCategoryColors([{ id: category.id, name: category.name, parent_id: null, color_hue: null }]).get(category.id))
+              : null;
+            return (
+              <li key={category.id} className="budget-entry budget-category" data-depth={depth}>
+                {isEditing ? (
+                  <form className="budget-entry-editor budget-category-editor"
+                    onSubmit={(event) => {
                       event.preventDefault();
                       if (validCategoryName(renaming.name)) {
                         void save(update(category, {
                           name: renaming.name.trim(),
-                          parent_id: renaming.parent === "" ? null : renaming.parent,
-                          color_hue: renaming.parent !== "" || renaming.hueChange === "keep" ? undefined
+                          parent_id: editParent === "" ? null : editParent,
+                          color_hue: editParent !== "" || renaming.hueChange === "keep" ? undefined
                             : renaming.hueChange === "clear" ? null : renaming.hue,
-                        }), () => { setRenaming(null); });
+                        }), () => { closeAfterSave(category.id); });
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape" && !busy) {
+                        event.preventDefault();
+                        closeEditor(category.id);
                       }
                     }}>
+                    <div className="budget-category-editor-fields">
                       <label>{nameLabel}
-                        <input name="category_name" maxLength={CATEGORY_NAME_MAX} value={renaming.name}
+                        <input ref={editNameRef} name="category_name" maxLength={CATEGORY_NAME_MAX}
+                          value={renaming.name} disabled={busy}
                           onChange={(event) => { setRenaming({ ...renaming, name: event.currentTarget.value }); }} />
                       </label>
-                      <ParentField label={parentLabel} none={noParentLabel} value={renaming.parent} disabled={busy}
-                        choices={parentChoices(categories, category.id, locale)}
+                      <ParentField label={parentLabel} none={noParentLabel} value={editParent} disabled={busy}
+                        choices={editChoices}
                         onChange={(parent) => { setRenaming({ ...renaming, parent }); }} />
-                      {renaming.parent === "" ? (
+                    </div>
+                    {editParent === "" && previewColor !== null ? (
+                      <div className="budget-category-editor-color">
                         <label>{t("budget.rules.colorHue")}
                           <span className="budget-entry-facts">
-                            <CategorySwatch color={{ background: categoryHueToHex(renaming.hue), hatched: false }} />
+                            <CategorySwatch color={previewColor} />
                             <input name="color_hue" type="range" min="0" max="359" step="1" value={renaming.hue}
                               disabled={busy} onChange={(event) => {
                                 setRenaming({ ...renaming, hue: Number(event.currentTarget.value), hueChange: "set" });
@@ -198,53 +270,91 @@ function CategoriesPanel({ categories, api, run, locale, onSaved, epoch }: Categ
                             <output>{renaming.hue}°</output>
                           </span>
                         </label>
-                      ) : null}
-                      {renaming.parent === "" ? (
                         <button type="button" disabled={busy || renaming.hueChange === "clear"}
-                          onClick={() => { setRenaming({ ...renaming, hueChange: "clear" }); }}>{t("budget.rules.automaticColor")}</button>
-                      ) : null}
+                          onClick={() => { setRenaming({ ...renaming, hueChange: "clear" }); }}>
+                          {t("budget.rules.automaticColor")}
+                        </button>
+                      </div>
+                    ) : null}
+                    <div className="budget-category-editor-actions">
                       <button type="submit" className="budget-primary" disabled={busy || !validCategoryName(renaming.name)}>
                         {t("budget.rules.save")}
                       </button>
-                      <button type="button" disabled={busy} onClick={() => { setRenaming(null); }}>{t("budget.rules.cancel")}</button>
-                    </form>
-                  ) : (
-                    <div className="budget-entry-facts">
-                      <CategorySwatch color={categoryColors.get(category.id)} />
-                      <strong className={category.archived ? "budget-muted" : undefined}>{category.name}</strong>
-                      {category.archived ? <span>({archivedLabel})</span> : null}
-                      <button type="button" disabled={busy} onClick={() => {
-                        setRenaming({ id: category.id, name: category.name, parent: category.parent_id ?? "",
-                          hue: category.color_hue ?? 20, hueChange: "keep" });
-                      }}>{t("budget.rules.rename")}</button>
-                      <button type="button" disabled={busy || archiveBlocked} title={archiveBlocked ? archiveBlockedLabel : undefined}
-                        onClick={() => { void save(update(category, { archived: !category.archived }), () => undefined); }}>
-                        {category.archived ? t("budget.rules.restore") : t("budget.rules.archive")}
+                      <button type="button" disabled={busy} onClick={() => { closeEditor(category.id); }}>
+                        {t("budget.rules.cancel")}
                       </button>
                     </div>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        );
-      })() : null}
-      <form className="budget-entry-editor" onSubmit={(event) => {
+                    <div className="budget-category-editor-lifecycle">
+                      <button type="button" className={category.archived ? undefined : "budget-category-archive"}
+                        disabled={busy || archiveBlocked} title={archiveBlocked ? archiveBlockedLabel : undefined}
+                        onClick={() => {
+                          void save(update(category, { archived: !category.archived }), () => { closeAfterSave(category.id); });
+                        }}>
+                        {category.archived ? t("budget.rules.restore") : t("budget.rules.archive")}
+                      </button>
+                      {archiveBlocked ? <p className="budget-muted">{archiveBlockedLabel}</p> : null}
+                    </div>
+                  </form>
+                ) : (
+                  <button type="button" className="budget-category-row" disabled={busy}
+                    ref={(node) => {
+                      if (node === null) rowRefs.current.delete(category.id);
+                      else rowRefs.current.set(category.id, node);
+                    }}
+                    onClick={() => { openEditor(category); }}>
+                    <CategorySwatch color={categoryColors.get(category.id)} />
+                    <span className={category.archived ? "budget-category-name budget-muted" : "budget-category-name"}>
+                      <strong>{category.name}</strong>
+                      {category.archived ? <span className="budget-muted"> ({archivedLabel})</span> : null}
+                    </span>
+                    <span className="budget-category-chevron" aria-hidden="true" />
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      <form className="budget-entry-editor budget-category-create" onSubmit={(event) => {
         event.preventDefault();
         if (validCategoryName(draft)) {
-          void save(() => api.createCategory({ name: draft.trim(), parent_id: draftParent === "" ? null : draftParent }), () => {
+          void save(() => api.createCategory({
+            name: draft.trim(),
+            parent_id: effectiveDraftParent === "" ? null : effectiveDraftParent,
+          }), () => {
             setDraft("");
             setDraftParent("");
           });
         }
       }}>
         <label>{nameLabel}
-          <input name="category_name" maxLength={CATEGORY_NAME_MAX} value={draft} onChange={(event) => { setDraft(event.currentTarget.value); }} />
+          <input name="category_name" maxLength={CATEGORY_NAME_MAX} value={draft}
+            onChange={(event) => { setDraft(event.currentTarget.value); }} />
         </label>
-        <ParentField label={parentLabel} none={noParentLabel} value={draftParent} disabled={busy}
-          choices={parentChoices(Array.isArray(categories) ? categories : [], null, locale)} onChange={setDraftParent} />
+        <ParentField label={parentLabel} none={noParentLabel} value={effectiveDraftParent} disabled={busy}
+          choices={createParentChoices} onChange={setDraftParent} />
         <button type="submit" disabled={busy || !validCategoryName(draft)}>{t("budget.rules.add")}</button>
       </form>
+      <details className="budget-category-options">
+        <summary>{t("budget.main.moreOptions")}</summary>
+        <div className="budget-category-options-body">
+          <p>{t("budget.rules.spreadColorsHint")}</p>
+          {activeRoots.length > 0 ? (
+            <ul className="budget-category-palette">
+              {activeRoots.map((root) => (
+                <li key={root.id}>
+                  <CategorySwatch color={categoryColors.get(root.id)} />
+                  <span>{root.name}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <button type="button" disabled={busy || activeRoots.length === 0}
+            onClick={() => { void save(() => api.spreadCategoryColors(), () => undefined); }}>
+            {t("budget.rules.spreadColors")}
+          </button>
+        </div>
+      </details>
     </section>
   );
 }

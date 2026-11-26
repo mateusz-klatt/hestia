@@ -76,6 +76,12 @@ function button(text: string, scope: ParentNode = host): HTMLButtonElement {
   if (found === undefined) throw new Error(`button ${text} missing`);
   return found;
 }
+function categoryRow(name: string, scope: ParentNode = section("Categories")): HTMLButtonElement {
+  const found = [...scope.querySelectorAll<HTMLButtonElement>("button.budget-category-row")]
+    .find((item) => item.textContent.includes(name));
+  if (found === undefined) throw new Error(`category row ${name} missing`);
+  return found;
+}
 async function click(element: HTMLElement): Promise<void> {
   await act(async () => { element.click(); await Promise.resolve(); });
   await settle();
@@ -101,12 +107,18 @@ function field(scope: ParentNode, label: string): HTMLInputElement | HTMLSelectE
 }
 
 describe("categories", () => {
-  it("lists categories with archived ones marked and adds a trimmed new name", async () => {
+  it("lists categories with swatches without repeated row actions and adds a trimmed new name", async () => {
     const api = fakeApi();
     await show(api);
     const panel = section("Categories");
     expect(panel.textContent).toContain("Synthetic Food");
-    expect(panel.textContent).toContain("Synthetic Old(archived)");
+    expect(panel.textContent).toContain("Synthetic Old (archived)");
+    const rows = [...panel.querySelectorAll<HTMLButtonElement>("li button.budget-category-row")];
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.type === "button")).toBe(true);
+    expect([...panel.querySelectorAll("li button")].map((item) => item.textContent)).not.toContain("Rename");
+    expect([...panel.querySelectorAll("li button")].map((item) => item.textContent)).not.toContain("Archive");
+    expect([...panel.querySelectorAll("li button")].map((item) => item.textContent)).not.toContain("Restore");
     const add = [...panel.querySelectorAll("form")].at(-1);
     const name = add?.querySelector("input");
     expect(button("Add category", panel).disabled).toBe(true);
@@ -118,25 +130,52 @@ describe("categories", () => {
     expect(name?.value).toBe("");
   });
 
-  it("renames and archives with the category id and the version the owner saw", async () => {
+  it("opens the editor from a row with keyboard support, renames, archives, and restores inside it", async () => {
     const api = fakeApi();
     await show(api);
     const panel = section("Categories");
-    await click(button("Rename", panel));
+    await click(categoryRow("Synthetic Food", panel));
     const form = panel.querySelector("li form");
-    await type(form?.querySelector("input"), "Synthetic Groceries");
-    await act(async () => { (form as HTMLFormElement | null)?.requestSubmit(); await Promise.resolve(); });
+    const nameInput = form?.querySelector<HTMLInputElement>('input[name="category_name"]');
+    expect(document.activeElement).toBe(nameInput);
+    await act(async () => {
+      form?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(panel.querySelector("li form")).toBeNull();
+    expect(document.activeElement).toBe(categoryRow("Synthetic Food", panel));
+
+    await click(categoryRow("Synthetic Food", panel));
+    const renameForm = panel.querySelector("li form");
+    await type(renameForm?.querySelector('input[name="category_name"]'), "Synthetic Groceries");
+    await act(async () => { (renameForm as HTMLFormElement | null)?.requestSubmit(); await Promise.resolve(); });
     await settle();
     expect(api.updateCategory).toHaveBeenCalledWith({ category_id: "cat-food", name: "Synthetic Groceries", archived: false, expected_version: 1, parent_id: null });
-    await click(button("Restore", section("Categories")));
+    expect(panel.querySelector("li form")).toBeNull();
+
+    await click(categoryRow("Synthetic Food", panel));
+    await click(button("Archive", panel.querySelector("li form") as HTMLElement));
+    expect(api.updateCategory).toHaveBeenCalledWith({ category_id: "cat-food", name: "Synthetic Food", archived: true, expected_version: 1, parent_id: null });
+    expect(panel.querySelector("li form")).toBeNull();
+
+    await click(categoryRow("Synthetic Old", panel));
+    await click(button("Restore", panel.querySelector("li form") as HTMLElement));
     expect(api.updateCategory).toHaveBeenLastCalledWith({ category_id: "cat-old", name: "Synthetic Old", archived: false, expected_version: 3, parent_id: null });
+    expect(panel.querySelector("li form")).toBeNull();
+
+    // Switching directly from one open row to another moves focus to the newly opened editor.
+    await click(categoryRow("Synthetic Food", panel));
+    await click(categoryRow("Synthetic Old", panel));
+    const switchedForm = panel.querySelector("li form");
+    expect(document.activeElement).toBe(switchedForm?.querySelector('input[name="category_name"]'));
+    expect((switchedForm?.querySelector('input[name="category_name"]') as HTMLInputElement | null)?.value).toBe("Synthetic Old");
   });
 
   it("sets a root hue with a live preview and clears it back to automatic", async () => {
     const api = fakeApi();
     await show(api);
     const panel = section("Categories");
-    await click(button("Rename", panel));
+    await click(categoryRow("Synthetic Food", panel));
     const editor = panel.querySelector("li form");
     const hue = field(editor as HTMLElement, "Colour hue") as HTMLInputElement;
     expect(hue.type).toBe("range");
@@ -149,7 +188,7 @@ describe("categories", () => {
       category_id: "cat-food", name: "Synthetic Food", archived: false, expected_version: 1, parent_id: null, color_hue: 123,
     });
 
-    await click(button("Rename", panel));
+    await click(categoryRow("Synthetic Food", panel));
     const clearing = panel.querySelector("li form");
     await click(button("Automatic colour", clearing as HTMLElement));
     expect(button("Automatic colour", clearing as HTMLElement).disabled).toBe(true);
@@ -160,10 +199,20 @@ describe("categories", () => {
     });
   });
 
-  it("spreads root colours only on request and reloads the categories", async () => {
+  it("hides spread colours under More disclosure, explains its impact, and reloads on request", async () => {
     const api = fakeApi();
     await show(api);
-    const spread = button("Spread colours evenly", section("Categories"));
+    const panel = section("Categories");
+    const details = panel.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector("summary")?.textContent).toBe("More");
+    await click(details?.querySelector("summary") as HTMLElement);
+    expect(details?.open).toBe(true);
+    expect(details?.textContent).toContain(t("budget.rules.spreadColorsHint"));
+    expect(details?.textContent).toContain("Synthetic Food");
+    expect(details?.textContent).not.toContain("Synthetic Old");
+    const spread = button("Spread colours evenly", details as ParentNode);
     expect(spread.disabled).toBe(false);
     await click(spread);
     expect(api.spreadCategoryColors).toHaveBeenCalledTimes(1);
@@ -173,53 +222,69 @@ describe("categories", () => {
   it("reloads after a conflict and refuses an empty rename", async () => {
     const api = fakeApi();
     await show(api);
+    const panel = section("Categories");
+    await click(categoryRow("Synthetic Food", panel));
     api.updateCategory.mockImplementationOnce(() => fail(409, "budget_analytics_conflict"));
-    await click(button("Archive", section("Categories")));
+    await click(button("Archive", panel.querySelector("li form") as HTMLElement));
     expect(host.textContent).toContain("changed elsewhere");
     expect(api.categories).toHaveBeenCalledTimes(2);
-    await click(button("Rename", section("Categories")));
-    await type(section("Categories").querySelector("li form input"), "   ");
-    expect(button("Save", section("Categories")).disabled).toBe(true);
-    await click(button("Cancel", section("Categories")));
-    expect(section("Categories").querySelector("li form")).toBeNull();
+    await type(panel.querySelector("li form input"), "   ");
+    expect(button("Save", panel).disabled).toBe(true);
+    await click(button("Cancel", panel));
+    expect(panel.querySelector("li form")).toBeNull();
+    expect(document.activeElement).toBe(categoryRow("Synthetic Food", panel));
   });
 
-  it("indents a subcategory, chooses its parent, and will not archive a parent", async () => {
+  it("indents a subcategory, keeps hue top-level only, and enforces archived-parent protections", async () => {
     const transport = { id: "cat-transport", name: "Synthetic Transport", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null };
     const fuel = { id: "cat-fuel", name: "Synthetic Fuel", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: "cat-transport" };
+    const archived = { id: "cat-old", name: "Synthetic Old", archived: true, version: 3, created_at: 1, updated_at: 2, parent_id: null };
     const api = fakeApi();
-    api.categories.mockImplementation(() => ok({ categories: [fuel, transport] }));
+    api.categories.mockImplementation(() => ok({ categories: [fuel, transport, archived] }));
     await show(api);
     const panel = section("Categories");
-    const items = [...panel.querySelectorAll("li")];
-    const parent = items[0];
-    const child = items[1];
-    if (parent === undefined || child === undefined) throw new Error("category rows missing");
-    expect(items.map((item) => item.getAttribute("data-depth"))).toEqual(["0", "1"]);
+    const items = [...panel.querySelectorAll("ul.budget-category-list > li")];
+    const oldRow = items[0];
+    const parent = items[1];
+    const child = items[2];
+    if (oldRow === undefined || parent === undefined || child === undefined) throw new Error("category rows missing");
+    expect(items.map((item) => item.getAttribute("data-depth"))).toEqual(["0", "0", "1"]);
     expect(parent.textContent).toContain("Synthetic Transport");
-    const expectedColors = buildCategoryColors([fuel, transport]);
+    const expectedColors = buildCategoryColors([fuel, transport, archived]);
     const parentSwatch = parent.querySelector<HTMLElement>(".budget-cat-swatch");
     const childSwatch = child.querySelector<HTMLElement>(".budget-cat-swatch");
     expect(parentSwatch?.style.backgroundColor).toBeTruthy();
     expect(childSwatch?.style.backgroundColor).toBeTruthy();
     expect(parentSwatch?.style.backgroundColor).not.toBe(childSwatch?.style.backgroundColor);
     expect(expectedColors.get("cat-fuel").oklch.l).toBeGreaterThan(expectedColors.get("cat-transport").oklch.l);
-    expect(button("Archive", parent).disabled).toBe(true);
-    expect(button("Archive", parent).title).toBe(t("budget.rules.archiveBlocked"));
-    expect(button("Archive", child).disabled).toBe(false);
+
+    await click(categoryRow("Synthetic Transport", panel));
+    const parentEditor = panel.querySelector("li form") as HTMLElement;
+    expect(button("Archive", parentEditor).disabled).toBe(true);
+    expect(button("Archive", parentEditor).title).toBe(t("budget.rules.archiveBlocked"));
+    expect(parentEditor.textContent).toContain(t("budget.rules.archiveBlocked"));
+    expect(field(parentEditor, "Colour hue")).not.toBeNull();
+    await click(button("Cancel", parentEditor));
+
     const add = [...panel.querySelectorAll("form")].at(-1);
     if (add === undefined) throw new Error("form missing");
-    await choose(field(add, "Parent category") as HTMLSelectElement, "cat-transport");
+    const addParentSelect = field(add, "Parent category") as HTMLSelectElement;
+    expect([...addParentSelect.options].map((option) => option.value)).toEqual(["", "cat-fuel", "cat-transport"]);
+    await choose(addParentSelect, "cat-transport");
     await type(add.querySelector("input"), "Synthetic Wash");
     await act(async () => { add.requestSubmit(); await Promise.resolve(); });
     await settle();
     expect(api.createCategory).toHaveBeenCalledWith({ name: "Synthetic Wash", parent_id: "cat-transport" });
-    const fuelRow = [...section("Categories").querySelectorAll("li")][1];
-    if (fuelRow === undefined) throw new Error("fuel row missing");
-    await click(button("Rename", fuelRow));
+
+    await click(categoryRow("Synthetic Fuel", panel));
     const editor = section("Categories").querySelector("li form");
     if (!(editor instanceof HTMLFormElement)) throw new Error("editor missing");
-    await choose(field(editor, "Parent category") as HTMLSelectElement, "");
+    expect(button("Archive", editor).disabled).toBe(false);
+    expect(field(editor, "Colour hue")).toBeNull();
+    const editParentSelect = field(editor, "Parent category") as HTMLSelectElement;
+    expect([...editParentSelect.options].map((option) => option.value)).toEqual(["", "cat-transport"]);
+    await choose(editParentSelect, "");
+    expect(field(editor, "Colour hue")).not.toBeNull();
     await act(async () => { editor.requestSubmit(); await Promise.resolve(); });
     await settle();
     expect(api.updateCategory).toHaveBeenCalledWith({
@@ -227,12 +292,14 @@ describe("categories", () => {
     });
   });
 
-  it("labels the parent field in Polish", async () => {
+  it("labels the parent field, disclosure, and spread hint in Polish", async () => {
     await show(fakeApi(), { locale: "pl" });
     const panel = section("Kategorie");
     expect(panel.textContent).toContain("Kategoria nadrzędna");
     expect(panel.textContent).toContain("Najwyższy poziom");
+    expect(panel.querySelector("details summary")?.textContent).toBe("Więcej");
     expect(panel.textContent).toContain("Rozłóż kolory równomiernie");
+    expect(panel.textContent).toContain(t("budget.rules.spreadColorsHint"));
     expect(t("budget.rules.archiveBlocked")).toBe("Najpierw przenieś jej podkategorie. Zarchiwizowane też trzeba przenieść.");
   });
 });
@@ -371,6 +438,12 @@ describe("rules", () => {
     await show(api);
     expect(section("Rules").textContent).toContain("No rules yet.");
     expect(section("Categories").textContent).toContain("Could not be loaded.");
+    const okApi = fakeApi();
+    okApi.updateCategory.mockImplementationOnce(() => fail(403, "budget_forbidden"));
+    const onSaveAccessLoss = await show(okApi, { lost: true });
+    await click(categoryRow("Synthetic Food"));
+    await click(button("Archive", section("Categories").querySelector("li form") as HTMLElement));
+    expect(onSaveAccessLoss).toHaveBeenCalledWith({ ok: false, status: 403, error: "budget_forbidden" });
     api.rules.mockImplementation(() => fail(401, "budget_http_401"));
     const onAccessLoss = await show(api, { revision: 1, lost: true });
     expect(onAccessLoss).toHaveBeenCalledWith({ ok: false, status: 401, error: "budget_http_401" });
@@ -434,11 +507,11 @@ describe("rules", () => {
     await type(add?.querySelector("input"), "Synthetic Pending");
     await act(async () => { add?.requestSubmit(); await Promise.resolve(); });
     await settle();
-    expect(button("Rename", section("Categories")).disabled).toBe(true);
+    expect(categoryRow("Synthetic Food").disabled).toBe(true);
     await show(api, { revision: 1 });
     await act(async () => { late({ ok: true, data: { category } }); await Promise.resolve(); });
     await settle();
-    expect(button("Rename", section("Categories")).disabled).toBe(false);
+    expect(categoryRow("Synthetic Food").disabled).toBe(false);
     expect(button("Add category", section("Categories")).disabled).toBe(false);
     expect(api.categories).toHaveBeenCalledTimes(2);
   });
