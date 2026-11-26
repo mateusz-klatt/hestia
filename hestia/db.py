@@ -925,6 +925,8 @@ class BudgetReceipt(Base):
         Index("ix_budget_receipts_owner_date", "owner", "receipt_date", "id"),
         Index("uq_budget_receipts_gateway_ref", "owner", "gateway", "gateway_ref_hmac", unique=True,
               sqlite_where=text("gateway_ref_hmac IS NOT NULL")),
+        Index("ix_budget_receipts_owner_blik_ref", "owner", "blik_ref_hmac",
+              sqlite_where=text("blik_ref_hmac IS NOT NULL")),
         Index("uq_budget_receipts_tx_link", "linked_account_id", "linked_entry_ref", unique=True,
               sqlite_where=text("status IN ('confirmed', 'needs_review') AND linked_account_id IS NOT NULL "
                                 "AND linked_entry_ref IS NOT NULL")),
@@ -982,6 +984,10 @@ class BudgetReceipt(Base):
                         "AND gateway_status IN ('registered', 'paid'))", name="ck_budget_receipts_gateway_status"),
         CheckConstraint("gateway_ref_hmac IS NULL OR (length(gateway_ref_hmac) = 64 "
                         "AND gateway_ref_hmac NOT GLOB '*[^0-9a-f]*')", name="ck_budget_receipts_gateway_ref_hmac"),
+        CheckConstraint("blik_ref_hmac IS NULL OR (length(blik_ref_hmac) = 64 "
+                        "AND blik_ref_hmac NOT GLOB '*[^0-9a-f]*')", name="ck_budget_receipts_blik_ref_hmac"),
+        CheckConstraint("card_last4 IS NULL OR (length(card_last4) = 4 "
+                        "AND card_last4 NOT GLOB '*[^0-9]*')", name="ck_budget_receipts_card_last4"),
         CheckConstraint("fee_amount IS NULL OR (length(fee_amount) BETWEEN 1 AND 80 "
                         "AND fee_amount NOT GLOB '-*')", name="ck_budget_receipts_fee_amount"),
         CheckConstraint("payee_host IS NULL OR (length(payee_host) BETWEEN 1 AND 253 "
@@ -1011,6 +1017,8 @@ class BudgetReceipt(Base):
     gateway: Mapped[str | None]
     gateway_status: Mapped[str | None]
     gateway_ref_hmac: Mapped[str | None]
+    blik_ref_hmac: Mapped[str | None]
+    card_last4: Mapped[str | None]
     fee_amount: Mapped[str | None]
     payee_host: Mapped[str | None]
     # Migration 0031 enforces same-owner evidence with triggers and clears the

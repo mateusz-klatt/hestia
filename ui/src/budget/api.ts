@@ -25,7 +25,7 @@ import type {
   ReceiptSearchRequest,
 } from "./receipts_model";
 
-export const RECEIPT_CONTRACT_HEADERS = { "X-Hestia-Contract-Version": "0.52.0" } as const;
+export const RECEIPT_CONTRACT_HEADERS = { "X-Hestia-Contract-Version": "0.57.0" } as const;
 
 export interface ReceiptDevice {
   token_id: string;

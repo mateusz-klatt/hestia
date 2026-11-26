@@ -95,10 +95,12 @@ class GmailSettingsTests(TestCase):
 
     def test_document_senders_load_with_overlapping_paths(self):
         docs = [{"sender": "@VENDOR.example.test", "merchant": "Example Vendor"}]
+        self.env[gmail_config.CARD_ACCOUNTS_ENV] = json.dumps({"1234": ["account-1"]})
         settings = self.load(document_senders=docs, payment_senders=[
             {"sender": "@shop.example.test", "merchant": "Shop", "gateway": True},
         ])
         self.assertEqual(settings.document_senders, (PaymentSender("@vendor.example.test", "Example Vendor"),))
+        self.assertEqual(settings.card_accounts, {"1234": ("account-1",)})
         settings = self.load(sender_allowlist=[], spouse_forward_senders=[], document_senders=docs)
         self.assertEqual(len(settings.document_senders), 1)
         for invalid in (None, [docs[0], docs[0]], [docs[0] | {"gateway": True}]):

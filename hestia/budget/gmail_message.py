@@ -434,6 +434,9 @@ class GmailMessageProcessor:
             gateway_ref_secondary_hmac=(digest(secret, GATEWAY_REF_DOMAIN, inspected.gateway_ref_secondary)
                                         if inspected.gateway_ref_secondary is not None else None),
             gateway_name=sender.merchant if sender.gateway else None,
+            blik_ref_hmac=(digest(secret, GATEWAY_REF_DOMAIN, inspected.blik_ref)
+                           if inspected.blik_ref is not None else None),
+            card_last4=inspected.card_last4,
         )
         return replace(pending, outcome="imported", payment=provenance,
                        rfc_message_id_hmac=_rfc_message_hmac(message, secret)), False, False

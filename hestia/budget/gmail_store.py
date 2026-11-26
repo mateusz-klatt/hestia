@@ -119,6 +119,8 @@ class PendingPayment:
     gateway_ref_hmac: str | None = None
     gateway_name: str | None = None
     gateway_ref_secondary_hmac: str | None = None
+    blik_ref_hmac: str | None = None
+    card_last4: str | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -622,6 +624,10 @@ class GmailStore(BudgetStore):
         if fields.payee_host is not None:
             row.payee_host = fields.payee_host
         row.receipt_date = receipt_date
+        if row.blik_ref_hmac is None and payment.blik_ref_hmac is not None:
+            row.blik_ref_hmac = payment.blik_ref_hmac
+        if row.card_last4 is None and payment.card_last4 is not None:
+            row.card_last4 = payment.card_last4
         line = session.scalar(select(BudgetReceiptLine).where(
             BudgetReceiptLine.receipt_id == row.id, BudgetReceiptLine.owner == owner))
         if line is not None:
@@ -779,7 +785,8 @@ class GmailStore(BudgetStore):
             receipt_date=payment.receipt_date.isoformat(), total_amount=fields.total_amount, currency=fields.currency,
             status="imported", document_kind="payment_confirmation", source_kind="email",
             gateway=payment.gateway_name, gateway_status=payment.status,
-            gateway_ref_hmac=payment.gateway_ref_hmac, fee_amount=fields.fee_amount,
+            gateway_ref_hmac=payment.gateway_ref_hmac, blik_ref_hmac=payment.blik_ref_hmac,
+            card_last4=payment.card_last4, fee_amount=fields.fee_amount,
             payee_host=fields.payee_host,
             version=1, created_at=now, updated_at=now, import_expires_at=now + IMPORT_TTL,
         )

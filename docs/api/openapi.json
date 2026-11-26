@@ -10848,6 +10848,7 @@
           },
           "match_strength": {
             "enum": [
+              "id",
               "nip",
               "distinctive",
               "generic",
@@ -11090,6 +11091,19 @@
       },
       "BudgetReceiptDetail": {
         "properties": {
+          "card_last4": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]{4}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Card Last4"
+          },
           "chain_key": {
             "anyOf": [
               {
@@ -11510,6 +11524,17 @@
               }
             ],
             "title": "Candidates"
+          },
+          "no_bank_data": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Bank Data"
           },
           "receipt": {
             "$ref": "#/components/schemas/BudgetReceiptDetail"
@@ -12410,6 +12435,17 @@
           "draft": {
             "$ref": "#/components/schemas/BudgetReceiptDetail"
           },
+          "no_bank_data": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Bank Data"
+          },
           "receipt_id": {
             "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
             "title": "Receipt Id",
@@ -12572,6 +12608,19 @@
       },
       "BudgetReceiptSummary": {
         "properties": {
+          "card_last4": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]{4}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Card Last4"
+          },
           "chain_key": {
             "anyOf": [
               {
@@ -17007,7 +17056,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.56.0"
+    "version": "0.57.0"
   },
   "openapi": "3.1.0",
   "paths": {

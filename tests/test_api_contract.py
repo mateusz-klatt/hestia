@@ -59,7 +59,19 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.56.0")
+        self.assertEqual(document["info"]["version"], "0.57.0")
+        # 0.57.0 additive card_last4, no_bank_data, and "id" match_strength.
+        for name in ("BudgetReceiptSummary", "BudgetReceiptDetail"):
+            schemas[name]["properties"].pop("card_last4")
+            if "card_last4" in schemas[name].get("required", []):
+                schemas[name]["required"].remove("card_last4")
+        for name in ("BudgetReceiptParseResult", "BudgetReceiptDetailResult"):
+            schemas[name]["properties"].pop("no_bank_data")
+        schemas["BudgetReceiptCandidate"]["properties"]["match_strength"]["enum"] = [
+            "nip", "distinctive", "generic", "none",
+        ]
+        document["info"]["version"] = "0.56.0"
+        # 0.56.0 additive PDF diagnostics and compatibility header.
         status = document["paths"]["/api/budget/receipts/gmail-status"]["get"]
         header, = status.pop("parameters")
         self.assertEqual((header["name"], header["in"], header["required"]),

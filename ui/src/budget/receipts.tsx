@@ -23,10 +23,10 @@ import {
   RECEIPT_STATUSES,
   RECEIPT_STATUS_KEYS,
   availableLinkOptions,
+  buildBulkConfirmRequest,
   buildBulkSelectionPlan,
   buildCandidateSetKey,
   buildConfirmRequest,
-  buildPlainBulkConfirmRequest,
   buildReceiptListRequest,
   candidateDisplayDate,
   candidateSelectionBinding,
@@ -111,7 +111,7 @@ type ListState =
 
 type DetailState =
   | { kind: "loading" }
-  | { kind: "ready"; detail: ReceiptDetail; candidates: ReceiptCandidate[] }
+  | { kind: "ready"; detail: ReceiptDetail; candidates: ReceiptCandidate[]; noBankData: boolean }
   | { kind: "error" };
 
 type ImageState =
@@ -273,6 +273,7 @@ export function ReceiptsView({
     excludedNeedsReview: number;
     excludedDrafts: number;
     merchants: string[];
+    linkById: boolean;
   } | null>(null);
   const [bulkProgress, setBulkProgress] = useState<{ total: number; done: number } | null>(null);
   const [bulkReport, setBulkReport] = useState<{
@@ -388,6 +389,7 @@ export function ReceiptsView({
     excludedNeedsReview: number;
     excludedDrafts: number;
     merchants: string[];
+    linkById: boolean;
   }) => {
     const runToken = ++bulkRunGenRef.current;
     const expectedActor = actorKey;
@@ -465,7 +467,14 @@ export function ReceiptsView({
           setBulkProgress({ total: plan.targets.length, done: processed });
           continue;
         }
-        const built = buildPlainBulkConfirmRequest(detailRes.data.receipt, t("budget.receipts.summaryLineDefault"));
+        const built = detailRes.data.receipt.receipt_id !== target.receipt_id
+          ? { ok: false as const, errorCode: "budget_receipt_conflict" }
+          : buildBulkConfirmRequest(
+              detailRes.data.receipt,
+              detailRes.data.candidates ?? [],
+              t("budget.receipts.summaryLineDefault"),
+              { linkById: plan.linkById },
+            );
         if (!built.ok) {
           recordError(formatBulkErrorBucket(undefined, built.errorCode));
           processed += 1;
@@ -669,7 +678,7 @@ export function ReceiptsView({
       const candidates = result.data.candidates ?? [];
       loadedReceiptIdRef.current = receipt.receipt_id;
       latestReadyCandidatesRef.current = { receiptId: receipt.receipt_id, candidates };
-      setDetailState({ kind: "ready", detail: receipt, candidates });
+      setDetailState({ kind: "ready", detail: receipt, candidates, noBankData: result.data.no_bank_data === true });
       if (receipt.image_available) {
         const imgToken = ++imageGeneration.current;
         setImageState({ kind: "loading" });
@@ -992,9 +1001,19 @@ export function ReceiptsView({
         <div
           className="budget-notice budget-receipt-bulk-dialog"
           role="alertdialog"
-          aria-label={t("budget.receipts.bulkConfirmTitle", { count: bulkConfirmPlan.targets.length })}
+          aria-label={t(
+            bulkConfirmPlan.linkById ? "budget.receipts.bulkConfirmWithIdTitle" : "budget.receipts.bulkConfirmTitle",
+            { count: bulkConfirmPlan.targets.length },
+          )}
         >
-          <p><strong>{t("budget.receipts.bulkConfirmTitle", { count: bulkConfirmPlan.targets.length })}</strong></p>
+          <p>
+            <strong>
+              {t(
+                bulkConfirmPlan.linkById ? "budget.receipts.bulkConfirmWithIdTitle" : "budget.receipts.bulkConfirmTitle",
+                { count: bulkConfirmPlan.targets.length },
+              )}
+            </strong>
+          </p>
           <p className="budget-muted">
             {t("budget.receipts.bulkConfirmMerchants", { merchants: formatMerchantsLine(bulkConfirmPlan.merchants) })}
           </p>
@@ -1008,7 +1027,22 @@ export function ReceiptsView({
               {t("budget.receipts.bulkExcludedDrafts", { count: bulkConfirmPlan.excludedDrafts })}
             </p>
           ) : null}
-          <p className="budget-muted">{t("budget.receipts.linkChoiceNone")}</p>
+          <label className="budget-toggle">
+            <input
+              type="checkbox"
+              name="bulk_link_by_id"
+              checked={bulkConfirmPlan.linkById}
+              disabled={bulkBusy}
+              onChange={(event) => {
+                const checked = event.currentTarget.checked;
+                setBulkConfirmPlan((current) => current === null ? null : { ...current, linkById: checked });
+              }}
+            />
+            <span>{t("budget.receipts.bulkConfirmWithIdLinkOption")}</span>
+          </label>
+          {bulkConfirmPlan.linkById ? null : (
+            <p className="budget-muted">{t("budget.receipts.linkChoiceNone")}</p>
+          )}
           <div className="budget-actions">
             <button
               type="button"
@@ -1076,6 +1110,7 @@ export function ReceiptsView({
                       excludedNeedsReview: selectionPlan.excludedNeedsReview,
                       excludedDrafts: selectionPlan.excludedDrafts,
                       merchants: selectionPlan.merchants,
+                      linkById: false,
                     });
                   }}
                 >
@@ -1104,6 +1139,7 @@ export function ReceiptsView({
                         excludedNeedsReview: group.excludedNeedsReview,
                         excludedDrafts: group.excludedDrafts,
                         merchants: [group.merchant],
+                        linkById: false,
                       });
                     }}
                   >
@@ -1227,7 +1263,7 @@ export function ReceiptsView({
             const floorToken = ++detailGeneration.current;
             receiptFloorGenRef.current.set(updated.receipt_id, floorToken);
             latestReadyCandidatesRef.current = { receiptId: updated.receipt_id, candidates: [] };
-            setDetailState({ kind: "ready", detail: updated, candidates: [] });
+            setDetailState({ kind: "ready", detail: updated, candidates: [], noBankData: false });
             setNotice(t("budget.receipts.confirmSuccess"));
             reloadList();
           }}
@@ -1613,9 +1649,11 @@ function ReceiptDetailDrawer({
                   locale,
                   candidate.credit_debit_indicator,
                 );
-                const strengthBadge = candidate.match_strength === "nip"
-                  ? t("budget.receipts.matchBadgeNip")
-                  : t("budget.receipts.matchBadgeMerchant");
+                const strengthBadge = candidate.match_strength === "id"
+                  ? t("budget.receipts.matchBadgeId")
+                  : candidate.match_strength === "nip"
+                    ? t("budget.receipts.matchBadgeNip")
+                    : t("budget.receipts.matchBadgeMerchant");
                 return (
                   <section
                     className="budget-notice budget-receipt-suggested"
@@ -2077,6 +2115,12 @@ function ReceiptDetailDrawer({
                     <legend>{t("budget.receipts.linkChoiceHeading")}</legend>
                     {!linkOptions.paymentAllowsLink ? (
                       <p className="budget-muted">{t("budget.receipts.cashNoLinkNote")}</p>
+                    ) : null}
+                    {linkOptions.paymentAllowsLink && detail.status !== "confirmed"
+                      && candidates.length === 0 && detailState.noBankData ? (
+                      <p className="budget-muted budget-receipt-no-bank-data" role="note">
+                        {t("budget.receipts.noBankDataPeriod")}
+                      </p>
                     ) : null}
                     {linkOptions.mustUnlinkToConfirm && detail.status === "confirmed" ? (
                       <p className="budget-warn" role="note">{t("budget.receipts.confirmedUnlinkNote")}</p>

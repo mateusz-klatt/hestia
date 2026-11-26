@@ -1,6 +1,7 @@
 """Local Gmail grant lifecycle and resumable, receipt-scoped import rounds."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 import fcntl
@@ -9,6 +10,7 @@ import json
 from pathlib import Path
 import random
 import re
+from types import MappingProxyType
 
 from .gmail_address import canonical_mailbox
 from .gmail_client import GmailCredentials, GmailError, RunLimit
@@ -39,6 +41,7 @@ class GmailSettings:
     sync_interval_seconds: int = 3600
     payment_senders: tuple[PaymentSender, ...] = ()
     document_senders: tuple[PaymentSender, ...] = ()
+    card_accounts: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
 
 
 def _history_id(value):

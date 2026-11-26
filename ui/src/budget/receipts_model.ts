@@ -571,7 +571,7 @@ export function availableLinkOptions(
 }
 
 export function isStrongMatchStrength(strength: ReceiptCandidate["match_strength"]): boolean {
-  return strength === "nip" || strength === "distinctive";
+  return strength === "id" || strength === "nip" || strength === "distinctive";
 }
 
 /**
@@ -1362,18 +1362,61 @@ export function buildBulkSelectionPlan(
   return { confirmable, excludedNeedsReview, excludedDrafts, merchants };
 }
 
-/** Builds a plain confirm (`link: null`) for an unlinked Gmail import; omits existing lines, synthesizing 1 summary line only for 0-line Gmail invoices. */
-export function buildPlainBulkConfirmRequest(
+export function uniqueIdCandidate(
+  detail: Pick<
+    ReceiptDetail,
+    "status" | "linked" | "linked_account_id" | "linked_entry_ref" | "payment_method" | "evidence_for_receipt_id"
+  >,
+  candidates: readonly ReceiptCandidate[],
+): { candidate: ReceiptCandidate; index: number } | null {
+  if (detail.status !== "imported" || detail.evidence_for_receipt_id !== null) {
+    return null;
+  }
+  if (detail.linked || detail.linked_account_id !== null || detail.linked_entry_ref !== null) {
+    return null;
+  }
+  if (detail.payment_method === "cash" || detail.payment_method === "mixed") {
+    return null;
+  }
+  let found: { candidate: ReceiptCandidate; index: number } | null = null;
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    if (candidate?.match_strength === "id") {
+      if (found !== null) {
+        return null;
+      }
+      found = { candidate, index };
+    }
+  }
+  if (found === null || found.candidate.candidate_token.trim() === "") {
+    return null;
+  }
+  return found;
+}
+
+/** Builds a bulk confirm request; links only when `linkById` is opted in AND a single `"id"` candidate exists. */
+export function buildBulkConfirmRequest(
   detail: ReceiptDetail,
+  candidates: readonly ReceiptCandidate[],
   summaryFallbackName: string,
-): { ok: true; request: ReceiptConfirmRequest } | { ok: false; errorCode: string } {
+  options?: { linkById?: boolean },
+): { ok: true; request: ReceiptConfirmRequest; linkedById: boolean } | { ok: false; errorCode: string } {
   if (!isBulkConfirmable(detail)) {
     return {
       ok: false,
       errorCode: detail.status === "needs_review" ? "budget_receipt_conflict" : "budget_receipt_invalid_request",
     };
   }
+  const idMatch = options?.linkById === true ? uniqueIdCandidate(detail, candidates) : null;
+  const effectiveCandidates = idMatch === null ? [] : candidates;
   const draft = draftFromDetail(detail, []);
+  if (idMatch !== null) {
+    draft.linkChoice = `candidate:${String(idMatch.index)}`;
+    draft.selectedCandidate = candidateSelectionBinding(idMatch.candidate);
+  } else {
+    draft.linkChoice = "unlink";
+    draft.selectedCandidate = null;
+  }
   if (detail.lines.length === 0) {
     if (detail.document_kind !== "invoice") {
       return { ok: false, errorCode: "budget_receipt_total_mismatch" };
@@ -1386,7 +1429,7 @@ export function buildPlainBulkConfirmRequest(
       synthesizeInvoiceSummaryLine(detail, detail.raw_shop_name ?? "", normalizedTotal, summaryFallbackName),
     );
   }
-  const built = buildConfirmRequest(detail, draft, [], summaryFallbackName);
+  const built = buildConfirmRequest(detail, draft, effectiveCandidates, summaryFallbackName);
   if (!built.ok) {
     return {
       ok: false,
@@ -1395,7 +1438,16 @@ export function buildPlainBulkConfirmRequest(
         : "budget_receipt_invalid_request",
     };
   }
-  return { ok: true, request: built.request };
+  return { ok: true, request: built.request, linkedById: idMatch !== null };
+}
+
+/** Builds a plain confirm (`link: null`) for an unlinked Gmail import; omits existing lines, synthesizing 1 summary line only for 0-line Gmail invoices. */
+export function buildPlainBulkConfirmRequest(
+  detail: ReceiptDetail,
+  summaryFallbackName: string,
+): { ok: true; request: ReceiptConfirmRequest } | { ok: false; errorCode: string } {
+  const built = buildBulkConfirmRequest(detail, [], summaryFallbackName, { linkById: false });
+  return built.ok ? { ok: true, request: built.request } : built;
 }
 
 export function formatBulkErrorBucket(status: number | undefined, error: string): string {
