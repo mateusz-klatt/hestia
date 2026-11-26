@@ -58,6 +58,14 @@ _ITEM_GROSS_TAIL = re.compile(
     rf"(?P<gross>{_NUMBER})\s*(?:PLN\s*)?(?P<ptu>[A-G])?\Z",
     re.IGNORECASE | re.ASCII,
 )
+# OCR sometimes reads the piece count 1 as I or the multiplication sign as =.
+# Only consider these alternatives when both complete, two-decimal prices remain.
+_OCR_ITEM_PRICE = r"[0-9]{1,9}[.,][0-9]{2}"
+_OCR_ITEM_TAIL = re.compile(
+    r"(?:I\s*szt\s*[x×*=]|(?P<quantity>[1-9][0-9]{0,8})\s*szt\s*=)\s*"
+    rf"(?P<unit_price>{_OCR_ITEM_PRICE})\s+(?P<gross>{_OCR_ITEM_PRICE})\s*(?:PLN\s*)?(?P<ptu>[A-G])?\Z",
+    re.IGNORECASE | re.ASCII,
+)
 _NAMED_UNIT_TAIL = re.compile(
     rf"(?P<quantity>{_NUMBER})\s*(?P<unit>{_UNITS})"
     rf"(?:\s*[x×*]\s*(?P<unit_price>{_NUMBER})\s*(?:=\s*)?)?"
@@ -882,7 +890,21 @@ def _named_unit_match(value):
 
 
 def _item_match(value):
-    return _tail_match(value, (_ITEM_QTY_TAIL, _ITEM_GROSS_TAIL))
+    match = _tail_match(value, (_ITEM_QTY_TAIL, _ITEM_GROSS_TAIL))
+    if match is not None and match["quantity"] is not None:
+        return match
+    ocr = _tail_match(value, (_OCR_ITEM_TAIL,))
+    if ocr is None:
+        return match
+    quantity = ocr["quantity"] or "1"
+    unit_cents = int(ocr["unit_price"].replace(",", "").replace(".", ""))
+    gross_cents = int(ocr["gross"].replace(",", "").replace(".", ""))
+    if int(quantity) * unit_cents != gross_cents:
+        return match
+    return _FieldMatch({
+        "name": ocr["name"], "quantity": quantity, "unit": "szt",
+        "unit_price": ocr["unit_price"], "gross": ocr["gross"], "ptu": ocr["ptu"],
+    })
 
 
 def _parse_lines(lines):

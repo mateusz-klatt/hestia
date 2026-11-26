@@ -180,6 +180,35 @@ NR KARTY ****5555
         parsed = parse_receipt("SKLEP TESTOWY\nETYKIETA MASTERCARD 1szt * 2,00 2,00 A\nSUMA PLN 2,00\n")
         self.assertEqual(parsed["payment_method"], "unknown")
 
+    def test_recovers_ocr_piece_count_and_operator_when_both_prices_reconcile(self):
+        parsed = parse_receipt(
+            "SKLEP TESTOWY\nPARAGON FISKALNY\n"
+            "SOK 300ml. Iszt * 8,75 8,75\nOPUST SOK 300ml -1,00 A\n"
+            "SOK 300ml, 2szt = 8,75 17,50 A\nSUMA PLN 25,25\n"
+        )
+        self.assertEqual(parsed["math_delta"], "0")
+        single, pair = parsed["lines"]
+        self.assertEqual((single["raw_name"], single["quantity"], single["raw_unit"], single["ptu_code"]),
+                         ("SOK 300ml.", "1", "szt", None))
+        self.assertEqual((single["unit_price_raw"], single["gross_line_total"], single["net_line_total"]),
+                         ("8.75", "8.75", "7.75"))
+        self.assertEqual((pair["raw_name"], pair["quantity"], pair["raw_unit"], pair["ptu_code"]),
+                         ("SOK 300ml,", "2", "szt", "A"))
+        self.assertEqual((pair["unit_price_raw"], pair["gross_line_total"]), ("8.75", "17.5"))
+
+    def test_only_recovers_suspect_ocr_arithmetic_when_prices_reconcile(self):
+        parsed = parse_receipt(
+            "SKLEP TESTOWY\nPARAGON FISKALNY\n"
+            "SOK Iszt * 6,25 9,25\nSOK 2szt = 6,25 9,25 A\n"
+            "PŁYN 1szt * 6,25 6,00 B\nSUMA PLN 15,25\n"
+        )
+        # Keep the existing gross-only fallback when the row has a PTU code.
+        gross_only, regular = parsed["lines"]
+        self.assertEqual((gross_only["raw_name"], gross_only["raw_unit"], gross_only["unit_price_raw"]),
+                         ("SOK 2szt = 6,25", None, "9.25"))
+        self.assertEqual((regular["raw_name"], regular["unit_price_raw"], regular["gross_line_total"]),
+                         ("PŁYN", "6.25", "6"))
+
     def test_redact_pan_accepts_unicode_separators(self):
         groups = ("5351", "0055", "5555", "5555")
         digits = "".join(groups)
