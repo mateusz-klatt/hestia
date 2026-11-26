@@ -14,13 +14,15 @@ export { RECEIPT_CONTRACT_HEADERS };
 export type ReceiptsApi = Pick<
   BudgetApi,
   "receiptsList" | "receiptsSearch" | "receiptDetail" | "receiptImage" | "confirmReceipt" | "deleteReceipt"
-> & Partial<Pick<BudgetApi, "isAuthorizationLocked">>;
+> & Partial<Pick<BudgetApi, "fetchReceiptLinkGroupDetail" | "isAuthorizationLocked">>;
 
 export function createReceiptsApi(api: ReceiptsApi = budgetApi): ReceiptsApi {
   return {
     receiptsList: (request?: ReceiptListRequest) => api.receiptsList(request),
     receiptsSearch: (request: ReceiptSearchRequest) => api.receiptsSearch(request),
     receiptDetail: (receiptId: string) => api.receiptDetail(receiptId),
+    ...(api.fetchReceiptLinkGroupDetail === undefined ? {}
+      : { fetchReceiptLinkGroupDetail: api.fetchReceiptLinkGroupDetail.bind(api) }),
     receiptImage: (receiptId: string) => api.receiptImage(receiptId),
     confirmReceipt: (request: ReceiptConfirmRequest) => api.confirmReceipt(request),
     deleteReceipt: (request: ReceiptDeleteRequest) => api.deleteReceipt(request),

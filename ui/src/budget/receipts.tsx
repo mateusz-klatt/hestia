@@ -2,6 +2,7 @@
 // image object URLs, and link metadata in React component memory only (never localStorage and
 // never putting receipt fields into GET query strings).
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { components } from "../api/openapi";
 import { t } from "../i18n";
 import type { BudgetResult } from "./api";
 import { labelOf } from "./analytics/model";
@@ -42,6 +43,7 @@ import {
   hasMatchingFieldsChanged,
   isBulkConfirmable,
   isExcludedDraftForBulk,
+  isReceiptGrouped,
   isRedactedValue,
   isStaleCursorError,
   keepCandidateBinding,
@@ -80,6 +82,9 @@ import type {
 } from "./receipts_model";
 
 type AccessBarrier = (result: { ok: boolean; status?: number; error?: string }) => boolean;
+type ReceiptAccessBarrier = (result: Parameters<AccessBarrier>[0], options?: { explicitDisabledOnly?: boolean }) => boolean;
+type ReceiptGroupLink = NonNullable<ReceiptSummary["link_group"]>;
+type ReceiptGroupDetail = components["schemas"]["BudgetReceiptGroupDetailResult"];
 
 const fallbackPendingStores = new WeakMap<ReceiptsApi, PendingReceiptStore>();
 
@@ -120,9 +125,9 @@ type ImageState =
   | { kind: "ready"; url: string }
   | { kind: "unavailable" };
 
-function isDisabledStatus(result: { ok: boolean; status?: number; error?: string }, isImageRequest = false): boolean {
+function isDisabledStatus(result: Parameters<AccessBarrier>[0], explicitDisabledOnly = false): boolean {
   if (result.ok || result.status !== 404) return false;
-  if (isImageRequest) return result.error === "budget_receipts_disabled";
+  if (explicitDisabledOnly) return result.error === "budget_receipts_disabled";
   return result.error !== "budget_receipt_not_found";
 }
 
@@ -215,6 +220,18 @@ function gatewayChips(receipt: Pick<ReceiptSummary, "gateway_status" | "has_docu
   );
 }
 
+function ReceiptGroupBadge({ group }: { group: ReceiptGroupLink }) {
+  return (
+    <span
+      className="budget-chip budget-receipt-status"
+      data-status={group.group_status}
+      title={group.group_status === "needs_review" ? t("budget.receipts.statuses.needs_review") : undefined}
+    >
+      {t("budget.receipts.groupedBadge", { count: group.member_count })}
+    </span>
+  );
+}
+
 function confirmErrorText(error: string): string {
   switch (error) {
     case "budget_receipt_conflict": return t("budget.receipts.conflict");
@@ -293,6 +310,7 @@ export function ReceiptsView({
   const receiptFloorGenRef = useRef<Map<string, number>>(new Map());
   const receiptLinkMemoryRef = useRef<Map<string, ReceiptLinkSessionEntry>>(new Map());
   const openReceiptIdRef = useRef<string | null>(null);
+  const receiptDrawerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const loadedReceiptIdRef = useRef<string | null>(null);
   const latestReadyCandidatesRef = useRef<{ receiptId: string; candidates: readonly ReceiptCandidate[] } | null>(null);
   const staleCursorReloadedRef = useRef(false);
@@ -315,6 +333,7 @@ export function ReceiptsView({
   const resetDrawer = useCallback(() => {
     detailGeneration.current += 1;
     openReceiptIdRef.current = null;
+    receiptDrawerTriggerRef.current = null;
     loadedReceiptIdRef.current = null;
     latestReadyCandidatesRef.current = null;
     clearImage();
@@ -353,16 +372,13 @@ export function ReceiptsView({
     }
   }, [actorKey, clearAllReceiptsState]);
 
-  const checkBarrier = useCallback((
-    result: { ok: boolean; status?: number; error?: string },
-    options: { isImageRequest?: boolean } = {},
-  ): boolean => {
+  const checkBarrier = useCallback<ReceiptAccessBarrier>((result, options = {}) => {
     // Propagate lost access BEFORE checking !mounted.current so unmounting onto Accounts never drops 401/403.
     if (onAccessLoss(result)) {
       if (mounted.current) clearAllReceiptsState(false);
       return true;
     }
-    if (isDisabledStatus(result, options.isImageRequest === true)) {
+    if (isDisabledStatus(result, options.explicitDisabledOnly === true)) {
       if (mounted.current) clearAllReceiptsState(true, revision);
       return true;
     }
@@ -684,7 +700,7 @@ export function ReceiptsView({
         setImageState({ kind: "loading" });
         void receiptsApi.receiptImage(receipt.receipt_id).then((imgResult) => {
           const latestFloor = receiptFloorGenRef.current.get(targetId) ?? 0;
-          if (checkBarrier(imgResult, { isImageRequest: true }) || !mounted.current
+          if (checkBarrier(imgResult, { explicitDisabledOnly: true }) || !mounted.current
             || imgToken !== imageGeneration.current || token !== detailGeneration.current
             || token <= latestFloor || openReceiptIdRef.current !== targetId) return;
           if (!imgResult.ok) {
@@ -711,10 +727,11 @@ export function ReceiptsView({
     latestReadyCandidatesRef.current?.receiptId === receiptId ? latestReadyCandidatesRef.current.candidates : null
   ), []);
 
-  const openReceipt = useCallback((receiptId: string) => {
+  const openReceipt = useCallback((receiptId: string, trigger?: HTMLButtonElement) => {
     if (bulkProgress !== null
       || (openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null)
       || openReceiptIdRef.current === receiptId) return;
+    if (openReceiptIdRef.current === null) receiptDrawerTriggerRef.current = trigger ?? null;
     openReceiptIdRef.current = receiptId;
     loadedReceiptIdRef.current = null;
     latestReadyCandidatesRef.current = null;
@@ -725,7 +742,9 @@ export function ReceiptsView({
 
   const closeDetail = useCallback(() => {
     if (openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null) return;
+    const trigger = receiptDrawerTriggerRef.current;
     resetDrawer();
+    trigger?.focus();
   }, [store, resetDrawer]);
 
   const resolveDetailDraft = useCallback((
@@ -1202,9 +1221,11 @@ export function ReceiptsView({
                         <span className="budget-chip budget-receipt-status" data-status={row.status}>
                           {labelOf(RECEIPT_STATUS_KEYS, row.status)}
                         </span>
-                        <span className="budget-chip budget-receipt-link-badge" data-linked={row.linked ? "true" : "false"}>
-                          {row.linked ? t("budget.receipts.linkedBadge") : t("budget.receipts.unlinkedBadge")}
-                        </span>
+                        {row.link_group == null ? (
+                          <span className="budget-chip budget-receipt-link-badge" data-linked={row.linked ? "true" : "false"}>
+                            {row.linked ? t("budget.receipts.linkedBadge") : t("budget.receipts.unlinkedBadge")}
+                          </span>
+                        ) : <ReceiptGroupBadge group={row.link_group} />}
                         {rowPending === null ? null : (
                           <span className="budget-chip budget-muted" role="status">
                             {rowPending === "confirm" ? t("budget.receipts.confirming") : t("budget.receipts.deleting")}
@@ -1213,7 +1234,7 @@ export function ReceiptsView({
                         <button
                           type="button"
                           disabled={bulkBusy}
-                          onClick={() => { openReceipt(row.receipt_id); }}
+                          onClick={(event) => { openReceipt(row.receipt_id, event.currentTarget); }}
                         >
                           {t("budget.receipts.open")}
                         </button>
@@ -1257,6 +1278,7 @@ export function ReceiptsView({
           onLinkChoiceTouched={recordLinkChoiceTouched}
           onAccessLoss={checkBarrier}
           onClose={closeDetail}
+          onOpenReceipt={openReceipt}
           onRetryDetail={() => { setDetailRefresh((current) => current + 1); }}
           onConfirmed={(updated) => {
             receiptLinkMemoryRef.current.delete(`${actorKey}:${updated.receipt_id}`);
@@ -1297,7 +1319,7 @@ export function ReceiptsView({
 }
 
 interface DrawerProps {
-  api: Pick<ReceiptsApi, "confirmReceipt" | "deleteReceipt">;
+  api: Pick<ReceiptsApi, "confirmReceipt" | "deleteReceipt" | "fetchReceiptLinkGroupDetail">;
   store: PendingReceiptStore;
   accounts: readonly BudgetAccount[];
   connections: readonly BudgetConnection[];
@@ -1312,14 +1334,136 @@ interface DrawerProps {
     candidates: readonly ReceiptCandidate[],
   ) => { draft: ReceiptConfirmDraft; showSuggestedBanner: boolean; keepEvidenceInvalidated: boolean };
   onLinkChoiceTouched: (receiptId: string, choice: ReceiptLinkExplicitChoice) => void;
-  onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
+  onAccessLoss: ReceiptAccessBarrier;
   onClose: () => void;
+  onOpenReceipt: (receiptId: string) => void;
   onRetryDetail: () => void;
   onConfirmed: (receipt: ReceiptDetail) => void;
   onConflictOrStale: (receiptId: string) => void;
   onNotFound: (receiptId: string) => void;
   onDeleted: (receiptId: string) => void;
   onMutationError: () => void;
+}
+
+function ReceiptGroupDocumentRow({ receipt, current, locale, onOpenReceipt }: {
+  receipt: ReceiptSummary;
+  current: boolean;
+  locale: string;
+  onOpenReceipt: (receiptId: string) => void;
+}) {
+  const name = (
+    <RedactedOrText
+      value={receipt.raw_shop_name}
+      fallback={receipt.gateway ?? receipt.forwarded_sender_domain ?? t("budget.receipts.unknownMerchant")}
+    />
+  );
+  return (
+    <li className="budget-entry" aria-current={current ? "true" : undefined}>
+      <div className="budget-entry-main">
+        <span className="budget-muted">{receipt.receipt_date ?? t("budget.receipts.noDate")}</span>
+        <span className="budget-entry-text">
+          {current ? name : (
+            <button type="button" className="budget-link" onClick={() => { onOpenReceipt(receipt.receipt_id); }}>
+              {name}
+            </button>
+          )}
+        </span>
+        <strong>{receiptTotalDisplay(receipt, locale)}</strong>
+      </div>
+      {receipt.gateway !== null && receipt.raw_shop_name && receipt.raw_shop_name !== receipt.gateway ? (
+        <span className="budget-muted">{receipt.gateway}</span>
+      ) : null}
+    </li>
+  );
+}
+
+function ReceiptGroupSection({ api, group, receipt, accounts, connections, locale, onOpenReceipt, onAccessLoss }: {
+  api: Pick<ReceiptsApi, "fetchReceiptLinkGroupDetail">;
+  group: ReceiptGroupLink;
+  receipt: ReceiptDetail;
+  accounts: readonly BudgetAccount[];
+  connections: readonly BudgetConnection[];
+  locale: string;
+  onOpenReceipt: (receiptId: string) => void;
+  onAccessLoss: ReceiptAccessBarrier;
+}) {
+  const { group_id: groupId } = group;
+  const [state, setState] = useState<
+    { kind: "loading" } | { kind: "error" } | { kind: "ready"; detail: ReceiptGroupDetail }
+  >({ kind: "loading" });
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (api.fetchReceiptLinkGroupDetail === undefined) return;
+    let active = true;
+    setState({ kind: "loading" });
+    void api.fetchReceiptLinkGroupDetail(groupId).then((result) => {
+      if (onAccessLoss(result, { explicitDisabledOnly: true }) || !active) return;
+      setState(result.ok && result.data.group.group_id === groupId
+        ? { kind: "ready", detail: result.data }
+        : { kind: "error" });
+    });
+    return () => { active = false; };
+  }, [api, groupId, onAccessLoss, attempt]);
+
+  const title = t("budget.receipts.linkedGroupSection");
+  const groupDetail = state.kind === "ready" ? state.detail : null;
+  const currentGroup = groupDetail?.group ?? group;
+  const accountId = groupDetail === null ? receipt.linked_account_id : groupDetail.linked_account_id;
+  const currency = receipt.currency ?? groupDetail?.members[0]?.currency ?? groupDetail?.evidence?.currency ?? null;
+  const itemProps = { locale, onOpenReceipt };
+
+  return (
+    <section className="budget-receipt-section" aria-label={title}>
+      <h5>{title}</h5>
+      <div className="budget-entry-facts">
+        <ReceiptGroupBadge group={currentGroup} />
+        {currentGroup.group_status === "needs_review" ? (
+          <span className="budget-warn">{t("budget.receipts.statuses.needs_review")}</span>
+        ) : null}
+        {accountId === null ? null : (
+          <span>{t("budget.receipts.linkedAccount", {
+            account: receiptAccountLabel(accounts, connections, accountId, t("budget.main.account")),
+          })}</span>
+        )}
+        {currentGroup.fee_amount === null ? null : (
+          <span>{t("budget.receipts.paymentEvidenceFee", {
+            amount: currency === null ? currentGroup.fee_amount : formatAmount(currentGroup.fee_amount, currency, locale),
+          })}</span>
+        )}
+      </div>
+      {api.fetchReceiptLinkGroupDetail === undefined ? (
+        <p className="budget-muted">{t("budget.receipts.detailError")}</p>
+      ) : state.kind === "loading" ? (
+        <p className="budget-muted" role="status">{t("budget.receipts.detailLoading")}</p>
+      ) : state.kind === "error" ? (
+        <div className="budget-notice budget-entries-action" role="alert">
+          <span>{t("budget.receipts.detailError")}</span>
+          <button type="button" onClick={() => { setAttempt((current) => current + 1); }}>
+            {t("budget.receipts.retry")}
+          </button>
+        </div>
+      ) : (
+        <>
+          <ul className="budget-entry-list" aria-label={t("budget.receipts.groupMembers")}>
+            {state.detail.members.map((member) => (
+              <ReceiptGroupDocumentRow key={member.receipt_id} receipt={member}
+                current={member.receipt_id === receipt.receipt_id} {...itemProps} />
+            ))}
+          </ul>
+          {state.detail.evidence === null ? null : (
+            <>
+              <strong>{t("budget.receipts.paymentEvidence")}</strong>
+              <ul className="budget-entry-list" aria-label={t("budget.receipts.paymentEvidence")}>
+                <ReceiptGroupDocumentRow receipt={state.detail.evidence}
+                  current={state.detail.evidence.receipt_id === receipt.receipt_id} {...itemProps} />
+              </ul>
+            </>
+          )}
+        </>
+      )}
+    </section>
+  );
 }
 
 function ReceiptDetailDrawer({
@@ -1337,6 +1481,7 @@ function ReceiptDetailDrawer({
   onLinkChoiceTouched,
   onAccessLoss,
   onClose,
+  onOpenReceipt,
   onRetryDetail,
   onConfirmed,
   onConflictOrStale,
@@ -1350,7 +1495,10 @@ function ReceiptDetailDrawer({
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
   const keepActionErrorRef = useRef(false);
   const drawerMountedRef = useRef(true);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const linkChoicesRef = useRef<HTMLFieldSetElement | null>(null);
+
+  useLayoutEffect(() => { closeButtonRef.current?.focus(); }, []);
 
   useEffect(() => {
     drawerMountedRef.current = true;
@@ -1366,7 +1514,7 @@ function ReceiptDetailDrawer({
   }, [onClose, actionBusy]);
 
   useEffect(() => {
-    if (detailState.kind === "ready") {
+    if (detailState.kind === "ready" && !isReceiptGrouped(detailState.detail)) {
       const resolved = resolveDetailDraft(detailState.detail, detailState.candidates);
       setConfirmDraft(resolved.draft);
       setSuggestionDismissed(!resolved.showSuggestedBanner);
@@ -1413,6 +1561,7 @@ function ReceiptDetailDrawer({
   };
 
   const submitConfirm = async (detail: ReceiptDetail, candidates: readonly ReceiptCandidate[], draft: ReceiptConfirmDraft) => {
+    if (isReceiptGrouped(detail)) return;
     const currentCandidates = getLatestCandidates(detail.receipt_id) ?? candidates;
     const built = buildConfirmRequest(detail, draft, currentCandidates, t("budget.receipts.summaryLineDefault"));
     if (!built.ok) {
@@ -1465,7 +1614,7 @@ function ReceiptDetailDrawer({
   };
 
   const submitDelete = async (detail: ReceiptDetail) => {
-    if (!isOpenReceipt(detail.receipt_id)) return;
+    if (isReceiptGrouped(detail) || !isOpenReceipt(detail.receipt_id)) return;
     const lockToken = store.tryAcquire(detail.receipt_id, "delete");
     if (lockToken === null) return;
     keepActionErrorRef.current = false;
@@ -1552,7 +1701,7 @@ function ReceiptDetailDrawer({
       <div className="modal-card budget-receipt-drawer" role="dialog" aria-modal="true" aria-label={title}>
         <header className="budget-receipt-drawer-head">
           <h3>{title}</h3>
-          <button type="button" disabled={actionBusy !== null} onClick={onClose}>
+          <button ref={closeButtonRef} type="button" disabled={actionBusy !== null} onClick={onClose}>
             {t("budget.main.close")}
           </button>
         </header>
@@ -1566,9 +1715,10 @@ function ReceiptDetailDrawer({
           </div>
         ) : (() => {
           const { detail, candidates } = detailState;
+          const group = detail.link_group;
           const currentCandidateSetKey = buildCandidateSetKey(detail, candidates);
           const storedKeepCandidate = findCurrentLinkedCandidate(detail, candidates);
-          const activeDraft = confirmDraft === null
+          const activeDraft = group != null || confirmDraft === null
             ? null
             : clearStaleCandidateSelection(confirmDraft, detail.receipt_id, currentCandidateSetKey, storedKeepCandidate);
           const hasRedactedLines = receiptHasRedactedLines(detail.lines);
@@ -1795,7 +1945,19 @@ function ReceiptDetailDrawer({
                 </section>
               )}
 
-              <section className="budget-receipt-section" aria-label={t("budget.receipts.linkSection")}>
+              {group != null ? (
+                <ReceiptGroupSection
+                  key={`${group.group_id}:${String(group.group_version)}`}
+                  api={api}
+                  group={group}
+                  receipt={detail}
+                  accounts={accounts}
+                  connections={connections}
+                  locale={locale}
+                  onOpenReceipt={onOpenReceipt}
+                  onAccessLoss={onAccessLoss}
+                />
+              ) : <section className="budget-receipt-section" aria-label={t("budget.receipts.linkSection")}>
                 <h5>{t("budget.receipts.linkSection")}</h5>
                 {detail.linked ? (
                   <div className="budget-receipt-linked-tx">
@@ -1840,7 +2002,7 @@ function ReceiptDetailDrawer({
                 ) : (
                   <p className="budget-muted">{t("budget.receipts.unlinkedState")}</p>
                 )}
-              </section>
+              </section>}
 
               {detail.image_available && imageState.kind !== "none" ? (
                 <section className="budget-receipt-section" aria-label={t("budget.receipts.imageHeading")}>
@@ -2246,7 +2408,7 @@ function ReceiptDetailDrawer({
                 </form>
               )}
 
-              {confirmingDelete ? (
+              {group == null && confirmingDelete ? (
                 <div className="budget-notice budget-receipt-delete-dialog" role="alertdialog" aria-label={t("budget.receipts.deleteConfirmTitle")}>
                   <p><strong>{t("budget.receipts.deleteConfirmTitle")}</strong></p>
                   <p className="budget-muted">{t("budget.receipts.deleteConfirmBody")}</p>

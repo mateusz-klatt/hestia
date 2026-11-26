@@ -33,6 +33,10 @@ export type ReceiptPaymentMethod = ReceiptConfirmRequest["payment_method"];
 export type ReceiptKind = ReceiptConfirmRequest["receipt_kind"];
 export type ReceiptLineKind = ReceiptLineInput["line_kind"];
 
+export function isReceiptGrouped(receipt: Pick<ReceiptSummary, "link_group">): boolean {
+  return receipt.link_group != null;
+}
+
 export const RECEIPT_STATUSES: readonly ReceiptStatus[] = ["imported", "needs_review", "confirmed", "draft"];
 export const RECEIPT_DOCUMENT_KINDS: readonly ReceiptDocumentKind[] = ["receipt", "invoice", "payment_confirmation"];
 export const RECEIPT_SOURCE_KINDS: readonly ReceiptSourceKind[] = [
@@ -539,25 +543,26 @@ export function hasMatchingFieldsChanged(
 
 /** Models the exact link transitions `receipt_store.confirm` and `receipt_store.detail` support per status. */
 export function availableLinkOptions(
-  detail: Pick<ReceiptDetail, "status" | "linked" | "linked_account_id" | "linked_entry_ref">,
+  detail: Pick<ReceiptDetail, "status" | "linked" | "linked_account_id" | "linked_entry_ref" | "link_group">,
   candidates: readonly ReceiptCandidate[],
   paymentMethod: ReceiptPaymentMethod,
   matchingFieldsChanged = false,
 ): ReceiptLinkOptions {
-  const paymentAllowsLink = paymentMethod !== "cash" && paymentMethod !== "mixed";
-  const tokensValid = paymentAllowsLink && !matchingFieldsChanged;
-  const currentCandidate = findCurrentLinkedCandidate(detail, candidates);
-
-  if (detail.status === "confirmed") {
+  const grouped = isReceiptGrouped(detail);
+  const paymentAllowsLink = !grouped && paymentMethod !== "cash" && paymentMethod !== "mixed";
+  if (grouped || detail.status === "confirmed") {
     return {
       paymentAllowsLink,
       matchingFieldsChanged,
       canKeep: false,
       canPickCandidates: false,
-      mustUnlinkToConfirm: detail.linked,
+      mustUnlinkToConfirm: !grouped && detail.linked,
       currentCandidate: null,
     };
   }
+
+  const tokensValid = paymentAllowsLink && !matchingFieldsChanged;
+  const currentCandidate = findCurrentLinkedCandidate(detail, candidates);
 
   const canKeep = tokensValid && detail.linked && currentCandidate !== null;
   return {
@@ -580,14 +585,14 @@ export function isStrongMatchStrength(strength: ReceiptCandidate["match_strength
  * `"nip"` or `"distinctive"`.
  */
 export function preselectedCandidate(
-  detail: Pick<ReceiptDetail, "status" | "linked" | "linked_account_id" | "linked_entry_ref">,
+  detail: Pick<ReceiptDetail, "status" | "linked" | "linked_account_id" | "linked_entry_ref" | "link_group">,
   candidates: readonly ReceiptCandidate[],
   paymentMethod: ReceiptPaymentMethod,
 ): ReceiptCandidate | null {
   if (detail.status !== "imported" && detail.status !== "draft" && detail.status !== "needs_review") {
     return null;
   }
-  if (detail.linked || detail.linked_account_id !== null || detail.linked_entry_ref !== null) {
+  if (isReceiptGrouped(detail) || detail.linked || detail.linked_account_id !== null || detail.linked_entry_ref !== null) {
     return null;
   }
   if (paymentMethod === "cash" || paymentMethod === "mixed") {
@@ -1057,6 +1062,7 @@ export function buildConfirmRequest(
   candidates: readonly ReceiptCandidate[],
   summaryFallbackName = "Document",
 ): { ok: true; request: ReceiptConfirmRequest } | { ok: false; errorKey: MessageKey } {
+  if (isReceiptGrouped(detail)) return { ok: false, errorKey: "budget.receipts.invalidForm" };
   const origShop = (detail.raw_shop_name ?? "").trim();
   const shopName = draft.rawShopName.trim();
   const shopEdited = shopName !== origShop;
@@ -1228,14 +1234,14 @@ export function isGmailImportSource(sourceKind: ReceiptSourceKind): boolean {
 
 /** Only unlinked Gmail imports (`email` / `attachment` with `imported` status) support bulk confirm. */
 export function isBulkConfirmable(
-  receipt: Pick<ReceiptSummary, "status" | "source_kind" | "linked">,
+  receipt: Pick<ReceiptSummary, "status" | "source_kind" | "linked" | "link_group">,
 ): boolean {
-  return !receipt.linked && receipt.status === "imported" && isGmailImportSource(receipt.source_kind);
+  return !isReceiptGrouped(receipt) && !receipt.linked && receipt.status === "imported" && isGmailImportSource(receipt.source_kind);
 }
 
 /** True for OCR / paste / live-text drafts and non-Gmail items excluded from bulk confirm (distinct from `needs_review`). */
 export function isExcludedDraftForBulk(
-  receipt: Pick<ReceiptSummary, "status" | "source_kind" | "linked">,
+  receipt: Pick<ReceiptSummary, "status" | "source_kind" | "linked" | "link_group">,
 ): boolean {
   return !isBulkConfirmable(receipt) && receipt.status !== "needs_review" && receipt.status !== "confirmed";
 }
@@ -1365,14 +1371,14 @@ export function buildBulkSelectionPlan(
 export function uniqueIdCandidate(
   detail: Pick<
     ReceiptDetail,
-    "status" | "linked" | "linked_account_id" | "linked_entry_ref" | "payment_method" | "evidence_for_receipt_id"
+    "status" | "linked" | "linked_account_id" | "linked_entry_ref" | "payment_method" | "evidence_for_receipt_id" | "link_group"
   >,
   candidates: readonly ReceiptCandidate[],
 ): { candidate: ReceiptCandidate; index: number } | null {
   if (detail.status !== "imported" || detail.evidence_for_receipt_id !== null) {
     return null;
   }
-  if (detail.linked || detail.linked_account_id !== null || detail.linked_entry_ref !== null) {
+  if (isReceiptGrouped(detail) || detail.linked || detail.linked_account_id !== null || detail.linked_entry_ref !== null) {
     return null;
   }
   if (detail.payment_method === "cash" || detail.payment_method === "mixed") {

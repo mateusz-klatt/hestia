@@ -27,6 +27,7 @@ import {
   isBulkConfirmable,
   isExcludedDraftForBulk,
   isGmailImportSource,
+  isReceiptGrouped,
   isRedactedValue,
   isStaleCursorError,
   isStrongMatchStrength,
@@ -597,6 +598,27 @@ describe("receipts_model", () => {
     expect(editedOther.gross_line_total).toBe("15");
     expect(editedOther.discount_amount).toBe("0");
     expect(editedOther.net_line_total).toBe("15.00");
+  });
+
+  it("keeps grouped Gmail receipts out of legacy link and bulk-confirm flows", () => {
+    const receipt = detailOf({ status: "imported", source_kind: "email" });
+    const grouped = {
+      ...receipt,
+      link_group: { group_id: "group-1", group_version: 1, group_status: "confirmed" as const,
+        member_count: 2, evidence_receipt_id: null, fee_amount: null },
+    };
+    const candidate = candidateOf({ match_strength: "id" });
+    expect(isReceiptGrouped(receipt)).toBe(false);
+    expect(isReceiptGrouped({ link_group: null })).toBe(false);
+    expect(isBulkConfirmable(receipt)).toBe(true);
+    expect(isBulkConfirmable(grouped)).toBe(false);
+    expect(preselectedCandidate(grouped, [candidate], "card")).toBeNull();
+    expect(uniqueIdCandidate(grouped, [candidate])).toBeNull();
+    expect(availableLinkOptions({ ...grouped, linked: true }, [candidate], "card")).toMatchObject({
+      canKeep: false, canPickCandidates: false, mustUnlinkToConfirm: false,
+    });
+    expect(buildConfirmRequest(grouped, draftFromDetail(receipt, [candidate]), [candidate]).ok).toBe(false);
+    expect(buildBulkConfirmRequest(grouped, [candidate], "Document", { linkById: true }).ok).toBe(false);
   });
 
   it("restricts bulk confirm to Gmail imports, groups by NIP or normalized name, and omits lines on confirm", () => {

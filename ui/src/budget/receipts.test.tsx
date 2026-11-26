@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { components } from "../api/openapi";
 import { loadLocale } from "../i18n";
 import type { BudgetResult } from "./api";
 import { account, connection } from "./fixtures";
@@ -122,6 +123,38 @@ function receiptCandidate(overrides: Partial<ReceiptCandidate> = {}): ReceiptCan
     match_strength: "none",
     candidate_token: "cand-token-1",
     ...overrides,
+  };
+}
+
+type ReceiptGroupDetail = components["schemas"]["BudgetReceiptGroupDetailResult"];
+
+function receiptGroupDetail(): ReceiptGroupDetail {
+  const group: ReceiptGroupDetail["group"] = {
+    group_id: "44444444-4444-4444-8444-444444444444",
+    group_version: 3,
+    group_status: "needs_review",
+    member_count: 2,
+    evidence_receipt_id: "33333333-3333-4333-8333-333333333333",
+    fee_amount: "0.50",
+  };
+  return {
+    group,
+    members: [
+      receiptSummary({ link_group: group, linked: true, raw_shop_name: "Synthetic first shop", total_amount: "25.00" }),
+      receiptSummary({ link_group: group, linked: true, receipt_id: "22222222-2222-4222-8222-222222222222",
+        raw_shop_name: "Synthetic second shop", total_amount: "17.00" }),
+    ],
+    evidence: receiptSummary({
+      link_group: group,
+      linked: true,
+      receipt_id: group.evidence_receipt_id ?? "",
+      document_kind: "payment_confirmation",
+      gateway: "Synthetic gateway",
+      raw_shop_name: null,
+      total_amount: "42.50",
+    }),
+    linked_account_id: null,
+    linked_entry_ref: null,
   };
 }
 
@@ -307,6 +340,90 @@ async function submit(form: HTMLFormElement | null): Promise<void> {
 }
 
 describe("ReceiptsView", () => {
+  it("shows grouped members and gateway evidence in the same drawer without legacy write actions", async () => {
+    const groupDetail = receiptGroupDetail();
+    const rows = [...groupDetail.members, ...(groupDetail.evidence === null ? [] : [groupDetail.evidence])];
+    const clients = fakeClients(rows);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => ok({
+      receipt: receiptDetail(rows.find((row) => row.receipt_id === id)),
+      candidates: [receiptCandidate()],
+    }));
+    const loadGroup = vi.fn(() => ok(groupDetail));
+    clients.rApi.fetchReceiptLinkGroupDetail = loadGroup;
+
+    await renderReceipts(clients);
+    expect([...host.querySelectorAll(".budget-receipt-row")].map((row) => row.textContent)).toEqual([
+      expect.stringContaining("Grouped (2)"),
+      expect.stringContaining("Grouped (2)"),
+      expect.stringContaining("Grouped (2)"),
+    ]);
+    const opener = openDetailButton(0);
+    await click(opener);
+    expect(loadGroup).toHaveBeenCalledWith(groupDetail.group.group_id);
+    const group = dialog().querySelector<HTMLElement>('[aria-label="Linked group"]');
+    if (group === null) throw new Error("group missing");
+    expect(group.querySelector('[aria-label="Documents in group"]')?.textContent).toContain("Synthetic first shop");
+    expect(group.querySelector('[aria-current="true"]')?.textContent).toContain("25.00 PLN");
+    expect(group.querySelector('[aria-label="Payment evidence"]')?.textContent).toContain("Synthetic gateway");
+    expect(group.textContent).toContain("fee 0.50 PLN");
+    expect(group.textContent).toContain("Needs review");
+    expect(group.textContent).not.toContain("Account:");
+    expect(dialog().querySelector('[aria-label="Linked bank transaction"]')).toBeNull();
+    expect(dialog().querySelector('[name="link_choice"]')).toBeNull();
+    expect(dialog().textContent).not.toContain("Confirm receipt");
+    expect(dialog().textContent).not.toContain("Delete document");
+
+    await click(button("Synthetic second shop", group));
+    expect(clients.rApi.receiptDetail).toHaveBeenLastCalledWith(rows[1]?.receipt_id);
+    expect(dialog().querySelector('[aria-current="true"]')?.textContent).toContain("Synthetic second shop");
+    expect(document.activeElement).toBe(button("Close", dialog()));
+    await click(button("Close", dialog()));
+    expect(document.activeElement).toBe(opener);
+    expect(clients.rApi.confirmReceipt).not.toHaveBeenCalled();
+    expect(clients.rApi.deleteReceipt).not.toHaveBeenCalled();
+  });
+
+  it("keeps the receipt open when a group read is unavailable and retries the group alone", async () => {
+    const groupDetail = receiptGroupDetail();
+    const firstRow = groupDetail.members[0];
+    if (firstRow === undefined) throw new Error("member missing");
+    const clients = fakeClients([firstRow], receiptDetail(firstRow));
+    clients.rApi.fetchReceiptLinkGroupDetail = vi.fn<NonNullable<ReceiptsApi["fetchReceiptLinkGroupDetail"]>>()
+      .mockResolvedValueOnce({ ok: false, status: 404, error: "budget_http_404" })
+      .mockImplementation(() => ok(groupDetail));
+
+    await renderReceipts(clients);
+    await click(openDetailButton(0));
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("Document details could not be loaded.");
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(1);
+    await click(button("Retry", dialog()));
+    expect(dialog().textContent).toContain("Synthetic second shop");
+    expect(clients.rApi.receiptDetail).toHaveBeenCalledTimes(1);
+    expect(clients.rApi.fetchReceiptLinkGroupDetail).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops an unfinished group response when the active receipt session changes", async () => {
+    const groupDetail = receiptGroupDetail();
+    const firstRow = groupDetail.members[0];
+    if (firstRow === undefined) throw new Error("member missing");
+    const clients = fakeClients([firstRow], receiptDetail(firstRow));
+    const response = deferred<ReceiptGroupDetail>();
+    clients.rApi.fetchReceiptLinkGroupDetail = vi.fn(() => response.promise);
+
+    await renderReceipts(clients);
+    await click(openDetailButton(0));
+    expect(dialog().textContent).toContain("Loading document details…");
+    await renderReceipts(fakeClients(), { actorKey: "new-owner" });
+    await click(openDetailButton(0));
+    await act(async () => {
+      response.resolve({ ok: true, data: groupDetail });
+      await response.promise;
+    });
+    expect(dialog().querySelector('[aria-label="Linked group"]')).toBeNull();
+    expect(dialog().textContent).not.toContain("Synthetic second shop");
+    expect(dialog().textContent).toContain("Confirm receipt");
+  });
+
   it("lists receipts and documents, labels actual searchable fields, and localizes in Polish", async () => {
     const clients = fakeClients([
       receiptSummary({
