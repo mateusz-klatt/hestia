@@ -1,0 +1,14 @@
+Billing Summary
+Bill To
+Klient Test
+Sold To
+Klient Test
+Example Ireland Operations Limited
+Example Street 1
+Dublin Test
+Billing Number G123456789
+Document Date 11/09/2026
+Total Amount EUR 5.00
+Tax 1.00
+Total EUR 5.00
+End of billing summary

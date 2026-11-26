@@ -93,6 +93,19 @@ class GmailSettingsTests(TestCase):
         self.assertEqual(settings.known_merchant_domains, ())
         self.assertEqual(self.load(payment_senders=[]).payment_senders, ())
 
+    def test_document_senders_load_with_overlapping_paths(self):
+        docs = [{"sender": "@VENDOR.example.test", "merchant": "Example Vendor"}]
+        settings = self.load(document_senders=docs, payment_senders=[
+            {"sender": "@shop.example.test", "merchant": "Shop", "gateway": True},
+        ])
+        self.assertEqual(settings.document_senders, (PaymentSender("@vendor.example.test", "Example Vendor"),))
+        settings = self.load(sender_allowlist=[], spouse_forward_senders=[], document_senders=docs)
+        self.assertEqual(len(settings.document_senders), 1)
+        for invalid in (None, [docs[0], docs[0]], [docs[0] | {"gateway": True}]):
+            with self.subTest(invalid=invalid):
+                self.settings.write_text(json.dumps(self.data | {"document_senders": invalid}), encoding="utf-8")
+                self.assert_invalid()
+
     def test_payment_rule_count(self):
         entries = [{"sender": f"pay{index}@shop.example.test", "merchant": "X"} for index in range(201)]
         self.assertEqual(len(self.load(payment_senders=entries[:200]).payment_senders), 200)

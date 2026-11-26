@@ -1,0 +1,5 @@
+Biuro Przykład
+Invoice
+Billing Number OFFICE-1
+Document Date 03/11/2026
+Total Amount EUR 55.00

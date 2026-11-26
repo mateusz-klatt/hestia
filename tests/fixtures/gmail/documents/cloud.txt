@@ -1,0 +1,4 @@
+Chmura Przykład
+Invoice number: CLOUD-1
+Date of issue: November 3, 2026
+Total due $17.00

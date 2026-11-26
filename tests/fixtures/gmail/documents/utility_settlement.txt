@@ -1,0 +1,9 @@
+Twoja faktura rozliczeniowa
+nr. 1234567890 z dnia: 02.01.2026
+Sprzedawca: Nabywca:
+Utility Test S.A.
+NIP: 8567346215
+Klient Test
+NIP: 1234563218
+Termin płatności: 15.01.2026 245,10 złNależność za okres 01.12.2025 - 31.12.2025:
+Kwota do zapłaty 245,10 zł

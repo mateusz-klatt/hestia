@@ -1,0 +1,8 @@
+Przykład Studio
+Invoice number: INV-42
+Date of issue: November 3, 2026
+Bill to: Synthetic Buyer
+Subtotal €100.00
+Total excluding tax €100.00
+VAT - Poland 23% on €100.00
+Total €123.00

@@ -1,0 +1,17 @@
+FAKTURA VAT
+Faktura VAT nr A123456789
+Sprzedawca:
+SKLEP TEST SP. Z O.O.
+NIP:
+8567346215
+Data wystawienia: 2026-01-02
+NABYWCA:
+Klient Test
+NIP:
+BRAK
+Pozycje strony pierwszej
+Do zapłaty: 12,30 PLN
+Faktura VAT nr A123456789
+Pozycje strony drugiej
+Do zapłaty: 4,50 PLN
+Do zapłaty razem: 16,80 PLN

@@ -1,0 +1,10 @@
+Faktura VAT nr TAXI/2026/1
+Faktura wystawiona przez
+w imieniu Sprzedawcy
+Platforma Test Sp. z o.o.
+Sprzedawca: Taxi Test Sp. z o.o. ul. Testowa 1, 00-001 Warszawa NIP: 856-734-62-15
+Nabywca: Klient Test
+NIP: 1234563218
+Data wystawienia 02.01.2026
+Suma brutto 45,50 PLN
+Płatność kartą kredytową 45,50 PLN

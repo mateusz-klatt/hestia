@@ -59,7 +59,18 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.55.0")
+        self.assertEqual(document["info"]["version"], "0.56.0")
+        status = document["paths"]["/api/budget/receipts/gmail-status"]["get"]
+        header, = status.pop("parameters")
+        self.assertEqual((header["name"], header["in"], header["required"]),
+                         ("X-Hestia-Contract-Version", "header", False))
+        ts_path = Path(__file__).resolve().parent.parent / "ui" / "src" / "api" / "openapi.ts"
+        status_ts = ts_path.read_text(encoding="utf-8").split("getBudgetReceiptGmailStatus: {", 1)[1]
+        self.assertIn('"X-Hestia-Contract-Version"?: string;', status_ts.split("requestBody", 1)[0])
+        reasons = schemas["BudgetReceiptGmailStatus"]["properties"]["parse_failed_reasons"]["propertyNames"]["enum"]
+        reasons.remove("pdf_no_text")
+        reasons.remove("multiple_documents")
+        document["info"]["version"] = "0.55.0"
         # 0.55.0 additive candidate match_strength.
         schemas["BudgetReceiptCandidate"]["properties"].pop("match_strength")
         schemas["BudgetReceiptCandidate"]["required"].remove("match_strength")

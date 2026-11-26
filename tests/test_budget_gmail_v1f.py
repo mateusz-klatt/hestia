@@ -1933,7 +1933,8 @@ class V1f3ForwardBodyTests(unittest.TestCase):
             "orders@shop.example.test", "Order confirmed without a table.", subject="Order #XX12345",
             rfc_id="<shop-v1f3-two-standalone@shop.example.test>",
         )
-        with patch("hestia.budget.gmail_message.unwrap_trusted_forward", return_value=(inner, True)):
+        with patch("hestia.budget.gmail_message._forwarded_original",
+                   side_effect=lambda message, _render: inner if message.get("From") == "owner@gmail.com" else None):
             pending = self._process(forwarded, "v1f3-two-standalone-markers")
         self.assertEqual((pending.outcome, pending.forwarded_manually, pending.payment),
                          ("imported", True, None))

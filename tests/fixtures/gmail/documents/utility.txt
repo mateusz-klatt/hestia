@@ -1,0 +1,7 @@
+Faktura VAT nr UTIL/1
+Sprzedawca: Energia Przykład
+Data faktury: 03.11.2026
+Termin płatności: 20.11.2026
+Wartość netto 100,00 zł
+Usługa netto 30,00 zł
+Kwota do zapłaty 159,90 zł

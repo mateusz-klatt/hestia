@@ -1,0 +1,4 @@
+Ticket booking
+Invoice number TICKET-001
+Date of issue 2026-01-02
+Total EUR 20.00

@@ -1,0 +1,6 @@
+Receipt
+Przykład Studio
+Receipt number: REC-42
+Invoice number: INV-42
+Date of issue: November 3, 2026
+Amount paid €123.00

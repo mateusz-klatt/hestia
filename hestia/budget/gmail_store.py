@@ -30,6 +30,8 @@ RFC_MESSAGE_DOMAIN = b"hestia/budget/gmail-rfc-msg-id/v1\0"
 PAYMENT_SENDER_DOMAIN = b"hestia/budget/gmail-payment-sender/v1\0"
 PAYMENT_PAYEE_DOMAIN = b"hestia/budget/gmail-payment-payee/v1\0"
 ORDER_REFERENCE_DOMAIN = b"hestia/budget/gmail-order-reference/v1\0"
+DOCUMENT_NUMBER_DOMAIN = b"hestia/budget/gmail-document-number/v1\0"
+DOCUMENT_RECEIPT_DOMAIN = b"hestia/budget/gmail-document-receipt/v1\0"
 GATEWAY_REF_DOMAIN = b"hestia/budget/gmail-gateway-ref/v1\0"
 SCOPE_DOMAIN = b"hestia/budget/gmail-scope-query/v1\0"
 MAILBOX_DOMAIN = b"hestia/budget/gmail-mailbox/v1\0"
@@ -53,6 +55,7 @@ STATUS_FIELDS = ("grant_status", "grant_generation", "version", "sync_phase", "a
 _PARSE_FAILED_REASONS_PREFIX = "budget_gmail_parse_failed_reasons:"
 _RETRY_WINDOW_PREFIX = "budget_gmail_retry_full_window:"
 _INC_RESET_PREFIX = "budget_gmail_inc_reset:"
+_DOCUMENT_NUMBER_PREFIX = "budget_gmail_document_number:"
 _PAYMENT_SENDER_PREFIX = "budget_gmail_payment_sender:"
 _PAYMENT_ORDER_PREFIX = "budget_gmail_payment_order:"
 _PAYMENT_PAYEE_PREFIX = "budget_gmail_payment_payee:"
@@ -65,6 +68,8 @@ PARSE_FAILED_REASONS = (
     "other",
     "part_defects",
     "pdf_unsupported",
+    "pdf_no_text",
+    "multiple_documents",
     "recursion",
     "unicode_error",
     "worker_rejected",
@@ -130,12 +135,18 @@ class PendingMessage:
     parse_failed_reason: str | None = None
     payment: PendingPayment | None = None
     failed_gateway: tuple[str, ...] | None = None
+    document_provenance: dict | None = None
+    diagnostic_reason: str | None = None
 
 
 def _linked_manual_forward():
     return select(BudgetReceipt.id).where(
         BudgetReceipt.id == BudgetGmailMessage.receipt_id, BudgetReceipt.forwarded_manually == 1,
     ).exists()
+
+
+def _document_number_key(receipt_id):
+    return _DOCUMENT_NUMBER_PREFIX + receipt_id
 
 
 def _payment_sender_key(receipt_id):
@@ -209,6 +220,7 @@ def _forget_payment_provenance(session, receipt_ids):
         select(_payment_order_key(receipt_ids)),
         select(_payment_payee_key(receipt_ids)),
         select(_gateway_ref_key(receipt_ids)),
+        select(_document_number_key(receipt_ids)),
     )
     session.execute(delete(AppMeta).where(AppMeta.key.in_(keys)))
 
@@ -230,7 +242,7 @@ def _tombstone_messages(session, *predicates):
 def tombstone_receipt(session, owner, receipt_id):
     owned_receipt = select(BudgetReceipt.id).where(BudgetReceipt.id == receipt_id, BudgetReceipt.owner == owner)
     keys = (_payment_sender_key(receipt_id), _payment_order_key(receipt_id), _payment_payee_key(receipt_id),
-            _gateway_ref_key(receipt_id))
+            _gateway_ref_key(receipt_id), _document_number_key(receipt_id))
     session.execute(delete(AppMeta).where(AppMeta.key.in_(keys), owned_receipt.exists()))
     _tombstone_messages(session, BudgetGmailMessage.owner == owner, BudgetGmailMessage.receipt_id == receipt_id)
 
@@ -701,16 +713,62 @@ class GmailStore(BudgetStore):
             if len(candidates) == 1 and candidates[0].id == document.id:
                 gateway_row.evidence_for_receipt_id = document.id
 
+    def _duplicate_document(self, session, owner, item, now):
+        incoming = item.document_provenance
+        entries = session.execute(select(BudgetReceipt, AppMeta).join(
+            AppMeta, AppMeta.key == _document_number_key(BudgetReceipt.id),
+        ).where(BudgetReceipt.owner == owner))
+        for receipt, meta in entries:
+            existing = json.loads(meta.value)
+            if existing["number_hmac"] == incoming["number_hmac"]:
+                if (existing["seller_key"] != incoming["seller_key"]
+                        or receipt.currency != item.invoice.currency
+                        or Decimal(receipt.total_amount) != Decimal(item.invoice.amount)):
+                    return "multiple_documents"
+                existing["paid"] |= incoming["paid"]
+                if incoming["receipt_number_hmac"]:
+                    existing["receipt_number_hmac"] = incoming["receipt_number_hmac"]
+                meta.value = json.dumps(existing, sort_keys=True)
+                if (receipt.status == "imported" and receipt.document_kind == "receipt"
+                        and item.invoice.document_kind == "invoice"):
+                    receipt.document_kind = "invoice"
+                    receipt.invoice_number = item.invoice.invoice_number
+                    receipt.receipt_date = item.invoice.issue_date
+                    receipt.due_date = item.invoice.due_date
+                    receipt.raw_nip = item.invoice.nip
+                    receipt.version += 1
+                    receipt.updated_at = now
+                    attached = session.scalars(select(BudgetReceipt).where(
+                        BudgetReceipt.owner == owner, BudgetReceipt.gateway.is_not(None),
+                        BudgetReceipt.evidence_for_receipt_id == receipt.id,
+                        BudgetReceipt.status == "imported",
+                    )).all()
+                    for gateway_row in attached:
+                        self._attach_evidence(session, owner, gateway_row, revalidate=True)
+                    self._attach_gateway_for_document(session, owner, receipt)
+                return "skipped_duplicate"
+        return None
+
     @staticmethod
     def _invoice(session, owner, item, now):
         invoice = item.invoice
+        invoice_number = invoice.invoice_number
+        if (item.document_provenance is not None and invoice.document_kind == "receipt" and invoice.receipt_number
+                and invoice_number.casefold() == invoice.receipt_number.casefold()):
+            invoice_number = None
         receipt = BudgetReceipt(id=str(uuid.uuid4()), owner=owner, raw_shop_name=invoice.issuer, raw_nip=invoice.nip,
-                                invoice_number=invoice.invoice_number, receipt_date=invoice.issue_date,
+                                invoice_number=invoice_number, receipt_date=invoice.issue_date,
                                 due_date=invoice.due_date, total_amount=invoice.amount, currency=invoice.currency,
-                                status="imported", document_kind="invoice", source_kind=item.source_kind,
+                                status="imported", document_kind=getattr(invoice, "document_kind", "invoice"), source_kind=item.source_kind,
                                 version=1, created_at=now, updated_at=now, import_expires_at=now + IMPORT_TTL)
         session.add(receipt)
         session.flush()
+        if item.document_provenance is not None:
+            session.add(AppMeta(key=_document_number_key(receipt.id),
+                                value=json.dumps(item.document_provenance, sort_keys=True)))
+            session.add(BudgetReceiptLine(receipt_id=receipt.id, owner=owner, line_no=1, line_kind="other",
+                                         raw_name="Dokument", raw_name_key="dokument", quantity="1",
+                                         gross_line_total=invoice.amount, net_line_total=invoice.amount))
         return receipt.id
 
     @staticmethod
@@ -776,6 +834,7 @@ class GmailStore(BudgetStore):
                     continue
                 receipt_id = None
                 outcome = item.outcome
+                reason = item.parse_failed_reason
                 # Review placeholders are keyed by their outer Gmail ID.
                 rfc_hmac = None if item.forwarded_manually else item.rfc_message_id_hmac
                 if self._duplicate(session, owner, rfc_hmac):
@@ -783,6 +842,12 @@ class GmailStore(BudgetStore):
                 elif item.failed_gateway is not None:
                     outcome = self._failed_gateway(session, owner, item.failed_gateway, now=now,
                                                    expires_at=item.internal_date + PROVENANCE_TTL)
+                elif item.document_provenance is not None:
+                    duplicate = self._duplicate_document(session, owner, item, now)
+                    if duplicate == "multiple_documents":
+                        outcome, reason = "parse_failed", duplicate
+                    else:
+                        outcome = duplicate or outcome
                 elif item.payment is not None:
                     if item.payment.gateway_ref_hmac is not None:
                         outcome = self._merge_gateway(session, owner, item.payment, now) or outcome
@@ -807,7 +872,9 @@ class GmailStore(BudgetStore):
                 else:
                     skipped += 1
                     if outcome == "parse_failed":
-                        new_reasons.append(normalize_parse_failed_reason(item.parse_failed_reason))
+                        new_reasons.append(normalize_parse_failed_reason(reason))
+                if item.diagnostic_reason is not None and not (outcome == "parse_failed" and reason == item.diagnostic_reason):
+                    new_reasons.append(normalize_parse_failed_reason(item.diagnostic_reason))
                 session.add(BudgetGmailMessage(owner=owner, gmail_id_hmac=item.gmail_id_hmac,
                                                rfc_message_id_hmac=rfc_hmac,
                                                internal_date=item.internal_date, trust_path=item.trust_path,

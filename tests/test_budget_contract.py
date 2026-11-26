@@ -368,7 +368,9 @@ class BudgetOpenApiTests(unittest.TestCase):
             version, = [parameter for parameter in operation["parameters"] if parameter["in"] == "header"]
             self.assertEqual(version["name"], "X-Hestia-Contract-Version")
             self.assertFalse(version["required"])
-        self.assertNotIn("parameters", receipts["/api/budget/receipts/gmail-status"]["get"])
+        status_header, = receipts["/api/budget/receipts/gmail-status"]["get"]["parameters"]
+        self.assertEqual((status_header["name"], status_header["in"], status_header["required"]),
+                         ("X-Hestia-Contract-Version", "header", False))
         sync_post = receipts["/api/budget/receipts/gmail-sync"]["post"]
         self.assertIn("202", sync_post["responses"])
         self.assertNotIn("200", sync_post["responses"])

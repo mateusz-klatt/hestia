@@ -1,0 +1,102 @@
+FAKTURA
+Faktura Numer faktury: 1234567890
+Sprzedawca: Biuro Test Sp. z o.o.
+NIP: 8567346215
+Nabywca: Klient Test
+NIP: BRAK
+Numer faktury
+Data faktury
+Identyfikator płatności
+1234567890
+02.01.2026
+PAY-EXAMPLE-01
+Okres rozliczeniowy
+01.12.2025 - 31.12.2025
+Usługa testowa
+Pozycja usługi syntetycznej 001     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 002     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 003     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 004     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 005     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 006     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 007     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 008     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 009     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 010     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 011     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 012     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 013     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 014     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 015     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 016     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 017     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 018     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 019     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 020     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 021     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 022     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 023     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 024     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 025     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 026     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 027     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 028     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 029     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 030     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 031     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 032     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 033     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 034     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 035     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 036     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 037     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 038     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 039     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 040     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 041     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 042     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 043     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 044     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 045     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 046     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 047     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 048     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 049     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 050     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 051     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 052     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 053     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 054     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 055     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 056     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 057     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 058     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 059     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 060     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 061     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 062     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 063     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 064     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 065     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 066     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 067     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 068     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 069     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 070     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 071     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 072     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 073     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 074     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 075     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 076     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 077     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 078     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 079     1 szt.     0,10 EUR
+Pozycja usługi syntetycznej 080     1 szt.     0,10 EUR
+Wartość netto 10,00 EUR
+Podatek VAT 2,30 EUR
+Suma w EUR 12,30
+Do zapłaty w EUR 12,30
+Termin płatności 15.01.2026
+Dziękujemy za zakup
+Strona 1 z 1
