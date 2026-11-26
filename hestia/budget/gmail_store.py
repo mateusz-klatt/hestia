@@ -753,7 +753,7 @@ class GmailStore(BudgetStore):
     def _invoice(session, owner, item, now):
         invoice = item.invoice
         invoice_number = invoice.invoice_number
-        if (item.document_provenance is not None and invoice.receipt_number
+        if (item.document_provenance is not None and invoice.document_kind == "receipt" and invoice.receipt_number
                 and invoice_number.casefold() == invoice.receipt_number.casefold()):
             invoice_number = None
         receipt = BudgetReceipt(id=str(uuid.uuid4()), owner=owner, raw_shop_name=invoice.issuer, raw_nip=invoice.nip,

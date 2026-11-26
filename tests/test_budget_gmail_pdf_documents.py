@@ -322,6 +322,29 @@ class DocumentPipeline(unittest.TestCase):
         with self.sessions() as session:
             self.assertEqual(len(session.scalars(select(db.BudgetReceipt)).all()), 4)
 
+    def test_validated_invoice_number_matches_bundled_and_separate_receipt_only_documents(self):
+        for index, (bundled, reverse) in enumerate(((True, False), (True, True),
+                                                    (False, False), (False, True))):
+            with self.subTest(bundled=bundled, reverse=reverse):
+                number = f'REC-4{index}'
+                invoice = fixture('stripe_invoice').replace('INV-42', number)
+                receipt = fixture('stripe_receipt').replace('Invoice number: INV-42\n', '').replace('REC-42', number)
+                texts = (receipt, invoice) if reverse else (invoice, receipt)
+                if bundled:
+                    item = self.process(self.message(texts))
+                    self.assertEqual(self.commit(item), (1, 0, True))
+                else:
+                    item = self.process(self.message([texts[0]]))
+                    self.assertEqual(self.commit(item), (1, 0, True))
+                    self.assertEqual(self.commit(self.process(self.message([texts[1]]))), (0, 1, True))
+                with self.sessions() as session:
+                    message = session.get(db.BudgetGmailMessage, (OWNER, item.gmail_id_hmac))
+                    row = session.get(db.BudgetReceipt, message.receipt_id)
+                    self.assertEqual((row.document_kind, row.invoice_number), ('invoice', number))
+                    provenance = json.loads(session.get(db.AppMeta, _document_number_key(row.id)).value)
+                    self.assertTrue(provenance['paid'])
+                    self.assertIsNotNone(provenance['receipt_number_hmac'])
+
     def test_invoice_receipt_both_orders_and_multi_pdf(self):
         for i, order in enumerate((('stripe_invoice', 'stripe_receipt'), ('stripe_receipt', 'stripe_invoice'))):
             # Use a separate seller so both orderings exercise insertion.
