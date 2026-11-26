@@ -122,6 +122,8 @@ class AppStoreItemTests(TestCase):
                 ("Razem: 419,99 zł", BODY, NAME), (BODY, BODY, NAME),
                 (BODY, "Razem: 419,99 zł", NAME), (BODY, "Potwierdzenie bez danych", None),
                 (BODY, BODY.replace(TITLE, "Inna Usługa"), None),
+                (BODY, BODY.replace("419,99 zł", "418,99 zł", 1), None),
+                (BODY.replace("419,99 zł", "418,99 zł", 1), BODY, None),
                 (BODY, BODY.replace("000000000000", "111111111111"), None),
                 (BODY, BODY.replace("14 listopada 2026", "15 listopada 2026"), None),
                 ("Razem: 418,99 zł", BODY, None),

@@ -19,7 +19,7 @@ _CYCLE = re.compile(
     r"|[1-9][0-9]? (?:miesiąc(?:e)?|miesięcy))\)?$", re.IGNORECASE,
 )
 _DEVICE_OWNER = r"[^\W\d_](?:[^\W\d_]|['’-]){0,63}"
-_DEVICE = re.compile(rf"iPhone (?:{_DEVICE_OWNER}|\({_DEVICE_OWNER}\))", re.IGNORECASE)
+_DEVICE = re.compile(rf"\biPhone (?:{_DEVICE_OWNER}|\({_DEVICE_OWNER}\))(?!\w)", re.IGNORECASE)
 _PLAN = re.compile(r"Plan (?:rodzinny|indywidualny|studencki)", re.IGNORECASE)
 _PRODUCT_TEXT = re.compile(r"[^\W\d_](?:[^\W_]|[ +&'’():–-]){1,95}")
 _PRECEDING_ID = re.compile(r"(?:[A-Z0-9-]*[0-9]{5,}[A-Z0-9-]*|[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+)", re.IGNORECASE)
@@ -27,7 +27,16 @@ _PRIVATE_LABEL = re.compile(
     r"\b(?:netto|brutto|VAT|adres|konto|identyfikator|telefon|klient|klienta|imię|nazwisko|email|"
     r"odbiorca|nabywca|PESEL|płatność|zamówieni[ae]|faktura|dokument|mastercard|visa)\b", re.IGNORECASE,
 )
-_ADJUSTMENT = re.compile(r"\b(?:rabat\w*|zniżk\w*|saldo|zwrot\w*|discount|credit|kupon\w*)\b", re.IGNORECASE)
+_ADJUSTMENT = re.compile(
+    r"\b(?:rabat\w*|zniżk\w*|saldo|discount|credit|kupon\w*|coupon\w*|korekt\w*|faktura korygująca)\b",
+    re.IGNORECASE,
+)
+_REFUND = re.compile(r"\b(?:zwrot\w*|refund\w*)\b", re.IGNORECASE)
+_FOOTER_REFUND = re.compile(
+    r"^(?:zwrot|refund)\s*[:.]?$|^(?:zwrot (?:za|środków|płatności|pieniędzy)|refund (?:for|of))\b"
+    r"|\b(?:zwrócono|zwróciliśmy|dokonano zwrotu|przyznano zwrot|refunded|refund (?:issued|processed))\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def apple_document_number(text):
@@ -43,7 +52,7 @@ def _price(line, currency):
 
 
 def _safe_product_text(line):
-    return (_PRODUCT_TEXT.fullmatch(line) and not _PRIVATE_LABEL.search(line)
+    return (_PRODUCT_TEXT.fullmatch(line) and not _PRIVATE_LABEL.search(line) and not _DEVICE.search(line)
             and sum(char.isdigit() for char in line) <= 4 and redact_digit_field(line) == line
             and redact_pan(line) == line)
 
@@ -89,10 +98,12 @@ def _item_prices(detail, index, currency):
     return price, tax, end
 
 
-def apple_subscription_lines(text, total, currency):
-    """Return only a complete set of safe, reconciled lines; unfamiliar layouts keep their summary."""
+def inspect_apple_subscription_items(text, total, currency):
+    """An absent subscription section returns None. An unrecognized one returns an empty tuple."""
     lines = [line for line in _normalized_invoice_lines(text) if line]
     labels = [line.casefold().removesuffix(":").rstrip() for line in lines]
+    if not any(label.startswith(("odnowienie", "zawiera podatek vat")) for label in labels):
+        return None
     if labels.count("kwota netto") != 1:
         return ()
     summary = labels.index("kwota netto")
@@ -130,9 +141,19 @@ def apple_subscription_lines(text, total, currency):
     # An unaccounted price or discount might belong to another purchase.
     if not items or item_vat != vat:
         return ()
-    if any(_ADJUSTMENT.search(line) or (i not in consumed and _AMOUNT.search(line)) for i, line in enumerate(detail)):
+    if any(_ADJUSTMENT.search(line) or _REFUND.search(line) or (i not in consumed and _AMOUNT.search(line))
+           for i, line in enumerate(detail)):
+        return ()
+    # The normal footer can offer help requesting returns. A posted adjustment
+    # or a price after the card charge makes the item list ambiguous.
+    footer = "\n".join(lines[summary + 6:])
+    if _AMOUNT.search(footer) or _ADJUSTMENT.search(footer) or _FOOTER_REFUND.search(footer):
         return ()
     try:
         return tuple(validate_confirm_lines(items, total))
     except ReceiptError:
         return ()
+
+
+def apple_subscription_lines(text, total, currency):
+    return inspect_apple_subscription_items(text, total, currency) or ()

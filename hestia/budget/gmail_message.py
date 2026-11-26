@@ -15,12 +15,12 @@ import re
 from zoneinfo import ZoneInfo
 
 from .gmail_address import canonical_mailbox
-from .gmail_apple import apple_document_number, apple_subscription_lines
+from .gmail_apple import apple_document_number, inspect_apple_subscription_items
 from .gmail_client import GmailError
 from .gmail_document import ImportedDocument, extract_document
 from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
 from .gmail_payment import _payee_key, inspect_payment
-from .gmail_shop_items import extract_shop_items
+from .gmail_shop_items import inspect_shop_items
 from .gmail_store import (DOCUMENT_NUMBER_DOMAIN, DOCUMENT_RECEIPT_DOMAIN, GATEWAY_REF_DOMAIN, ORDER_REFERENCE_DOMAIN, PAYMENT_PAYEE_DOMAIN, PAYMENT_SENDER_DOMAIN,
                           RFC_MESSAGE_DOMAIN, PendingMessage, PendingPayment, digest, normalize_parse_failed_reason)
 from .gmail_trust import (_FORWARD_MARKERS, _INVALID_FORWARD, _forward_sender, _forwarded_original, _inline_forward,
@@ -424,10 +424,10 @@ class GmailMessageProcessor:
             return pending, False, False
         reference = payment.order_reference
         apple_number = apple_document_number(text) if apple else None
-        items = ()
+        item_block = None
         if not sender.gateway:
-            extract_items = apple_subscription_lines if apple else extract_shop_items
-            items = extract_items(text, payment.total_amount, payment.currency)
+            inspect_items = inspect_apple_subscription_items if apple else inspect_shop_items
+            item_block = inspect_items(text, payment.total_amount, payment.currency)
         provenance = PendingPayment(
             replace(payment, order_reference=None), receipt_date,
             digest(secret, PAYMENT_SENDER_DOMAIN, sender.sender),
@@ -444,7 +444,7 @@ class GmailMessageProcessor:
             blik_ref_hmac=(digest(secret, GATEWAY_REF_DOMAIN, inspected.blik_ref)
                            if inspected.blik_ref is not None else None),
             card_last4=inspected.card_last4,
-            items=items,
+            items=item_block or (), item_block_rejected=item_block == (),
             apple_document_hmac=digest(secret, DOCUMENT_NUMBER_DOMAIN, apple_number) if apple_number else None,
         )
         return replace(pending, outcome="imported", payment=provenance,
@@ -468,7 +468,8 @@ class GmailMessageProcessor:
             alternate = pending
         first, second = result.payment, alternate.payment
         items = ()
-        if (second is not None and first.fields.total_amount == second.fields.total_amount
+        if (second is not None and not (first.item_block_rejected or second.item_block_rejected)
+                and first.fields.total_amount == second.fields.total_amount
                 and first.fields.currency == second.fields.currency):
             evidence = ((first.card_last4, second.card_last4), (first.order_reference_hmac, second.order_reference_hmac),
                         (first.apple_document_hmac, second.apple_document_hmac),

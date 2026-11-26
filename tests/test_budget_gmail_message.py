@@ -146,6 +146,9 @@ class GmailMessageProcessorTests(unittest.TestCase):
         for plain, html, item_count, renders in (
                 (SHOP_TABLE, SHOP_TABLE, 2, 2),
                 (SHOP_TABLE, SHOP_TABLE.replace("Blok rysunkowy", "Szkicownik"), 0, 2),
+                (SHOP_TABLE, SHOP_TABLE.replace("3,40 zł", "3,39 zł"), 0, 2),
+                (SHOP_TABLE.replace("3,40 zł", "3,39 zł"), SHOP_TABLE, 0, 1),
+                (SHOP_TABLE, "Łącznie: 14,30 zł", 2, 2),
                 ("Łącznie: 14,30 zł", SHOP_TABLE, 0, 1)):
             with self.subTest(item_count=item_count, renders=renders):
                 message = self._payment_email(plain)
@@ -159,7 +162,7 @@ class GmailMessageProcessorTests(unittest.TestCase):
     def test_payment_gateway_cannot_supply_shop_items(self):
         self.settings.payment_senders = (PaymentSender("@gateway.example.test", "Example Gateway", gateway=True),)
         message = _email("shop@gateway.example.test", SHOP_TABLE)
-        with patch.object(gmail_message, "extract_shop_items", side_effect=AssertionError("Unexpected shop parser")):
+        with patch.object(gmail_message, "inspect_shop_items", side_effect=AssertionError("Unexpected shop parser")):
             pending = self._process(_metadata(message), _raw(message))
         self.assertEqual((pending.outcome, pending.payment.fields.total_amount, pending.payment.items),
                          ("imported", "14.3", ()))

@@ -51,10 +51,11 @@ def _product(lines):
                 discount_amount="0", net_line_total=str(total))
 
 
-def extract_shop_items(text: str, total: str, currency: str) -> tuple[dict, ...]:
-    """Return complete validated rows, or an empty tuple for an unrecognized or ambiguous order."""
-    if (currency != "PLN" or not isinstance(text, str) or len(text) > MAX_TEXT_BYTES
-            or not _HAS_CODE.search(text) or len(text.encode("utf-8", "replace")) > MAX_TEXT_BYTES):
+def inspect_shop_items(text: str, total: str, currency: str) -> tuple[dict, ...] | None:
+    """None indicates no recognized block. An empty tuple indicates a block that failed validation."""
+    if not isinstance(text, str) or len(text) > MAX_TEXT_BYTES or not _HAS_CODE.search(text):
+        return None
+    if currency != "PLN" or len(text.encode("utf-8", "replace")) > MAX_TEXT_BYTES:
         return ()
     lines = [line for line in _normalized_invoice_lines(text) if line]
     labels = [line.casefold() for line in lines]
@@ -92,3 +93,7 @@ def extract_shop_items(text: str, total: str, currency: str) -> tuple[dict, ...]
         return tuple(validate_confirm_lines(items, receipt_total))
     except (AnalyticsError, ReceiptError):
         return ()
+
+
+def extract_shop_items(text: str, total: str, currency: str) -> tuple[dict, ...]:
+    return inspect_shop_items(text, total, currency) or ()

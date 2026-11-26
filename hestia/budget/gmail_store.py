@@ -124,6 +124,7 @@ class PendingPayment:
     items: tuple[dict, ...] = ()
     # Transient correlation of the two MIME alternatives; never persisted.
     apple_document_hmac: str | None = None
+    item_block_rejected: bool = False
 
 
 @dataclass(frozen=True, repr=False)
