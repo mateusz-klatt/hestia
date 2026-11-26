@@ -58,6 +58,14 @@ _ITEM_GROSS_TAIL = re.compile(
     rf"(?P<gross>{_NUMBER})\s*(?:PLN\s*)?(?P<ptu>[A-G])?\Z",
     re.IGNORECASE | re.ASCII,
 )
+# OCR sometimes reads the piece count 1 as I or the multiplication sign as =.
+# Only consider these alternatives when both complete, two-decimal prices remain.
+_OCR_ITEM_PRICE = r"[0-9]{1,9}[.,][0-9]{2}"
+_OCR_ITEM_TAIL = re.compile(
+    r"(?:I\s*szt\s*[x×*=]|(?P<quantity>[1-9][0-9]{0,8})\s*szt\s*=)\s*"
+    rf"(?P<unit_price>{_OCR_ITEM_PRICE})\s+(?P<gross>{_OCR_ITEM_PRICE})\s*(?:PLN\s*)?(?P<ptu>[A-G])?\Z",
+    re.IGNORECASE | re.ASCII,
+)
 _NAMED_UNIT_TAIL = re.compile(
     rf"(?P<quantity>{_NUMBER})\s*(?P<unit>{_UNITS})"
     rf"(?:\s*[x×*]\s*(?P<unit_price>{_NUMBER})\s*(?:=\s*)?)?"
@@ -74,7 +82,15 @@ _CALCULATION = re.compile(
     rf"(?P<unit_price>{_NUMBER})\s*(?:=\s*)?(?P<gross>{_NUMBER})\s*(?:PLN\s*)?(?P<ptu>[A-G])?$",
     re.IGNORECASE | re.ASCII,
 )
-_DISCOUNT = re.compile(rf"^\s*(?:RABAT|OPUST)\b[^0-9+-]*(?P<amount>{_NUMBER})", re.IGNORECASE | re.ASCII)
+_DISCOUNT_PREFIX = re.compile(r"^\s*(?:RABAT|OPUST)\b", re.IGNORECASE | re.ASCII)
+# The product name may contain a size or part number. Only the price at the
+# end of the line, optionally followed by the currency or PTU code, is a discount.
+_DISCOUNT_AMOUNT = re.compile(
+    rf"(?<![^\s:])(?P<amount>{_NUMBER})\s*(?:(?:PLN|Z[Łł])\s*)?(?:[A-G])?\Z",
+    re.IGNORECASE | re.ASCII,
+)
+_REFUND_WORD = re.compile(r"\bzwrot(?:u|owi|em|y|ow|om|ami|ach)?\b")
+_MASTERCARD_PAYMENT = re.compile(r"^[ \t]*platnosc(?:[ \t]+|[ \t]*:[ \t]*)mastercard\b", re.MULTILINE)
 _UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.ASCII)
@@ -874,7 +890,21 @@ def _named_unit_match(value):
 
 
 def _item_match(value):
-    return _tail_match(value, (_ITEM_QTY_TAIL, _ITEM_GROSS_TAIL))
+    match = _tail_match(value, (_ITEM_QTY_TAIL, _ITEM_GROSS_TAIL))
+    if match is not None and match["quantity"] is not None:
+        return match
+    ocr = _tail_match(value, (_OCR_ITEM_TAIL,))
+    if ocr is None:
+        return match
+    quantity = ocr["quantity"] or "1"
+    unit_cents = int(ocr["unit_price"].replace(",", "").replace(".", ""))
+    gross_cents = int(ocr["gross"].replace(",", "").replace(".", ""))
+    if int(quantity) * unit_cents != gross_cents:
+        return match
+    return _FieldMatch({
+        "name": ocr["name"], "quantity": quantity, "unit": "szt",
+        "unit_price": ocr["unit_price"], "gross": ocr["gross"], "ptu": ocr["ptu"],
+    })
 
 
 def _parse_lines(lines):
@@ -883,7 +913,8 @@ def _parse_lines(lines):
         value = " ".join(raw.split())
         if not value:
             continue
-        discount = _DISCOUNT.match(value)
+        discount_prefix = _DISCOUNT_PREFIX.match(value)
+        discount = _DISCOUNT_AMOUNT.search(value[discount_prefix.end():]) if discount_prefix else None
         basket = any(marker in fold_text(value) for marker in ("kupon", "bon ", "rabat cal", "rabat na "))
         if discount and not basket and result and result[-1]["line_kind"] == "item":
             amount = _decimal(discount["amount"].replace("+", ""))
@@ -966,7 +997,7 @@ def parse_receipt(text):
             if amounts:
                 total = _decimal(amounts[-1])
     key = fold_text(text)
-    has_card = "karta" in key or "platnicza" in key or "paypass" in key
+    has_card = "karta" in key or "platnicza" in key or "paypass" in key or _MASTERCARD_PAYMENT.search(key) is not None
     has_cash = "gotowka" in key
     payment = "mixed" if has_card and has_cash else "blik" if "blik" in key else "card" if has_card else "cash" if has_cash else "unknown"
     parsed_lines = _parse_lines(lines)
@@ -974,7 +1005,7 @@ def parse_receipt(text):
         _bounded_sum(line["net_line_total"] for line in parsed_lines), negate_money(total)))
     return {
         "raw_shop_name": shop_name, "raw_nip": nip, "chain_key": chain_for(shop_name, nip),
-        "receipt_kind": "refund" if "zwrot" in key else "purchase", "receipt_date": receipt_date,
+        "receipt_kind": "refund" if _REFUND_WORD.search(key) else "purchase", "receipt_date": receipt_date,
         "receipt_time": receipt_time, "total_amount": total, "currency": "PLN" if total is not None else None,
         "payment_method": payment, "lines": parsed_lines,
         "math_delta": math_delta,
