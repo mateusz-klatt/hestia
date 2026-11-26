@@ -32,7 +32,8 @@ _GENERIC_SELLER = re.compile(r"^(?:billing|(?:summary|invoice|receipt|statement|
 _LABELS = {
     "invoice": r"faktura(?:\s+vat)?\s+nr\.?|(?:faktura\s+)?numer faktury|invoice number|billing number",
     "receipt": r"receipt number|paragon(?:\s+nr\.?)?",
-    "issue": r"data wystawienia(?: faktury)?|data faktury|date of issue|date issued|date paid|document date",
+    "issue": r"data wystawienia(?: faktury)?|data faktury|date of issue|date issued|document date",
+    "paid_date": r"date paid",
     "due": r"termin płatności|date due|payment due on",
     "seller": r"sprzedawca|from(?=\s*:?\s*$)",
     "issuer": r"faktura wystawiona przez",
@@ -264,13 +265,17 @@ def extract_document(text: str, *, merchant: str) -> ImportedDocument | None:
     number = number or receipt_number
     if number is None:
         return None
+    kind = "receipt" if _RECEIPT_HEADING.search(joined) or (
+        not fields.get("invoice") and (receipt_number or _PARAGON.search(joined))) else "invoice"
     dates = {}
-    for key in ("issue", "due"):
+    for key in ("issue", "due", "paid_date"):
         values = fields.get(key, [])
         parsed = {_document_date(value) for value in values}
         if values and (None in parsed or len(parsed) != 1):
             return None
         dates[key] = next(iter(parsed)).isoformat() if parsed else None
+    if dates["issue"] is None and kind == "receipt":
+        dates["issue"] = dates["paid_date"]
     if dates["issue"] is None:
         return None
     total = None
@@ -317,8 +322,6 @@ def extract_document(text: str, *, merchant: str) -> ImportedDocument | None:
             continue
         nips.add(parsed)
     nip = next(iter(nips)) if len(nips) == 1 and None not in nips else None
-    paid = bool(receipt_number or zero_due or _PAID.search(joined))
-    kind = "receipt" if _RECEIPT_HEADING.search(joined) or (
-        not fields.get("invoice") and (receipt_number or _PARAGON.search(joined))) else "invoice"
+    paid = bool(receipt_number or zero_due or dates["paid_date"] or _PAID.search(joined))
     return ImportedDocument(seller, nip, number, canonical_money(str(total[0])), total[1], dates["issue"],
                             dates["due"], kind, paid, receipt_number)

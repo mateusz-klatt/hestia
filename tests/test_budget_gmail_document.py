@@ -137,6 +137,21 @@ Zapłacono: 12,30 zł
         self.assertEqual(extract_document(text.replace('Credited total $2.00', 'Credited total $999.00'),
                                           merchant='Vendor Test').amount, '11.07')
 
+    def test_payment_date_is_separate_from_document_issue_date(self):
+        invoice = 'Vendor Example\nInvoice number INV-42\nDate of issue November 3, 2026\nTotal €123.00'
+        for heading in ('', 'Receipt\n'):
+            for paid_date in ('November 3, 2026', 'November 4, 2026'):
+                with self.subTest(heading=heading, paid_date=paid_date):
+                    doc = extract_document(heading + invoice + '\nDate paid ' + paid_date, merchant='Vendor')
+                    self.assertEqual((doc.issue_date, doc.paid), ('2026-11-03', True))
+                    self.assertEqual(doc.document_kind, 'receipt' if heading else 'invoice')
+        undated = invoice.replace('Date of issue November 3, 2026\n', '') + '\nDate paid November 4, 2026'
+        self.assertIsNone(extract_document(undated, merchant='Vendor'))
+        self.assertEqual(extract_document('Receipt\n' + undated, merchant='Vendor').issue_date, '2026-11-04')
+        for extra in ('\nDate paid invalid', '\nDate paid November 4, 2026\nDate paid November 5, 2026'):
+            with self.subTest(extra=extra):
+                self.assertIsNone(extract_document(invoice + extra, merchant='Vendor'))
+
     def test_g3_cloud_office_headers_and_label_currency(self):
         text = fixture('cloud_office_pl')
         self.assertGreater(text.index('Do zapłaty w EUR'), 3000)
