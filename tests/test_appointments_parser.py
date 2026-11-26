@@ -1,16 +1,20 @@
 """Unit tests for the pure CMP /GetScheduler response parser."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest import TestCase
 
 from hestia.appointments import (
     WARSAW_TZ,
+    BookedAppointment,
     CmpParseError,
+    WatchCriteria,
+    diff_slots,
     parse_cmp_scheduler,
     parse_cmp_scheduler_bytes,
 )
+from hestia.appointments.config import parse_warsaw_datetime
 
 FIXTURES = Path(__file__).parent / "fixtures" / "appointments"
 
@@ -142,6 +146,24 @@ class CmpParserTests(TestCase):
         self.assertEqual(summer.specialty_id, "spec-default")
         self.assertEqual(fold0.start.astimezone(timezone.utc), datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc))
         self.assertEqual(fold1.start.astimezone(timezone.utc), datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc))
+
+        # Booked at 02:15+01:00 (01:15Z, second post-DST occurrence): 02:30+02:00 (00:30Z) is
+        # earlier in absolute time and notifiable; 02:30+01:00 (01:30Z) is later and excluded.
+        fold_criteria = WatchCriteria(
+            watch_id="dst-fold-watch",
+            provider="cmp",
+            specialty_id="spec-default",
+            date_from=date(2026, 10, 25),
+            date_to=date(2026, 10, 25),
+            booked_slot=BookedAppointment(
+                start=parse_warsaw_datetime("2026-10-25T02:15:00+01:00", require_offset=True),
+            ),
+            only_better_than_booked=True,
+        )
+        fold_diff = diff_slots([], [fold0, fold1], fold_criteria)
+        self.assertEqual(fold_diff.new_slots, (fold0, fold1))
+        self.assertEqual(fold_diff.better_slots, (fold0,))
+        self.assertEqual(fold_diff.notifiable_slots, (fold0,))
 
     def test_missing_fields_malformed_values_and_labels(self) -> None:
         payload = {

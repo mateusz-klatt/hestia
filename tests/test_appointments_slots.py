@@ -216,6 +216,10 @@ class SlotDiffTests(TestCase):
                 AppointmentSlot(**base, end=datetime(2026, 12, 12, 10, 20, tzinfo=WARSAW_TZ)),
             ),
             (
+                AppointmentSlot(**base, end=datetime(2026, 12, 12, 10, 30, tzinfo=WARSAW_TZ)),
+                AppointmentSlot(**base, end=datetime(2026, 12, 12, 9, 30, tzinfo=timezone.utc)),
+            ),
+            (
                 AppointmentSlot(**base, telemedicine=False),
                 AppointmentSlot(**base, telemedicine=True),
             ),
@@ -234,6 +238,16 @@ class SlotDiffTests(TestCase):
                 ba = dedupe_and_sort([right, left])
                 self.assertEqual(len(ab), 1)
                 self.assertEqual(ab, ba)
+                self.assertEqual(ab[0].start.isoformat(), ba[0].start.isoformat())
+                self.assertEqual(str(ab[0].start.tzinfo), str(ba[0].start.tzinfo))
+                self.assertEqual(
+                    None if ab[0].end is None else ab[0].end.isoformat(),
+                    None if ba[0].end is None else ba[0].end.isoformat(),
+                )
+                self.assertEqual(
+                    None if ab[0].end is None else str(ab[0].end.tzinfo),
+                    None if ba[0].end is None else str(ba[0].end.tzinfo),
+                )
 
         # Equivalent UTC/Warsaw representations match across previous and current snapshots.
         diff = diff_slots([dup_b], [dup_a, dup_b, other], self.criteria)
