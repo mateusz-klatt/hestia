@@ -152,6 +152,22 @@ Zapłacono: 12,30 zł
             with self.subTest(extra=extra):
                 self.assertIsNone(extract_document(invoice + extra, merchant='Vendor'))
 
+    def test_receipt_number_identifies_receipt_without_standalone_heading(self):
+        base = 'Example Vendor\nReceipt number REC-42\nInvoice number INV-42\nAmount paid EUR 123'
+        for label in ('Date of issue', 'Date paid'):
+            with self.subTest(label=label):
+                doc = extract_document(base + '\n' + label + ' November 4, 2026', merchant='Vendor')
+                self.assertEqual((doc.document_kind, doc.issue_date, doc.receipt_number),
+                                 ('receipt', '2026-11-04', 'REC-42'))
+
+    def test_explicit_inline_from_seller_retains_nip_and_respects_buyer_boundary(self):
+        base = 'Invoice number X1\nDate issued 2026-11-03\nTotal EUR 10\n'
+        seller = 'From: Actual Seller\nNIP: 8567346215'
+        doc = extract_document(base + seller, merchant='Configured Vendor')
+        self.assertEqual((doc.issuer, doc.nip), ('Actual Seller', '8567346215'))
+        doc = extract_document(base + 'Bill to: Buyer\n' + seller, merchant='Configured Vendor')
+        self.assertEqual((doc.issuer, doc.nip), ('Configured Vendor', None))
+
     def test_g3_cloud_office_headers_and_label_currency(self):
         text = fixture('cloud_office_pl')
         self.assertGreater(text.index('Do zapłaty w EUR'), 3000)

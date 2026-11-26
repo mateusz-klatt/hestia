@@ -35,7 +35,7 @@ _LABELS = {
     "issue": r"data wystawienia(?: faktury)?|data faktury|date of issue|date issued|document date",
     "paid_date": r"date paid",
     "due": r"termin płatności|date due|payment due on",
-    "seller": r"sprzedawca|from(?=\s*:?\s*$)",
+    "seller": r"sprzedawca|from(?=\s*:|\s*$)",
     "issuer": r"faktura wystawiona przez",
     "buyer": r"dane nabywcy|nabywca|odbiorca|kupujący|billed to|bill to|sold to|customer",
     "nip": r"nip",
@@ -265,8 +265,8 @@ def extract_document(text: str, *, merchant: str) -> ImportedDocument | None:
     number = number or receipt_number
     if number is None:
         return None
-    kind = "receipt" if _RECEIPT_HEADING.search(joined) or (
-        not fields.get("invoice") and (receipt_number or _PARAGON.search(joined))) else "invoice"
+    kind = "receipt" if receipt_number or _RECEIPT_HEADING.search(joined) or (
+        not fields.get("invoice") and _PARAGON.search(joined)) else "invoice"
     dates = {}
     for key in ("issue", "due", "paid_date"):
         values = fields.get(key, [])

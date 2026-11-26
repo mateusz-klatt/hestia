@@ -92,6 +92,7 @@ The receipt date is the issue date. The email date is only a cross-check: if the
 - **Dedupe:**
   - the RFC Message-ID first (existing);
   - then the same owner + seller key (`_payee_key`) + HMAC of the `invoice_number` (new AppMeta provenance, `budget_gmail_document_number:<receipt_id>`) = duplicate;
+  - conservative rollout rule: a matching number HMAC for the same owner but a different seller is withheld with `multiple_documents`, rather than importing a second row. This can reject unrelated sellers' colliding local invoice numbers; it is an intentional release limitation;
   - a Stripe-style "Receipt" PDF for an invoice number already imported marks that row paid (provenance only) and is `skipped_duplicate`. The reverse order works too: the invoice arrives after the receipt and becomes skipped_duplicate, with the paid flag kept.
   - A single email with two PDFs for the same number (invoice + receipt) produces ONE receipt row.
 - **Evidence:** a newly imported document runs v1f's reverse attachment (`_attach_gateway_for_document`), so an already-imported gateway row for the same purchase attaches to it. The v1f rules are unchanged: exactly one candidate, never re-point confirmed rows.
@@ -132,3 +133,5 @@ The labelled extractor recognizes `Do zapłaty razem` and `Razem do zapłaty` at
 Bare labels followed by another field or known table header are ignored. A `Billing Number` is also a document marker; generic headings such as `Billing Summary` are not seller names. EU VAT identifiers are ignored when choosing the seller NIP. An unsafe or overlong implicit seller heading falls back to the configured merchant. A trusted issuer template without an issue date is reused by the existing invoice path after checking the other PDF parts; generic document extraction still requires an issue date.
 
 `Date paid` is payment provenance, separate from the issue date. A later payment date does not conflict with `Date of issue` or `Date issued`, and marks the document paid. A receipt without an issue-date label may use its labelled payment date as its receipt date; an invoice still requires an issue date. Invalid or conflicting payment dates reject.
+
+A validated `Receipt number` identifies a receipt even without a standalone receipt heading. Explicit `From: Seller` fields are accepted alongside bare `From` labels, with the buyer boundary retained. When an imported receipt is promoted by a matching invoice, the validated invoice number and issue date take precedence along with its due date and seller NIP; confirmed owner-edited rows keep their fields.

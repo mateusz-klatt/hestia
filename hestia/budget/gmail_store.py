@@ -732,6 +732,8 @@ class GmailStore(BudgetStore):
                 if (receipt.status == "imported" and receipt.document_kind == "receipt"
                         and item.invoice.document_kind == "invoice"):
                     receipt.document_kind = "invoice"
+                    receipt.invoice_number = item.invoice.invoice_number
+                    receipt.receipt_date = item.invoice.issue_date
                     receipt.due_date = item.invoice.due_date
                     receipt.raw_nip = item.invoice.nip
                     receipt.version += 1
