@@ -1127,7 +1127,7 @@ class MonthlyBudgetProjectionTests(ProjectionCase):
         })
         self.assertEqual(result["summary"]["start_budget"], "5000")
 
-    def test_monthly_budget_card_fallback_requires_confirmed_account_kind(self):
+    def test_monthly_budget_purchase_is_usable_before_account_kind_confirmation(self):
         self.add_transaction("a", "card-purchase", amount="125.25", booking_date="2026-11-10",
                              transaction_date="2026-11-10")
         with self.sessions.begin() as session:
@@ -1143,7 +1143,7 @@ class MonthlyBudgetProjectionTests(ProjectionCase):
         self.assertEqual(unconfirmed["summary"]["spent"], "125.25")
         self.assertEqual(confirmed["summary"], unconfirmed["summary"])
         self.assertEqual((unconfirmed["coverage"]["pending_transfer_rows"], unconfirmed["coverage"]["provisional"]),
-                         (1, True))
+                         (0, False))
         self.assertEqual((confirmed["coverage"]["pending_transfer_rows"], confirmed["coverage"]["provisional"]),
                          (0, False))
 
