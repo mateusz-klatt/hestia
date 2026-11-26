@@ -11,7 +11,7 @@ import unicodedata
 import uuid
 
 from pydantic import TypeAdapter, ValidationError
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, tuple_
 from sqlalchemy.exc import IntegrityError
 
 from .. import api_contract
@@ -22,6 +22,7 @@ from ..db import BudgetCategoryTranslation as CategoryTranslation
 from ..db import BudgetCategoryLimit as CategoryLimitRow
 from ..db import BudgetMortgagePayment as MortgagePaymentRow, BudgetMortgageSchedule as MortgageScheduleRow
 from ..db import BudgetConnection as Connection, BudgetRule as Rule, BudgetRulePreview as Preview
+from ..db import BudgetReceiptLinkGroup as ReceiptLinkGroup
 from ..db import BudgetTransaction as Transaction, BudgetTransactionMetadata as Metadata
 from ..db import BudgetTransferDecision as Decision, BudgetTransferLeg as Leg
 from .analytics_core import (AnalyticsError, KINDS, COUNTERPARTY_RULE_PREFIX, clean_one_off_label, compare_money,
@@ -1128,6 +1129,18 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             else:
                 debit_fp, credit_fp = row.debit_fingerprint, row.credit_fingerprint
                 source = row.source
+            if action == "accept":
+                legs = (
+                    (debit_row.account_id, debit_row.entry_reference),
+                    (credit_row.account_id, credit_row.entry_reference),
+                )
+                # Both group statuses reserve the transaction.
+                reservation = select(ReceiptLinkGroup.id).where(
+                    ReceiptLinkGroup.owner == owner,
+                    tuple_(ReceiptLinkGroup.account_id, ReceiptLinkGroup.entry_reference).in_(legs),
+                ).limit(1)
+                if session.scalar(reservation) is not None:
+                    raise AnalyticsError("budget_analytics_leg_reserved", 409)
             before = None if row is None else _dict(row, _DECISION_FIELDS)
             status = {"accept": "accepted", "reject": "rejected", "undo": "undone"}[action]
             if row is not None and (row.status, row.debit_fingerprint, row.credit_fingerprint, row.source) == (status, debit_fp, credit_fp, source):

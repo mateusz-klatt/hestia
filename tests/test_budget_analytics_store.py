@@ -14,7 +14,7 @@ import uuid
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
-from sqlalchemy import select
+from sqlalchemy import delete, event, select
 
 from hestia import db
 from hestia.budget.analytics_core import AnalyticsError, financial_fingerprint
@@ -514,6 +514,76 @@ class TransferTests(AnalyticsCase):
                 self.store.decide_transfer("owner", decision_id=accepted["id"], action="undo", expected_version=1)
         self.assertEqual(len(self.rows(db.BudgetTransferLeg)), 2)
         self.assertEqual(self.rows(db.BudgetTransferDecision)[0].status, "accepted")
+
+    def test_receipt_group_reserves_either_leg_until_it_is_unlinked(self):
+        tables = [model.__table__ for model in (
+            db.BudgetReceipt, db.BudgetReceiptLinkGroup, db.BudgetReceiptLinkMember,
+            db.BudgetTransaction, db.BudgetTransferDecision, db.BudgetTransferLeg, db.BudgetAnalyticsAudit,
+        )]
+
+        def state():
+            with self.engine.connect() as connection:
+                return [connection.execute(select(table).order_by(*table.primary_key.columns)).all() for table in tables]
+
+        def assert_reserved(**transfer):
+            before = state()
+            writes = []
+
+            def record_write(_connection, _cursor, statement, _parameters, context, _executemany):
+                if context.isinsert or context.isupdate or context.isdelete:
+                    writes.append(statement)
+
+            event.listen(self.engine, "before_cursor_execute", record_write)
+            try:
+                with self.assertRaises(AnalyticsError) as reserved:
+                    self.decide(**transfer)
+            finally:
+                event.remove(self.engine, "before_cursor_execute", record_write)
+            self.assertEqual((reserved.exception.code, reserved.exception.status), ("budget_analytics_leg_reserved", 409))
+            self.assertEqual(writes, [])
+            self.assertEqual(state(), before)
+
+        for status in ("confirmed", "needs_review"):
+            for direction in ("DBIT", "CRDT"):
+                with self.subTest(status=status, direction=direction):
+                    group_id = f"group-{status}-{direction}"
+                    debit, credit = ("a", f"{group_id}-debit"), ("b", f"{group_id}-credit")
+                    self.add_transaction(*debit, amount="100", booking_date="2026-11-30")
+                    self.add_transaction(*credit, amount="100", credit_debit_indicator="CRDT", booking_date="2026-12-01")
+                    account, reference = debit if direction == "DBIT" else credit
+                    with self.sessions.begin() as session:
+                        session.add(db.BudgetReceiptLinkGroup(
+                            id=group_id, owner="owner", account_id=self.accounts[account], entry_reference=reference,
+                            currency="PLN", tx_amount="100", credit_debit_indicator=direction, status=status,
+                            linked_fingerprint=self.fingerprint(account, reference), linked_evidence="{}",
+                            version=1, created_at=self.now, updated_at=self.now,
+                        ))
+                        receipt_ids = [f"{group_id}-{index}" for index in range(2)]
+                        for receipt_id, amount in zip(receipt_ids, ("40", "60")):
+                            session.add(db.BudgetReceipt(
+                                id=receipt_id, owner="owner", status=status, source_kind="attachment",
+                                receipt_date="2026-11-30", currency="PLN", total_amount=amount, payment_method="card",
+                                receipt_kind="purchase" if direction == "DBIT" else "refund",
+                                version=1, created_at=self.now, updated_at=self.now,
+                            ))
+                        session.flush()
+                        session.add_all(db.BudgetReceiptLinkMember(group_id=group_id, receipt_id=receipt_id, owner="owner")
+                                        for receipt_id in receipt_ids)
+
+                    assert_reserved(debit=debit, credit=credit)
+                    rejected = self.decide(debit=debit, credit=credit, action="reject")
+                    self.assertEqual((rejected["status"], rejected["version"]), ("rejected", 1))
+                    retry = dict(debit=debit, credit=credit, decision_id=rejected["id"], expected_version=1)
+                    assert_reserved(**retry)
+
+                    with self.sessions.begin() as session:
+                        session.execute(delete(db.BudgetReceiptLinkMember).where(db.BudgetReceiptLinkMember.group_id == group_id))
+                        session.delete(session.get(db.BudgetReceiptLinkGroup, group_id))
+                    accepted = self.decide(**retry)
+                    self.assertEqual((accepted["status"], accepted["version"]), ("accepted", 2))
+                    self.assertEqual({(row.account_id, row.entry_reference) for row in self.rows(db.BudgetTransferLeg)
+                                      if row.decision_id == rejected["id"]},
+                                     {(self.accounts[account], reference) for account, reference in (debit, credit)})
 
     def test_two_simultaneous_accepts_have_only_one_atomic_winner(self):
         from concurrent.futures import ThreadPoolExecutor
