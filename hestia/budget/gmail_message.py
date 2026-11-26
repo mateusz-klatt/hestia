@@ -19,7 +19,7 @@ from .gmail_apple import apple_document_number, inspect_apple_subscription_items
 from .gmail_client import GmailError
 from .gmail_document import ImportedDocument, extract_document
 from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
-from .gmail_payment import _payee_key, inspect_payment
+from .gmail_payment import _payee_key, confirms_order_cancellation, inspect_payment
 from .gmail_shop_items import inspect_shop_items
 from .gmail_store import (DOCUMENT_NUMBER_DOMAIN, DOCUMENT_RECEIPT_DOMAIN, GATEWAY_REF_DOMAIN, ORDER_REFERENCE_DOMAIN, PAYMENT_PAYEE_DOMAIN, PAYMENT_SENDER_DOMAIN,
                           RFC_MESSAGE_DOMAIN, PendingMessage, PendingPayment, digest, normalize_parse_failed_reason)
@@ -504,6 +504,14 @@ class GmailMessageProcessor:
                 return result
         return failure
 
+    def _cancelled_order(self, message, pending, sender, *, inline_outer=None):
+        if not any(confirms_order_cancellation(str(subject)) for subject in message.get_all("Subject", ())):
+            return None
+        if sender is not None and sender.gateway:
+            # A gateway can still report a correlated terminal failure for an earlier registration.
+            return self._payment(message, pending, sender, inline_outer=inline_outer)
+        return pending
+
     def _parse(self, raw, pending):
         message = BytesParser(policy=policy.default).parsebytes(raw)
         if self._trust(message.raw_items()) != pending.trust_path:
@@ -529,11 +537,14 @@ class GmailMessageProcessor:
                 if _forwarded_original(nested, render_html) is not None:
                     return replace(pending, outcome="skipped_non_receipt")
                 return self._manual_forward(message, inner, pending)
+            sender = payment_sender_for(inner.raw_items(), payment_senders)
+            inline_outer = None if _has_rfc822_attachment(message) else message
+            if cancelled := self._cancelled_order(inner, pending, sender, inline_outer=inline_outer):
+                return cancelled
             manual = _forward_sender(inner) not in self.settings.sender_allowlist
             document_failure = pending
             document_sender = payment_sender_for(inner.raw_items(), document_senders)
             if document_sender is not None:
-                inline_outer = None if _has_rfc822_attachment(message) else message
                 imported = self._document(inner, pending, document_sender, inline_outer=inline_outer,
                                           forwarded=True, manual=manual, allow_undated_template=not manual)
                 if imported.outcome == "imported" or imported.parse_failed_reason == "multiple_documents":
@@ -545,9 +556,7 @@ class GmailMessageProcessor:
                 if (imported.outcome == "imported" and pattern is not None
                         and pattern.fullmatch(imported.invoice.invoice_number)):
                     return imported
-            sender = payment_sender_for(inner.raw_items(), payment_senders)
             if sender is not None:
-                inline_outer = None if _has_rfc822_attachment(message) else message
                 imported = self._payment(inner, pending, sender, inline_outer=inline_outer)
                 if document_failure.diagnostic_reason == "pdf_no_text":
                     imported = replace(imported, diagnostic_reason="pdf_no_text")
@@ -560,6 +569,8 @@ class GmailMessageProcessor:
                 return document_failure
             return self._manual_forward(message, inner, pending)
         sender = payment_sender_for(message.raw_items(), payment_senders)
+        if cancelled := self._cancelled_order(message, pending, sender):
+            return cancelled
         document_sender = payment_sender_for(message.raw_items(), document_senders)
         if document_sender is not None:
             issuer_sender = classify_sender(message.raw_items(), self.settings.sender_allowlist, ()) == "direct_allowlist"

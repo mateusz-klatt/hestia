@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from html import unescape
 from itertools import islice
 import re
 from typing import Literal
@@ -54,6 +55,11 @@ _MARKER = re.compile(
     r"|gotowe\s+do\s+odbioru|potwierdzenie\s+odbioru|została\s+wysłana|wysłaliśmy"
     r"|shipped|out\s+for\s+delivery)\b",
     re.IGNORECASE,
+)
+# Only an affirmative merchant subject, optionally naming its shop or order number.
+_ORDER_CANCELLATION_SUBJECT = re.compile(
+    r"(?:potwierdzenie anulowania zamówienia)(?: (?:nr\.? |#)[0-9][0-9-]{0,31})?"
+    r"(?: (?:w|we) (?:sklepie )?[^\W_][\w-]*(?:\.[\w-]+)*)?[.!]?", re.IGNORECASE,
 )
 _REFUND_SUBJECT = re.compile(r"\b(?:zwrot|refund|korekta|faktura\s++korygująca|credit\s++note)\b", re.IGNORECASE)
 _REFUND_NOTICE = re.compile(
@@ -680,10 +686,25 @@ def _clean_field(value: str) -> str:
     return " ".join(token for token in value.replace(_REDACTED, " ").split() if not _contact_token(token))
 
 
+_POLISH_LETTER_ENTITY = re.compile(r"&(?:amp;)?([A-Za-z][A-Za-z0-9]{1,30}|#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6});")
+_POLISH_DIACRITICS = frozenset("ąćęłńóśźżĄĆĘŁŃÓŚŹŻ")
+
+
+def _polish_letter(match: re.Match) -> str:
+    # Some mail subjects and plain-text titles use HTML-encoded Polish letters.
+    # Leave markup, punctuation and arbitrary character references as literal text.
+    decoded = unescape(f"&{match[1]};")
+    return decoded if decoded in _POLISH_DIACRITICS else match[0]
+
+
+def _decode_polish_letters(value: str) -> str:
+    return _POLISH_LETTER_ENTITY.sub(_polish_letter, value)
+
+
 def _description(candidates: list[str]) -> str:
     fallback = "Płatność"
     for candidate in candidates:
-        value = _clean_field(candidate)
+        value = _clean_field(_decode_polish_letters(candidate))
         if value.strip(" .,:;!?").casefold() in _GENERIC_DESCRIPTIONS:
             continue
         digit_heavy = bool(_LONG_DIGITS.search(value)) or redact_digit_field(value) != value
@@ -845,6 +866,14 @@ def _subject_text(subject: str) -> str:
     return " ".join(_normalize_receipt_text(bounded)[:256].split())
 
 
+def confirms_order_cancellation(subject: str) -> bool:
+    # Do not treat a truncated question, qualification or negation as a definitive notice.
+    if len(subject) > 256:
+        return False
+    normalized = _subject_text(_decode_polish_letters(subject))
+    return _ORDER_CANCELLATION_SUBJECT.fullmatch(normalized) is not None
+
+
 def _shorten_url(match: re.Match[str]) -> str:
     authority = match["authority"].rpartition("@")[2]
     if authority.startswith("["):
@@ -880,6 +909,7 @@ def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gate
         if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
             return PaymentInspection()
         provider = provider if gateway else None
+        cancellation = any(confirms_order_cancellation(subject) for subject in subjects)
         subjects = tuple(_subject_text(subject) for subject in subjects)
         # Shorten link tokens before invoice normalization applies its per-line cap.
         shortened = _HTTP_URL.sub(_shorten_url, text)
@@ -897,7 +927,7 @@ def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gate
             body = "\n".join(raw)
             if _CARD_VERIFICATION.search(body) and _CARD_VERIFICATION_CANCEL.search(body):
                 return PaymentInspection(reject_reason="card_verification")
-        if any(_subject_rejected(subject, provider) for subject in subjects):
+        if cancellation or any(_subject_rejected(subject, provider) for subject in subjects):
             return PaymentInspection()
         if any(_body_marker(line, provider) for line in raw):
             return PaymentInspection()
