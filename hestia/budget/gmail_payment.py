@@ -516,32 +516,35 @@ def _opt_value(raw: str) -> str:
     return value
 
 
-def _strip_bare_bank_refs(text: str, matched_refs: set[str]) -> str:
+def _strip_bare_bank_refs(text: str, matched_refs: set[str], *, count: int = 0) -> str:
     for ref in sorted(matched_refs, key=len, reverse=True):
         pattern = rf"(?<![\w./-]){re.escape(ref)}(?![\w./-])"
-        text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+        text = re.sub(pattern, " ", text, count=count, flags=re.IGNORECASE)
     return text
 
 
 def bank_payee_texts(text: str, matched_refs: set[str]) -> tuple[str, str]:
     """Return bank text for finding and for ruling out the receipt's payee."""
     normalized = _BANK_NIP_SPAN.sub(" ", unicodedata.normalize("NFKC", text))
-    first_tag = _BANK_SWIFT_TAG.search(normalized)
-    if first_tag is None:
+    if _BANK_SWIFT_TAG.search(normalized) is None:
         plain = _strip_bare_bank_refs(normalized, matched_refs)
         return plain, plain
 
-    plain = _strip_bare_bank_refs(normalized[:first_tag.start()], matched_refs)
-    fields = normalized[first_tag.start():]
+    opt_refs = set()
 
     def strip_matched_opt(match: re.Match[str]) -> str:
-        return " " if _opt_value(match[1]) in matched_refs else match[0]
+        value = _opt_value(match[1])
+        if value in matched_refs:
+            opt_refs.add(value)
+            return " "
+        return match[0]
 
-    # A reference cannot establish the merchant. Preserve the other field values
-    # when checking for a conflicting merchant, even if they repeat the reference.
-    evidence = _BANK_SWIFT_TAG.sub(" ", _BANK_OPT_PATH.sub(" ", fields))
-    remaining = _BANK_SWIFT_TAG.sub(" ", _BANK_OPT_PATH.sub(strip_matched_opt, fields))
-    return f"{plain} {_strip_bare_bank_refs(evidence, matched_refs)}", f"{plain} {remaining}"
+    # An ID cannot establish the merchant. For the conflict check, retain repeated
+    # occurrences outside /OPT/ and honor the original bare-token boundaries.
+    evidence = _BANK_SWIFT_TAG.sub(" ", _BANK_OPT_PATH.sub(" ", normalized))
+    remaining = _BANK_OPT_PATH.sub(strip_matched_opt, normalized)
+    remaining = _strip_bare_bank_refs(remaining, matched_refs - opt_refs, count=1)
+    return _strip_bare_bank_refs(evidence, matched_refs), _BANK_SWIFT_TAG.sub(" ", remaining)
 
 
 def _autopay_bank_tokens(text: str) -> list[tuple[str, int]]:

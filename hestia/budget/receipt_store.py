@@ -343,7 +343,7 @@ def _secondary_payee_guard(row, counterparty, remit_texts, matched_ref_tokens) -
     if not groups:
         return False
     description = " ".join(value for value in remit_texts if isinstance(value, str))
-    bank_text = " ".join(part for part in (description, counterparty) if part)
+    bank_text = "\n".join(part for part in (description, counterparty) if part)
     evidence, remaining = bank_payee_texts(bank_text, matched_ref_tokens)
     bank_words = frozenset(merchant_word_tokens(evidence))
     distinctive_score = sum(1 for group in groups if any(alias.issubset(bank_words) for alias in group))
