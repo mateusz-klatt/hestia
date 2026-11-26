@@ -580,6 +580,11 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     && receiptAccess
     && !receiptUnavailable
     && authorization?.own_budget?.can_use_receipts === true;
+  const receiptPermissions = authorization?.own_budget?.permissions;
+  const transactionReceiptsList = receiptsAllowed
+    && receiptPermissions?.includes("budget.receipts.view") === true
+    && receiptPermissions.includes("budget.receipts.match")
+    ? guardedReceiptsApi.receiptsList : undefined;
   // Analytics views are available only while the server offers analytics; receipts are gated independently.
   const shownView: View = view === "receipts"
     ? (receiptsAllowed ? "receipts" : "accounts")
@@ -695,7 +700,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
           onOpenLimits={() => { authorizeView(() => { setView("limits"); }); }} />
       ) : shownView === "month" ? (
         <MonthView key={`${focusMonth ?? "current"}-${focusCurrency ?? "all"}-${focusProvisional === undefined ? "full" : `provisional:${String(focusProvisional.keys.length)}:${focusProvisional.truncated ? "1" : "0"}`}`}
-          api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
+          api={api} receiptsList={transactionReceiptsList} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} initialMonth={focusMonth} initialCurrency={focusCurrency}
           initialProvisionalKeys={focusProvisional?.keys}
           initialProvisionalTotal={focusProvisional?.total}

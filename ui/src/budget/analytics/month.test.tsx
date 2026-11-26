@@ -103,7 +103,7 @@ describe("month view", () => {
     const api = fakeApi();
     await show(api);
     expect(api.overview).toHaveBeenCalledTimes(1);
-    await click([...host.querySelectorAll("button")].find((item) => item.textContent === "Change"));
+    await click(host.querySelector<HTMLButtonElement>(".budget-entry-category"));
     await act(async () => { host.querySelector<HTMLFormElement>(".budget-entry-editor")?.requestSubmit(); await Promise.resolve(); });
     await settle();
     expect(api.annotate).toHaveBeenCalledTimes(1);
