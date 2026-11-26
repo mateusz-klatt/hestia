@@ -151,8 +151,15 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                     return body
                 values = _WRITES[operation].model_validate(body).model_dump()
                 owner, secret = _authorize(request, auth_enabled, session_secret)
+            version = receipt_api._receipt_contract(request, operation)
             active_runtime = service_runtime()
             result = await api._settled_thread(lambda: active_runtime.run(owner, operation, values, secret))
+            if operation == "gmail-status" and version < (0, 56, 0):
+                reasons = result["parse_failed_reasons"]
+                for reason in ("pdf_no_text", "multiple_documents"):
+                    count = reasons.pop(reason, 0)
+                    if count:
+                        reasons["other"] = reasons.get("other", 0) + count
             status = 202 if operation == "gmail-sync" else 200
             return web.json_response(result, status=status, headers=api.PRIVATE_HEADERS)
         except GmailError as error:

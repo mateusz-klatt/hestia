@@ -102,7 +102,7 @@ _DEVICE_BROWSER_REQUESTS = {
 
 
 def _receipt_contract(request, operation):
-    if operation not in _RECEIPT_RESULT_KEY:
+    if operation not in _RECEIPT_RESULT_KEY and operation != "gmail-status":
         return (0, 0, 0)
     values = request.headers.getall(_CONTRACT_HEADER, [])
     if not values:

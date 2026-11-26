@@ -11917,6 +11917,8 @@
                 "other",
                 "part_defects",
                 "pdf_unsupported",
+                "pdf_no_text",
+                "multiple_documents",
                 "recursion",
                 "unicode_error",
                 "worker_rejected"
@@ -17005,7 +17007,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.55.0"
+    "version": "0.56.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -26342,6 +26344,18 @@
       "get": {
         "description": "Default-off with HESTIA_BUDGET_GMAIL_IMPORT_ENABLED. Requires an authenticated SQLite admin and a same-origin browser session. Use the returned version for grant changes. Manual Google revocation can affect Calendar Sync.",
         "operationId": "getBudgetReceiptGmailStatus",
+        "parameters": [
+          {
+            "description": "Request Gmail PDF diagnostics starting at 0.56.0. Earlier versions or an omitted header receive those counts under other.",
+            "in": "header",
+            "name": "X-Hestia-Contract-Version",
+            "required": false,
+            "schema": {
+              "pattern": "^0\\.(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {

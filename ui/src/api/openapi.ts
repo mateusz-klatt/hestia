@@ -15754,7 +15754,10 @@ export interface operations {
     getBudgetReceiptGmailStatus: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Request Gmail PDF diagnostics starting at 0.56.0. Earlier versions or an omitted header receive those counts under other. */
+                "X-Hestia-Contract-Version"?: string;
+            };
             path?: never;
             cookie?: never;
         };

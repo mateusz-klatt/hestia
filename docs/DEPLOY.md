@@ -128,7 +128,7 @@ The service reads all three files through `config._read_secret`. Each must be a 
 - **Gmail refresh token**: reuse the existing `gmail.readonly` token (no new grant). Write it into a `0400` file under `./data/secrets/` and point the config's `refresh_token_env` at the env var holding that container path.
 - **Config** `HESTIA_BUDGET_RECEIPTS_GMAIL_CONFIG`: path to the JSON config, up to 16 KiB.
 
-`sender_allowlist` and `spouse_forward_senders` must both appear. At least one of `sender_allowlist`, `spouse_forward_senders`, and `payment_senders` must contain an entry. Environment variable names must match `[A-Z_][A-Z0-9_]{0,127}` and be set inside the container. The examples below are placeholders.
+`sender_allowlist` and `spouse_forward_senders` must both appear. At least one of `sender_allowlist`, `spouse_forward_senders`, `payment_senders`, and `document_senders` must contain an entry. Environment variable names must match `[A-Z_][A-Z0-9_]{0,127}` and be set inside the container. The examples below are placeholders.
 
 | JSON key | Type | Meaning | Default or allowed values |
 | --- | --- | --- | --- |
@@ -139,6 +139,7 @@ The service reads all three files through `config._read_secret`. Each must be a 
 | `refresh_token_env` | String | Name of the environment variable holding the absolute container path to the refresh-token file, such as `EXAMPLE_GMAIL_REFRESH_TOKEN_FILE`. | Required. Environment variable name. |
 | `sender_allowlist` | Array of strings | Supplier rules for direct imports. Forwarded invoices require exact mailbox entries. | Required. Bare ASCII addresses or domain rules such as `billing@supplier.example.test` and `@supplier.example.test`. Domain rules include subdomains and exclude public webmail domains. |
 | `payment_senders` | Array of objects | Authenticated direct senders of payment confirmations. Each entry supplies a `sender` rule and a display `merchant`. Set `gateway` to `true` to extract the payee from the message when available. | Defaults to `[]` with at most 200 entries. Use the same sender syntax as `sender_allowlist`, for example `@shop.example.test`. Public webmail domains, duplicate rules, and overlap with `sender_allowlist` are rejected. Each `merchant` must contain 1–64 printable characters, including at least one non-whitespace character. `gateway` is a boolean and defaults to `false`. |
+| `document_senders` | Array of objects | Trusted senders of PDF invoices and receipts, for example `[{"sender": "@vendor.example.test", "merchant": "Example Vendor"}]`. | Defaults to `[]`, at most 200 entries. Uses payment sender validation for `sender` and `merchant`; duplicate document rules are rejected, but overlap with payment or issuer senders is allowed. |
 | `spouse_forward_senders` | Array of strings | Mailboxes allowed to send spouse forwards. | Required. Exact bare ASCII addresses such as `forwarder@example.test`. |
 | `known_merchant_domains` | Array of strings | Legacy domain setting. Automatic forward imports depend on exact mailbox entries in `sender_allowlist`. | Defaults to `[]`. ASCII domains with an optional leading `@`, such as `supplier.example.test`. Public webmail domains are excluded. |
 | `require_known_forwarded_merchant` | Boolean | Legacy setting. The importer enforces exact mailbox checks for either value. | Defaults to `true`. |

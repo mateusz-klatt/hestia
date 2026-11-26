@@ -1,0 +1,5 @@
+Przykład Studio
+Invoice number: INV-43
+Date of issue: November 3, 2026
+Date due: November 20, 2026
+Amount due $25.00 USD

@@ -1,0 +1,11 @@
+Faktura VAT nr F/2026/1
+Sprzedawca: Sklep Przykład
+NIP: 8567346215
+Nabywca: Klient Przykład
+NIP: 1234563218
+Data wystawienia: 03.11.2026
+Termin płatności: 10.11.2026
+Nazwa Netto VAT Brutto
+Towar 100,00 23,00 123,00
+Suma: 123,00 zł
+Zapłacono: 123,00 zł

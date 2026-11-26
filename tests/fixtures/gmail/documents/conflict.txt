@@ -1,0 +1,4 @@
+Invoice number X
+Date of issue 2026-11-03
+Total EUR 10.00
+Total EUR 11.00

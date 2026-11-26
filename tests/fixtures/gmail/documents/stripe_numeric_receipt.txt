@@ -1,0 +1,18 @@
+Receipt
+Invoice number ABCD1234-0007
+Receipt number 123456789012
+Date paid August 3, 2026
+Vendor Test Inc
+Bill to
+Klient Test
+Subtotal $9.00
+Total excluding tax $9.00
+VAT - Poland 23% on $9.00 $2.07
+Credited subtotal $2.00
+Credited total $2.00
+Adjusted invoice total $11.07
+Total $11.07
+Amount paid $11.07
+Payment history
+Payment method Date Amount paid Receipt number
+Mastercard - 1234 August 3, 2026 $11.07 123456789012

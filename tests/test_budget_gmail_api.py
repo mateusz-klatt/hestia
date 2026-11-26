@@ -505,6 +505,31 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
                           after["parse_failed_reasons"]),
                          ("idle", 1, 0, {}))
 
+    async def test_pdf_diagnostics_are_version_gated(self):
+        os.environ[gmail_api.FLAG] = "1"
+        original = gmail_api._Runtime._status
+        def status(runtime, store, owner, secret):
+            result = original(runtime, store, owner, secret)
+            result["parse_failed_reasons"] = {"pdf_no_text": 1, "multiple_documents": 2, "other": 4}
+            return result
+        with mock.patch.object(gmail_api._Runtime, "_status", status):
+            old = await self.call("gmail-status")
+            self.assertEqual((await old.json())["parse_failed_reasons"], {"other": 7})
+            boundary = await self.call("gmail-status", headers=self.headers() | {
+                "X-Hestia-Contract-Version": "0.55.0",
+            })
+            self.assertEqual((await boundary.json())["parse_failed_reasons"], {"other": 7})
+            current = await self.call("gmail-status", headers=self.headers() | {
+                "X-Hestia-Contract-Version": "0.56.0",
+            })
+            self.assertEqual((await current.json())["parse_failed_reasons"], {
+                "pdf_no_text": 1, "multiple_documents": 2, "other": 4,
+            })
+            invalid = await self.call("gmail-status", headers=self.headers() | {
+                "X-Hestia-Contract-Version": "invalid",
+            })
+            self.assertEqual(invalid.status, 400)
+
     async def test_gmail_status_exposes_parse_failed_reasons_and_logs_safely(self):
         os.environ[gmail_api.FLAG] = "1"
         granted = await self.call("gmail-grant", json={"action": "enable", "expected_version": 1})

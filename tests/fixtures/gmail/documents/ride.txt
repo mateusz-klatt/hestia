@@ -1,0 +1,5 @@
+Faktura VAT nr RIDE/1
+Sprzedawca: Przejazdy Przykład
+Data wystawienia: 3.11.2026, 10:15
+Kwota brutto 45,50 zł
+Płatność kartą kredytową 45,50 zł

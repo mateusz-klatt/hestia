@@ -1,0 +1,10 @@
+Faktura VAT nr VAT-100
+Sprzedawca: Sklep Test
+Data wystawienia: 02.01.2026
+Suma:
+Netto
+VAT
+Brutto
+100,00 PLN
+23,00 PLN
+123,00 PLN

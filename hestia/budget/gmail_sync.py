@@ -38,6 +38,7 @@ class GmailSettings:
     backfill_max_messages: int = 500
     sync_interval_seconds: int = 3600
     payment_senders: tuple[PaymentSender, ...] = ()
+    document_senders: tuple[PaymentSender, ...] = ()
 
 
 def _history_id(value):
@@ -82,6 +83,7 @@ def _history_messages(page):
 def _terms(settings):
     senders = set(settings.sender_allowlist + settings.spouse_forward_senders)
     senders.update(entry.sender for entry in settings.payment_senders)
+    senders.update(entry.sender for entry in settings.document_senders)
     senders.add(settings.owner_mailbox)
     return tuple(f'from:"{sender.removeprefix("@")}"' for sender in sorted(senders))
 

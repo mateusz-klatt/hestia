@@ -517,14 +517,14 @@ class GmailMessageProcessorTests(unittest.TestCase):
         self.assertEqual(self.worker.parse.call_args_list, [call("html", html.encode()),
                                                             call("text", b"\n" + INVOICE.encode())])
 
-    def test_mixed_attached_and_inline_depth_two_imports_the_final_original(self):
+    def test_mixed_attached_and_inline_depth_two_requires_manual_review(self):
         relay = _email(MERCHANT, f"Begin forwarded message:\nFrom: {MERCHANT}\nMessage-ID: {RFC_ID}\n\n{INVOICE}")
         outer = _email(SPOUSE, "Synthetic cover note")
         outer.add_attachment(relay)
         pending = self._process(_metadata(outer), _raw(outer))
-        self.assertEqual((pending.outcome, pending.forwarded_manually), ("imported", False))
-        self.assertEqual(pending.invoice.invoice_number, "RE/2026/00042")
-        self.assertEqual(pending.rfc_message_id_hmac, digest(SECRET, RFC_MESSAGE_DOMAIN, "Invoice-42@respect.example"))
+        self.assertEqual((pending.outcome, pending.forwarded_manually), ("imported", True))
+        self.assertIsNone(pending.invoice)
+        self.assertIsNone(pending.rfc_message_id_hmac)
 
     def test_mixed_depth_three_and_ambiguous_or_malformed_inner_forwards_are_rejected(self):
         inline = f"Begin forwarded message:\nFrom: {MERCHANT}\n\n{INVOICE}"

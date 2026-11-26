@@ -119,7 +119,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.52.0: gateway payment evidence — receipt gateway/status/fee/payee_host/evidence fields, payment_evidence on detail, and the evidence list filter.
 # 0.54.0: origin-bound QR login, native device exchange/budget reads, delegated receipts, and grant editing.
 # 0.55.0: additive match_strength ("nip" | "distinctive" | "generic" | "none") on BudgetReceiptCandidate.
-CONTRACT_VERSION = "0.55.0"
+# 0.56.0: Gmail PDF no-text and multiple-document parse diagnostics.
+CONTRACT_VERSION = "0.56.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -4867,6 +4868,12 @@ def _gmail_receipt_paths():
         "operationId": "getBudgetReceiptGmailStatus", "summary": "Read safe Gmail import state",
         "description": description + " Use the returned version for grant changes. Manual Google revocation can "
                        "affect Calendar Sync.",
+        "parameters": [{
+            "name": "X-Hestia-Contract-Version", "in": "header", "required": False,
+            "description": "Request Gmail PDF diagnostics starting at 0.56.0. Earlier versions or an omitted header "
+                           "receive those counts under other.",
+            "schema": {"type": "string", "pattern": r"^0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$"},
+        }],
         "responses": responses,
     }}
     return paths

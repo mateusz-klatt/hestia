@@ -122,12 +122,22 @@ def normalize_payment_senders(values) -> tuple[PaymentSender, ...]:
     return tuple(rules.values())
 
 
-def normalize_sender_rules(sender_allowlist, spouse_forward_senders, known_merchant_domains, *, payment_senders=()):
+def normalize_document_senders(values):
+    """Validate document senders using the payment sender grammar without gateway options."""
+    if not isinstance(values, list) or any(
+        not isinstance(entry, dict) or set(entry) != {"sender", "merchant"} for entry in values
+    ):
+        raise ValueError(_CONFIG_ERROR)
+    return normalize_payment_senders(values)
+
+
+def normalize_sender_rules(sender_allowlist, spouse_forward_senders, known_merchant_domains, *, payment_senders=(),
+                           document_senders=()):
     """Return normalized direct rules, exact spouse mailboxes and merchant domains."""
     direct = _normalize_rules(sender_allowlist, _sender_rule)
     spouse = _normalize_rules(spouse_forward_senders, canonical_mailbox)
     merchants = set(_normalize_rules(known_merchant_domains, _domain_rule))
-    if not direct and not spouse and not payment_senders:
+    if not direct and not spouse and not payment_senders and not document_senders:
         raise ValueError(_CONFIG_ERROR)
     # Match in both directions to catch either a parent domain or an exact mailbox
     # covered by the other list's domain rule.
@@ -291,7 +301,8 @@ def _gmail_authenticated(domain, results, signatures, *, relaxed=False):
     return "dkim" in aligned and bool(aligned & {"spf", "dmarc"})
 
 
-def classify_sender(headers, sender_allowlist, spouse_forward_senders, owner_mailbox=None, *, payment_senders=()):
+def classify_sender(headers, sender_allowlist, spouse_forward_senders, owner_mailbox=None, *, payment_senders=(),
+                    document_senders=()):
     """Classify ordered outer headers, preserving duplicates and the topmost AR."""
     by_name = {}
     for name, value in headers:
@@ -310,7 +321,7 @@ def classify_sender(headers, sender_allowlist, spouse_forward_senders, owner_mai
         path = "owner_forward"
     elif address in spouse_forward_senders:
         path = "spouse_forward"
-    elif invoice_sender or any(_matches_sender(address, entry.sender) for entry in payment_senders):
+    elif invoice_sender or any(_matches_sender(address, entry.sender) for entry in (*payment_senders, *document_senders)):
         path = "direct_allowlist"
     else:
         return "untrusted"
