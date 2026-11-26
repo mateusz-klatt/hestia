@@ -20,6 +20,10 @@ IBAN = "FI0455231152453547"  # Published API example, never a user's account.
 IDS = ({"scheme": "IBAN", "identification": IBAN},)
 _NRB_BODY = "00000000" + "0000000000000001"
 NRB = f"{98 - int(_NRB_BODY + '252100') % 97:02}" + _NRB_BODY
+FX_EVIDENCE = {"instructed_amount": {"amount": "10.50", "currency": "USD"},
+               "exchange_rate": "4.20", "unit_currency": "USD"}
+EQUIVALENT_FX = {"instructed_amount": {"amount": "010.5000", "currency": "USD"},
+                 "exchange_rate": "04.2000", "unit_currency": "USD"}
 
 
 class BankMetadataNormalizationTests(unittest.TestCase):
@@ -116,6 +120,47 @@ class BankMetadataNormalizationTests(unittest.TestCase):
         empty.add({"creditor": {"name": "First"}}, core)
         empty.add({"creditor": {"name": "Second"}}, core)
         self.assertEqual(empty.finish().transactions, ())
+
+    def test_duplicate_fx_observations_compare_decimal_values_and_keep_conflicts(self):
+        core = normalize.normalize_transaction(transaction())
+        def collect(*rates):
+            collector = metadata.MetadataCollector()
+            for rate in rates:
+                collector.add({"exchange_rate": rate, "creditor": {"name": "Synthetic"},
+                               "merchant_category_code": "1234"}, core)
+            return collector.finish()
+
+        equivalent = collect(FX_EVIDENCE, EQUIVALENT_FX)
+        self.assertEqual(equivalent, collect(EQUIVALENT_FX, FX_EVIDENCE))
+        self.assertEqual(equivalent.rejected, 0)
+        self.assertIn(equivalent.transactions[0].payload["exchange_rate"], (FX_EVIDENCE, EQUIVALENT_FX))
+        original = {"instructed_amount": FX_EVIDENCE["instructed_amount"]}
+        rate = {"exchange_rate": FX_EVIDENCE["exchange_rate"], "unit_currency": FX_EVIDENCE["unit_currency"]}
+        for parts in ((original, rate), (FX_EVIDENCE, original), (FX_EVIDENCE, rate)):
+            with self.subTest(parts=parts):
+                merged = collect(*parts)
+                self.assertEqual(merged, collect(*reversed(parts)))
+                self.assertEqual(merged.rejected, 0)
+                self.assertEqual(merged.transactions[0].payload["exchange_rate"], FX_EVIDENCE)
+        for different in ({**FX_EVIDENCE, "exchange_rate": "4.25"}, {**FX_EVIDENCE, "unit_currency": "CAD"},
+                          {**FX_EVIDENCE, "instructed_amount": {"amount": "11", "currency": "USD"}},
+                          {**FX_EVIDENCE, "instructed_amount": {"amount": "10.50", "currency": "CAD"}}):
+            with self.subTest(evidence=different):
+                conflict = collect(FX_EVIDENCE, different, FX_EVIDENCE)
+                self.assertEqual(conflict.rejected, 1)
+                self.assertEqual(conflict.transactions[0].payload, {"exchange_rate": None, "mcc": "1234",
+                                                                     "creditor_name": "Synthetic"})
+
+    def test_raw_null_exchange_is_absence(self):
+        core = normalize.normalize_transaction(transaction())
+        raw = {"entry_reference": core["entry_reference"], "exchange_rate": None,
+               "creditor": {"name": "Synthetic"}}
+        self.assertEqual(metadata.normalize_transaction_metadata(raw), {"creditor_name": "Synthetic"})
+        sidecar = {"transactions": [{**raw, "exchange_rate": FX_EVIDENCE}, raw]}
+        result = metadata.parse_bank_metadata(sidecar, (core,))
+        self.assertEqual(result.rejected, 0)
+        self.assertEqual(result.transactions[0].payload,
+                         {"exchange_rate": FX_EVIDENCE, "creditor_name": "Synthetic"})
 
     def test_trusted_country_nrb_alias_and_explicit_iban_mislabeled_bban(self):
         raw = {"account_id": {"other": {"scheme_name": "BBAN", "identification": NRB}}}
@@ -222,6 +267,68 @@ class BankMetadataPersistenceTests(unittest.TestCase):
         self.assertEqual(self.apply_tx(account, fp, {"mcc": "9999"}), "mismatch")
         self.assertEqual(self.apply_tx(account, newfp, {"debtor_name": "Current"}, "offline_import", 1), "updated")
         self.assertEqual(json.loads(self.rows(db.BudgetTransactionMetadata)[0].payload_json), {"debtor_name": "Current"})
+
+    def test_exchange_ties_suppress_conflicting_proof_and_require_fresh_replacement(self):
+        account, _, fp = self.ready()
+        original = {"exchange_rate": FX_EVIDENCE, "creditor_name": "Synthetic"}
+        equivalent = {"exchange_rate": EQUIVALENT_FX}
+        contradictory = {"exchange_rate": {**FX_EVIDENCE, "exchange_rate": "4.25"}}
+        marker = {"exchange_rate": None}
+        self.assertEqual(self.apply_tx(account, fp, original), "updated")
+        self.assertEqual(self.apply_tx(account, fp, equivalent), "unchanged")
+        self.assertEqual(self.apply_tx(account, fp, equivalent, when=1001), "unchanged")
+        row = self.rows(db.BudgetTransactionMetadata)[0]
+        self.assertEqual((json.loads(row.payload_json), row.version), (original, 1))
+
+        self.assertEqual(self.apply_tx(account, fp, {"mcc": "1234"}, when=1100), "updated")
+        self.assertEqual(self.apply_tx(account, fp, marker, "offline_import", 2000), "older")
+        self.assertEqual(self.apply_tx(account, fp, contradictory, when=1000), "older")
+        self.assertEqual(self.apply_tx(account, fp, contradictory, when=1001), "updated")
+        self.assertEqual(self.apply_tx(account, fp, marker, when=1001), "unchanged")
+        self.assertEqual(self.apply_tx(account, fp, equivalent, when=1001), "older")
+        self.assertEqual(self.apply_tx(account, fp, original, "offline_import", 2000), "older")
+        rate_only = {"exchange_rate": {"exchange_rate": "4.25", "unit_currency": "USD"}}
+        self.assertEqual(self.apply_tx(account, fp, rate_only, when=1002), "older")
+        row = self.rows(db.BudgetTransactionMetadata)[0]
+        self.assertEqual(json.loads(row.payload_json), {**original, **marker, "mcc": "1234"})
+        self.assertEqual(json.loads(row.provenance_json)["exchange_rate"], {"source": "api", "observed_at": 1001})
+        self.assertEqual((row.observed_at, row.version), (1100, 3))
+
+        recovery = {"exchange_rate": {"instructed_amount": FX_EVIDENCE["instructed_amount"]}}
+        self.assertEqual(self.apply_tx(account, fp, recovery, when=1002), "updated")
+        row = self.rows(db.BudgetTransactionMetadata)[0]
+        self.assertEqual(json.loads(row.payload_json), {**original, **recovery, "mcc": "1234"})
+        self.assertEqual(json.loads(row.provenance_json)["exchange_rate"], {"source": "api", "observed_at": 1002})
+
+    def test_exchange_ties_combine_partial_evidence_from_the_same_source(self):
+        account, _, fp = self.ready()
+        original = {"exchange_rate": {"instructed_amount": FX_EVIDENCE["instructed_amount"]}}
+        rate = {"exchange_rate": {"exchange_rate": "4.20", "unit_currency": "USD"}}
+        self.assertEqual(self.apply_tx(account, fp, original), "updated")
+        self.assertEqual(self.apply_tx(account, fp, rate), "updated")
+        self.assertEqual(self.apply_tx(account, fp, original), "unchanged")
+        row = self.rows(db.BudgetTransactionMetadata)[0]
+        self.assertEqual(json.loads(row.payload_json), {"exchange_rate": FX_EVIDENCE})
+        self.assertEqual(self.apply_tx(account, fp, rate, when=1001), "updated")
+        self.assertEqual(json.loads(self.rows(db.BudgetTransactionMetadata)[0].payload_json), rate)
+
+    def test_collector_exchange_conflict_persists_with_source_precedence(self):
+        account, core, fp = self.ready()
+        collector = metadata.MetadataCollector()
+        collector.add({"exchange_rate": FX_EVIDENCE}, core)
+        collector.add({"exchange_rate": {**FX_EVIDENCE, "exchange_rate": "4.25"}}, core)
+        collected = collector.finish()
+        self.assertEqual(collected.transactions[0].payload, {"exchange_rate": None})
+        with self.sessions.begin() as session:
+            counts = metadata.apply_bank_metadata(session, account, collected, source="offline_import", observed_at=1000)
+        self.assertEqual((counts["updated"], counts["rejected"]), (1, 1))
+        positive = {"exchange_rate": FX_EVIDENCE}
+        self.assertEqual(self.apply_tx(account, fp, positive, when=1000), "older")
+        self.assertEqual(self.apply_tx(account, fp, positive, when=1001), "updated")
+        with self.sessions.begin() as session:
+            counts = metadata.apply_bank_metadata(session, account, collected, source="offline_import", observed_at=2000)
+        self.assertEqual(counts["older"], 1)
+        self.assertEqual(json.loads(self.rows(db.BudgetTransactionMetadata)[0].payload_json), positive)
 
     def test_invalid_optional_metadata_ownership_and_uncertainty_do_not_write(self):
         account, _, fp = self.ready()

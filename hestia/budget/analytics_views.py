@@ -116,7 +116,7 @@ def _metadata(value):
     raw = _json(value)
     from .bank_metadata import exchange_evidence
     exchange = raw.pop("exchange_rate", {})
-    if exchange_evidence(exchange) != exchange:
+    if exchange is not None and exchange_evidence(exchange) != exchange:
         raise AnalyticsError()
     allowed = {"creditor_name", "debtor_name", "creditor_accounts", "debtor_accounts", "mcc"}
     if raw.keys() - allowed:

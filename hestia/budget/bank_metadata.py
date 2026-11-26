@@ -13,6 +13,8 @@ import math
 import re
 import unicodedata
 
+from .analytics_core import canonical_money
+
 MAX_IDENTITIES = 16
 MAX_METADATA_BYTES = 8 * 1024 * 1024
 # GenericIdentification also includes personal identifiers, masked numbers and
@@ -155,6 +157,27 @@ def exchange_evidence(raw):
     return fields
 
 
+def _exchange_meaning(evidence):
+    components = {}
+    if original := evidence.get("instructed_amount"):
+        components["instructed_amount"] = (original["currency"], canonical_money(original["amount"]))
+    if rate := evidence.get("exchange_rate"):
+        components["exchange_rate"] = (evidence["unit_currency"], canonical_money(rate))
+    return components
+
+
+def _combine_exchange(current, incoming, *, order_independent=False):
+    first, second = _exchange_meaning(current), _exchange_meaning(incoming)
+    shared = first.keys() & second.keys()
+    if any(first[key] != second[key] for key in shared):
+        return None
+    combined = {**incoming, **current}
+    if order_independent:
+        for key in shared:
+            combined[key] = min(current[key], incoming[key], key=_json)
+    return combined
+
+
 def _transaction_patch(raw, country=None):
     if not isinstance(raw, dict):
         return {}, 1
@@ -225,7 +248,12 @@ class MetadataCollector:
             if field in conflicts:
                 continue
             if field in merged and merged[field] != value:
-                del merged[field]
+                if field == "exchange_rate":
+                    merged[field] = _combine_exchange(merged[field], value, order_independent=True)
+                    if merged[field] is not None:
+                        continue
+                else:
+                    del merged[field]
                 conflicts.add(field)
                 self.rejected += 1
             else:
@@ -320,7 +348,8 @@ def _payload_patch(patch):
                 return None
             result[key] = list(normalized)
         elif key == "exchange_rate":
-            if not value or exchange_evidence(value) != value:
+            # Only normalized observations can carry an explicit conflict.
+            if value is not None and (not value or exchange_evidence(value) != value):
                 return None
             result[key] = value
         elif key == "mcc":
@@ -370,10 +399,23 @@ def _merge_fields(row, ledger_fp, patch, source, observed_at):
     provenance = json.loads(row.provenance_json) if same else {}
     accepted = False
     for key, value in patch.items():
-        prior = provenance.get(key, {"source": row.source, "observed_at": row.observed_at}) if same else None
-        if key in retained and (prior["source"] == "api" and source != "api" or observed_at < prior["observed_at"]
-                or observed_at == prior["observed_at"] and prior["source"] == source and retained[key] != value):
-            continue
+        if key in retained:
+            prior = provenance.get(key, {"source": row.source, "observed_at": row.observed_at})
+            if prior["source"] == "api" and source != "api" or observed_at < prior["observed_at"]:
+                continue
+            current = retained[key]
+            simultaneous = observed_at == prior["observed_at"]
+            if key == "exchange_rate":
+                if value is not None:
+                    if current is None:
+                        if simultaneous or "instructed_amount" not in value:
+                            continue
+                    elif simultaneous and source == prior["source"]:
+                        value = _combine_exchange(current, value)
+                    elif _exchange_meaning(current) == _exchange_meaning(value):
+                        value = current
+            elif simultaneous and source == prior["source"] and current != value:
+                continue
         retained[key], provenance[key] = value, {"source": source, "observed_at": observed_at}
         accepted = True
     return retained, provenance, accepted, same

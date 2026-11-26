@@ -58,6 +58,8 @@ class CardPurchase:
 def _card_amount_matches(payload, currency, amount, lines, metadata):
     if payload["currency"] == currency:
         return canonical_money(payload["amount"]) == amount
+    if "exchange_rate" in metadata and metadata["exchange_rate"] is None:
+        return False
     original = exchange_evidence(metadata.get("exchange_rate")).get("instructed_amount")
     amounts = {(original["currency"], canonical_money(original["amount"]))} if original else set()
     for line in lines:

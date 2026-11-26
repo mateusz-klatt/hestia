@@ -164,6 +164,10 @@ class CardPurchaseTests(AnalyticsCase):
             },
         )
         self.assertEqual(analytics_views._metadata(json.dumps(patch)), {"creditor_name": DOCUMENT.issuer})
+        self.assertEqual(
+            analytics_views._metadata(json.dumps({**patch, "exchange_rate": None})),
+            {"creditor_name": DOCUMENT.issuer},
+        )
         self.assertEqual(bank_metadata._payload_patch(patch), patch)
         for bad in ({"exchange_rate": []}, {"exchange_rate": {}}, {"exchange_rate": {"extra": "ignored"}}):
             self.assertIsNone(bank_metadata._payload_patch(bad))
