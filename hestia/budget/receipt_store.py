@@ -23,7 +23,8 @@ from sqlalchemy.exc import IntegrityError
 from .. import authz
 from ..db import (AppMeta, BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
                   BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line,
-                  BudgetReceiptLinkGroup as ReceiptLinkGroup, BudgetShop as Shop,
+                  BudgetReceiptLinkGroup as ReceiptLinkGroup, BudgetReceiptLinkMember as ReceiptLinkMember,
+                  BudgetShop as Shop,
                   BudgetTransaction as Transaction, BudgetTransferLeg as Leg)
 from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint, negate_money, sum_money
 from .device_token import DeviceTokenError, _issued_mask, _legacy_bearer_allowed, write_device_audit
@@ -307,6 +308,12 @@ def _group_reservation(owner, account_id, entry_reference):
         ReceiptLinkGroup.owner == owner, ReceiptLinkGroup.account_id == account_id,
         ReceiptLinkGroup.entry_reference == entry_reference,
     )
+
+
+def _receipt_in_group(session, owner, receipt_id):
+    member = exists().where(ReceiptLinkMember.owner == owner, ReceiptLinkMember.receipt_id == receipt_id)
+    evidence = exists().where(ReceiptLinkGroup.owner == owner, ReceiptLinkGroup.evidence_receipt_id == receipt_id)
+    return session.scalar(select(or_(member, evidence)))
 
 
 def _fee_adjusted_total(total_amount, fee_amount):
@@ -765,6 +772,9 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 or row.payment_method in ("cash", "mixed")
                 or getattr(row, "evidence_for_receipt_id", None) is not None):
             return []
+        receipt_id = getattr(row, "id", None)
+        if receipt_id is not None and _receipt_in_group(session, owner, receipt_id):
+            return []
         try:
             total = canonical_money(row.total_amount)
             fee_adjusted = _fee_adjusted_total(row.total_amount, getattr(row, "fee_amount", None))
@@ -1059,18 +1069,22 @@ class BudgetReceiptStore(BudgetHTTPStore):
             effective["chain_key"] = chain_for(effective["raw_shop_name"], effective["raw_nip"])
             effective["document_kind"] = row.document_kind
             effective["due_date"] = row.due_date
-            if effective["lines"] is None:
-                self._check_stored_lines(session, owner, row.id, effective["total_amount"])
-            row_was_draft = row.status == "draft"
+            grouped = _receipt_in_group(session, owner, row.id)
             link = effective["link"]
-            preserve_link = row.linked_account_id is not None and not self._match_allowed
-            if link is not None and not self._match_allowed:
-                raise DeviceTokenError(403, "budget_forbidden")
             sensitive_changed = any(
                 effective[key] != getattr(row, key)
                 for key in ("raw_shop_name", "raw_nip", "receipt_kind", "receipt_date",
                             "total_amount", "currency", "payment_method")
             )
+            group_conflict = grouped and (link is not None or sensitive_changed)
+            if effective["lines"] is None and not group_conflict:
+                self._check_stored_lines(session, owner, row.id, effective["total_amount"])
+            row_was_draft = row.status == "draft"
+            preserve_link = row.linked_account_id is not None and not self._match_allowed
+            if link is not None and not self._match_allowed:
+                raise DeviceTokenError(403, "budget_forbidden")
+            if group_conflict:
+                raise ReceiptError("budget_receipt_in_group", 409)
             fingerprint = None if link is None else self._confirmed_link(session, owner, effective, link, row)
             before = audit_payload(row, "confirm")
             row.shop_id = self._shop_id(session, owner, effective)
@@ -1081,14 +1095,17 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 session.execute(delete(Line).where(Line.receipt_id == row.id, Line.owner == owner))
                 for line in effective["lines"]:
                     session.add(Line(receipt_id=row.id, owner=owner, **line))
-            if not preserve_link:
-                if link is None:
-                    row.linked_account_id = row.linked_entry_ref = row.linked_fingerprint = row.linked_evidence = None
-                else:
-                    row.linked_account_id = link["account_id"]
-                    row.linked_entry_ref = link["entry_reference"]
-                    row.linked_fingerprint, row.linked_evidence = fingerprint
-            row.status = "needs_review" if preserve_link and (sensitive_changed or row.status == "needs_review") else "confirmed"
+            if not grouped:
+                if not preserve_link:
+                    if link is None:
+                        row.linked_account_id = row.linked_entry_ref = row.linked_fingerprint = row.linked_evidence = None
+                    else:
+                        row.linked_account_id = link["account_id"]
+                        row.linked_entry_ref = link["entry_reference"]
+                        row.linked_fingerprint, row.linked_evidence = fingerprint
+                row.status = (
+                    "needs_review" if preserve_link and (sensitive_changed or row.status == "needs_review") else "confirmed"
+                )
             row.version, row.updated_at = row.version + 1, now
             row.import_expires_at = None
             if row_was_draft:
@@ -1097,7 +1114,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 session.flush()
             except IntegrityError:
                 raise ReceiptError("budget_receipt_tx_already_linked", 409) from None
-            write_audit(session, owner, row, "confirm", before, audit_payload(row, "confirm", self._actor), now)
+            after = audit_payload(row, "confirm", self._actor)
+            if grouped:
+                before["linked"] = after["linked"] = True
+            write_audit(session, owner, row, "confirm", before, after, now)
             return {"ok": True, "receipt": self._detail(session, row)}
 
     def _encode_cursor(self, owner, context, row):
@@ -1320,6 +1340,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 raise ReceiptError("budget_receipt_conflict", 409)
             if row.evidence_for_receipt_id is not None:
                 raise ReceiptError("budget_receipt_stale_source", 409)
+            if _receipt_in_group(session, owner, row.id):
+                raise ReceiptError("budget_receipt_in_group", 409)
             tombstone_receipt(session, owner, row.id)
             session.execute(delete(Line).where(Line.receipt_id == row.id, Line.owner == owner))
             erase_receipt_audit(session, owner, row.id)
