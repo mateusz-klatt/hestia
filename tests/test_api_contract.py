@@ -59,7 +59,26 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.57.0")
+        self.assertEqual(document["info"]["version"], "0.58.0")
+        # 0.58.0 additive owner-private appointment_slot & appointment_attention inbox alerts.
+        for name in (
+            "BudgetAnalyticsInboxAppointmentRef",
+            "BudgetAnalyticsInboxAppointmentSlotParams",
+            "BudgetAnalyticsInboxAppointmentSlotItem",
+            "BudgetAnalyticsInboxAppointmentAttentionParams",
+            "BudgetAnalyticsInboxAppointmentAttentionItem",
+        ):
+            del schemas[name]
+        inbox_items_57 = schemas["BudgetAnalyticsInbox"]["properties"]["items"]["items"]
+        for kind, schema_name in (
+            ("appointment_slot", "BudgetAnalyticsInboxAppointmentSlotItem"),
+            ("appointment_attention", "BudgetAnalyticsInboxAppointmentAttentionItem"),
+        ):
+            del inbox_items_57["discriminator"]["mapping"][kind]
+            inbox_items_57["oneOf"].remove({"$ref": f"#/components/schemas/{schema_name}"})
+            schemas["BudgetAnalyticsInboxKeyRequest"]["properties"]["kind"]["enum"].remove(kind)
+        document["paths"]["/api/budget/analytics/inbox"]["get"]["parameters"] = []
+        document["paths"]["/api/budget/analytics/inbox-mark"]["post"].pop("parameters")
         # 0.57.0 additive card_last4, no_bank_data, and "id" match_strength.
         for name in ("BudgetReceiptSummary", "BudgetReceiptDetail"):
             schemas[name]["properties"].pop("card_last4")

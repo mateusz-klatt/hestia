@@ -2070,6 +2070,7 @@ def _validate_control_payload(op) -> "str | None":
 
 
 def make_app(rt):
+    from .appointments.poller import register as register_appointments
     from .calendar_sync.api import register as register_calendars
     from .budget.api import register as register_budget
     app = web.Application(
@@ -2082,6 +2083,7 @@ def make_app(rt):
     register_budget(app, _read_json_body, auth_enabled=lambda: _AUTH_ENABLED,
                     session_secret=lambda: _SESSION_SECRET, secure_cookie=lambda: _COOKIE_SECURE,
                     login_limiter=app[_LOGIN_LIMITER_KEY])
+    register_appointments(app, session_secret=lambda: _SESSION_SECRET)
     app.router.add_get("/", _ui_index, allow_head=False)                          # the TS app (Vite build)
     app.router.add_get("/assets/{path:[A-Za-z0-9._-]+}", _ui_asset, allow_head=False)
     app.router.add_get("/ui/", _ui_redirect, allow_head=False)                    # retired alias -> /

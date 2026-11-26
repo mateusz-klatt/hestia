@@ -21,7 +21,23 @@ KIND_CONSENT = "consent_renewal"
 KIND_MORTGAGE = "mortgage_due"
 KIND_SPENDING = "spending_limit"
 KIND_DEVICE = "device_added"
-INBOX_KINDS = (KIND_DEVICE, KIND_CONSENT, KIND_MORTGAGE, KIND_SPENDING)
+KIND_APPOINTMENT_SLOT = "appointment_slot"
+KIND_APPOINTMENT_ATTENTION = "appointment_attention"
+LEGACY_INBOX_KINDS = (
+    KIND_DEVICE,
+    KIND_CONSENT,
+    KIND_MORTGAGE,
+    KIND_SPENDING,
+)
+APPOINTMENT_INBOX_KINDS = frozenset({
+    KIND_APPOINTMENT_SLOT,
+    KIND_APPOINTMENT_ATTENTION,
+})
+INBOX_KINDS = (
+    *LEGACY_INBOX_KINDS,
+    KIND_APPOINTMENT_SLOT,
+    KIND_APPOINTMENT_ATTENTION,
+)
 
 _KIND_ORDER = {kind: index for index, kind in enumerate(INBOX_KINDS)}
 _SEVERITY_ORDER = {
@@ -29,6 +45,8 @@ _SEVERITY_ORDER = {
     KIND_CONSENT: {"attention_required": 0, "expired": 1, "due_soon": 2},
     KIND_MORTGAGE: {"overdue": 0, "due_today": 1, "due_soon": 2},
     KIND_SPENDING: {"exceeded": 0, "at_limit": 1, "approaching": 2},
+    KIND_APPOINTMENT_SLOT: {"better_slot": 0, "new_slot": 1},
+    KIND_APPOINTMENT_ATTENTION: {"circuit_open": 0, "authorization": 1},
 }
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
 _MILESTONE = re.compile(r"[A-Za-z0-9:_-]{1,128}\Z", re.ASCII)
@@ -38,6 +56,15 @@ _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _ATTENTION = re.compile(r"[a-z][a-z0-9_]{0,63}\Z", re.ASCII)
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _MAX_LOCAL_ID = 128
+_APPT_MESSAGE_LIMIT = 256
+_APPT_ERROR_CODES = frozenset({
+    "network",
+    "rate_limit",
+    "provider_http",
+    "authorization",
+    "invalid_response",
+    "run_limit",
+})
 _SUBJECT_DOMAIN = "hestia/budget/inbox/subject/v1"
 _KEY_TOKEN_DOMAIN = "hestia/budget/inbox/key-token/v1"
 _READS_DIGEST_VERSION = "owner-inbox-reads-v1"
@@ -213,6 +240,85 @@ def device_entry(owner: str, token_id: str, device_name: str, added_at: float, *
         "milestone": "added",
         "ref": {"token_id": token_id},
         "params": params,
+    }
+
+
+def _appointment_message(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value) > _APPT_MESSAGE_LIMIT
+        or _CONTROL.search(value)
+        or not value.isprintable()
+    ):
+        raise OwnerInboxDataError()
+    return value
+
+
+def appointment_slot_entry(
+    owner: str,
+    watch_id: str,
+    slot_hash: str,
+    *,
+    slot_date: str,
+    message: str,
+    better_than_booked: bool,
+) -> dict:
+    """Strictly allowlisted live alert for one notified appointment slot (rendered text + coarse day)."""
+    clean_watch = _local_id(watch_id)
+    if (
+        not isinstance(slot_hash, str)
+        or not _HEX64.fullmatch(slot_hash)
+        or not isinstance(slot_date, str)
+        or not _DATE.fullmatch(slot_date)
+        or type(better_than_booked) is not bool
+    ):
+        raise OwnerInboxDataError()
+    clean_message = _appointment_message(message)
+    status = "better_slot" if better_than_booked else "new_slot"
+    return {
+        "kind": KIND_APPOINTMENT_SLOT,
+        "subject_id": opaque_subject_id(owner, KIND_APPOINTMENT_SLOT, f"{clean_watch}\0{slot_hash}"),
+        "milestone": status,
+        "ref": {"watch_id": clean_watch},
+        "params": {
+            "status": status,
+            "date": slot_date,
+            "message": clean_message,
+            "better_than_booked": better_than_booked,
+        },
+    }
+
+
+def appointment_attention_entry(
+    owner: str,
+    watch_id: str,
+    *,
+    status: str,
+    error_code: str,
+    consecutive_failures: int,
+    notified_at: int | float,
+) -> dict:
+    """Strictly allowlisted live alert for circuit-break or auth renewal on one appointment watch."""
+    clean_watch = _local_id(watch_id)
+    if (
+        status not in _SEVERITY_ORDER[KIND_APPOINTMENT_ATTENTION]
+        or error_code not in _APPT_ERROR_CODES
+        or type(consecutive_failures) is not int
+        or consecutive_failures < 1
+    ):
+        raise OwnerInboxDataError()
+    stamp = int(_non_negative_float(notified_at))
+    return {
+        "kind": KIND_APPOINTMENT_ATTENTION,
+        "subject_id": opaque_subject_id(owner, KIND_APPOINTMENT_ATTENTION, clean_watch),
+        "milestone": _check_milestone(f"{status}:{stamp}"),
+        "ref": {"watch_id": clean_watch},
+        "params": {
+            "status": status,
+            "error_code": error_code,
+            "consecutive_failures": consecutive_failures,
+        },
     }
 
 

@@ -57,10 +57,19 @@ export type AnalyticsForecastItem = Schemas["BudgetAnalyticsForecastItem"];
 export type AnalyticsInboxConsentItem = Schemas["BudgetAnalyticsInboxConsentItem"];
 export type AnalyticsInboxMortgageItem = Schemas["BudgetAnalyticsInboxMortgageItem"];
 export type AnalyticsInboxSpendingLimitItem = Schemas["BudgetAnalyticsInboxSpendingLimitItem"];
-export type AnalyticsInbox = Schemas["BudgetAnalyticsInbox"];
-export type AnalyticsInboxItem = AnalyticsInbox["items"][number];
-export type AnalyticsInboxKey = Schemas["BudgetAnalyticsInboxKeyRequest"];
-export type AnalyticsInboxMarkRequest = Schemas["BudgetAnalyticsInboxMarkRequest"];
+// Browser inbox calls omit the contract version header and use the four legacy alert kinds.
+export type AnalyticsInboxItem =
+  | AnalyticsInboxConsentItem
+  | AnalyticsInboxMortgageItem
+  | AnalyticsInboxSpendingLimitItem
+  | Schemas["BudgetAnalyticsInboxDeviceItem"];
+export type AnalyticsInbox = Omit<Schemas["BudgetAnalyticsInbox"], "items"> & { items: AnalyticsInboxItem[] };
+export type AnalyticsInboxKey = Omit<Schemas["BudgetAnalyticsInboxKeyRequest"], "kind"> & {
+  kind: AnalyticsInboxItem["kind"];
+};
+export type AnalyticsInboxMarkRequest = Omit<Schemas["BudgetAnalyticsInboxMarkRequest"], "items"> & {
+  items: AnalyticsInboxKey[];
+};
 export type AnalyticsInboxMarkSaved = Schemas["BudgetAnalyticsInboxMarkSaved"];
 
 export type AnalyticsMonthlyBudget = Schemas["BudgetAnalyticsMonthlyBudget"];
