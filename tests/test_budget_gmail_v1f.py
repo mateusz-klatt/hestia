@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from hestia import db
 from hestia.budget import gmail_message, gmail_worker
@@ -406,7 +406,7 @@ class V1fStoreTests(unittest.TestCase):
         directory = TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.addCleanup(db.reset_engine_cache)
-        _engine, self.sessions = db.init_db(Path(directory.name) / "v1f.db")
+        self.engine, self.sessions = db.init_db(Path(directory.name) / "v1f.db")
         with self.sessions.begin() as session:
             session.add(db.AppMeta(key="users_authoritative", value="1"))
             session.add(db.User(username="owner", password_hash="synthetic", role="admin"))
@@ -558,13 +558,16 @@ class V1fStoreTests(unittest.TestCase):
                     self.assertEqual(stored.gateway_ref_hmac, incoming_ref)
                     self.assertEqual(receipt_ref_hmacs(session, stored), frozenset(expected))
                     meta = session.get(db.AppMeta, _gateway_ref_key(row.id))
-                    self.assertEqual(json.loads(meta.value), sorted(expected - {incoming_ref}))
+                    expected_order = [payment_ref] if index == 1 else [first_transaction]
+                    if secondary is not None:
+                        expected_order.append(secondary)
+                    self.assertEqual(json.loads(meta.value), expected_order)
                     for ref in expected:
                         self.assertEqual([match.id for match in self.store._gateway_rows(
                             session, "owner", gateway, ref,
                         )], [row.id])
 
-    def test_gateway_ref_union_is_bounded_and_keeps_newest_refs_deterministically(self):
+    def test_gateway_ref_union_drops_oldest_ref_at_bound(self):
         primary = "f" * 64
         refs = tuple(f"{index:064x}" for index in range(1, 5))
         registered = _gateway_payment(total="40", fee=None, status="registered", ref=primary,
@@ -580,7 +583,7 @@ class V1fStoreTests(unittest.TestCase):
             stored = session.get(db.BudgetReceipt, row.id)
             self.assertEqual(receipt_ref_hmacs(session, stored), frozenset({primary, *refs[1:]}))
             self.assertEqual(json.loads(session.get(db.AppMeta, _gateway_ref_key(row.id)).value),
-                             sorted(refs[1:]))
+                             list(refs[1:]))
 
     def test_dual_ref_confirmed_registration_changes_only_status_when_totals_match(self):
         for index, paid_total in enumerate(("120", "121.5"), start=1):
@@ -731,6 +734,41 @@ class V1fStoreTests(unittest.TestCase):
             self.assertEqual(receipt_ref_hmacs(session, gateway_row),
                              frozenset({_ref("accessor-primary"), _ref("accessor-secondary")}))
             self.assertEqual(receipt_ref_hmacs(session, shop_row), frozenset())
+
+    def test_gateway_rows_query_count_is_constant_as_history_grows(self):
+        primary, secondary = _ref("history-target-primary"), _ref("history-target-secondary")
+        target = _gateway_payment(ref=primary, secondary_ref=secondary)
+        self.assertEqual(self._commit(self._message(1, payment=target)), (1, 0, True))
+        (target_row,) = self._receipts()
+        statements = []
+
+        def record(_connection, _cursor, statement, _parameters, _context, _executemany):
+            statements.append(statement)
+
+        event.listen(self.engine, "before_cursor_execute", record)
+        try:
+            with self.sessions() as session:
+                self.assertEqual(self.store._gateway_rows(session, "owner", "Example Pay", None), [])
+            self.assertEqual(statements, [])
+            for start, stop in ((0, 3), (3, 15)):
+                with self.sessions.begin() as session:
+                    for index in range(start, stop):
+                        session.add(db.BudgetReceipt(
+                            id=f"history-{index}", owner="owner", raw_shop_name="Historical Shop",
+                            receipt_date=DAY.isoformat(), total_amount="1", currency="PLN", status="confirmed",
+                            payment_method="card", document_kind="payment_confirmation", source_kind="email", gateway="Example Pay",
+                            gateway_status="paid", gateway_ref_hmac=_ref(f"history-{index}"), version=1,
+                            created_at=self.clock.now, updated_at=self.clock.now,
+                        ))
+                statements.clear()
+                with self.sessions() as session:
+                    matches = self.store._gateway_rows(session, "owner", "Example Pay", secondary)
+                    self.assertEqual([row.id for row in matches], [target_row.id])
+                self.assertEqual(len(statements), 1, statements)
+                self.assertIn("LEFT OUTER JOIN", statements[0])
+                self.assertIn("LIKE", statements[0])
+        finally:
+            event.remove(self.engine, "before_cursor_execute", record)
 
     def test_receipt_ref_hmacs_is_fail_closed_exact_and_preview_safe(self):
         primary = _ref("defensive-primary")
@@ -1658,12 +1696,33 @@ class V1f2ForwardedPaymentTests(unittest.TestCase):
         duplicate = format_datetime(outer + timedelta(days=2))
         self.assertEqual(self._inner_receipt_date([duplicate, duplicate], outer), fallback)
 
+    def test_forwarded_inner_date_bounds_use_utc_across_dst(self):
+        for label, outer, delta in (
+            ("spring-minus-400", datetime(2026, 4, 1, 10, tzinfo=UTC), timedelta(days=-400)),
+            ("spring-plus-3", datetime(2026, 3, 27, 11, tzinfo=UTC), timedelta(days=3)),
+            ("autumn-minus-400", datetime(2026, 10, 30, 10, tzinfo=UTC), timedelta(days=-400)),
+            ("autumn-plus-3", datetime(2026, 10, 22, 11, tzinfo=UTC), timedelta(days=3)),
+        ):
+            boundary = outer + delta
+            fallback = outer.astimezone(gmail_message._WARSAW).date()
+            with self.subTest(case=label, boundary="exact"):
+                self.assertEqual(self._inner_receipt_date([format_datetime(boundary)], outer),
+                                 boundary.astimezone(gmail_message._WARSAW).date())
+            outside = boundary + (timedelta(seconds=1) if delta.days > 0 else -timedelta(seconds=1))
+            with self.subTest(case=label, boundary="outside"):
+                self.assertEqual(self._inner_receipt_date([format_datetime(outside)], outer), fallback)
+
     def test_gmail_locale_inner_dates_use_warsaw_local_time_strictly(self):
         outer = datetime(2026, 11, 25, 23, 30, tzinfo=UTC)
         for header in (
             "śr., 25 lis 2026 o 23:30",
+            "śr., 25 lis 2026 o 9:30",
             "Wed, Nov 25, 2026 at 11:30 PM",
+            "Wed, Nov 25, 2026 at 11:30\u202fPM",
+            "Wed, Nov 25, 2026 at 11:30\u00a0PM",
             "Wed, Nov 25, 2026 at 12:30 AM",
+            "Wed, 25 Nov 2026 at 10:20",
+            "Wed, 25 Nov 2026 at 9:30",
         ):
             with self.subTest(header=header):
                 expected = date(2026, 11, 25)
@@ -1857,5 +1916,24 @@ class V1f3ForwardBodyTests(unittest.TestCase):
         forwarded.add_alternative(html, subtype="html")
         with patch("hestia.budget.gmail_message.inline_forward_body", side_effect=lambda text: text):
             pending = self._process(forwarded, "v1f3-no-actual-cut")
+        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.payment),
+                         ("imported", True, None))
+
+    def test_two_standalone_whole_line_markers_skip_outer_html_fallback(self):
+        plain = (_V1F3_FIXTURES / "forwarded_table_dropped_plain.txt").read_text(encoding="utf-8")
+        html = (_V1F3_FIXTURES / "forwarded_table_dropped_html.html").read_text(encoding="utf-8")
+        html = html.replace(
+            "<table>", "<div>---------- Forwarded message ---------</div><table>",
+        )
+        forwarded = V1f2ForwardedPaymentTests._email(
+            "owner@gmail.com", plain, rfc_id="<owner-v1f3-two-standalone@gmail.com>",
+        )
+        forwarded.add_alternative(html, subtype="html")
+        inner = V1f2ForwardedPaymentTests._email(
+            "orders@shop.example.test", "Order confirmed without a table.", subject="Order #XX12345",
+            rfc_id="<shop-v1f3-two-standalone@shop.example.test>",
+        )
+        with patch("hestia.budget.gmail_message.unwrap_trusted_forward", return_value=(inner, True)):
+            pending = self._process(forwarded, "v1f3-two-standalone-markers")
         self.assertEqual((pending.outcome, pending.forwarded_manually, pending.payment),
                          ("imported", True, None))

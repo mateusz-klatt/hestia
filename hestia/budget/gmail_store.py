@@ -156,15 +156,15 @@ def _gateway_ref_key(receipt_id):
 
 def _stored_gateway_ref_hmacs(meta):
     if meta is None:
-        return frozenset()
+        return ()
     try:
         refs = json.loads(meta.value)
     except (TypeError, ValueError, RecursionError):
-        return frozenset()
+        return ()
     if (not isinstance(refs, list) or len(refs) >= MAX_GATEWAY_REFS
             or any(not isinstance(ref, str) or not ref for ref in refs)):
-        return frozenset()
-    return frozenset(refs)
+        return ()
+    return tuple(dict.fromkeys(refs))
 
 
 def receipt_ref_hmacs(session, receipt) -> frozenset[str]:
@@ -177,7 +177,7 @@ def receipt_ref_hmacs(session, receipt) -> frozenset[str]:
 
 
 def _write_gateway_ref_hmacs(session, receipt_id, primary, refs):
-    secondary = sorted(set(refs) - {primary, None})
+    secondary = [ref for ref in dict.fromkeys(refs) if ref is not None and ref != primary]
     key = _gateway_ref_key(receipt_id)
     if secondary:
         session.merge(AppMeta(key=key, value=json.dumps(secondary)))
@@ -525,11 +525,21 @@ class GmailStore(BudgetStore):
 
     @staticmethod
     def _gateway_rows(session, owner, gateway, ref_hmac, secondary_ref_hmac=None):
-        refs = {ref for ref in (ref_hmac, secondary_ref_hmac) if ref is not None}
-        candidates = session.scalars(select(BudgetReceipt).where(
+        refs = frozenset(ref for ref in (ref_hmac, secondary_ref_hmac) if ref is not None)
+        if not refs:
+            return []
+        secondary = aliased(AppMeta)
+        secondary_match = and_(secondary.key.is_not(None), or_(
+            *(secondary.value.like(f'%"{ref}"%') for ref in refs),
+        ))
+        candidates = session.execute(select(BudgetReceipt, secondary).outerjoin(
+            secondary, secondary.key == _gateway_ref_key(BudgetReceipt.id),
+        ).where(
             BudgetReceipt.owner == owner, BudgetReceipt.gateway == gateway,
+            or_(BudgetReceipt.gateway_ref_hmac.in_(refs), secondary_match),
         ).order_by(BudgetReceipt.id)).all()
-        return [row for row in candidates if refs & receipt_ref_hmacs(session, row)]
+        return [row for row, stored in candidates
+                if refs & {row.gateway_ref_hmac, *_stored_gateway_ref_hmacs(stored)}]
 
     def _merge_gateway(self, session, owner, payment, now):
         """Merge by any stored gateway ref. Returns None when the row must be inserted."""
@@ -573,16 +583,16 @@ class GmailStore(BudgetStore):
         incoming = tuple(dict.fromkeys(ref for ref in (
             payment.gateway_ref_hmac, payment.gateway_ref_secondary_hmac,
         ) if ref is not None))
-        existing = receipt_ref_hmacs(session, row)
+        stored_refs = session.get(AppMeta, _gateway_ref_key(row.id))
+        existing = tuple(ref for ref in (*_stored_gateway_ref_hmacs(stored_refs), row.gateway_ref_hmac)
+                         if ref is not None)
         collision = session.scalar(select(BudgetReceipt.id).where(
             BudgetReceipt.owner == owner, BudgetReceipt.gateway == row.gateway,
             BudgetReceipt.gateway_ref_hmac == payment.gateway_ref_hmac, BudgetReceipt.id != row.id,
         ).limit(1))
         primary = row.gateway_ref_hmac if collision is not None else payment.gateway_ref_hmac
-        excluded = {primary, row.gateway_ref_hmac, *incoming}
-        older = sorted(existing - excluded, reverse=True)
-        ordered = tuple(dict.fromkeys((primary, *incoming, row.gateway_ref_hmac, *older)))
-        refs = frozenset(ref for ref in ordered[:MAX_GATEWAY_REFS] if ref is not None)
+        others = tuple(dict.fromkeys(ref for ref in (*existing, *incoming) if ref != primary))
+        refs = (*others[-(MAX_GATEWAY_REFS - 1):], primary)
         _write_gateway_ref_hmacs(session, row.id, primary, refs)
         row.gateway_ref_hmac = primary
         if payment.payee_hmac is not None:
@@ -723,7 +733,9 @@ class GmailStore(BudgetStore):
             gross_line_total=fields.total_amount, net_line_total=fields.total_amount,
         ))
         session.add(AppMeta(key=_payment_sender_key(receipt.id), value=payment.sender_hmac))
-        refs = {ref for ref in (payment.gateway_ref_hmac, payment.gateway_ref_secondary_hmac) if ref is not None}
+        refs = tuple(dict.fromkeys(ref for ref in (
+            payment.gateway_ref_hmac, payment.gateway_ref_secondary_hmac,
+        ) if ref is not None))
         if payment.gateway_ref_secondary_hmac is not None:
             _write_gateway_ref_hmacs(session, receipt.id, payment.gateway_ref_hmac, refs)
         if payment.gateway_ref_hmac is not None and payment.status == "paid":

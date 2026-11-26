@@ -30,10 +30,16 @@ _WARSAW = ZoneInfo("Europe/Warsaw")
 _POLISH_FORWARD_DATE = re.compile(
     r"(?:pon|wt|śr|czw|pt|sob|niedz)\., ([0-9]{1,2}) "
     r"(sty|lut|mar|kwi|maj|cze|lip|sie|wrz|paź|lis|gru) ([0-9]{4}) o "
-    r"([01][0-9]|2[0-3]):([0-5][0-9])",
+    r"([01]?[0-9]|2[0-3]):([0-5][0-9])",
     re.IGNORECASE,
 )
-_ENGLISH_FORWARD_DATE = re.compile(
+_ENGLISH_FORWARD_DATE_24H = re.compile(
+    r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), ([0-9]{1,2}) "
+    r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ([0-9]{4}) at "
+    r"([01]?[0-9]|2[0-3]):([0-5][0-9])",
+    re.IGNORECASE,
+)
+_ENGLISH_FORWARD_DATE_12H = re.compile(
     r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
     r"([0-9]{1,2}), ([0-9]{4}) at (1[0-2]|[1-9]):([0-5][0-9]) ([AP]M)",
     re.IGNORECASE,
@@ -178,11 +184,16 @@ def _has_rfc822_attachment(message):
 
 
 def _parse_forward_date(value):
+    value = value.replace("\u202f", " ").replace("\u00a0", " ")
     if match := _POLISH_FORWARD_DATE.fullmatch(value):
         day, month, year, hour, minute = match.groups()
         return datetime(int(year), _POLISH_FORWARD_MONTHS[month.casefold()], int(day),
                         int(hour), int(minute), tzinfo=_WARSAW)
-    if match := _ENGLISH_FORWARD_DATE.fullmatch(value):
+    if match := _ENGLISH_FORWARD_DATE_24H.fullmatch(value):
+        day, month, year, hour, minute = match.groups()
+        return datetime(int(year), _ENGLISH_FORWARD_MONTHS[month.casefold()], int(day),
+                        int(hour), int(minute), tzinfo=_WARSAW)
+    if match := _ENGLISH_FORWARD_DATE_12H.fullmatch(value):
         month, day, year, hour, minute, meridiem = match.groups()
         hour = int(hour) % 12 + (12 if meridiem.upper() == "PM" else 0)
         return datetime(int(year), _ENGLISH_FORWARD_MONTHS[month.casefold()], int(day),
@@ -192,10 +203,10 @@ def _parse_forward_date(value):
 
 def _payment_receipt_date(message, pending):
     try:
-        outer = datetime.fromtimestamp(pending.internal_date, _WARSAW)
+        outer = datetime.fromtimestamp(pending.internal_date, UTC)
+        fallback = outer.astimezone(_WARSAW).date()
     except (OverflowError, OSError, ValueError):
         return None
-    fallback = outer.date()
     if pending.trust_path not in ("spouse_forward", "owner_forward"):
         return fallback
     headers = message.get_all("Date", ())
