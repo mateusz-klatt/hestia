@@ -64,6 +64,7 @@ function receiptSummary(overrides: Partial<ReceiptSummary> = {}): ReceiptSummary
     payee_host: null,
     evidence_for_receipt_id: null,
     has_document: true,
+    card_last4: null,
     created_at: 1_700_000_000,
     updated_at: 1_700_000_000,
     ...overrides,
@@ -1988,5 +1989,121 @@ describe("ReceiptsView", () => {
     expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("Dane z banku się zmieniły — wybierz ponownie");
     expect(linkRadio("keep", dialog()).checked).toBe(false);
     expect(button("Zatwierdź dokument", dialog()).disabled).toBe(true);
+  });
+
+  it("shows ID preselection badge, no-bank-data period note, and opt-in bulk confirm linking only exact ID matches", async () => {
+    const p24Id = "id-p24-1";
+    const nipId = "id-nip-1";
+    const gapId = "id-gap-1";
+    const idCand = receiptCandidate({
+      account_id: "local-a",
+      entry_reference: "e".repeat(64),
+      match_strength: "id",
+      merchant_token_hit: false,
+      candidate_token: "tok-p24-unique",
+    });
+    const nipCand = receiptCandidate({
+      account_id: "local-a",
+      entry_reference: "f".repeat(64),
+      match_strength: "nip",
+      merchant_token_hit: true,
+      candidate_token: "tok-nip-strong",
+    });
+
+    const rows: ReceiptSummary[] = [
+      receiptSummary({
+        receipt_id: p24Id,
+        status: "imported",
+        source_kind: "email",
+        document_kind: "payment_confirmation",
+        gateway: "Przelewy24",
+        gateway_status: "paid",
+        has_document: false,
+        raw_shop_name: "Sklep P24",
+        payment_method: "card",
+      }),
+      receiptSummary({
+        receipt_id: nipId,
+        status: "imported",
+        source_kind: "email",
+        document_kind: "invoice",
+        raw_shop_name: "Sklep NIP",
+        raw_nip: "7791011327",
+        payment_method: null,
+      }),
+      receiptSummary({
+        receipt_id: gapId,
+        status: "imported",
+        source_kind: "email",
+        document_kind: "payment_confirmation",
+        raw_shop_name: "Apple PreSep",
+        receipt_date: "2026-08-01",
+        payment_method: "card",
+        card_last4: "2177",
+      }),
+    ];
+    const clients = fakeClients(rows);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((receiptId) => {
+      if (receiptId === p24Id) {
+        return ok({
+          receipt: receiptDetail({ ...rows[0], card_last4: null, payment_evidence: [] }),
+          candidates: [idCand],
+          no_bank_data: false,
+        });
+      }
+      if (receiptId === nipId) {
+        return ok({
+          receipt: receiptDetail({ ...rows[1], card_last4: null, lines: [], payment_evidence: [] }),
+          candidates: [nipCand],
+          no_bank_data: false,
+        });
+      }
+      return ok({
+        receipt: receiptDetail({ ...rows[2], payment_evidence: [] }),
+        candidates: [],
+        no_bank_data: true,
+      });
+    });
+
+    await renderReceipts(clients, { locale: "pl" });
+
+    // 1) Gateway P24 receipt with unique "id" candidate preselects it with ID badge.
+    await click(openDetailButton(0, "Szczegóły"));
+    const d0 = dialog();
+    expect(d0.querySelector('[data-match-strength="id"]')?.textContent).toBe("Identyfikator");
+    expect(linkRadio("candidate:0", d0).checked).toBe(true);
+    expect(d0.textContent).not.toContain("Brak danych z banku za ten okres");
+    await click(button("Zamknij", d0));
+
+    // 2) Pre-Sep receipt with no_bank_data: true shows "Brak danych z banku za ten okres." instead of empty list.
+    await click(openDetailButton(2, "Szczegóły"));
+    const d2 = dialog();
+    expect(d2.textContent).toContain("Brak danych z banku za ten okres.");
+    await click(button("Zamknij", d2));
+
+    // 3) Opt-in bulk confirm links ONLY p24Id (exact "id" candidate) and leaves nipId & gapId unlinked.
+    await click(inputByName("select_all_loaded"));
+    await click(button("Zatwierdź zaznaczone (3)"));
+    const bulkBox = alertBox();
+    const bulkOpt = bulkBox.querySelector<HTMLInputElement>('input[name="bulk_link_by_id"]');
+    if (bulkOpt === null) throw new Error("Expected bulk_link_by_id checkbox");
+    expect(bulkOpt.checked).toBe(false);
+    expect(bulkBox.textContent).toContain("Zatwierdź z powiązaniem (tylko pewne — po identyfikatorze)");
+    await click(bulkOpt);
+    await click(button("Rozpocznij zatwierdzanie", bulkBox));
+
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledTimes(3);
+    expect(clients.rApi.confirmReceipt).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      receipt_id: p24Id,
+      link: { account_id: idCand.account_id, entry_reference: idCand.entry_reference, candidate_token: "tok-p24-unique" },
+    }));
+    expect(clients.rApi.confirmReceipt).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      receipt_id: nipId,
+      link: null,
+    }));
+    expect(clients.rApi.confirmReceipt).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      receipt_id: gapId,
+      link: null,
+    }));
   });
 });

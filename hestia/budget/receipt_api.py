@@ -11,7 +11,8 @@ from pydantic import ValidationError
 
 from .. import api_contract, authz, store_sql
 from ..db import init_db
-from . import api, consent_context, device_token
+from . import api, consent_context, device_token, gmail_config
+from .analytics_core import canonical_money
 from .config import BudgetConfigError
 from .receipt_parser import ReceiptError
 from .receipt_store import BudgetReceiptStore
@@ -31,6 +32,7 @@ _CONTRACT_HEADER = "X-Hestia-Contract-Version"
 _CONTRACT_VERSION = re.compile(r"0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\Z")
 _NATIVE_GMAIL_VERSION = (0, 40, 0)
 _GATEWAY_EVIDENCE_VERSION = (0, 52, 0)
+_ID_MATCH_VERSION = (0, 57, 0)
 _CURRENT_VERSION = tuple(int(part) for part in api_contract.CONTRACT_VERSION.split("."))
 _RECEIPT_RESULT_KEY = {"parse-text": "draft", "confirm": "receipt", "list": "receipts",
                        "search": "receipts", "detail": "receipt"}
@@ -57,6 +59,8 @@ def _store(secret, device_id=None, actor=None):
         raise BudgetUsersBackendRequired()
     return BudgetReceiptStore(
         sessions, clock=time.time, cursor_secret=secret, device_id=device_id, actor=actor,
+        ref_hmac_secret=gmail_config.load_ref_hmac_secret(session_secret=secret),
+        card_accounts=gmail_config.load_card_accounts(),
     )
 
 
@@ -116,6 +120,23 @@ def _receipt_contract(request, operation):
 
 
 def _response(operation, result, version):
+    if version < _ID_MATCH_VERSION and operation in _RECEIPT_RESULT_KEY:
+        key = _RECEIPT_RESULT_KEY[operation]
+        receipts = result[key] if key == "receipts" else (result[key],)
+        for receipt in receipts:
+            receipt.pop("card_last4", None)
+        result.pop("no_bank_data", None)
+        candidates = result.get("candidates")
+        if candidates:
+            expected_total = canonical_money(result[key]["total_amount"])
+            filtered = []
+            for candidate in candidates:
+                if canonical_money(candidate["amount"]) != expected_total:
+                    continue
+                if candidate.get("match_strength") == "id":
+                    candidate["match_strength"] = "none"
+                filtered.append(candidate)
+            result["candidates"] = filtered
     if version < _GATEWAY_EVIDENCE_VERSION and operation in _RECEIPT_RESULT_KEY:
         key = _RECEIPT_RESULT_KEY[operation]
         receipts = result[key] if key == "receipts" else (result[key],)

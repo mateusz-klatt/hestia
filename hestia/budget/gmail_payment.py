@@ -37,6 +37,8 @@ class PaymentInspection:
     reject_reason: str | None = None
     gateway_ref: str | None = None
     gateway_ref_secondary: str | None = None
+    card_last4: str | None = None
+    blik_ref: str | None = None
 
 
 class _RejectedPayment(ValueError):
@@ -157,6 +159,68 @@ _REF_PAYU_LINK = re.compile(
     r"https?://[^\s?#]+\?(?:[^\s#]*?&(?:amp;)?)?transId=([A-Z0-9]+)(?=$|[&#)\]\s])",
     re.IGNORECASE,
 )
+_BLIK_REF = re.compile(
+    r"(?:\b(?:nr|numer)\s+transakcji(?:\s+blik)?|\bidentyfikator\s+transakcji\s+blik)"
+    r"\s*(?::\s*)?(?:\*{1,2}\s*|\(\s*)?(?<![\w./-])([0-9]{6,20})(?![\w./-])",
+    re.IGNORECASE,
+)
+_TPAY_BLIK_SUFFIX = re.compile(r"(?<![\w./-])TR-[A-Z0-9]+-[A-Z0-9]+/([0-9]{7,20})(?![\w./-])", re.IGNORECASE)
+_GATEWAY_ALIASES = {
+    "p24": "p24",
+    "przelewy24": "p24",
+    "przelewy 24": "p24",
+    "tpay": "tpay",
+    "tpay.com": "tpay",
+    "autopay": "autopay",
+    "blue media": "autopay",
+    "bluemedia": "autopay",
+    "payu": "payu",
+    "payu.com": "payu",
+    "paynow": "paynow",
+    "paynow.pl": "paynow",
+    "blik": "blik",
+    "stripe": "stripe",
+}
+_BANK_NIP_SPAN = re.compile(r"\bNIP\b[:\s-]*[0-9-]{8,16}", re.IGNORECASE)
+_BANK_DATE_TOKEN = re.compile(r"^(?:\d{2}[-_./]\d{2}[-_./]\d{4}|\d{4}[-_./]\d{2}[-_./]\d{2})$")
+_BANK_SWIFT_TAG = re.compile(
+    r"/(?:OPT|TI|BI|TXT|TITL|BENM|ADR|OB|ORD|REF|NRB|KNT|DKR|ZLC|NIP)/", re.IGNORECASE,
+)
+_BANK_OPT_PATH = re.compile(rf"/OPT/(\S+?)(?={_BANK_SWIFT_TAG.pattern}|\s|$)", re.IGNORECASE)
+_BANK_STRUCTURED_REFS = {
+    "p24": re.compile(r"(?<![\w.-])(P24(?:-[A-Z0-9]{3}){3})(?![\w./-])", re.IGNORECASE),
+    "tpay": re.compile(
+        r"(?<![\w.-])(TR-[A-Z0-9]+-[A-Z0-9]+)(?:(?![\w./-])|(?=/[0-9]{6,20}(?![\w./-])))",
+        re.IGNORECASE,
+    ),
+    "paynow": re.compile(rf"(?<![\w.-])({_PAYNOW_ID})(?![\w./-])", re.IGNORECASE),
+}
+_BANK_PAYU_NUMERIC = re.compile(r"(?<![\w./-])([0-9]{5,20})(?![\w./-])")
+_BANK_PAYU_ALNUM = re.compile(
+    r"(?<![\w./-])(?=[A-Z0-9]*[0-9])(?=[A-Z0-9]*[A-Z])([A-Z0-9]{6,24})(?![\w./-])",
+    re.IGNORECASE,
+)
+_OPT_PAYU_NUMERIC = re.compile(r"^[0-9]{5,20}$")
+_OPT_PAYU_ALNUM = re.compile(r"^(?=[A-Z0-9]*[0-9])(?=[A-Z0-9]*[A-Z])[A-Z0-9]{6,24}$")
+_BANK_AUTOPAY_TOKEN = re.compile(
+    r"(?<![\w./-])(?=[A-Z0-9_-]*[0-9])([A-Z0-9]{4,}(?:[-_][A-Z0-9]+)*)(?![\w./-])",
+    re.IGNORECASE,
+)
+_BANK_AUTOPAY_SLASH = re.compile(r"(?<![\w./-])([A-Z0-9]+/[A-Z0-9]{2,}(?:/[A-Z0-9]+)*)(?![\w./-])", re.IGNORECASE)
+_OPT_AUTOPAY_VALUE = re.compile(r"^[A-Z0-9]+(?:[-_/][A-Z0-9]+)*$")
+_BANK_GATEWAY_LABELS = re.compile(
+    r"\b(?:"
+    r"(?P<p24>przelewy\s*24|p24(?!-[A-Z0-9])|paypro)"
+    r"|(?P<tpay>tpay(?:\.com)?|krajowy\s+integrator(?:\s+p[łl]atno[śs]ci)?|transferuj(?:\.pl)?)"
+    r"|(?P<autopay>autopay|blue\s*media)"
+    r"|(?P<payu>payu(?:\.com)?)"
+    r"|(?P<paynow>paynow(?:\.pl)?|melements)"
+    r"|(?P<blik>blik)"
+    r"|(?P<other>stripe|paypal|adyen|klarna|dotpay|imoje|cashbill|hotpay|polcard|eservice)"
+    r")\b",
+    re.IGNORECASE,
+)
+_GENERIC_ANCHORED_GATEWAYS = frozenset({"payu", "autopay"})
 # Payee hosts: an "Adres www:" label, a parenthesized URL after the payee, or
 # "dla https://host/" in the subject.
 _ADDRESS_WWW = re.compile(r"Adres\s+www\s*:\s*(\S+)", re.IGNORECASE)
@@ -164,6 +228,16 @@ _PAYEE_URL = re.compile(r"\(\s*(https?://[^\s)]+)", re.IGNORECASE)
 _SUBJECT_PAYEE = re.compile(r"\bdla\s++(?:-\s++)?(.+)", re.IGNORECASE)
 _TRAILING_ID = re.compile(r"\s+\d{6,}$")
 _CARD = re.compile(r"(?<!\w)(?:[•]{4}|[*]{4}|x{4}|(?<!\S)-)\s+[0-9]{4}$", re.IGNORECASE)
+_CARD_LAST4_PATTERNS = (
+    re.compile(r"(?<![./-])(?:[•·]{2,}|[*]{4,}|[xX]{4,})\s*([0-9]{4})(?![0-9-])"),
+    re.compile(
+        r"\b(?:visa|mastercard|maestro|amex|american\s+express|debit|credit|"
+        r"karta(?:\s+p[łl]atnicza)?|card|payment\s+method|metoda\s+p[łl]atno[śs]ci)\s*"
+        r"(?:[-–]|ending\s+in|ko[nń]cz[aą]c[aey]\s+si[eę]\s+na|:?\s*(?:nr\s+)?[•·*x]{2,}|:)\s*"
+        r"([0-9]{4})(?![0-9-])",
+        re.IGNORECASE,
+    ),
+)
 _CURRENCY_CODE = r"(?:PLN|EUR|USD|GBP)"
 _CURRENCY = rf"(?:{_CURRENCY_CODE}|zł|€|\$|£)"
 _MONEY_NUMBER = (
@@ -385,6 +459,151 @@ def _gateway_status(provider: PaymentProvider | None, subjects: tuple[str, ...],
     return "registered"
 
 
+def canonical_gateway(gateway: str | None) -> str | None:
+    """Normalize a receipt gateway label or provider key to a canonical gateway key."""
+    if not isinstance(gateway, str):
+        return None
+    key = " ".join(unicodedata.normalize("NFKC", gateway).strip().lower().split())
+    return _GATEWAY_ALIASES.get(key)
+
+
+def _blik_ref(subjects: tuple[str, ...], lines: list[str]) -> str | None:
+    joined = "\n".join((*subjects, *lines))
+    match = _BLIK_REF.search(joined) or _TPAY_BLIK_SUFFIX.search(joined)
+    return match[1] if match else None
+
+
+def _card_last4(lines: list[str]) -> str | None:
+    found = {
+        match[1]
+        for line in lines
+        for pattern in _CARD_LAST4_PATTERNS
+        for match in pattern.finditer(line)
+    }
+    return found.pop() if len(found) == 1 else None
+
+
+def _is_other_gateway_token(token: str) -> bool:
+    return bool(token.startswith(("P24-", "TR-")) or _GATEWAY_REFS["paynow"].fullmatch(token))
+
+
+def _gateway_labels(text: str) -> list[tuple[int, int, str]]:
+    labels: list[tuple[int, int, str]] = []
+    for match in _BANK_GATEWAY_LABELS.finditer(text):
+        group = match.lastgroup
+        labels.append((match.start(), match.end(), "_other" if group == "other" else group))
+    return labels
+
+
+def _token_gateway_allowed(pos: int, provider: str, labels: list[tuple[int, int, str]]) -> bool:
+    if provider in _GENERIC_ANCHORED_GATEWAYS and not any(gw == provider for _, _, gw in labels):
+        return False
+    preceding = None
+    for _, end, gw in labels:
+        if end <= pos:
+            preceding = gw
+        else:
+            break
+    if preceding is not None:
+        return preceding == provider
+    return not (provider in _GENERIC_ANCHORED_GATEWAYS and labels and labels[0][2] != provider)
+
+
+def _opt_value(raw: str) -> str:
+    value = raw.rstrip("/").upper()
+    if value.startswith("IU/") and len(value) > 3:
+        return value[3:]
+    return value
+
+
+def _strip_bare_bank_refs(text: str, matched_refs: set[str], *, count: int = 0) -> str:
+    for ref in sorted(matched_refs, key=len, reverse=True):
+        pattern = rf"(?<![\w./-]){re.escape(ref)}(?![\w./-])"
+        text = re.sub(pattern, " ", text, count=count, flags=re.IGNORECASE)
+    return text
+
+
+def bank_payee_texts(text: str, matched_refs: set[str]) -> tuple[str, str]:
+    """Return bank text for finding and for ruling out the receipt's payee."""
+    normalized = _BANK_NIP_SPAN.sub(" ", unicodedata.normalize("NFKC", text))
+    if _BANK_SWIFT_TAG.search(normalized) is None:
+        plain = _strip_bare_bank_refs(normalized, matched_refs)
+        return plain, plain
+
+    opt_refs = set()
+
+    def strip_matched_opt(match: re.Match[str]) -> str:
+        value = _opt_value(match[1])
+        if value in matched_refs:
+            opt_refs.add(value)
+            return " "
+        return match[0]
+
+    # An ID cannot establish the merchant. For the conflict check, retain repeated
+    # occurrences outside /OPT/ and honor the original bare-token boundaries.
+    evidence = _BANK_SWIFT_TAG.sub(" ", _BANK_OPT_PATH.sub(" ", normalized))
+    remaining = _BANK_OPT_PATH.sub(strip_matched_opt, normalized)
+    remaining = _strip_bare_bank_refs(remaining, matched_refs - opt_refs, count=1)
+    return _strip_bare_bank_refs(evidence, matched_refs), _BANK_SWIFT_TAG.sub(" ", remaining)
+
+
+def _autopay_bank_tokens(text: str) -> list[tuple[str, int]]:
+    candidates: list[tuple[str, int]] = [
+        *((match[1].upper(), match.start()) for match in _BANK_AUTOPAY_TOKEN.finditer(text)),
+        *((slash[1].upper(), slash.start()) for slash in _BANK_AUTOPAY_SLASH.finditer(text)),
+    ]
+    for opt in _BANK_OPT_PATH.finditer(text):
+        value = _opt_value(opt[1])
+        if _OPT_AUTOPAY_VALUE.fullmatch(value):
+            candidates.append((value, opt.start()))
+    return [
+        (token, pos)
+        for token, pos in candidates
+        if len(token) >= 5 and any(char.isdigit() for char in token)
+        and not _BANK_DATE_TOKEN.fullmatch(token) and not _is_other_gateway_token(token)
+    ]
+
+
+def _payu_bank_tokens(text: str) -> list[tuple[str, int]]:
+    candidates: list[tuple[str, int]] = [
+        *(
+            (match[1].upper(), match.start())
+            for match in _REF_PAYU_SUBJECT.finditer(text)
+            if len(match[1]) >= 4
+        ),
+        *((match[1].upper(), match.start()) for match in _REF_PAYU_LINK.finditer(text)),
+        *((match[1].upper(), match.start()) for match in _BANK_PAYU_NUMERIC.finditer(text)),
+        *((match[1].upper(), match.start()) for match in _BANK_PAYU_ALNUM.finditer(text)),
+    ]
+    for opt in _BANK_OPT_PATH.finditer(text):
+        value = _opt_value(opt[1])
+        if _OPT_PAYU_NUMERIC.fullmatch(value) or _OPT_PAYU_ALNUM.fullmatch(value):
+            candidates.append((value, opt.start()))
+    return [(token, pos) for token, pos in candidates if not _is_other_gateway_token(token)]
+
+
+def bank_ref_tokens(text: str | None, gateway: str | None) -> set[str]:
+    """Extract normalized per-gateway reference tokens from bank remittance or party text."""
+    provider = canonical_gateway(gateway)
+    if provider is None or not isinstance(text, str) or not text.strip():
+        return set()
+    normalized = unicodedata.normalize("NFKC", text)
+    labels = _gateway_labels(normalized)
+    if provider in _BANK_STRUCTURED_REFS:
+        candidates = [(match[1].upper(), match.start()) for match in _BANK_STRUCTURED_REFS[provider].finditer(normalized)]
+    elif provider == "blik":
+        candidates = [(match[1], match.start()) for match in _BLIK_REF.finditer(normalized)]
+    else:
+        stripped = _BANK_NIP_SPAN.sub(lambda match: " " * len(match[0]), normalized)
+        if provider == "payu":
+            candidates = _payu_bank_tokens(stripped)
+        elif provider == "autopay":
+            candidates = _autopay_bank_tokens(stripped)
+        else:
+            return set()
+    return {token for token, pos in candidates if _token_gateway_allowed(pos, provider, labels)}
+
+
 def _gateway_ref(provider: PaymentProvider | None, subjects: tuple[str, ...], lines: list[str],
                  raw_text: str) -> str | None:
     if provider == "payu":
@@ -392,6 +611,8 @@ def _gateway_ref(provider: PaymentProvider | None, subjects: tuple[str, ...], li
     elif provider == "autopay":
         joined = "\n".join((*subjects, *lines))
         match = _REF_AUTOPAY_PAYMENT_NO.search(joined) or _GATEWAY_REFS["autopay"].search(joined)
+    elif provider == "blik":
+        return _blik_ref(subjects, lines)
     else:
         pattern = _GATEWAY_REFS.get(provider)
         match = pattern.search("\n".join((*subjects, *lines))) if pattern else None
@@ -706,11 +927,14 @@ def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gate
         safe_subjects = tuple(redact_pan(subject) if subject else "" for subject in subjects)
         payee, description, host = _receipt_fields(lines, safe_subjects, gateway)
         reference = _order_reference([*safe_subjects, *lines])
+        blik_ref = _blik_ref(safe_subjects, [*raw, *lines])
+        card_last4 = _card_last4(lines)
         payment = ImportedPayment(payee or merchant, description, *total, _body_dates(lines, following), reference,
                                   payee_from_config=gateway and payee is None,
                                   fee_amount=fee, payee_host=host)
         return PaymentInspection(payment, status=status, gateway_ref=gateway_ref,
-                                 gateway_ref_secondary=gateway_ref_secondary)
+                                 gateway_ref_secondary=gateway_ref_secondary,
+                                 card_last4=card_last4, blik_ref=blik_ref)
     except (_RejectedPayment, ReceiptError, UnicodeEncodeError):
         return PaymentInspection()
 

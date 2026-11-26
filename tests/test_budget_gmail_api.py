@@ -519,12 +519,14 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
                 "X-Hestia-Contract-Version": "0.55.0",
             })
             self.assertEqual((await boundary.json())["parse_failed_reasons"], {"other": 7})
-            current = await self.call("gmail-status", headers=self.headers() | {
-                "X-Hestia-Contract-Version": "0.56.0",
-            })
-            self.assertEqual((await current.json())["parse_failed_reasons"], {
-                "pdf_no_text": 1, "multiple_documents": 2, "other": 4,
-            })
+            for version in ("0.56.0", "0.57.0"):
+                with self.subTest(version=version):
+                    current = await self.call("gmail-status", headers=self.headers() | {
+                        "X-Hestia-Contract-Version": version,
+                    })
+                    self.assertEqual((await current.json())["parse_failed_reasons"], {
+                        "pdf_no_text": 1, "multiple_documents": 2, "other": 4,
+                    })
             invalid = await self.call("gmail-status", headers=self.headers() | {
                 "X-Hestia-Contract-Version": "invalid",
             })

@@ -582,6 +582,10 @@ const en = {
   "budget.receipts.bookingDateNote": "(booked {date})",
   "budget.receipts.candidateListChanged": "Candidate list has changed",
   "budget.receipts.bankEvidenceChanged": "Bank details have changed — please choose again",
+  "budget.receipts.matchBadgeId": "ID match",
+  "budget.receipts.noBankDataPeriod": "No bank data for this period.",
+  "budget.receipts.bulkConfirmWithIdLinkOption": "Confirm with linking (certain only — by ID)",
+  "budget.receipts.bulkConfirmWithIdTitle": "Confirm {count} documents (link only exact ID matches)?",
 
   "budget.consent.title": "Consent status & renewal overview",
   "budget.consent.intro": "Read-only summary of bank consent validity and stored authorization records. No remote closure, deletion or bank request runs here.",

@@ -846,7 +846,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("match_strength", cand_schema["required"])
         self.assertEqual(
             cand_schema["properties"]["match_strength"]["enum"],
-            ["nip", "distinctive", "generic", "none"],
+            ["id", "nip", "distinctive", "generic", "none"],
         )
         base = {
             "account_id": "acc-1",
@@ -861,7 +861,7 @@ class BudgetOpenApiTests(unittest.TestCase):
             "merchant_token_hit": True,
             "candidate_token": "tok-1",
         }
-        for valid_strength in ("nip", "distinctive", "generic", "none"):
+        for valid_strength in ("id", "nip", "distinctive", "generic", "none"):
             model = contract.BudgetReceiptCandidate.model_validate({**base, "match_strength": valid_strength})
             self.assertEqual(model.match_strength, valid_strength)
         for bad_strength in ("strong", "", None, 123):
@@ -869,7 +869,7 @@ class BudgetOpenApiTests(unittest.TestCase):
                 contract.BudgetReceiptCandidate.model_validate({**base, "match_strength": bad_strength})
         ts_path = Path(__file__).resolve().parent.parent / "ui" / "src" / "api" / "openapi.ts"
         cand_ts = ts_path.read_text(encoding="utf-8").split("BudgetReceiptCandidate: {", 1)[1].split("\n        };", 1)[0]
-        self.assertIn('match_strength: "nip" | "distinctive" | "generic" | "none";', cand_ts)
+        self.assertIn('match_strength: "id" | "nip" | "distinctive" | "generic" | "none";', cand_ts)
 
 
 class BudgetProviderBindingTests(unittest.TestCase):

@@ -14,7 +14,7 @@ _PUBLIC_WEBMAIL = frozenset({
 })
 _CONFIG_ERROR = "budget_receipt_gmail_sender_config_invalid"
 _MAX_PAYMENT_SENDERS = 200
-PaymentProvider = Literal["p24", "tpay", "autopay", "payu", "paynow", "stripe"]
+PaymentProvider = Literal["p24", "tpay", "autopay", "payu", "paynow", "stripe", "blik"]
 _PAYMENT_PROVIDER_DOMAINS: dict[str, PaymentProvider] = {
     "przelewy24.pl": "p24",
     "tpay.com": "tpay",

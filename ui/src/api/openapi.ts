@@ -5907,7 +5907,7 @@ export interface components {
              * Match Strength
              * @enum {string}
              */
-            match_strength: "nip" | "distinctive" | "generic" | "none";
+            match_strength: "id" | "nip" | "distinctive" | "generic" | "none";
             /** Merchant Token Hit */
             merchant_token_hit: boolean;
             /** Transaction Date */
@@ -5990,6 +5990,11 @@ export interface components {
         };
         /** BudgetReceiptDetail */
         BudgetReceiptDetail: {
+            /**
+             * Card Last4
+             * @default null
+             */
+            card_last4: string | null;
             /** Chain Key */
             chain_key: string | null;
             /** Created At */
@@ -6117,6 +6122,8 @@ export interface components {
         BudgetReceiptDetailResult: {
             /** Candidates */
             candidates?: components["schemas"]["BudgetReceiptCandidate"][] | null;
+            /** No Bank Data */
+            no_bank_data?: boolean | null;
             receipt: components["schemas"]["BudgetReceiptDetail"];
         };
         /**
@@ -6436,6 +6443,8 @@ export interface components {
             /** Candidates */
             candidates: components["schemas"]["BudgetReceiptCandidate"][];
             draft: components["schemas"]["BudgetReceiptDetail"];
+            /** No Bank Data */
+            no_bank_data?: boolean | null;
             /** Receipt Id */
             receipt_id: string;
             /** Version */
@@ -6487,6 +6496,11 @@ export interface components {
         };
         /** BudgetReceiptSummary */
         BudgetReceiptSummary: {
+            /**
+             * Card Last4
+             * @default null
+             */
+            card_last4: string | null;
             /** Chain Key */
             chain_key: string | null;
             /** Created At */

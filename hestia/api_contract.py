@@ -120,7 +120,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.54.0: origin-bound QR login, native device exchange/budget reads, delegated receipts, and grant editing.
 # 0.55.0: additive match_strength ("nip" | "distinctive" | "generic" | "none") on BudgetReceiptCandidate.
 # 0.56.0: Gmail PDF no-text and multiple-document parse diagnostics.
-CONTRACT_VERSION = "0.56.0"
+# 0.57.0: ID-first matching ("id" strength), receipt card_last4, and no_bank_data period signal.
+CONTRACT_VERSION = "0.57.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -3157,6 +3158,7 @@ class BudgetReceiptSummary(BaseModel):
     payee_host: Annotated[str, Field(min_length=1, max_length=253)] | None = None
     evidence_for_receipt_id: BudgetReceiptId | None = None
     has_document: bool = True
+    card_last4: Annotated[str, Field(pattern=r"^[0-9]{4}$")] | None = None
 
 
 class BudgetReceiptPaymentEvidence(BaseModel):
@@ -3185,7 +3187,7 @@ class BudgetReceiptCandidate(BaseModel):
     booking_date: str | None
     value_date: str | None
     merchant_token_hit: bool
-    match_strength: Literal["nip", "distinctive", "generic", "none"]
+    match_strength: Literal["id", "nip", "distinctive", "generic", "none"]
     date_distance: int
     candidate_token: Annotated[str, Field(min_length=1, max_length=4096)]
 
@@ -3196,6 +3198,7 @@ class BudgetReceiptParseResult(BaseModel):
     draft: BudgetReceiptDetail
     candidates: list[BudgetReceiptCandidate]
     version: int
+    no_bank_data: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class BudgetReceiptDetailResult(BaseModel):
@@ -3205,6 +3208,7 @@ class BudgetReceiptDetailResult(BaseModel):
     candidates: Annotated[
         list[BudgetReceiptCandidate] | None, Field(default=None, json_schema_extra=_OMIT),
     ] = None
+    no_bank_data: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class BudgetReceiptConfirmResult(BaseModel):

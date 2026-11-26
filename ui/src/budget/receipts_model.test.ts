@@ -5,6 +5,7 @@ import {
   REDACTED_VALUE,
   addDecimals,
   availableLinkOptions,
+  buildBulkConfirmRequest,
   buildBulkSelectionPlan,
   buildConfirmRequest,
   buildPlainBulkConfirmRequest,
@@ -28,11 +29,13 @@ import {
   isGmailImportSource,
   isRedactedValue,
   isStaleCursorError,
+  isStrongMatchStrength,
   keepCandidateBinding,
   listMonthForFilter,
   merchantBulkGroups,
   mergeReceiptRows,
   normalizeDecimalInput,
+  preselectedCandidate,
   receiptAccountLabel,
   receiptHasRedactedLines,
   receiptMerchantGroupIdentity,
@@ -43,6 +46,7 @@ import {
   selectKeepDraft,
   subtractDecimals,
   suggestedCandidateDates,
+  uniqueIdCandidate,
   validPolishNip,
   validReceiptDateRange,
 } from "./receipts_model";
@@ -83,6 +87,7 @@ function summary(overrides: Partial<ReceiptSummary> = {}): ReceiptSummary {
     payee_host: null,
     evidence_for_receipt_id: null,
     has_document: true,
+    card_last4: null,
     created_at: 1_700_000_000,
     updated_at: 1_700_000_000,
     ...overrides,
@@ -1028,5 +1033,82 @@ describe("receipts_model", () => {
     expect(afterBump.draft.linkChoice).toBe("");
     expect(afterBump.showSuggestedBanner).toBe(false);
     expect(afterBump.nextSessionEntry.touched).toBe(true);
+  });
+
+  it("treats id as strong for preselection and limits bulk ID linking strictly to single-id matches", () => {
+    expect(isStrongMatchStrength("id")).toBe(true);
+    const idCand: ReceiptCandidate = {
+      account_id: "acc-1",
+      entry_reference: "1".repeat(64),
+      amount: "42.50",
+      currency: "PLN",
+      credit_debit_indicator: "DBIT",
+      transaction_date: "2026-11-14",
+      booking_date: "2026-11-14",
+      value_date: "2026-11-14",
+      merchant_token_hit: false,
+      match_strength: "id",
+      date_distance: 0,
+      candidate_token: "tok-id-1",
+    };
+    const nipCand: ReceiptCandidate = {
+      ...idCand,
+      entry_reference: "2".repeat(64),
+      match_strength: "nip",
+      candidate_token: "tok-nip-1",
+    };
+    const weakCand: ReceiptCandidate = {
+      ...idCand,
+      entry_reference: "3".repeat(64),
+      match_strength: "none",
+      candidate_token: "tok-none-1",
+    };
+    const gatewayImported = detailOf({
+      status: "imported",
+      source_kind: "email",
+      document_kind: "payment_confirmation",
+      gateway: "Przelewy24",
+      gateway_status: "paid",
+      fee_amount: null,
+      payee_host: null,
+      evidence_for_receipt_id: null,
+      has_document: false,
+    });
+    expect(preselectedCandidate(gatewayImported, [idCand], "card")).toEqual(idCand);
+    expect(preselectedCandidate(gatewayImported, [idCand, weakCand], "card")).toBeNull();
+
+    // Unique "id" links even when an extra "none" coincidence candidate exists, while "nip" / "distinctive" / empty / 2-"id" confirm unlinked.
+    expect(uniqueIdCandidate(gatewayImported, [idCand, weakCand])?.candidate).toEqual(idCand);
+    expect(uniqueIdCandidate(gatewayImported, [nipCand])).toBeNull();
+    expect(uniqueIdCandidate(gatewayImported, [idCand, { ...idCand, candidate_token: "tok-id-2", entry_reference: "4".repeat(64) }])).toBeNull();
+    expect(uniqueIdCandidate(gatewayImported, [{ ...idCand, candidate_token: "   " }])).toBeNull();
+    expect(uniqueIdCandidate({ ...gatewayImported, evidence_for_receipt_id: "ev-1" }, [idCand])).toBeNull();
+    expect(uniqueIdCandidate({ ...gatewayImported, linked: true, linked_account_id: "acc-1", linked_entry_ref: "1".repeat(64) }, [idCand])).toBeNull();
+    expect(uniqueIdCandidate({ ...gatewayImported, payment_method: "cash" }, [idCand])).toBeNull();
+
+    const plain = buildBulkConfirmRequest(gatewayImported, [idCand], "Summary", { linkById: false });
+    expect(plain.ok).toBe(true);
+    if (plain.ok) {
+      expect(plain.linkedById).toBe(false);
+      expect(plain.request.link).toBeNull();
+    }
+
+    const withId = buildBulkConfirmRequest(gatewayImported, [weakCand, idCand], "Summary", { linkById: true });
+    expect(withId.ok).toBe(true);
+    if (withId.ok) {
+      expect(withId.linkedById).toBe(true);
+      expect(withId.request.link).toEqual({
+        account_id: idCand.account_id,
+        entry_reference: idCand.entry_reference,
+        candidate_token: "tok-id-1",
+      });
+    }
+
+    const withNipOnly = buildBulkConfirmRequest(gatewayImported, [nipCand], "Summary", { linkById: true });
+    expect(withNipOnly.ok).toBe(true);
+    if (withNipOnly.ok) {
+      expect(withNipOnly.linkedById).toBe(false);
+      expect(withNipOnly.request.link).toBeNull();
+    }
   });
 });

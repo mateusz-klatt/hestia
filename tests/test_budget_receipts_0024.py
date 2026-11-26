@@ -64,8 +64,9 @@ class ReceiptMigration0024Tests(unittest.TestCase):
                 connection.exec_driver_sql(
                     "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL "
                     "AND tbl_name = 'budget_receipts' "
-                    # The additive v1f index is asserted by test_budget_gmail_0031.
-                    "AND name != 'uq_budget_receipts_gateway_ref' ORDER BY name"
+                    # Additive post-0024 indexes are asserted by test_budget_gmail_0031 and test_budget_receipt_0033.
+                    "AND name NOT IN ('uq_budget_receipts_gateway_ref', 'ix_budget_receipts_owner_blik_ref') "
+                    "ORDER BY name"
                 ).all(),
             )
 
