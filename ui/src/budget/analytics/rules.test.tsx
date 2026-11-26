@@ -7,7 +7,7 @@ import { createBudgetApi } from "../api";
 import type { BudgetApi, BudgetResult } from "../api";
 import { buildCategoryColors, contrastRatio, parseHexColor } from "./category_colors";
 import { categoryList } from "./fixtures";
-import type { AnalyticsRule, RuleCandidate, RulePreview, RuleSaved } from "./model";
+import type { AnalyticsCategory, AnalyticsRule, RuleCandidate, RulePreview, RuleSaved } from "./model";
 import { loadLocale, t } from "../../i18n";
 import { account } from "../fixtures";
 import { CategoriesView } from "./rules";
@@ -301,6 +301,164 @@ describe("categories", () => {
     expect(panel.textContent).toContain("Rozłóż kolory równomiernie");
     expect(panel.textContent).toContain(t("budget.rules.spreadColorsHint"));
     expect(t("budget.rules.archiveBlocked")).toBe("Najpierw przenieś jej podkategorie. Zarchiwizowane też trzeba przenieść.");
+  });
+
+  it("preserves create parent across a pending reload, blocks submit during loading or error, and recovers when parent stays valid", async () => {
+    const transport = { id: "cat-transport", name: "Synthetic Transport", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null };
+    const food = { id: "cat-food", name: "Synthetic Food", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null };
+    const api = fakeApi();
+    api.categories.mockImplementation(() => ok({ categories: [transport, food] }));
+    await show(api);
+
+    const panel = section("Categories");
+    const add = [...panel.querySelectorAll("form")].at(-1) as HTMLFormElement;
+    await choose(field(add, "Parent category") as HTMLSelectElement, "cat-transport");
+    await type(add.querySelector('input[name="category_name"]'), "Synthetic Wash");
+
+    let resolveReload: (value: BudgetResult<{ categories: AnalyticsCategory[] }>) => void = () => undefined;
+    api.categories.mockImplementationOnce(() => new Promise((resolve) => { resolveReload = resolve; }));
+    await act(async () => {
+      root.render(<CategoriesView api={api} accounts={accounts} locale="en" revision={1} onAccessLoss={() => false} />);
+      await Promise.resolve();
+    });
+
+    const pendingSelect = field(add, "Parent category") as HTMLSelectElement;
+    expect(pendingSelect.value).toBe("cat-transport");
+    expect(pendingSelect.selectedOptions[0]?.textContent).toBe("Synthetic Transport");
+    expect(pendingSelect.disabled).toBe(true);
+    expect(button("Add category", add).disabled).toBe(true);
+    await act(async () => { add.requestSubmit(); await Promise.resolve(); });
+    expect(api.createCategory).not.toHaveBeenCalled();
+
+    await act(async () => { resolveReload({ ok: true, data: { categories: [transport, food] } }); await Promise.resolve(); });
+    await settle();
+    expect((field(add, "Parent category") as HTMLSelectElement).value).toBe("cat-transport");
+    expect(button("Add category", add).disabled).toBe(false);
+    await act(async () => { add.requestSubmit(); await Promise.resolve(); });
+    await settle();
+    expect(api.createCategory).toHaveBeenCalledWith({ name: "Synthetic Wash", parent_id: "cat-transport" });
+
+    // Failed category load also blocks submitting even at top level.
+    api.categories.mockImplementationOnce(() => fail(500, "budget_internal_error"));
+    await show(api, { revision: 2 });
+    await type(add.querySelector('input[name="category_name"]'), "Synthetic Blocked");
+    expect(button("Add category", add).disabled).toBe(true);
+    await act(async () => { add.requestSubmit(); await Promise.resolve(); });
+    expect(api.createCategory).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks create submit if the chosen parent is archived during reload until an explicit new choice is made", async () => {
+    const transport = { id: "cat-transport", name: "Synthetic Transport", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null };
+    const food = { id: "cat-food", name: "Synthetic Food", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null };
+    const api = fakeApi();
+    api.categories.mockImplementation(() => ok({ categories: [transport, food] }));
+    await show(api);
+
+    const panel = section("Categories");
+    const add = [...panel.querySelectorAll("form")].at(-1) as HTMLFormElement;
+    await choose(field(add, "Parent category") as HTMLSelectElement, "cat-transport");
+    await type(add.querySelector('input[name="category_name"]'), "Synthetic Wash");
+
+    let resolveReload: (value: BudgetResult<{ categories: AnalyticsCategory[] }>) => void = () => undefined;
+    api.categories.mockImplementationOnce(() => new Promise((resolve) => { resolveReload = resolve; }));
+    await act(async () => {
+      root.render(<CategoriesView api={api} accounts={accounts} locale="en" revision={1} onAccessLoss={() => false} />);
+      await Promise.resolve();
+    });
+    expect(button("Add category", add).disabled).toBe(true);
+
+    await act(async () => {
+      resolveReload({ ok: true, data: { categories: [{ ...transport, archived: true, version: 2 }, food] } });
+      await Promise.resolve();
+    });
+    await settle();
+
+    const parentSelect = field(add, "Parent category") as HTMLSelectElement;
+    expect(parentSelect.value).toBe("cat-transport");
+    expect(parentSelect.selectedOptions[0]?.textContent).toBe("Synthetic Transport (archived)");
+    expect(parentSelect.selectedOptions[0]?.disabled).toBe(true);
+    expect(panel.textContent).toContain("Parent category (archived): This changed elsewhere; the latest state was loaded.");
+    expect(button("Add category", add).disabled).toBe(true);
+    await act(async () => { add.requestSubmit(); await Promise.resolve(); });
+    expect(api.createCategory).not.toHaveBeenCalled();
+
+    // Choosing Top level explicitly clears the stale block and allows submit.
+    await choose(parentSelect, "");
+    expect(panel.textContent).not.toContain("Parent category (archived):");
+    expect(button("Add category", add).disabled).toBe(false);
+    await act(async () => { add.requestSubmit(); await Promise.resolve(); });
+    await settle();
+    expect(api.createCategory).toHaveBeenCalledWith({ name: "Synthetic Wash", parent_id: null });
+  });
+
+  it("blocks edit submit when the chosen parent becomes archived or disappears until the owner chooses a valid parent or root", async () => {
+    const transport = { id: "cat-transport", name: "Synthetic Transport", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null };
+    const fuel = { id: "cat-fuel", name: "Synthetic Fuel", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: "cat-transport" };
+    const food = { id: "cat-food", name: "Synthetic Food", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null };
+    const api = fakeApi();
+    api.categories.mockImplementation(() => ok({ categories: [transport, fuel, food] }));
+    await show(api);
+
+    const panel = section("Categories");
+    await click(categoryRow("Synthetic Fuel", panel));
+
+    let resolveReload: (value: BudgetResult<{ categories: AnalyticsCategory[] }>) => void = () => undefined;
+    api.categories.mockImplementationOnce(() => new Promise((resolve) => { resolveReload = resolve; }));
+    await act(async () => {
+      root.render(<CategoriesView api={api} accounts={accounts} locale="en" revision={1} onAccessLoss={() => false} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      resolveReload({ ok: true, data: { categories: [{ ...transport, archived: true, version: 2 }, fuel, food] } });
+      await Promise.resolve();
+    });
+    await settle();
+
+    const editor = panel.querySelector("li form") as HTMLFormElement;
+    const editParentSelect = field(editor, "Parent category") as HTMLSelectElement;
+    expect(editParentSelect.value).toBe("cat-transport");
+    expect(editParentSelect.selectedOptions[0]?.textContent).toBe("Synthetic Transport (archived)");
+    expect(field(editor, "Colour hue")).toBeNull();
+    expect(editor.textContent).toContain("Parent category (archived): This changed elsewhere; the latest state was loaded.");
+    expect(button("Save", editor).disabled).toBe(true);
+    await act(async () => { editor.requestSubmit(); await Promise.resolve(); });
+    expect(api.updateCategory).not.toHaveBeenCalled();
+
+    // Choosing a valid active parent clears the error and submits with that parent.
+    await choose(editParentSelect, "cat-food");
+    expect(button("Save", editor).disabled).toBe(false);
+    await act(async () => { editor.requestSubmit(); await Promise.resolve(); });
+    await settle();
+    expect(api.updateCategory).toHaveBeenCalledWith({
+      category_id: "cat-fuel", name: "Synthetic Fuel", archived: false, expected_version: 1, parent_id: "cat-food",
+    });
+
+    // If a chosen parent disappears entirely on reload, the remembered name stays visible and submit is blocked until Top level is chosen.
+    api.categories.mockImplementation(() => ok({ categories: [transport, fuel, food] }));
+    await show(api, { revision: 2 });
+    await click(categoryRow("Synthetic Food", panel));
+    const foodEditor = panel.querySelector("li form") as HTMLFormElement;
+    await choose(field(foodEditor, "Parent category") as HTMLSelectElement, "cat-transport");
+    api.categories.mockImplementation(() => ok({ categories: [food] }));
+    await show(api, { revision: 3 });
+
+    const reopenedFoodEditor = panel.querySelector("li form") as HTMLFormElement;
+    const missingParentSelect = field(reopenedFoodEditor, "Parent category") as HTMLSelectElement;
+    expect(missingParentSelect.value).toBe("cat-transport");
+    expect(missingParentSelect.selectedOptions[0]?.textContent).toBe("Synthetic Transport");
+    expect(reopenedFoodEditor.textContent).toContain("Parent category: This changed elsewhere; the latest state was loaded.");
+    expect(button("Save", reopenedFoodEditor).disabled).toBe(true);
+    await act(async () => { reopenedFoodEditor.requestSubmit(); await Promise.resolve(); });
+    expect(api.updateCategory).toHaveBeenCalledTimes(1);
+
+    await choose(missingParentSelect, "");
+    expect(field(reopenedFoodEditor, "Colour hue")).not.toBeNull();
+    expect(button("Save", reopenedFoodEditor).disabled).toBe(false);
+    await act(async () => { reopenedFoodEditor.requestSubmit(); await Promise.resolve(); });
+    await settle();
+    expect(api.updateCategory).toHaveBeenLastCalledWith({
+      category_id: "cat-food", name: "Synthetic Food", archived: false, expected_version: 1, parent_id: null,
+    });
   });
 });
 

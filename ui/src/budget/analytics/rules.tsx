@@ -98,14 +98,18 @@ interface CategoriesProps {
   epoch: number;
 }
 
-function ParentField({ label, none, value, choices, disabled, onChange }: {
-  label: string; none: string; value: string; choices: readonly ParentChoice[]; disabled: boolean;
+function ParentField({ label, none, value, choices, staleOption, disabled, onChange }: {
+  label: string; none: string; value: string; choices: readonly ParentChoice[];
+  staleOption: { value: string; label: string } | null; disabled: boolean;
   onChange: (value: string) => void;
 }) {
   return (
     <label>{label}
       <select name="parent_id" value={value} disabled={disabled} onChange={(event) => { onChange(event.currentTarget.value); }}>
         <option value="">{none}</option>
+        {staleOption === null ? null : (
+          <option value={staleOption.value} disabled>{staleOption.label}</option>
+        )}
         {choices.map((choice) => (
           <option key={choice.id} value={choice.id}>{"\u2003".repeat(Math.max(0, choice.depth - 1))}{choice.name}</option>
         ))}
@@ -114,11 +118,51 @@ function ParentField({ label, none, value, choices, disabled, onChange }: {
   );
 }
 
+interface ParentOptionState {
+  valid: boolean;
+  stale: boolean;
+  archived: boolean;
+  staleOption: { value: string; label: string } | null;
+}
+
+function resolveParentState(
+  parentId: string,
+  rememberedLabel: string | null,
+  categories: Listed<AnalyticsCategory>,
+  choices: readonly ParentChoice[],
+): ParentOptionState {
+  if (parentId === "") {
+    return { valid: true, stale: false, archived: false, staleOption: null };
+  }
+  if (!Array.isArray(categories)) {
+    return {
+      valid: false,
+      stale: false,
+      archived: false,
+      staleOption: { value: parentId, label: rememberedLabel ?? t("budget.rules.parent") },
+    };
+  }
+  if (choices.some((choice) => choice.id === parentId)) {
+    return { valid: true, stale: false, archived: false, staleOption: null };
+  }
+  const found = categories.find((item) => item.id === parentId);
+  const archived = found?.archived === true;
+  const baseName = found?.name ?? rememberedLabel ?? t("budget.rules.parent");
+  const label = archived ? `${baseName} (${t("budget.rules.archived")})` : baseName;
+  return { valid: false, stale: true, archived, staleOption: { value: parentId, label } };
+}
+
+function staleParentMessage(archived: boolean): string {
+  return archived
+    ? `${t("budget.rules.parent")} (${t("budget.rules.archived")}): ${t("budget.rules.conflict")}`
+    : `${t("budget.rules.parent")}: ${t("budget.rules.conflict")}`;
+}
+
 function CategoriesPanel({ categories, api, run, locale, onSaved, epoch }: CategoriesProps) {
   const [draft, setDraft] = useState("");
-  const [draftParent, setDraftParent] = useState("");
+  const [draftParent, setDraftParent] = useState<{ id: string; label: string | null }>({ id: "", label: null });
   const [renaming, setRenaming] = useState<{
-    id: string; name: string; parent: string; hue: number; hueChange: "keep" | "set" | "clear";
+    id: string; name: string; parent: string; parentLabel: string | null; hue: number; hueChange: "keep" | "set" | "clear";
   } | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -172,11 +216,17 @@ function CategoriesPanel({ categories, api, run, locale, onSaved, epoch }: Categ
     ...(changes.color_hue === undefined ? {} : { color_hue: changes.color_hue }),
   });
 
+  const listReady = Array.isArray(categories);
+  const categoryList = listReady ? categories : [];
+  const parentLabelOf = (id: string | null): string | null =>
+    id === null || id === "" ? null : (categoryList.find((item) => item.id === id)?.name ?? null);
+
   const openEditor = (category: AnalyticsCategory) => {
     focusTarget.current = { type: "editor", id: category.id };
     setNotice(null);
     setRenaming({
       id: category.id, name: category.name, parent: category.parent_id ?? "",
+      parentLabel: parentLabelOf(category.parent_id),
       hue: category.color_hue ?? 20, hueChange: "keep",
     });
   };
@@ -189,11 +239,10 @@ function CategoriesPanel({ categories, api, run, locale, onSaved, epoch }: Categ
     setRenaming(null);
   };
 
-  const categoryList = Array.isArray(categories) ? categories : [];
   const categoryColors = buildCategoryColors(categoryList);
   const createParentChoices = parentChoices(categoryList, null, locale);
-  const effectiveDraftParent = draftParent !== "" && createParentChoices.some((choice) => choice.id === draftParent)
-    ? draftParent : "";
+  const createParentState = resolveParentState(draftParent.id, draftParent.label, categories, createParentChoices);
+  const canCreate = !busy && listReady && createParentState.valid && validCategoryName(draft);
   const activeRoots = categoryList
     .filter((category) => category.parent_id === null && !category.archived)
     .sort((left, right) => left.name.localeCompare(right.name, locale) || left.id.localeCompare(right.id));
@@ -211,16 +260,18 @@ function CategoriesPanel({ categories, api, run, locale, onSaved, epoch }: Categ
       {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
       {categories === "loading" ? <p className="budget-muted" role="status">{t("budget.rules.loading")}</p> : null}
       {categories === "error" ? <p className="budget-notice" role="alert">{t("budget.rules.error")}</p> : null}
-      {Array.isArray(categories) && categories.length === 0 ? <p className="budget-muted">{t("budget.rules.noCategories")}</p> : null}
-      {Array.isArray(categories) && categories.length > 0 ? (
+      {listReady && categories.length === 0 ? <p className="budget-muted">{t("budget.rules.noCategories")}</p> : null}
+      {listReady && categories.length > 0 ? (
         <ul className="budget-entry-list budget-category-list">
           {listCategoryTree(categories, locale).map(({ category, depth, has_children }) => {
             const archiveBlocked = has_children && !category.archived;
             const isEditing = renaming?.id === category.id;
             const editChoices = isEditing ? parentChoices(categories, category.id, locale) : [];
-            const editParent = isEditing && (renaming.parent === "" || editChoices.some((choice) => choice.id === renaming.parent))
-              ? renaming.parent : "";
-            const previewColor = isEditing && editParent === ""
+            const editParentState = isEditing
+              ? resolveParentState(renaming.parent, renaming.parentLabel, categories, editChoices)
+              : null;
+            const canSaveEdit = isEditing && !busy && editParentState?.valid === true && validCategoryName(renaming.name);
+            const previewColor = isEditing && renaming.parent === ""
               ? (renaming.hueChange === "set"
                 ? { background: categoryHueToHex(renaming.hue), hatched: false }
                 : renaming.hueChange === "keep" && category.parent_id === null
@@ -229,18 +280,17 @@ function CategoriesPanel({ categories, api, run, locale, onSaved, epoch }: Categ
               : null;
             return (
               <li key={category.id} className="budget-entry budget-category" data-depth={depth}>
-                {isEditing ? (
+                {isEditing && editParentState !== null ? (
                   <form className="budget-entry-editor budget-category-editor"
                     onSubmit={(event) => {
                       event.preventDefault();
-                      if (validCategoryName(renaming.name)) {
-                        void save(update(category, {
-                          name: renaming.name.trim(),
-                          parent_id: editParent === "" ? null : editParent,
-                          color_hue: editParent !== "" || renaming.hueChange === "keep" ? undefined
-                            : renaming.hueChange === "clear" ? null : renaming.hue,
-                        }), () => { closeAfterSave(category.id); });
-                      }
+                      if (!canSaveEdit) return;
+                      void save(update(category, {
+                        name: renaming.name.trim(),
+                        parent_id: renaming.parent === "" ? null : renaming.parent,
+                        color_hue: renaming.parent !== "" || renaming.hueChange === "keep" ? undefined
+                          : renaming.hueChange === "clear" ? null : renaming.hue,
+                      }), () => { closeAfterSave(category.id); });
                     }}
                     onKeyDown={(event) => {
                       if (event.key === "Escape" && !busy) {
@@ -254,11 +304,16 @@ function CategoriesPanel({ categories, api, run, locale, onSaved, epoch }: Categ
                           value={renaming.name} disabled={busy}
                           onChange={(event) => { setRenaming({ ...renaming, name: event.currentTarget.value }); }} />
                       </label>
-                      <ParentField label={parentLabel} none={noParentLabel} value={editParent} disabled={busy}
-                        choices={editChoices}
-                        onChange={(parent) => { setRenaming({ ...renaming, parent }); }} />
+                      <ParentField label={parentLabel} none={noParentLabel} value={renaming.parent}
+                        disabled={busy} choices={editChoices} staleOption={editParentState.staleOption}
+                        onChange={(parent) => {
+                          setRenaming({ ...renaming, parent, parentLabel: parentLabelOf(parent) });
+                        }} />
                     </div>
-                    {editParent === "" && previewColor !== null ? (
+                    {editParentState.stale ? (
+                      <p className="budget-notice" role="alert">{staleParentMessage(editParentState.archived)}</p>
+                    ) : null}
+                    {renaming.parent === "" && previewColor !== null ? (
                       <div className="budget-category-editor-color">
                         <label>{t("budget.rules.colorHue")}
                           <span className="budget-entry-facts">
@@ -277,7 +332,7 @@ function CategoriesPanel({ categories, api, run, locale, onSaved, epoch }: Categ
                       </div>
                     ) : null}
                     <div className="budget-category-editor-actions">
-                      <button type="submit" className="budget-primary" disabled={busy || !validCategoryName(renaming.name)}>
+                      <button type="submit" className="budget-primary" disabled={!canSaveEdit}>
                         {t("budget.rules.save")}
                       </button>
                       <button type="button" disabled={busy} onClick={() => { closeEditor(category.id); }}>
@@ -288,6 +343,7 @@ function CategoriesPanel({ categories, api, run, locale, onSaved, epoch }: Categ
                       <button type="button" className={category.archived ? undefined : "budget-category-archive"}
                         disabled={busy || archiveBlocked} title={archiveBlocked ? archiveBlockedLabel : undefined}
                         onClick={() => {
+                          if (busy || archiveBlocked) return;
                           void save(update(category, { archived: !category.archived }), () => { closeAfterSave(category.id); });
                         }}>
                         {category.archived ? t("budget.rules.restore") : t("budget.rules.archive")}
@@ -317,24 +373,27 @@ function CategoriesPanel({ categories, api, run, locale, onSaved, epoch }: Categ
       ) : null}
       <form className="budget-entry-editor budget-category-create" onSubmit={(event) => {
         event.preventDefault();
-        if (validCategoryName(draft)) {
-          void save(() => api.createCategory({
-            name: draft.trim(),
-            parent_id: effectiveDraftParent === "" ? null : effectiveDraftParent,
-          }), () => {
-            setDraft("");
-            setDraftParent("");
-          });
-        }
+        if (!canCreate) return;
+        void save(() => api.createCategory({
+          name: draft.trim(),
+          parent_id: draftParent.id === "" ? null : draftParent.id,
+        }), () => {
+          setDraft("");
+          setDraftParent({ id: "", label: null });
+        });
       }}>
         <label>{nameLabel}
           <input name="category_name" maxLength={CATEGORY_NAME_MAX} value={draft}
             onChange={(event) => { setDraft(event.currentTarget.value); }} />
         </label>
-        <ParentField label={parentLabel} none={noParentLabel} value={effectiveDraftParent} disabled={busy}
-          choices={createParentChoices} onChange={setDraftParent} />
-        <button type="submit" disabled={busy || !validCategoryName(draft)}>{t("budget.rules.add")}</button>
+        <ParentField label={parentLabel} none={noParentLabel} value={draftParent.id}
+          disabled={busy || !listReady} choices={createParentChoices} staleOption={createParentState.staleOption}
+          onChange={(id) => { setDraftParent({ id, label: parentLabelOf(id) }); }} />
+        <button type="submit" disabled={!canCreate}>{t("budget.rules.add")}</button>
       </form>
+      {createParentState.stale ? (
+        <p className="budget-notice" role="alert">{staleParentMessage(createParentState.archived)}</p>
+      ) : null}
       <details className="budget-category-options">
         <summary>{t("budget.main.moreOptions")}</summary>
         <div className="budget-category-options-body">
