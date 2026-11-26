@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import base64
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from email import policy
 from email.errors import MessageError
 from email.parser import BytesParser
+from email.utils import parsedate_to_datetime
 import logging
 import re
 from zoneinfo import ZoneInfo
@@ -18,7 +19,7 @@ from .gmail_payment import _payee_key, inspect_payment
 from .gmail_store import (GATEWAY_REF_DOMAIN, ORDER_REFERENCE_DOMAIN, PAYMENT_PAYEE_DOMAIN, PAYMENT_SENDER_DOMAIN,
                           RFC_MESSAGE_DOMAIN, PendingMessage, PendingPayment, digest, normalize_parse_failed_reason)
 from .gmail_trust import (classify_sender, domain_matches, forward_sender_domain, inline_forward_body,
-                          mime_parts, payment_sender_for, unwrap_trusted_forward)
+                          _is_forward_marker, mime_parts, payment_sender_for, unwrap_trusted_forward)
 from .gmail_worker import MAX_HTML_BYTES, MAX_PDF_BYTES, PDFUnsupported, WorkerRejected, WorkerUnavailable
 
 
@@ -26,6 +27,29 @@ MAX_MESSAGE_BYTES = 10 * 1024 * 1024
 _MAX_BASE64_CHARS = 4 * ((MAX_MESSAGE_BYTES + 2) // 3)
 _INTERNAL_DATE = re.compile(r"[0-9]{1,19}\Z", re.ASCII)
 _WARSAW = ZoneInfo("Europe/Warsaw")
+_POLISH_FORWARD_DATE = re.compile(
+    r"(?:pon|wt|śr|czw|pt|sob|niedz)\., ([0-9]{1,2}) "
+    r"(sty|lut|mar|kwi|maj|cze|lip|sie|wrz|paź|lis|gru) ([0-9]{4}) o "
+    r"([01]?[0-9]|2[0-3]):([0-5][0-9])",
+    re.IGNORECASE,
+)
+_ENGLISH_FORWARD_DATE_24H = re.compile(
+    r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), ([0-9]{1,2}) "
+    r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ([0-9]{4}) at "
+    r"([01]?[0-9]|2[0-3]):([0-5][0-9])",
+    re.IGNORECASE,
+)
+_ENGLISH_FORWARD_DATE_12H = re.compile(
+    r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+    r"([0-9]{1,2}), ([0-9]{4}) at (1[0-2]|[1-9]):([0-5][0-9]) ([AP]M)",
+    re.IGNORECASE,
+)
+_POLISH_FORWARD_MONTHS = {
+    month: number for number, month in enumerate("sty lut mar kwi maj cze lip sie wrz paź lis gru".split(), 1)
+}
+_ENGLISH_FORWARD_MONTHS = {
+    month: number for number, month in enumerate("jan feb mar apr may jun jul aug sep oct nov dec".split(), 1)
+}
 _ISSUER_SENDER_DOMAINS = {
     "T-Mobile": ("t-mobile.pl",),
     "Orange": ("orange.pl", "orange.com"),
@@ -159,6 +183,47 @@ def _has_rfc822_attachment(message):
     return any(part.get_content_type() == "message/rfc822" for part in mime_parts(message))
 
 
+def _parse_forward_date(value):
+    value = value.replace("\u202f", " ").replace("\u00a0", " ")
+    if match := _POLISH_FORWARD_DATE.fullmatch(value):
+        day, month, year, hour, minute = match.groups()
+        return datetime(int(year), _POLISH_FORWARD_MONTHS[month.casefold()], int(day),
+                        int(hour), int(minute), tzinfo=_WARSAW)
+    if match := _ENGLISH_FORWARD_DATE_24H.fullmatch(value):
+        day, month, year, hour, minute = match.groups()
+        return datetime(int(year), _ENGLISH_FORWARD_MONTHS[month.casefold()], int(day),
+                        int(hour), int(minute), tzinfo=_WARSAW)
+    if match := _ENGLISH_FORWARD_DATE_12H.fullmatch(value):
+        month, day, year, hour, minute, meridiem = match.groups()
+        hour = int(hour) % 12 + (12 if meridiem.upper() == "PM" else 0)
+        return datetime(int(year), _ENGLISH_FORWARD_MONTHS[month.casefold()], int(day),
+                        hour, int(minute), tzinfo=_WARSAW)
+    return parsedate_to_datetime(value)
+
+
+def _payment_receipt_date(message, pending):
+    try:
+        outer = datetime.fromtimestamp(pending.internal_date, UTC)
+        fallback = outer.astimezone(_WARSAW).date()
+    except (OverflowError, OSError, ValueError):
+        return None
+    if pending.trust_path not in ("spouse_forward", "owner_forward"):
+        return fallback
+    headers = message.get_all("Date", ())
+    if len(headers) != 1:
+        return fallback
+    try:
+        inner = _parse_forward_date(str(headers[0]))
+        if inner.tzinfo is None:
+            return fallback
+        inner = inner.astimezone(UTC)
+        if inner < outer - timedelta(days=400) or inner > outer + timedelta(days=3):
+            return fallback
+        return inner.astimezone(_WARSAW).date()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return fallback
+
+
 class GmailMessageProcessor:
     def __init__(self, settings, worker):
         self.settings = settings
@@ -213,7 +278,12 @@ class GmailMessageProcessor:
         except WorkerRejected as error:
             return _parse_failed(pending, _worker_reason(error)), True, False
         if cut_inline:
-            text = inline_forward_body(text)
+            if sum(_is_forward_marker(line) for line in text.splitlines()) != 1:
+                return pending, False, False
+            cut = inline_forward_body(text)
+            if cut is text:
+                return pending, False, False
+            text = cut
         if not text.strip():
             return pending, True, True
         inspected = inspect_payment(text, subjects=subjects, merchant=sender.merchant, gateway=sender.gateway,
@@ -222,17 +292,18 @@ class GmailMessageProcessor:
             return pending, True, True
         secret = self.settings.hmac_secret
         if inspected.reject_reason == "failed":
-            if sender.gateway and inspected.gateway_ref is not None:
-                ref_hmac = digest(secret, GATEWAY_REF_DOMAIN, inspected.gateway_ref)
+            ref_hmacs = tuple(digest(secret, GATEWAY_REF_DOMAIN, ref) for ref in (
+                inspected.gateway_ref, inspected.gateway_ref_secondary,
+            ) if ref is not None)
+            if sender.gateway and ref_hmacs:
                 return replace(pending, outcome="skipped_non_receipt",
-                               failed_gateway=(sender.merchant, ref_hmac)), False, False
+                               failed_gateway=(sender.merchant, *ref_hmacs)), False, False
             return pending, False, False
         payment = inspected.payment
         if payment is None:
             return pending, False, False
-        try:
-            receipt_date = datetime.fromtimestamp(pending.internal_date, _WARSAW).date()
-        except (OverflowError, OSError, ValueError):
+        receipt_date = _payment_receipt_date(message, pending)
+        if receipt_date is None:
             return pending, False, False
         if any(abs((body_date - receipt_date).days) > 3 for body_date in payment.body_dates):
             return pending, False, False
@@ -247,6 +318,8 @@ class GmailMessageProcessor:
             status=inspected.status,
             gateway_ref_hmac=(digest(secret, GATEWAY_REF_DOMAIN, inspected.gateway_ref)
                               if inspected.gateway_ref is not None else None),
+            gateway_ref_secondary_hmac=(digest(secret, GATEWAY_REF_DOMAIN, inspected.gateway_ref_secondary)
+                                        if inspected.gateway_ref_secondary is not None else None),
             gateway_name=sender.merchant if sender.gateway else None,
         )
         return replace(pending, outcome="imported", payment=provenance,

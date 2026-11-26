@@ -321,8 +321,12 @@ def classify_sender(headers, sender_allowlist, spouse_forward_senders, owner_mai
     return path
 
 
+def _is_forward_marker(line):
+    return line.strip(" \t-:").casefold() in _FORWARD_MARKERS
+
+
 def _split_inline_forward(lines):
-    markers = [i for i, line in enumerate(lines) if line.strip(" \t-:").casefold() in _FORWARD_MARKERS]
+    markers = [i for i, line in enumerate(lines) if _is_forward_marker(line)]
     if not markers:
         return None
     if len(markers) != 1:
@@ -344,6 +348,8 @@ def _split_inline_forward(lines):
             return _INVALID_FORWARD
         if name == "od":
             name = "from"
+        elif name == "data":
+            name = "date"
         elif name == "temat":
             name = "subject"
         if name in fields:
@@ -367,6 +373,8 @@ def _inline_forward(text):
     original["From"] = address
     if fields.get("subject"):
         original["Subject"] = fields["subject"]
+    if fields.get("date"):
+        original["Date"] = fields["date"]
     if fields.get("message-id"):
         original["Message-ID"] = fields["message-id"]
     original.set_content("\n".join(lines[index:]))

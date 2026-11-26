@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 import hmac
 import json
+import logging
 import uuid
 
 from sqlalchemy import and_, case, delete, func, or_, select, update
@@ -23,6 +24,7 @@ DAY = 86400
 IMPORT_TTL = 30 * DAY
 PROVENANCE_TTL = 400 * DAY
 MAX_PENDING_IMPORTS = 200
+MAX_GATEWAY_REFS = 4
 GMAIL_MESSAGE_DOMAIN = b"hestia/budget/gmail-msg-id/v1\0"
 RFC_MESSAGE_DOMAIN = b"hestia/budget/gmail-rfc-msg-id/v1\0"
 PAYMENT_SENDER_DOMAIN = b"hestia/budget/gmail-payment-sender/v1\0"
@@ -55,6 +57,7 @@ _PAYMENT_SENDER_PREFIX = "budget_gmail_payment_sender:"
 _PAYMENT_ORDER_PREFIX = "budget_gmail_payment_order:"
 _PAYMENT_PAYEE_PREFIX = "budget_gmail_payment_payee:"
 _GATEWAY_FAILED_PREFIX = "budget_gmail_gateway_failed:"
+_GATEWAY_REF_PREFIX = "budget_gmail_gateway_ref:"
 PARSE_FAILED_REASONS = (
     "charset_error",
     "message_defects",
@@ -67,6 +70,7 @@ PARSE_FAILED_REASONS = (
     "worker_rejected",
 )
 _PARSE_FAILED_REASON_SET = frozenset(PARSE_FAILED_REASONS)
+log = logging.getLogger("hestia.budget.gmail_store")
 
 
 def normalize_parse_failed_reason(reason):
@@ -109,6 +113,7 @@ class PendingPayment:
     status: str | None = None
     gateway_ref_hmac: str | None = None
     gateway_name: str | None = None
+    gateway_ref_secondary_hmac: str | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -124,7 +129,7 @@ class PendingMessage:
     sender_domain: str | None = None
     parse_failed_reason: str | None = None
     payment: PendingPayment | None = None
-    failed_gateway: tuple[str, str] | None = None
+    failed_gateway: tuple[str, ...] | None = None
 
 
 def _linked_manual_forward():
@@ -143,6 +148,41 @@ def _payment_order_key(receipt_id):
 
 def _payment_payee_key(receipt_id):
     return _PAYMENT_PAYEE_PREFIX + receipt_id
+
+
+def _gateway_ref_key(receipt_id):
+    return _GATEWAY_REF_PREFIX + receipt_id
+
+
+def _stored_gateway_ref_hmacs(meta):
+    if meta is None:
+        return ()
+    try:
+        refs = json.loads(meta.value)
+    except (TypeError, ValueError, RecursionError):
+        return ()
+    if (not isinstance(refs, list) or len(refs) >= MAX_GATEWAY_REFS
+            or any(not isinstance(ref, str) or not ref for ref in refs)):
+        return ()
+    return tuple(dict.fromkeys(refs))
+
+
+def receipt_ref_hmacs(session, receipt) -> frozenset[str]:
+    if getattr(receipt, "gateway", None) is None:
+        return frozenset()
+    primary = getattr(receipt, "gateway_ref_hmac", None)
+    receipt_id = getattr(receipt, "id", None)
+    secondary = session.get(AppMeta, _gateway_ref_key(receipt_id)) if receipt_id is not None else None
+    return frozenset(ref for ref in (primary, *_stored_gateway_ref_hmacs(secondary)) if ref is not None)
+
+
+def _write_gateway_ref_hmacs(session, receipt_id, primary, refs):
+    secondary = [ref for ref in dict.fromkeys(refs) if ref is not None and ref != primary]
+    key = _gateway_ref_key(receipt_id)
+    if secondary:
+        session.merge(AppMeta(key=key, value=json.dumps(secondary)))
+    else:
+        session.execute(delete(AppMeta).where(AppMeta.key == key))
 
 
 def _failed_gateway_prefix(owner):
@@ -164,15 +204,20 @@ def _forget_failed_gateways(session, owner, now=None):
     session.execute(statement)
 
 
+def _forget_payment_provenance(session, receipt_ids):
+    keys = select(_payment_sender_key(receipt_ids)).union_all(
+        select(_payment_order_key(receipt_ids)),
+        select(_payment_payee_key(receipt_ids)),
+        select(_gateway_ref_key(receipt_ids)),
+    )
+    session.execute(delete(AppMeta).where(AppMeta.key.in_(keys)))
+
+
 def _forget_payment_senders(session, *predicates):
     receipts = select(BudgetGmailMessage.receipt_id).where(
         BudgetGmailMessage.receipt_id.is_not(None), *predicates,
     ).subquery()
-    keys = select(_payment_sender_key(receipts.c.receipt_id)).union_all(
-        select(_payment_order_key(receipts.c.receipt_id)),
-        select(_payment_payee_key(receipts.c.receipt_id)),
-    )
-    session.execute(delete(AppMeta).where(AppMeta.key.in_(keys)))
+    _forget_payment_provenance(session, receipts.c.receipt_id)
 
 
 def _tombstone_messages(session, *predicates):
@@ -184,7 +229,8 @@ def _tombstone_messages(session, *predicates):
 
 def tombstone_receipt(session, owner, receipt_id):
     owned_receipt = select(BudgetReceipt.id).where(BudgetReceipt.id == receipt_id, BudgetReceipt.owner == owner)
-    keys = (_payment_sender_key(receipt_id), _payment_order_key(receipt_id), _payment_payee_key(receipt_id))
+    keys = (_payment_sender_key(receipt_id), _payment_order_key(receipt_id), _payment_payee_key(receipt_id),
+            _gateway_ref_key(receipt_id))
     session.execute(delete(AppMeta).where(AppMeta.key.in_(keys), owned_receipt.exists()))
     _tombstone_messages(session, BudgetGmailMessage.owner == owner, BudgetGmailMessage.receipt_id == receipt_id)
 
@@ -204,7 +250,8 @@ def _delete_imports(session, owner, expires_at=None):
         # Earlier manual-review rows had no explicit expiry.
         deadline = func.coalesce(BudgetReceipt.import_expires_at, BudgetReceipt.created_at + IMPORT_TTL)
         receipts = receipts.where(deadline <= expires_at)
-        _forget_payment_senders(session, BudgetGmailMessage.receipt_id.in_(receipts))
+    _forget_payment_provenance(session, receipts.subquery().c.id)
+    if expires_at is not None:
         _tombstone_messages(session, BudgetGmailMessage.receipt_id.in_(receipts))
     session.execute(delete(BudgetReceiptLine).where(BudgetReceiptLine.receipt_id.in_(receipts)))
     session.execute(delete(BudgetReceipt).where(BudgetReceipt.id.in_(receipts)))
@@ -217,6 +264,11 @@ def retain_imports(session, owner, now):
         expired += (BudgetGmailMessage.owner == owner,)
     _forget_payment_senders(session, *expired)
     session.execute(delete(BudgetGmailMessage).where(*expired))
+    linked = select(BudgetGmailMessage.receipt_id).where(BudgetGmailMessage.receipt_id.is_not(None))
+    orphaned = select(BudgetReceipt.id).where(BudgetReceipt.id.not_in(linked))
+    if owner is not None:
+        orphaned = orphaned.where(BudgetReceipt.owner == owner)
+    _forget_payment_provenance(session, orphaned.subquery().c.id)
     _forget_failed_gateways(session, owner, now)
 
 
@@ -390,7 +442,8 @@ class GmailStore(BudgetStore):
                     row.next_sync_at = now
             elif status == "revoked":
                 row.revoked_at = now
-                _forget_payment_senders(session, BudgetGmailMessage.owner == owner)
+                receipts = select(BudgetReceipt.id).where(BudgetReceipt.owner == owner).subquery()
+                _forget_payment_provenance(session, receipts.c.id)
                 _forget_failed_gateways(session, owner)
                 session.execute(update(BudgetGmailMessage).where(BudgetGmailMessage.owner == owner)
                                 .values(receipt_id=None))
@@ -471,25 +524,51 @@ class GmailStore(BudgetStore):
         return None
 
     @staticmethod
-    def _gateway_row(session, owner, gateway, ref_hmac):
-        return session.scalar(select(BudgetReceipt).where(
+    def _gateway_rows(session, owner, gateway, ref_hmac, secondary_ref_hmac=None):
+        refs = frozenset(ref for ref in (ref_hmac, secondary_ref_hmac) if ref is not None)
+        if not refs:
+            return []
+        secondary = aliased(AppMeta)
+        secondary_match = and_(secondary.key.is_not(None), or_(
+            *(secondary.value.like(f'%"{ref}"%') for ref in refs),
+        ))
+        candidates = session.execute(select(BudgetReceipt, secondary).outerjoin(
+            secondary, secondary.key == _gateway_ref_key(BudgetReceipt.id),
+        ).where(
             BudgetReceipt.owner == owner, BudgetReceipt.gateway == gateway,
-            BudgetReceipt.gateway_ref_hmac == ref_hmac))
+            or_(BudgetReceipt.gateway_ref_hmac.in_(refs), secondary_match),
+        ).order_by(BudgetReceipt.id)).all()
+        return [row for row, stored in candidates
+                if refs & {row.gateway_ref_hmac, *_stored_gateway_ref_hmacs(stored)}]
 
     def _merge_gateway(self, session, owner, payment, now):
-        """Merge by gateway transaction id. Returns None when the row must be inserted."""
+        """Merge by any stored gateway ref. Returns None when the row must be inserted."""
         gateway, ref_hmac = payment.gateway_name, payment.gateway_ref_hmac
-        row = self._gateway_row(session, owner, gateway, ref_hmac)
-        key = _failed_gateway_key(owner, gateway, ref_hmac)
+        secondary_ref_hmac = payment.gateway_ref_secondary_hmac
+        rows = self._gateway_rows(session, owner, gateway, ref_hmac, secondary_ref_hmac)
+        if len(rows) > 1:
+            log.warning("gmail gateway merge ambiguous match_count=%d", len(rows))
+            return "skipped_duplicate"
+        row = rows[0] if rows else None
+        incoming_refs = {ref for ref in (ref_hmac, secondary_ref_hmac) if ref is not None}
         if row is None:
             if payment.status == "registered":
-                failed = session.get(AppMeta, key)
-                if failed is not None and json.loads(failed.value)["expires_at"] > now:
-                    return "skipped_non_receipt"
+                for ref in incoming_refs:
+                    failed = session.get(AppMeta, _failed_gateway_key(owner, gateway, ref))
+                    if failed is not None and json.loads(failed.value)["expires_at"] > now:
+                        return "skipped_non_receipt"
             return None
         if payment.status == "registered" or row.currency != payment.fields.currency:
             return "skipped_duplicate"
-        session.execute(delete(AppMeta).where(AppMeta.key == key))
+        stored_payee = session.get(AppMeta, _payment_payee_key(row.id))
+        if not self._gateway_payees_match(
+            payment, stored_payee.value if stored_payee is not None else None, row.raw_shop_name,
+        ):
+            return "skipped_duplicate"
+        refs = incoming_refs | receipt_ref_hmacs(session, row)
+        session.execute(delete(AppMeta).where(AppMeta.key.in_(
+            [_failed_gateway_key(owner, gateway, ref) for ref in refs],
+        )))
         if row.gateway_status == "registered":
             if row.status == "imported":
                 self._upgrade_gateway(session, owner, row, payment, now)
@@ -501,14 +580,35 @@ class GmailStore(BudgetStore):
     def _upgrade_gateway(self, session, owner, row, payment, now):
         fields = payment.fields
         before = audit_payload(row, "gateway_upgrade")
+        incoming = tuple(dict.fromkeys(ref for ref in (
+            payment.gateway_ref_hmac, payment.gateway_ref_secondary_hmac,
+        ) if ref is not None))
+        stored_refs = session.get(AppMeta, _gateway_ref_key(row.id))
+        existing = tuple(ref for ref in (*_stored_gateway_ref_hmacs(stored_refs), row.gateway_ref_hmac)
+                         if ref is not None)
+        collision = session.scalar(select(BudgetReceipt.id).where(
+            BudgetReceipt.owner == owner, BudgetReceipt.gateway == row.gateway,
+            BudgetReceipt.gateway_ref_hmac == payment.gateway_ref_hmac, BudgetReceipt.id != row.id,
+        ).limit(1))
+        primary = row.gateway_ref_hmac if collision is not None else payment.gateway_ref_hmac
+        others = tuple(dict.fromkeys(ref for ref in (*existing, *incoming) if ref != primary))
+        refs = (*others[-(MAX_GATEWAY_REFS - 1):], primary)
+        _write_gateway_ref_hmacs(session, row.id, primary, refs)
+        row.gateway_ref_hmac = primary
+        if payment.payee_hmac is not None:
+            stored_payee = session.get(AppMeta, _payment_payee_key(row.id))
+            if stored_payee is None or stored_payee.value == "":
+                session.merge(AppMeta(key=_payment_payee_key(row.id), value=payment.payee_hmac))
         receipt_date = payment.receipt_date.isoformat()
         evidence_changed = (row.total_amount, row.fee_amount, row.receipt_date) != (
             fields.total_amount, fields.fee_amount, receipt_date)
         row.gateway_status = "paid"
-        row.raw_shop_name = fields.merchant
+        if not fields.payee_from_config:
+            row.raw_shop_name = fields.merchant
         row.fee_amount = fields.fee_amount
         row.total_amount = fields.total_amount
-        row.payee_host = fields.payee_host
+        if fields.payee_host is not None:
+            row.payee_host = fields.payee_host
         row.receipt_date = receipt_date
         line = session.scalar(select(BudgetReceiptLine).where(
             BudgetReceiptLine.receipt_id == row.id, BudgetReceiptLine.owner == owner))
@@ -521,20 +621,26 @@ class GmailStore(BudgetStore):
         self._attach_evidence(session, owner, row, revalidate=evidence_changed)
 
     def _failed_gateway(self, session, owner, failed, *, now, expires_at):
-        """Remove an unconfirmed failed registration and keep its ref until expiry."""
-        gateway_name, ref_hmac = failed
-        row = self._gateway_row(session, owner, gateway_name, ref_hmac)
+        """Remove an unconfirmed failed registration and keep its refs until expiry."""
+        gateway_name, *ref_hmacs = failed
+        rows = self._gateway_rows(session, owner, gateway_name, ref_hmacs[0],
+                                  ref_hmacs[1] if len(ref_hmacs) > 1 else None)
+        if len(rows) > 1:
+            log.warning("gmail gateway failed disposition ambiguous match_count=%d", len(rows))
+            return "skipped_duplicate"
+        row = rows[0] if rows else None
         if row is not None:
             if row.gateway_status != "registered" or row.status != "imported" or row.linked_account_id is not None:
                 return "skipped_non_receipt"
             self._delete_receipt(session, owner, row.id)
         if expires_at > now:
-            key = _failed_gateway_key(owner, gateway_name, ref_hmac)
-            meta = session.get(AppMeta, key)
-            if meta is None or json.loads(meta.value)["expires_at"] < expires_at:
-                session.merge(AppMeta(key=key, value=json.dumps({
-                    "gateway": gateway_name, "ref_hmac": ref_hmac, "expires_at": expires_at,
-                })))
+            for ref_hmac in dict.fromkeys(ref_hmacs):
+                key = _failed_gateway_key(owner, gateway_name, ref_hmac)
+                meta = session.get(AppMeta, key)
+                if meta is None or json.loads(meta.value)["expires_at"] < expires_at:
+                    session.merge(AppMeta(key=key, value=json.dumps({
+                        "gateway": gateway_name, "ref_hmac": ref_hmac, "expires_at": expires_at,
+                    })))
         return "skipped_non_receipt"
 
     @staticmethod
@@ -627,9 +733,15 @@ class GmailStore(BudgetStore):
             gross_line_total=fields.total_amount, net_line_total=fields.total_amount,
         ))
         session.add(AppMeta(key=_payment_sender_key(receipt.id), value=payment.sender_hmac))
+        refs = tuple(dict.fromkeys(ref for ref in (
+            payment.gateway_ref_hmac, payment.gateway_ref_secondary_hmac,
+        ) if ref is not None))
+        if payment.gateway_ref_secondary_hmac is not None:
+            _write_gateway_ref_hmacs(session, receipt.id, payment.gateway_ref_hmac, refs)
         if payment.gateway_ref_hmac is not None and payment.status == "paid":
-            key = _failed_gateway_key(owner, payment.gateway_name, payment.gateway_ref_hmac)
-            session.execute(delete(AppMeta).where(AppMeta.key == key))
+            for ref_hmac in sorted(refs):
+                key = _failed_gateway_key(owner, payment.gateway_name, ref_hmac)
+                session.execute(delete(AppMeta).where(AppMeta.key == key))
         if payment.order_reference_hmac is not None:
             session.add(AppMeta(key=_payment_order_key(receipt.id), value=payment.order_reference_hmac))
         if payment.gateway and (fields.payee_from_config or payment.payee_hmac is not None):

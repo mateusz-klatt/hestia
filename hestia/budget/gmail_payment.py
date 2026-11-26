@@ -36,6 +36,7 @@ class PaymentInspection:
     status: Literal["registered", "paid"] | None = None
     reject_reason: str | None = None
     gateway_ref: str | None = None
+    gateway_ref_secondary: str | None = None
 
 
 class _RejectedPayment(ValueError):
@@ -397,6 +398,18 @@ def _gateway_ref(provider: PaymentProvider | None, subjects: tuple[str, ...], li
     return match[1].upper() if match else None
 
 
+def _gateway_ref_secondary(provider: PaymentProvider | None, subjects: tuple[str, ...], lines: list[str]):
+    if provider != "autopay":
+        return None
+    joined = "\n".join((*subjects, *lines))
+    payment_number = _REF_AUTOPAY_PAYMENT_NO.search(joined)
+    transaction = _GATEWAY_REFS["autopay"].search(joined)
+    if not payment_number or not transaction:
+        return None
+    primary, secondary = payment_number[1].upper(), transaction[1].upper()
+    return secondary if secondary != primary else None
+
+
 def _candidate_host(value: str) -> tuple[bool, str | None]:
     match = _PAYEE_HOST.fullmatch(value.strip(" ()[]").removesuffix("."))
     if match and (match["scheme"] or "." in match["domain"]):
@@ -655,7 +668,10 @@ def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gate
         # shape so identifiers cannot hide warnings and table splits do not
         # turn the priced part of an item into an independent warning.
         if provider == "paynow" and any(_PAYNOW_FAILED.fullmatch(_BULLET.sub("", line)) for line in raw):
-            return PaymentInspection(reject_reason="failed", gateway_ref=_gateway_ref(provider, subjects, raw, text))
+            return PaymentInspection(
+                reject_reason="failed", gateway_ref=_gateway_ref(provider, subjects, raw, text),
+                gateway_ref_secondary=_gateway_ref_secondary(provider, subjects, raw),
+            )
         if provider == "p24":
             body = "\n".join(raw)
             if _CARD_VERIFICATION.search(body) and _CARD_VERIFICATION_CANCEL.search(body):
@@ -677,13 +693,14 @@ def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gate
         clean = redact_pan(joined).split("\n") if joined else expanded
         lines = [_SKIPPED_LINE if line == _SKIPPED_LINE else value for line, value in zip(expanded, clean)]
         following = _following_values(lines)
-        fee = status = gateway_ref = None
+        fee = status = gateway_ref = gateway_ref_secondary = None
         if gateway:
             if (result := _gateway_payment_total(lines, following, summary_rows)) is None:
                 return PaymentInspection(missing_total=True)
             total, fee = result[:2], result[2]
             status = _gateway_status(provider, subjects, lines)
             gateway_ref = _gateway_ref(provider, subjects, raw, text)
+            gateway_ref_secondary = _gateway_ref_secondary(provider, subjects, raw)
         elif (total := _payment_total(lines, following, summary_rows)) is None:
             return PaymentInspection(missing_total=True)
         safe_subjects = tuple(redact_pan(subject) if subject else "" for subject in subjects)
@@ -692,7 +709,8 @@ def inspect_payment(text: str, *, subjects: tuple[str, ...], merchant: str, gate
         payment = ImportedPayment(payee or merchant, description, *total, _body_dates(lines, following), reference,
                                   payee_from_config=gateway and payee is None,
                                   fee_amount=fee, payee_host=host)
-        return PaymentInspection(payment, status=status, gateway_ref=gateway_ref)
+        return PaymentInspection(payment, status=status, gateway_ref=gateway_ref,
+                                 gateway_ref_secondary=gateway_ref_secondary)
     except (_RejectedPayment, ReceiptError, UnicodeEncodeError):
         return PaymentInspection()
 

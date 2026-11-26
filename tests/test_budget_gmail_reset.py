@@ -12,8 +12,9 @@ from sqlalchemy import select
 from hestia import db
 from hestia.budget import __main__ as cli, gmail_config
 from hestia.budget.gmail_client import GmailClient
-from hestia.budget.gmail_store import (DAY, GMAIL_MESSAGE_DOMAIN, GmailStore, _failed_gateway_key, _payment_order_key,
-                                       _payment_payee_key, _payment_sender_key, _retry_window_key, digest)
+from hestia.budget.gmail_store import (DAY, GMAIL_MESSAGE_DOMAIN, GmailStore, _failed_gateway_key, _gateway_ref_key,
+                                       _payment_order_key, _payment_payee_key, _payment_sender_key, _retry_window_key,
+                                       digest)
 from hestia.budget.gmail_sync import GmailSync, _sync_lock
 from tests.test_budget_gmail_sync import (NOW, OWNER, SETTINGS, FakeClock, FakeGmailTransport, SyntheticProcessor, page,
                                           response)
@@ -54,7 +55,8 @@ class GmailResetTests(TestCase):
 
     @staticmethod
     def _payment_keys(receipt_id):
-        return {_payment_sender_key(receipt_id), _payment_order_key(receipt_id), _payment_payee_key(receipt_id)}
+        return {_payment_sender_key(receipt_id), _payment_order_key(receipt_id), _payment_payee_key(receipt_id),
+                _gateway_ref_key(receipt_id)}
 
     def _seed(self):
         self.service.transition(OWNER, 1, "active")
