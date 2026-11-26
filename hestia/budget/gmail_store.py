@@ -121,6 +121,9 @@ class PendingPayment:
     gateway_ref_secondary_hmac: str | None = None
     blik_ref_hmac: str | None = None
     card_last4: str | None = None
+    items: tuple[dict, ...] = ()
+    # Transient correlation of the two MIME alternatives; never persisted.
+    apple_document_hmac: str | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -792,11 +795,14 @@ class GmailStore(BudgetStore):
         )
         session.add(receipt)
         session.flush()
-        session.add(BudgetReceiptLine(
-            receipt_id=receipt.id, owner=owner, line_no=1, line_kind="other", raw_name=fields.description,
-            raw_name_key=fold_text(fields.description)[:128], quantity="1",
-            gross_line_total=fields.total_amount, net_line_total=fields.total_amount,
-        ))
+        if payment.items and not payment.gateway:
+            session.add_all(BudgetReceiptLine(receipt_id=receipt.id, owner=owner, **line) for line in payment.items)
+        else:
+            session.add(BudgetReceiptLine(
+                receipt_id=receipt.id, owner=owner, line_no=1, line_kind="other", raw_name=fields.description,
+                raw_name_key=fold_text(fields.description)[:128], quantity="1",
+                gross_line_total=fields.total_amount, net_line_total=fields.total_amount,
+            ))
         session.add(AppMeta(key=_payment_sender_key(receipt.id), value=payment.sender_hmac))
         refs = tuple(dict.fromkeys(ref for ref in (
             payment.gateway_ref_hmac, payment.gateway_ref_secondary_hmac,
