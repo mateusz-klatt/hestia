@@ -19,7 +19,7 @@ from .gmail_payment import _payee_key, inspect_payment
 from .gmail_store import (GATEWAY_REF_DOMAIN, ORDER_REFERENCE_DOMAIN, PAYMENT_PAYEE_DOMAIN, PAYMENT_SENDER_DOMAIN,
                           RFC_MESSAGE_DOMAIN, PendingMessage, PendingPayment, digest, normalize_parse_failed_reason)
 from .gmail_trust import (classify_sender, domain_matches, forward_sender_domain, inline_forward_body,
-                          mime_parts, payment_sender_for, unwrap_trusted_forward)
+                          _is_forward_marker, mime_parts, payment_sender_for, unwrap_trusted_forward)
 from .gmail_worker import MAX_HTML_BYTES, MAX_PDF_BYTES, PDFUnsupported, WorkerRejected, WorkerUnavailable
 
 
@@ -27,10 +27,23 @@ MAX_MESSAGE_BYTES = 10 * 1024 * 1024
 _MAX_BASE64_CHARS = 4 * ((MAX_MESSAGE_BYTES + 2) // 3)
 _INTERNAL_DATE = re.compile(r"[0-9]{1,19}\Z", re.ASCII)
 _WARSAW = ZoneInfo("Europe/Warsaw")
-_OUTER_FORWARD_MARKERS = (
-    "---------- Forwarded message ---------",
-    "---------- Wiadomość przekazana dalej ----------",
+_POLISH_FORWARD_DATE = re.compile(
+    r"(?:pon|wt|śr|czw|pt|sob|niedz)\., ([0-9]{1,2}) "
+    r"(sty|lut|mar|kwi|maj|cze|lip|sie|wrz|paź|lis|gru) ([0-9]{4}) o "
+    r"([01][0-9]|2[0-3]):([0-5][0-9])",
+    re.IGNORECASE,
 )
+_ENGLISH_FORWARD_DATE = re.compile(
+    r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+    r"([0-9]{1,2}), ([0-9]{4}) at (1[0-2]|[1-9]):([0-5][0-9]) ([AP]M)",
+    re.IGNORECASE,
+)
+_POLISH_FORWARD_MONTHS = {
+    month: number for number, month in enumerate("sty lut mar kwi maj cze lip sie wrz paź lis gru".split(), 1)
+}
+_ENGLISH_FORWARD_MONTHS = {
+    month: number for number, month in enumerate("jan feb mar apr may jun jul aug sep oct nov dec".split(), 1)
+}
 _ISSUER_SENDER_DOMAINS = {
     "T-Mobile": ("t-mobile.pl",),
     "Orange": ("orange.pl", "orange.com"),
@@ -164,6 +177,19 @@ def _has_rfc822_attachment(message):
     return any(part.get_content_type() == "message/rfc822" for part in mime_parts(message))
 
 
+def _parse_forward_date(value):
+    if match := _POLISH_FORWARD_DATE.fullmatch(value):
+        day, month, year, hour, minute = match.groups()
+        return datetime(int(year), _POLISH_FORWARD_MONTHS[month.casefold()], int(day),
+                        int(hour), int(minute), tzinfo=_WARSAW)
+    if match := _ENGLISH_FORWARD_DATE.fullmatch(value):
+        month, day, year, hour, minute, meridiem = match.groups()
+        hour = int(hour) % 12 + (12 if meridiem.upper() == "PM" else 0)
+        return datetime(int(year), _ENGLISH_FORWARD_MONTHS[month.casefold()], int(day),
+                        hour, int(minute), tzinfo=_WARSAW)
+    return parsedate_to_datetime(value)
+
+
 def _payment_receipt_date(message, pending):
     try:
         outer = datetime.fromtimestamp(pending.internal_date, _WARSAW)
@@ -176,15 +202,15 @@ def _payment_receipt_date(message, pending):
     if len(headers) != 1:
         return fallback
     try:
-        inner = parsedate_to_datetime(str(headers[0]))
+        inner = _parse_forward_date(str(headers[0]))
         if inner.tzinfo is None:
             return fallback
         inner = inner.astimezone(UTC)
-    except (TypeError, ValueError, OverflowError):
+        if inner < outer - timedelta(days=400) or inner > outer + timedelta(days=3):
+            return fallback
+        return inner.astimezone(_WARSAW).date()
+    except (TypeError, ValueError, OverflowError, OSError):
         return fallback
-    if outer - inner > timedelta(days=400):
-        return fallback
-    return inner.astimezone(_WARSAW).date()
 
 
 class GmailMessageProcessor:
@@ -241,9 +267,12 @@ class GmailMessageProcessor:
         except WorkerRejected as error:
             return _parse_failed(pending, _worker_reason(error)), True, False
         if cut_inline:
-            if sum(text.count(marker) for marker in _OUTER_FORWARD_MARKERS) != 1:
+            if sum(_is_forward_marker(line) for line in text.splitlines()) != 1:
                 return pending, False, False
-            text = inline_forward_body(text)
+            cut = inline_forward_body(text)
+            if cut is text:
+                return pending, False, False
+            text = cut
         if not text.strip():
             return pending, True, True
         inspected = inspect_payment(text, subjects=subjects, merchant=sender.merchant, gateway=sender.gateway,

@@ -321,8 +321,12 @@ def classify_sender(headers, sender_allowlist, spouse_forward_senders, owner_mai
     return path
 
 
+def _is_forward_marker(line):
+    return line.strip(" \t-:").casefold() in _FORWARD_MARKERS
+
+
 def _split_inline_forward(lines):
-    markers = [i for i, line in enumerate(lines) if line.strip(" \t-:").casefold() in _FORWARD_MARKERS]
+    markers = [i for i, line in enumerate(lines) if _is_forward_marker(line)]
     if not markers:
         return None
     if len(markers) != 1:

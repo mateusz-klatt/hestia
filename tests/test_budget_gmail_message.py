@@ -325,15 +325,16 @@ class GmailMessageProcessorTests(unittest.TestCase):
         self.assertEqual((pending.outcome, pending.forwarded_manually, pending.payment),
                          ("imported", True, None))
 
-        two_marker_html = html.replace(
+        # An additional quoted substring is not a second whole-line marker when a valid cut exists.
+        quoted_marker_html = html.replace(
             "<p>Razem: 42,50 PLN</p>",
             "<p>Quoted ---------- Wiadomość przekazana dalej ----------</p><p>Razem: 42,50 PLN</p>",
         )
-        two_marker_msg = _email(OWNER, plain, rfc_id="<outer-inline-two-markers@gmail.com>")
-        two_marker_msg.add_alternative(two_marker_html, subtype="html")
-        pending = self._process(_metadata(two_marker_msg), _raw(two_marker_msg))
-        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.payment),
-                         ("imported", True, None))
+        quoted_marker_msg = _email(OWNER, plain, rfc_id="<outer-inline-quoted-marker@gmail.com>")
+        quoted_marker_msg.add_alternative(quoted_marker_html, subtype="html")
+        pending = self._process(_metadata(quoted_marker_msg), _raw(quoted_marker_msg))
+        self.assertEqual((pending.outcome, pending.forwarded_manually, pending.payment.fields.total_amount),
+                         ("imported", False, "42.5"))
 
         # Explicit plain rejection does NOT fall back to outer HTML; neither does plain-only missing total or HTML-only.
         rejected_plain = plain.replace("Order confirmed without table.", "Payment failed")

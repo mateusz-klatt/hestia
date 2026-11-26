@@ -404,7 +404,10 @@ def _gateway_ref_secondary(provider: PaymentProvider | None, subjects: tuple[str
     joined = "\n".join((*subjects, *lines))
     payment_number = _REF_AUTOPAY_PAYMENT_NO.search(joined)
     transaction = _GATEWAY_REFS["autopay"].search(joined)
-    return transaction[1].upper() if payment_number and transaction else None
+    if not payment_number or not transaction:
+        return None
+    primary, secondary = payment_number[1].upper(), transaction[1].upper()
+    return secondary if secondary != primary else None
 
 
 def _candidate_host(value: str) -> tuple[bool, str | None]:
