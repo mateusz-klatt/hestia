@@ -245,6 +245,8 @@ NR KARTY ****5555
                          ("Pozycja bez nazwy", "MIÓD", "kg"))
         self.assertEqual((gross_only["raw_name"], gross_only["raw_unit"], gross_only["gross_line_total"]),
                          ("2szt * 4,00", None, "9"))
+        parsed = parse_receipt("PARAGON FISKALNY\nMIÓD\n1kg * 7,00 7,00 A\nSUMA PLN 7,00\n")
+        self.assertEqual(parsed["lines"][0]["raw_name"], "MIÓD")
 
     def test_only_splits_discount_with_corroborating_row(self):
         for suspect, legacy_discount in (
@@ -267,6 +269,48 @@ NR KARTY ****5555
                 self.assertEqual((item["raw_name"], item["discount_amount"]), ("KUBEK", legacy_discount))
         parsed = parse_receipt("SKLEP TESTOWY\nKUBEK 1szt * 20,00 20,00 A\nRABAT NA KOSZYK -2,00 A\n-1,00 A\n")
         self.assertEqual([item["line_kind"] for item in parsed["lines"]], ["item", "basket_discount"])
+
+    def test_ambiguous_split_rows_do_not_mutate_a_draft_item(self):
+        for rows, total in (
+            ("OPUST OPUST NAPÓJ 1szt * 7,50 7,50 A\n-1,25 A", "26,25"),
+            ("OPUST KAUCJA PUSZKA 2szt * 0,50 1,00 A\n-0,10 A", "20,90"),
+            ("OPUST 1szt * 7,50 7,50 A\n-1,25 B", "26,25"),
+            ("OPUST 1szt * 7,50 7,50 A\n-1,25 PLN B", "26,25"),
+            ("OPUST Iszt * 7,50 8,50 A\n-1,25 A", "26,25"),
+        ):
+            with self.subTest(rows=rows):
+                text = ("SKLEP TESTOWY\n2026-11-20 12:34\nKUBEK 1szt * 20,00 20,00 A\n"
+                        f"{rows}\nSUMA PLN {total}\n")
+                draft = self.receipts.parse_text("owner", text, source_kind="local_ocr")
+                [item] = draft["draft"]["lines"]
+                self.assertEqual((item["raw_name"], item["line_kind"], item["net_line_total"],
+                                  item["discount_amount"]), ("KUBEK", "item", "20", "0"))
+                with self.assertRaisesRegex(ReceiptError, "budget_receipt_total_mismatch"):
+                    self.receipts.confirm("owner", confirm_values(draft))
+
+    def test_corroborated_split_row_without_a_name_confirms(self):
+        for amount_prefix, discount in (("1szt *", "-1,25 A"), ("Iszt *", "-1,25 A"),
+                                        ("1szt *", "-1,25A"), ("Iszt *", "-1,25 PLN A")):
+            with self.subTest(amount_prefix=amount_prefix, discount=discount):
+                text = ("SKLEP TESTOWY\n2026-11-20 12:34\nKUBEK 1szt * 20,00 20,00 A\n"
+                        f"OPUST {amount_prefix} 7,50 7,50 A\n{discount}\nSUMA PLN 26,25\n")
+                draft = self.receipts.parse_text("owner", text, source_kind="local_ocr")
+                previous, unnamed = draft["draft"]["lines"]
+                self.assertEqual((previous["discount_amount"], unnamed["raw_name"], unnamed["net_line_total"]),
+                                 ("0", "Pozycja bez nazwy", "6.25"))
+                confirmed = self.receipts.confirm("owner", confirm_values(draft))["receipt"]
+                self.assertEqual(confirmed["status"], "confirmed")
+
+    def test_receipt_metadata_is_not_an_item_label(self):
+        headers = ("SKLEP TESTOWY", "SKLEP TESTOWY 7", "SKLEP TESTOWY\nNr kasy 7",
+                   "SKLEP TESTOWY\nNr wydr. 61720", "SKLEP TESTOWY\nNr wydruku 61720",
+                   "SKLEP TESTOWY\nNR WYDR brak numeru", "SKLEP TESTOWY\nNr wydr. 123456/4321")
+        for header in headers:
+            with self.subTest(header=header):
+                parsed = parse_receipt(f"{header}\n1,25L * 4,00 5,00 B\nSUMA PLN 5,00\n")
+                [item] = parsed["lines"]
+                self.assertEqual((item["raw_name"], item["quantity"], parsed["math_delta"]),
+                                 ("Pozycja bez nazwy", "1.25", "0"))
 
     def test_print_serial_boundary_keeps_number_redaction_for_unverified_rows(self):
         header = "Nr wydr. 411111/1111\n"
