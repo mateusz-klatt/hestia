@@ -124,12 +124,6 @@
   color: var(--fg);
   margin: 0;
 }
-.budget-notice[role="alert"],
-.budget-notice[role="alertdialog"] {
-  border-color: color-mix(in srgb, var(--err) 35%, var(--border));
-  border-inline-start-color: var(--err);
-  background: color-mix(in srgb, var(--err) 7%, var(--surface));
-}
 .budget-session-upgrade { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; }
 
 .budget-connection,
@@ -463,6 +457,10 @@
   text-align: start;
   line-height: 1.25;
 }
+.budget-transaction-table .budget-entry-category .budget-cat-badge {
+  border-radius: .45rem;
+  padding: .24rem .48rem;
+}
 .budget-entry-category:hover .budget-cat-badge { text-decoration: underline; text-underline-offset: .16em; }
 .budget-entry-document {
   position: relative;
@@ -545,7 +543,7 @@
   .budget-transaction-table th button { font-size: .8rem; gap: .15rem; }
   .budget-entry-open { grid-template-columns: minmax(0, 1fr); gap: .12rem; }
   .budget-transaction-table .budget-entry-facts { padding-inline-start: .25rem; }
-  .budget-transaction-table .budget-cat-badge { padding-inline: .35rem; font-size: .78rem; }
+  .budget-transaction-table .budget-cat-badge { padding: .22rem .38rem; font-size: .78rem; }
   .budget-transaction-amount strong { font-size: .82rem; }
   .budget-transaction-amount .budget-entry-document:empty:not([data-document-state]) { display: none; }
 }
@@ -557,7 +555,7 @@
   .budget-entry-open .budget-entry-text { font-size: .84rem; }
   .budget-entry-date { font-size: .75rem; }
   .budget-transaction-table td > .budget-entry-category { gap: .15rem; padding-inline: .1rem; }
-  .budget-transaction-table .budget-cat-badge { padding-inline: .28rem; font-size: .74rem; }
+  .budget-transaction-table .budget-cat-badge { padding: .2rem .32rem; font-size: .74rem; }
   .budget-transaction-amount strong { font-size: .78rem; }
 }
 
