@@ -3,7 +3,7 @@ from datetime import date
 from pathlib import Path
 import unittest
 
-from hestia.budget.gmail_payment import ImportedPayment, extract_payment
+from hestia.budget.gmail_payment import ImportedPayment, extract_payment, inspect_payment
 from hestia.budget.receipt_parser import MAX_LINE_CHARS, MAX_TEXT_BYTES, MAX_TEXT_LINES
 
 
@@ -145,7 +145,7 @@ class PaymentExtractionTests(unittest.TestCase):
 
     def test_every_total_label_and_priority(self):
         highest = ("Amount paid", "Kwota zapłacona", "Zapłacono łącznie", "Zapłacono", "Paid")
-        middle = ("Do zapłaty", "Łącznie", "Razem do zapłaty", "Suma do zapłaty",
+        middle = ("Kwota do zapłaty", "Do zapłaty", "Łącznie", "Razem do zapłaty", "Suma do zapłaty",
                   "Total", "Cena z dostawą")
         lowest = ("Razem", "Suma", "Kwota transakcji", "Kwota zamówienia", "Kwota")
         for labels, lower in ((highest, "Total 2 PLN"), (middle, "Razem 2 PLN"), (lowest, "xxxx 0000\n2 PLN")):
@@ -158,6 +158,60 @@ class PaymentExtractionTests(unittest.TestCase):
         self.assertEqual(_extract("Amount paid:\n\nEUR 2\nPaid €2.00").total_amount, "2")
         self.assertIsNone(_extract("PaidSomething 1 PLN\nCost Total 2 PLN"))
         self.assertIsNone(_extract("Offers Total 2 PLN Amount paid 2 PLN"))
+
+    def test_order_value_is_subtotal_when_amount_due_is_present(self):
+        for body in (
+            "Wartość zamówienia: 40,00 PLN\nKoszt dostawy: 4,00 PLN\nKaucja: 1,00 PLN\nKwota do zapłaty: 45,00 PLN",
+            "Wartość zamówienia\n40,00 PLN\nKoszt dostawy\n4,00 PLN\nKaucja\n1,00 PLN\nKwota do zapłaty\n45,00 PLN",
+            "Wartość zamówienia:\n40,00 zł\nOpłata serwisowa:\n4,00 zł\nKaucja za opakowania:\n1,00 zł\nKwota do zapłaty:\n\n45,00 zł",
+            "Kwota do zapłaty\n45,00 PLN\nWartość zamówienia\n40,00 PLN\nKoszt dostawy\n4,00 PLN\nKaucja\n1,00 PLN",
+            "Wartość zamówienia: 40,00 PLN\nKwota do zapłaty: 45,00 PLN\nŁącznie: 45,00 PLN",
+        ):
+            with self.subTest(body=body):
+                payment = _extract(body, "Potwierdzenie zamówienia")
+                self.assertEqual((payment.total_amount, payment.currency), ("45", "PLN"))
+
+        # Without an explicit parseable Kwota do zapłaty, Wartość zamówienia keeps its total role.
+        for body in (
+            "Wartość zamówienia: 40,00 PLN\nKoszt dostawy: 4,00 PLN\nKaucja: 1,00 PLN",
+            "Wartość zamówienia: 40,00 PLN\nKwota do zapłaty: brak",
+        ):
+            with self.subTest(body=body):
+                payment = _extract(body, "Potwierdzenie zamówienia")
+                self.assertEqual((payment.total_amount, payment.currency), ("40", "PLN"))
+
+        # Contradictory explicit totals, currencies, or non-positive due values reject explicitly.
+        for body in (
+            "Wartość zamówienia: 40,00 PLN\nKwota do zapłaty: 45,00 PLN\nKwota do zapłaty: 46,00 PLN",
+            "Wartość zamówienia: 40,00 PLN\nKwota do zapłaty: 45,00 PLN\nDo zapłaty: 46,00 PLN",
+            "Wartość zamówienia: 40,00 PLN\nKwota do zapłaty: 45,00 PLN\nKwota do zapłaty: 45,00 EUR",
+            "Wartość zamówienia: 40,00 EUR\nKwota do zapłaty: 45,00 PLN",
+            "Wartość zamówienia: 40,00 PLN\nWartość zamówienia: 41,00 PLN\nKwota do zapłaty: 45,00 PLN",
+            "Wartość zamówienia: 40,00 PLN\nTotal: 45,00 PLN",
+            "Wartość zamówienia: 40,00 PLN\nKwota do zapłaty: 0,00 PLN",
+            "Wartość zamówienia: 40,00 PLN\nKwota do zapłaty: -45,00 PLN",
+        ):
+            with self.subTest(rejected=body):
+                inspected = inspect_payment(body, subjects=("Potwierdzenie zamówienia",), merchant=_MERCHANT, gateway=False)
+                self.assertIsNone(inspected.payment)
+                self.assertFalse(inspected.missing_total)
+
+        # Refunds and cancellations remain rejected even with valid subtotal and due amounts.
+        sample = "Wartość zamówienia: 40,00 PLN\nKoszt dostawy: 4,00 PLN\nKaucja: 1,00 PLN\nKwota do zapłaty: 45,00 PLN"
+        self.assertIsNone(_extract(sample, "Potwierdzenie anulowania zamówienia nr 990100200"))
+        self.assertIsNone(_extract(sample, "Zwrot za zamówienie"))
+        self.assertIsNone(_extract("Zwrot środków\n" + sample, "Informacja o zamówieniu"))
+
+        # Gateway semantics remain unchanged: base + fee must match due, and Kwota do zapłaty is treated as due.
+        gw_match = _extract(
+            "Kwota transakcji: 40,00 PLN\nDodatkowe opłaty: 5,00 PLN\nKwota do zapłaty: 45,00 PLN",
+            "Potwierdzenie", gateway=True,
+        )
+        self.assertEqual((gw_match.total_amount, gw_match.currency, gw_match.fee_amount), ("45", "PLN", "5"))
+        self.assertIsNone(_extract(
+            "Wartość zamówienia: 40,00 PLN\nDodatkowe opłaty: 0,00 PLN\nKwota do zapłaty: 45,00 PLN",
+            "Potwierdzenie", gateway=True,
+        ))
 
     def test_disagreement_and_negative_values_reject(self):
         for body in (

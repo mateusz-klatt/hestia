@@ -164,6 +164,50 @@ class GmailMessageProcessorTests(unittest.TestCase):
             self.assertEqual((pending.outcome, pending.payment, pending.failed_gateway[0]),
                              ("skipped_non_receipt", None, "PayNow"))
 
+    def test_direct_order_confirmation_prefers_amount_due_over_order_subtotal_via_worker(self):
+        self.worker.parse.side_effect = lambda kind, source: _validate_output(_render(
+            {"text": b"T", "html": b"H"}[kind] + source))
+        plain = (
+            "Dziękujemy za zamówienie nr 990100200.\n"
+            "Wartość zamówienia\n"
+            "40,00 PLN\n"
+            "Koszt dostawy\n"
+            "4,00 PLN\n"
+            "Kaucja\n"
+            "1,00 PLN\n"
+            "Kwota do zapłaty\n"
+            "45,00 PLN\n"
+        )
+        html = (
+            "<html><body>"
+            "<p>Dziękujemy za zamówienie nr 990100200.</p>"
+            "<table>"
+            "<tr><td>Wartość zamówienia</td><td>40,00&nbsp;zł</td></tr>"
+            "<tr><td>Koszt dostawy</td><td>4,00&nbsp;zł</td></tr>"
+            "<tr><td>Kaucja</td><td>1,00&nbsp;zł</td></tr>"
+            "<tr><td><strong>Kwota do zapłaty</strong></td><td><strong>45,00&nbsp;zł</strong></td></tr>"
+            "</table>"
+            "</body></html>"
+        )
+        for subtype, body in (("plain", plain), ("html", html)):
+            with self.subTest(subtype=subtype):
+                message = self._payment_email(body, subtype=subtype)
+                message["Subject"] = "Potwierdzenie zamówienia nr 990100200"
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual((pending.trust_path, pending.outcome, pending.source_kind),
+                                 ("direct_allowlist", "imported", "email"))
+                self.assertFalse(pending.payment.gateway)
+                self.assertEqual((pending.payment.fields.merchant, pending.payment.fields.total_amount,
+                                  pending.payment.fields.currency),
+                                 ("Example Shop", "45", "PLN"))
+                self.assertEqual(pending.payment.order_reference_hmac,
+                                 digest(SECRET, ORDER_REFERENCE_DOMAIN, "990100200"))
+
+        cancelled = self._payment_email(html, subtype="html")
+        cancelled["Subject"] = "Potwierdzenie anulowania zamówienia nr 990100200"
+        skipped = self._process(_metadata(cancelled), _raw(cancelled))
+        self.assertEqual((skipped.outcome, skipped.payment), ("skipped_non_receipt", None))
+
     def test_itemized_shop_table_in_direct_and_forwarded_mail(self):
         inner = self._payment_email(SHOP_TABLE)
         outer = _email(OWNER, "Notatka właściciela")

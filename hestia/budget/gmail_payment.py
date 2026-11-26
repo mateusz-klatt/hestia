@@ -88,18 +88,24 @@ _FEE = re.compile(
     re.IGNORECASE,
 )
 _BULLET = re.compile(r"^[-*•]\s+")
+_AMOUNT_DUE_LABEL = r"Kwota\s++do\s++zapłaty"
+_ORDER_VALUE_LABEL = r"Wartość\s++zamówienia"
 _TOTAL = re.compile(
-    r"(?:(?P<charged>Charged)|(?P<paid>Amount\s+paid|Kwota\s+zapłacona|Zapłacono(?:\s++łącznie)?|Paid)"
-    r"|(?P<total>Do\s+zapłaty|Łączna\s+kwota(?:\s++(?:do\s+zapłaty|transakcji))?"
-    r"|Łącznie|Razem\s+do\s+zapłaty"
-    r"|Suma\s+do\s+zapłaty|Total|Cena\s+z\s+dostawą|Wartość\s++zamówienia)"
+    rf"(?:(?P<charged>Charged)|(?P<paid>Amount\s+paid|Kwota\s+zapłacona|Zapłacono(?:\s++łącznie)?|Paid)"
+    rf"|(?P<total>{_AMOUNT_DUE_LABEL}|Do\s+zapłaty|Łączna\s+kwota(?:\s++(?:do\s+zapłaty|transakcji))?"
+    rf"|Łącznie|Razem\s+do\s+zapłaty"
+    rf"|Suma\s+do\s+zapłaty|Total|Cena\s+z\s+dostawą|{_ORDER_VALUE_LABEL})"
     r"|(?P<sum>Razem|Suma|Kwota(?:\s++(?:zamówienia|transakcji))?))(?=$|[:\s])\s*+:?\s*+",
     re.IGNORECASE,
 )
 # Charged labels (v1f): the amount actually debited, base + fee. A subset of the
 # v1e "total" level, split out for gateway rows so the base stays visible.
-_DUE = re.compile(r"(?:Do\s+zapłaty|Łączna\s+kwota(?:\s++(?:do\s+zapłaty|transakcji))?)(?=$|[:\s])",
-                  re.IGNORECASE)
+_DUE = re.compile(
+    rf"(?:{_AMOUNT_DUE_LABEL}|Do\s+zapłaty|Łączna\s+kwota(?:\s++(?:do\s+zapłaty|transakcji))?)(?=$|[:\s])",
+    re.IGNORECASE,
+)
+_AMOUNT_DUE = re.compile(rf"{_AMOUNT_DUE_LABEL}(?=$|[:\s])", re.IGNORECASE)
+_ORDER_VALUE = re.compile(rf"{_ORDER_VALUE_LABEL}(?=$|[:\s])", re.IGNORECASE)
 _FEE_VALUE = re.compile(
     r"(?:Dodatkowe\s+opłaty(?:\s++obciążające\s++klienta)?|Opłata\s+za\s+realizację\s+transakcji)"
     r"(?=$|[:\s])\s*+:?\s*+",
@@ -371,6 +377,8 @@ def _payment_total(lines: list[str], following: list[str], summary_rows: dict[in
                    *, gateway: bool = False):
     totals: dict[str, set[tuple[Decimal, str]]] = {key: set() for key in ("charged", "paid", "total", "sum", "card")}
     due: set[tuple[Decimal, str]] = set()
+    order_values: set[tuple[Decimal, str]] = set()
+    has_amount_due = False
     summary_totals: dict[tuple[int, str], tuple[Decimal, str]] = {}
     for index, ((line, adjacent), next_value) in enumerate(zip(_line_pairs(lines), following)):
         label_line = _BULLET.sub("", line)
@@ -386,15 +394,31 @@ def _payment_total(lines: list[str], following: list[str], summary_rows: dict[in
             if parsed := _parse_amount(value, labelled=bool(inline), flattened_cell=row is not None):
                 if row is not None and summary_totals.setdefault((row, level), parsed) != parsed:
                     raise _RejectedPayment
-                if gateway and level == "total" and _DUE.match(label_line):
-                    due.add(parsed)
-                else:
-                    totals[level].add(parsed)
+                if level == "total":
+                    if gateway:
+                        if _DUE.match(label_line):
+                            due.add(parsed)
+                            continue
+                    elif _ORDER_VALUE.match(label_line):
+                        order_values.add(parsed)
+                        continue
+                    elif _AMOUNT_DUE.match(label_line):
+                        has_amount_due = True
+                totals[level].add(parsed)
                 continue
         if row is None and _CARD.search(line) and (parsed := _parse_amount(adjacent)):
             totals["card"].add(parsed)
     if gateway:
         return totals, due
+    if order_values:
+        if has_amount_due:
+            # Polish order confirmations treat Wartość zamówienia as a merchandise subtotal
+            # when an explicit Kwota do zapłaty is present in the same currency.
+            order_value = _single_amount(order_values)
+            if {currency for _amount, currency in totals["total"]} != {order_value[1]}:
+                raise _RejectedPayment
+        else:
+            totals["total"].update(order_values)
     for values in totals.values():
         if values:
             if len(values) != 1:
