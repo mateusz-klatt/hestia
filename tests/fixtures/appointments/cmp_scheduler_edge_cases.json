@@ -1,0 +1,46 @@
+{
+  "specialtyId": "spec-01",
+  "days": [
+    "not-a-day-object",
+    {
+      "date": "2026-03-29",
+      "slots": "not-a-slot-list"
+    },
+    {
+      "date": "2026-03-29",
+      "slots": [
+        "not-a-slot-object",
+        {
+          "slotId": "syn-dst-gap",
+          "startTime": "2026-03-29T02:30:00",
+          "doctorId": "doc-101",
+          "locationId": "loc-01"
+        },
+        {
+          "slotId": "syn-dst-valid",
+          "startTime": "2026-03-29T03:15:00",
+          "doctorId": "doc-101",
+          "locationId": "loc-01"
+        },
+        {
+          "slotId": "syn-bad-time",
+          "startTime": "25:99",
+          "doctorId": "doc-101",
+          "locationId": "loc-01"
+        },
+        {
+          "slotId": "syn-missing-doctor",
+          "startTime": "2026-03-29T04:00:00",
+          "locationId": "loc-01"
+        },
+        {
+          "slotId": "syn-end-before-start",
+          "startTime": "2026-03-29T05:00:00",
+          "endTime": "2026-03-29T04:30:00",
+          "doctorId": "doc-101",
+          "locationId": "loc-01"
+        }
+      ]
+    }
+  ]
+}
