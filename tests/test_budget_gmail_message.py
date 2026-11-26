@@ -1005,3 +1005,72 @@ class GmailMessageProcessorTests(unittest.TestCase):
         self.assertEqual((pending.outcome, pending.parse_failed_reason), ("parse_failed", "other"))
         self.assertEqual(logs.output, ["WARNING:hestia.budget.gmail_message:gmail parse_failed reason=other"])
         self.assertNotIn(secret, logs.output[0])
+
+    def test_respect_settlement_pdf_is_itemized_directly_without_email_summary(self):
+        from tests.test_budget_gmail_respect import _polish_pdf, _settlement_text
+
+        pdf_bytes = _polish_pdf(_settlement_text())
+        self.worker.parse.side_effect = lambda kind, payload: _validate_output(
+            _render({"text": b"T", "html": b"H", "pdf": b"P"}[kind] + payload)
+        )
+        cover_plus_pdf = _email(MERCHANT, "Faktura rozliczeniowa w załączniku.")
+        cover_plus_pdf.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename="settlement.pdf")
+        pdf_only = _email(MERCHANT)
+        pdf_only.set_content(pdf_bytes, maintype="application", subtype="pdf", filename="settlement.pdf")
+
+        for label, message in (("cover_plus_pdf", cover_plus_pdf), ("pdf_only", pdf_only)):
+            with self.subTest(label=label):
+                self.worker.parse.reset_mock()
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual((pending.outcome, pending.source_kind, pending.parse_failed_reason),
+                                 ("imported", "attachment", None))
+                self.assertEqual(pending.invoice, ImportedInvoice(
+                    "Respect Energy", None, "8800000042", "123", "PLN", "2026-11-23", "2026-12-10",
+                ))
+                self.assertEqual(
+                    [(item["raw_name"], item["quantity"], item["raw_unit"], item["net_line_total"])
+                     for item in pending.invoice.items],
+                    [
+                        ("Energia elektryczna (netto)", "75.5", "kWh", "60"),
+                        ("Dystrybucja energii elektrycznej (netto)", "1", None, "40"),
+                        ("VAT 23%", "1", None, "23"),
+                    ],
+                )
+                pdf_calls = [args for args, _ in self.worker.parse.call_args_list if args[0] == "pdf"]
+                self.assertEqual(len(pdf_calls), 1)
+
+    def test_respect_email_summary_still_imports_without_positions_when_pdf_parse_errors(self):
+        summary = (
+            "Wystawca: Respect Energy\n"
+            "Numer faktury: 8800000042\n"
+            "Kwota: 123,00 PLN\n"
+            "Data wystawienia: 23.11.2026\n"
+            "Termin płatności: 10.12.2026\n"
+        )
+        expected_invoice = ImportedInvoice(
+            "Respect Energy", None, "8800000042", "123", "PLN", "2026-11-23", "2026-12-10",
+        )
+        real_render = lambda kind, payload: _validate_output(
+            _render({"text": b"T", "html": b"H", "pdf": b"P"}[kind] + payload)
+        )
+        cases = (
+            ("damaged_pdf", b"%PDF-damaged", real_render),
+            ("PDFUnsupported", b"%PDF-1.4 synthetic", PDFUnsupported("synthetic pdf error")),
+            ("WorkerRejected", b"%PDF-1.4 synthetic", WorkerRejected("synthetic worker error")),
+            ("WorkerUnavailable", b"%PDF-1.4 synthetic", WorkerUnavailable("synthetic outage")),
+        )
+        for label, pdf_payload, pdf_behavior in cases:
+            with self.subTest(label=label):
+                message = _email(MERCHANT, summary)
+                message.add_attachment(pdf_payload, maintype="application", subtype="pdf", filename="settlement.pdf")
+                if callable(pdf_behavior):
+                    self.worker.parse.side_effect = pdf_behavior
+                else:
+                    self.worker.parse.side_effect = lambda kind, payload, exc=pdf_behavior: (
+                        (_ for _ in ()).throw(exc) if kind == "pdf" else payload.decode("utf-8")
+                    )
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual((pending.outcome, pending.source_kind, pending.parse_failed_reason),
+                                 ("imported", "email", None))
+                self.assertEqual(pending.invoice, expected_invoice)
+                self.assertEqual(pending.invoice.items, ())

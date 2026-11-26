@@ -18,6 +18,7 @@ from tests.test_budget_gmail_message import (
     _metadata,
     _raw,
 )
+from tests.test_budget_gmail_respect import _polish_pdf, _settlement_text
 from tests.test_budget_gmail_sync import SETTINGS
 from tests.test_budget_gmail_worker import _pdf_text, _pdf_writer, _write_pdf
 
@@ -171,3 +172,44 @@ class GmailDocumentDiscoveryTests(TestCase):
         self.worker.parse.side_effect = WorkerUnavailable()
         with self.assertRaisesRegex(GmailError, "parser_unavailable"):
             self.process(message)
+
+    def test_two_pdfs_of_same_document_keep_matching_and_drop_differing_positions(self):
+        base_text = _settlement_text()
+        base_pdf = _polish_pdf(base_text)
+        alt_split_pdf = _polish_pdf(_settlement_text(energy_net="59,00", distribution_net="41,00"))
+        alt_kwh_pdf = _polish_pdf(_settlement_text(kwh="76,0"))
+        summary_text = "\n".join(base_text.splitlines()[:7]) + "\n"
+        summary_pdf = _polish_pdf(summary_text)
+
+        matching = _email(UNLISTED, "")
+        for attachment in (base_pdf, base_pdf):
+            matching.add_attachment(attachment, maintype="application", subtype="pdf")
+        kept = self.process(matching)
+        self.assertEqual((kept.outcome, kept.card_required, kept.source_kind), ("imported", True, "attachment"))
+        self.assertEqual(
+            [(item["raw_name"], item["quantity"], item["raw_unit"], item["net_line_total"])
+             for item in kept.invoice.items],
+            [
+                ("Energia elektryczna (netto)", "75.5", "kWh", "60"),
+                ("Dystrybucja energii elektrycznej (netto)", "1", None, "40"),
+                ("VAT 23%", "1", None, "23"),
+            ],
+        )
+
+        for label, attachments, body in (
+            ("different_split", (base_pdf, alt_split_pdf), ""),
+            ("different_kwh", (base_pdf, alt_kwh_pdf), ""),
+            ("itemized_plus_summary", (base_pdf, summary_pdf), ""),
+            ("summary_plus_itemized", (summary_pdf, base_pdf), ""),
+            ("body_plus_differing_pdfs", (base_pdf, alt_split_pdf), summary_text),
+        ):
+            with self.subTest(label=label):
+                message = _email(UNLISTED, body)
+                for attachment in attachments:
+                    message.add_attachment(attachment, maintype="application", subtype="pdf")
+                pending = self.process(message)
+                self.assertEqual((pending.outcome, pending.card_required, pending.source_kind),
+                                 ("imported", True, "attachment"))
+                self.assertEqual((pending.invoice.issuer, pending.invoice.invoice_number, pending.invoice.amount),
+                                 ("Respect Energy", "8800000042", "123"))
+                self.assertEqual(pending.invoice.items, ())
