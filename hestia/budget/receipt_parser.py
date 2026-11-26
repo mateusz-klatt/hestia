@@ -479,9 +479,9 @@ def _mark_digit_runs(text, bad):
 def _mark_ibans(text, bad):
     """Mark lines that contribute a character to a bounded IBAN.
 
-    Separators may sit between the IBAN characters. The match must end on a
-    boundary, so a longer word is not a prefix hit. Each start reads at most
-    ``_IBAN_MAX`` alphanumeric characters.
+    Separators may sit between the IBAN characters. A validated candidate may
+    end at a line break while the scan continues for a longer wrapped match.
+    Each start reads at most ``_IBAN_MAX`` alphanumeric characters.
     """
     line_of = []
     line = 0
@@ -511,7 +511,7 @@ def _mark_ibans(text, bad):
                     look = cursor
                     while look < length and text[look] in _JOIN_SEPARATORS:
                         look += 1
-                    if look >= length or not text[look].isalnum():
+                    if look >= length or not text[look].isalnum() or "\n" in text[cursor:look]:
                         matched_end = look
                         matched_len = len(compact)
                 continue

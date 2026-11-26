@@ -352,6 +352,34 @@ NR KARTY ****5555
             self.assertNotIn(digits, line["raw_name"].replace("\u00a0", ""))
             self.assertNotIn(nbsp_pan, line["raw_name"])
 
+    def test_iban_redaction_respects_document_line_boundaries(self):
+        iban = "MT86MALT01100ABCDEFGHIJKLMNOPQR"
+        # This synthetic account's 26-character prefix also has a valid checksum.
+        wrapped = "MT77MALT01100TFOJOFWVWEUBOIPZVU"
+        following = "PARAGON FISKALNY\nSUMA PLN 5,00"
+        invalid_checksum = f"MT00{iban[4:]}"
+        for account_text, expected in (
+            (f"IBAN {iban}", "[usunięto]"),
+            (f"IBAN {iban}\n4111 1111\n1111 1111", "[usunięto]\n[usunięto]\n[usunięto]"),
+            (f"IBAN {wrapped[:26]}\n{wrapped[26:]}", "[usunięto]\n[usunięto]"),
+            (f"IBAN {invalid_checksum}", f"IBAN {invalid_checksum}"),
+            (f"IBAN {iban}EXTRA", f"IBAN {iban}EXTRA"),
+        ):
+            with self.subTest(account_text=account_text):
+                redacted = redact_pan(f"{account_text}\n{following}")
+                self.assertEqual(redacted, f"{expected}\n{following}")
+                self.assertEqual(redact_pan(redacted), redacted)
+
+    def test_receipt_draft_does_not_use_first_line_iban_as_shop_name(self):
+        iban = "MT86MALT01100ABCDEFGHIJKLMNOPQR"
+        text = (f"IBAN {iban}\nPARAGON FISKALNY\n2026-11-20 12:34\n"
+                "KUBEK 1szt * 5,00 5,00 A\nSUMA PLN 5,00\n")
+        parsed = self.receipts.parse_text("owner", text, source_kind="local_ocr")
+        self.assertNotIn(iban, json.dumps(parsed["draft"], ensure_ascii=False))
+        self.assertNotIn(iban, self.receipt_row(parsed["receipt_id"]).raw_shop_name or "")
+        confirmed = self.receipts.confirm("owner", confirm_values(parsed))["receipt"]
+        self.assertEqual((confirmed["status"], confirmed["total_amount"]), ("confirmed", "5"))
+
     def test_normalised_text_redacts_pans_hidden_by_unicode(self):
         expected = "[usunięto]\n[usunięto]"
         for sep in ("\r\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"):
