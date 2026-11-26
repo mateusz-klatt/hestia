@@ -6,7 +6,14 @@ from unittest.mock import Mock, call
 from hestia.budget.gmail_client import GmailError
 from hestia.budget.gmail_message import GmailMessageProcessor
 from hestia.budget.gmail_sync import _history_messages
-from tests.test_budget_gmail_message import GMAIL_HASH, MERCHANT, MESSAGE_ID, _email, _metadata, _raw
+from tests.test_budget_gmail_message import (
+    GMAIL_HASH,
+    MERCHANT,
+    MESSAGE_ID,
+    _email,
+    _metadata,
+    _raw,
+)
 from tests.test_budget_gmail_sync import SETTINGS
 
 

@@ -1,8 +1,8 @@
 """A direct document requires independent, unique evidence in the owner's card ledger."""
 
+import json
 from dataclasses import replace
 from datetime import date
-import json
 
 from hestia import db
 from hestia.budget import analytics_views, bank_metadata
@@ -11,7 +11,6 @@ from hestia.budget.gmail_card_match import match_card_purchase
 from hestia.budget.gmail_document import ImportedDocument
 from hestia.budget.receipt_reconcile import evidence_json, reconcile_receipt_links
 from tests.test_budget_analytics_store import AnalyticsCase
-
 
 DOCUMENT = ImportedDocument(
     "Arvid Books", None, "INV-77", "43.20", "PLN", "2026-11-30", None, "invoice", True, None

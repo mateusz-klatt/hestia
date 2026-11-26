@@ -1,8 +1,8 @@
 """Import a newly discovered document once booked card evidence corroborates it."""
+import json
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import UTC, datetime
-import json
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 

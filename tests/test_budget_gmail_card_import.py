@@ -6,14 +6,34 @@ from hestia import db
 from hestia.budget.gmail_card_import import waiting_key
 from hestia.budget.gmail_client import GmailClient
 from hestia.budget.gmail_message import GmailMessageProcessor
-from hestia.budget.gmail_store import GMAIL_MESSAGE_DOMAIN, IMPORT_TTL, MAILBOX_DOMAIN, GmailStore, digest
+from hestia.budget.gmail_store import (
+    GMAIL_MESSAGE_DOMAIN,
+    IMPORT_TTL,
+    MAILBOX_DOMAIN,
+    GmailStore,
+    digest,
+)
 from hestia.budget.gmail_sync import GmailSync
 from hestia.budget.gmail_trust import PaymentSender
 from hestia.budget.gmail_worker import _render, _validate_output
 from tests.test_budget_analytics_store import AnalyticsCase
 from tests.test_budget_gmail_discovery import DOCUMENT, UNLISTED
-from tests.test_budget_gmail_message import INVOICE, MERCHANT, SECRET, _email, _metadata, _raw
-from tests.test_budget_gmail_sync import FakeClock, FakeGmailTransport, OWNER, SETTINGS, page, response
+from tests.test_budget_gmail_message import (
+    INVOICE,
+    MERCHANT,
+    SECRET,
+    _email,
+    _metadata,
+    _raw,
+)
+from tests.test_budget_gmail_sync import (
+    OWNER,
+    SETTINGS,
+    FakeClock,
+    FakeGmailTransport,
+    page,
+    response,
+)
 
 
 class GmailCardImportTests(AnalyticsCase):
@@ -221,7 +241,7 @@ class GmailCardImportTests(AnalyticsCase):
         service = GmailSync(self.processor.settings, self.gmail, client, self.processor, self.path)
         with self.sessions.begin() as session:
             session.add_all(db.BudgetReceipt(id=f"pending-{n}", owner=OWNER, status="imported", source_kind="email",
-                                             created_at=self.now, updated_at=self.now) for n in range(200))
+                                             version=1, created_at=self.now, updated_at=self.now) for n in range(200))
         self.assertTrue(self.gmail.at_pending_cap(OWNER))
         self.add_card()
         transport.routes["/messages", None] = response(page("utility", "unpaid", token="next"))

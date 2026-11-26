@@ -1,14 +1,18 @@
 """Corroborate a parsed purchase document with a single owner-scoped, booked card debit."""
+import re
 from dataclasses import dataclass
 from datetime import date
-import re
 
 from sqlalchemy import case, func, or_
 
 from ..db import BudgetTransaction, BudgetTransactionMetadata
 from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint
 from .bank_metadata import exchange_evidence
-from .receipt_parser import contains_gateway_marker, merchant_score_groups, merchant_word_tokens
+from .receipt_parser import (
+    contains_gateway_marker,
+    merchant_score_groups,
+    merchant_word_tokens,
+)
 from .receipt_reconcile import _bound_date, _json, link_evidence, resolved_party_names
 from .receipt_store import BudgetReceiptStore, _nip_match, _shift_clamped
 
@@ -24,7 +28,7 @@ _NON_PURCHASE = re.compile(
 _ORIGINAL_AMOUNT = re.compile(
     r"\b(?:kwota (?:oryginalna|w walucie (?:oryginalnej|transakcji))|original (?:transaction )?amount)"
     r"\s*[:=]?\s*(?:([A-Z]{3})\s+)?(\d{1,16}(?:[,.]\d{1,12})?)(?:\s+([A-Z]{3})\b)?(?![\d,.])",
-    re.ASCII | re.I,
+    re.ASCII | re.IGNORECASE,
 )
 _DATE_KEYS = ("transaction_date", "booking_date", "value_date")
 

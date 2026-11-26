@@ -8,7 +8,16 @@ from hestia.budget.gmail_message import GmailMessageProcessor
 from hestia.budget.gmail_sync import GmailSettings
 from hestia.budget.gmail_trust import PaymentSender
 from tests.test_budget_gmail_message import (
-    GMAIL_HASH, INVOICE, MERCHANT, MESSAGE_ID, OWNER, SECRET, SPOUSE, _email, _metadata, _raw,
+    GMAIL_HASH,
+    INVOICE,
+    MERCHANT,
+    MESSAGE_ID,
+    OWNER,
+    SECRET,
+    SPOUSE,
+    _email,
+    _metadata,
+    _raw,
 )
 
 

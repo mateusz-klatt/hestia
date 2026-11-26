@@ -8,7 +8,15 @@ from hestia.budget.gmail_store import DOCUMENT_NUMBER_DOMAIN, RFC_MESSAGE_DOMAIN
 from hestia.budget.gmail_trust import PaymentSender
 from hestia.budget.gmail_worker import WorkerUnavailable, _render, _validate_output
 from tests.test_budget_gmail_message import (
-    GMAIL_HASH, INVOICE, MESSAGE_ID, RFC_ID, SECRET, SPOUSE, _email, _metadata, _raw,
+    GMAIL_HASH,
+    INVOICE,
+    MESSAGE_ID,
+    RFC_ID,
+    SECRET,
+    SPOUSE,
+    _email,
+    _metadata,
+    _raw,
 )
 from tests.test_budget_gmail_sync import SETTINGS
 from tests.test_budget_gmail_worker import _pdf_text, _pdf_writer, _write_pdf

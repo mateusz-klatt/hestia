@@ -1,9 +1,9 @@
 """Extract structured purchase documents for subsequent owner-card corroboration."""
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from itertools import chain, islice
-import re
 
 from .gmail_document import ImportedDocument, extract_document
 from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
