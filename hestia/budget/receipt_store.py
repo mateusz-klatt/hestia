@@ -22,7 +22,8 @@ from sqlalchemy.exc import IntegrityError
 
 from .. import authz
 from ..db import (AppMeta, BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
-                  BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line, BudgetShop as Shop,
+                  BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line,
+                  BudgetReceiptLinkGroup as ReceiptLinkGroup, BudgetShop as Shop,
                   BudgetTransaction as Transaction, BudgetTransferLeg as Leg)
 from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint, negate_money, sum_money
 from .device_token import DeviceTokenError, _issued_mask, _legacy_bearer_allowed, write_device_audit
@@ -298,6 +299,14 @@ def _line_dict(row):
 
 
 _DIGEST_HEX = re.compile(r"[0-9a-f]{64}")
+
+
+def _group_reservation(owner, account_id, entry_reference):
+    # Both confirmed and needs_review groups reserve the transaction.
+    return exists().where(
+        ReceiptLinkGroup.owner == owner, ReceiptLinkGroup.account_id == account_id,
+        ReceiptLinkGroup.entry_reference == entry_reference,
+    )
 
 
 def _fee_adjusted_total(total_amount, fee_amount):
@@ -679,6 +688,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             Leg.account_id == Transaction.account_id, Leg.entry_reference == Transaction.entry_reference,
             Leg.account_id == Account.id, Account.owner == owner,
         )
+        # Receipt-linked and grouped transactions still count when testing ID uniqueness.
         tx_rows = session.scalars(select(Transaction).join(Account).join(Connection).where(
             Account.owner == owner, Connection.owner == owner, Account.enabled.is_(True),
             Transaction.uncertain.is_(False), ~transfer_leg,
@@ -744,9 +754,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
             Leg.account_id == Transaction.account_id, Leg.entry_reference == Transaction.entry_reference,
             Leg.account_id == Account.id, Account.owner == owner,
         )
+        grouped = _group_reservation(owner, Transaction.account_id, Transaction.entry_reference)
         return session.execute(select(Transaction, _ROW_ID).join(Account).join(Connection).where(
             Account.owner == owner, Connection.owner == owner, Account.enabled.is_(True),
-            Transaction.uncertain.is_(False), ~active_link, ~transfer_leg,
+            Transaction.uncertain.is_(False), ~active_link, ~transfer_leg, ~grouped,
         )).all()
 
     def _candidates(self, session, owner, row, parsed, *, include_receipt_id=None):
@@ -877,12 +888,13 @@ class BudgetReceiptStore(BudgetHTTPStore):
             raise ReceiptError("budget_receipt_stale_source", 409)
         if session.get(Leg, (link["account_id"], link["entry_reference"])) is not None:
             raise ReceiptError()
-        other = session.scalar(select(Receipt).where(
-            Receipt.owner == owner,
+        other_link = exists().where(
+            Receipt.owner == owner, Receipt.id != receipt_id,
             Receipt.linked_account_id == link["account_id"], Receipt.linked_entry_ref == link["entry_reference"],
             Receipt.status.in_(("confirmed", "needs_review")),
-        ).limit(1))
-        if other is not None and other.id != receipt_id:
+        )
+        grouped = _group_reservation(owner, link["account_id"], link["entry_reference"])
+        if session.scalar(select(other_link | grouped)):
             raise ReceiptError("budget_receipt_tx_already_linked", 409)
         try:
             payload = _json(transaction.payload_json)

@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 from aiohttp import web
+from sqlalchemy import select
 
 from hestia import api_contract, db, web as hestia_web
 from hestia.budget import config, gmail_config, receipt_api
@@ -243,6 +244,64 @@ class ReceiptIdMatchingTests(AnalyticsCase):
         )
         detail_unq = self.receipts.detail("owner", "10000000-0000-4000-8000-000000000003")
         self.assertEqual(detail_unq["candidates"][0]["match_strength"], "id")
+
+    def test_grouped_transaction_is_hidden_and_an_issued_id_cannot_take_it(self):
+        tables = [model.__table__ for model in (
+            db.BudgetReceipt, db.BudgetReceiptLine, db.BudgetReceiptLinkGroup,
+            db.BudgetReceiptLinkMember, db.BudgetAnalyticsAudit,
+        )]
+
+        def stored_state():
+            with self.sessions() as session:
+                return [session.execute(select(table).order_by(*table.primary_key.columns)).all() for table in tables]
+
+        for index, status in enumerate(("confirmed", "needs_review")):
+            with self.subTest(status=status):
+                identifier = f"10000000-0000-4000-8000-{80 + index:012d}"
+                entry = f"tx-group-{status}"
+                reference = f"P24-GRP-111-22{index}"
+                amount = str(120 + index)
+                bank_fields = dict(amount=amount, booking_date="2026-11-15", value_date="2026-11-15",
+                                   remittance_information=[reference])
+                self.add_transaction("a", entry, **bank_fields)
+                self._insert_receipt(receipt_id=identifier, gateway="Przelewy24", raw_ref=reference, total_amount=amount)
+                issued = self.receipts.detail("owner", identifier)
+                candidate, = issued["candidates"]
+                self.assertEqual((candidate["match_strength"], candidate["entry_reference"]),
+                                 ("id", reference_digest(entry)))
+                values = confirm_values({"receipt_id": identifier, "version": issued["receipt"]["version"],
+                                         "draft": issued["receipt"], "candidates": issued["candidates"]},
+                                        link={"account_id": self.accounts["a"], "entry_reference": entry})
+
+                group_id = f"group-{status}"
+                members = [f"10000000-0000-4000-8000-{90 + 2 * index + offset:012d}" for offset in range(2)]
+                for member, total in zip(members, ("60", str(60 + index))):
+                    self._insert_receipt(receipt_id=member, status=status, total_amount=total)
+                with self.sessions.begin() as session:
+                    session.add(db.BudgetReceiptLinkGroup(
+                        id=group_id, owner="owner", account_id=self.accounts["a"], entry_reference=entry,
+                        currency="PLN", tx_amount=amount, credit_debit_indicator="DBIT", status=status,
+                        linked_fingerprint=self.fingerprint("a", entry), linked_evidence="{}", version=1,
+                        created_at=self.now, updated_at=self.now,
+                    ))
+                    session.flush()
+                    session.add_all(db.BudgetReceiptLinkMember(group_id=group_id, receipt_id=member, owner="owner")
+                                    for member in members)
+
+                self.assertEqual(self.receipts.detail("owner", identifier)["candidates"], [])
+                before = stored_state()
+                with mock.patch.object(self.receipts, "_shop_id", wraps=self.receipts._shop_id) as shop:
+                    with self.assertRaises(ReceiptError) as reserved:
+                        self.receipts.confirm("owner", values)
+                    shop.assert_not_called()
+                self.assertEqual((reserved.exception.code, reserved.exception.status),
+                                 ("budget_receipt_tx_already_linked", 409))
+                self.assertEqual(stored_state(), before)
+
+                self.add_transaction("b", entry, **bank_fields)
+                visible, = self.receipts.detail("owner", identifier)["candidates"]
+                self.assertEqual((visible["account_id"], visible["entry_reference"], visible["match_strength"]),
+                                 (self.accounts["b"], reference_digest(entry), "none"))
 
     def test_cross_gateway_never_matches(self):
         self.add_transaction("a", "tx-p24", amount="120.00", booking_date="2026-11-15", value_date="2026-11-15",
