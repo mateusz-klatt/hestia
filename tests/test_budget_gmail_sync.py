@@ -683,7 +683,7 @@ class GmailSyncTests(TestCase):
                 self.assertIn(term, query)
         self.assertEqual(self.processor.processed, ["new-card-invoice"])
 
-    def test_relaxing_sender_authentication_retries_only_rejected_mail_once(self):
+    def test_relaxing_sender_authentication_retries_prior_misses_once(self):
         self.enable()
         self.sync()
         def key(message_id):
@@ -707,20 +707,20 @@ class GmailSyncTests(TestCase):
                 self.assertTrue(self.sync()["has_more"])
             self.tick()
             self.assertFalse(self.sync()["has_more"])
-            self.assertEqual(self.processor.processed, ["invoice", "rejected"])
+            self.assertEqual(self.processor.processed, ["invoice", "rejected", "other", "failed"])
             queries = [entry["q"][0] for entry in self.transport.requests("/messages")]
             cutoff = int(NOW + 15 * DAY - SETTINGS.backfill_days * DAY)
             self.assertTrue(all(f"after:{cutoff}" in query for query in queries[-2:]))
             self.transport.routes[("/history", None)] = response(history(*receipts))
             self.tick()
             self.sync()
-            self.assertEqual(self.processor.processed, ["invoice", "rejected"])
+            self.assertEqual(self.processor.processed, ["invoice", "rejected", "other", "failed"])
             self.assertNotIn("after:", self.transport.requests("/messages")[-1]["q"][0])
 
         messages = {row.gmail_id_hmac: row.outcome for row in self.rows(db.BudgetGmailMessage)}
-        self.assertEqual(messages, {key(msg): "imported" if msg == "invoice" else outcome
+        self.assertEqual(messages, {key(msg): "imported" if msg in ("invoice", "other", "failed") else outcome
                                     for msg, outcome in receipts.items()})
-        self.assertEqual(len(self.rows(db.BudgetReceipt)), 1)
+        self.assertEqual(len(self.rows(db.BudgetReceipt)), 3)
         self.service.settings = SETTINGS
         self.tick()
         self.sync()
@@ -728,7 +728,7 @@ class GmailSyncTests(TestCase):
         self.service.settings = replace(SETTINGS, require_sender_authentication=False)
         self.tick()
         self.sync()
-        self.assertEqual(self.processor.processed, ["invoice", "rejected", "rejected"])
+        self.assertEqual(self.processor.processed, ["invoice", "rejected", "other", "failed", "rejected"])
 
     def test_payment_senders_are_searched_in_backfill_and_incremental_scope(self):
         self.service.settings = replace(SETTINGS, payment_senders=(

@@ -1,0 +1,15 @@
+Twoja faktura rozliczeniowa
+nr. 7700000042 z dnia: 03.11.2026
+Sprzedawca: Respect Energy
+Data wystawienia: 03.11.2026
+Termin płatności: 20.11.2026
+Do zapłaty razem: 123,04 zł
+Wartość netto Stawka VAT Kwota VAT
+Wartość
+brutto
+Rozliczenie 100,03 23 23,01 123,04
+a) Sprzedaż energii elektrycznej 50,02 23
+b) Dystrybucja energii elektrycznej 50,01 23
+Energia czynna - Całodobowa 01.10.2026 - 31.10.2026 kWh 88,5
+Tytuł wpłaty: faktura 7700000042
+Kwota: 123,04 zł

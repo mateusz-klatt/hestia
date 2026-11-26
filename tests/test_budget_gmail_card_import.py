@@ -73,6 +73,22 @@ class GmailCardImportTests(AnalyticsCase):
                          (invoice_number, "card", self.accounts["a"], "synthetic-card"))
         return receipt.id
 
+    def test_policy_catchup_replaces_old_sender_rejection_and_stages_once(self):
+        item = self.message("old-sender")
+        old = replace(item, card_required=False, outcome="skipped_untrusted_sender",
+                      invoice=None, document_provenance=None)
+        self.gmail.commit(OWNER, 1, {}, [old])
+        self.now += 1
+        cutoff = self.now
+        for _ in range(2):
+            self.gmail.commit(OWNER, 1, {}, [item], retry_skipped_before=cutoff)
+        self.assertEqual(self.rows(db.BudgetGmailMessage), [])
+        self.assertTrue(self.gmail.known(OWNER, item.gmail_id_hmac))
+        self.add_card()
+        self.gmail.commit(OWNER, 1, {"sync_phase": "idle"}, settle_cards=True)
+        self.assert_linked_once("TEST/42")
+        self.assertEqual([source.outcome for source in self.rows(db.BudgetGmailMessage)], ["imported"])
+
     def test_distinct_documents_competing_for_one_card_charge_stay_unlinked(self):
         first = self.message("first")
         second = self.message("second", body=DOCUMENT.replace("TEST/42", "TEST/43"))

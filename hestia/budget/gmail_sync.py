@@ -144,7 +144,7 @@ class _Progress:
     restarted: bool = False
     terms: tuple = field(default_factory=tuple)
     label_id: str | None = None
-    retry_untrusted_before: float | None = None
+    retry_skipped_before: float | None = None
 
 
 class GmailSync:
@@ -202,7 +202,7 @@ class GmailSync:
             starting_recovery=starting_recovery, starting_incremental=starting_incremental,
             settle_cards=not self.settings.require_sender_authentication and changes.get("sync_phase") == "idle",
             enforce_pending_cap=self.settings.require_sender_authentication,
-            retry_untrusted_before=progress.retry_untrusted_before,
+            retry_skipped_before=progress.retry_skipped_before,
         )
         progress.imported += imported
         progress.skipped += skipped
@@ -253,7 +253,7 @@ class GmailSync:
         try:
             for message_id in dict.fromkeys(ids):
                 msg_hash = digest(self.settings.hmac_secret, GMAIL_MESSAGE_DOMAIN, message_id)
-                if self.store.known(owner, msg_hash, retry_untrusted_before=progress.retry_untrusted_before):
+                if self.store.known(owner, msg_hash, retry_skipped_before=progress.retry_skipped_before):
                     continue
                 if progress.attempted >= MAX_SYNC_MESSAGES_PER_RUN:
                     raise RunLimit()
@@ -413,7 +413,7 @@ class GmailSync:
                 profile_history = self._profile(run, state.mailbox_hmac)
                 self.store.retain(owner, generation, settle_cards=False if self.settings.require_sender_authentication else None)
                 progress.label_id = self._label(run)
-                progress.retry_untrusted_before = self.store.prepare_sender_policy(
+                progress.retry_skipped_before = self.store.prepare_sender_policy(
                     owner, generation, self.settings.require_sender_authentication, self.settings.backfill_days)
                 state = self.store.state(owner)
                 force = bool(force_full_resync or state.force_full_resync)

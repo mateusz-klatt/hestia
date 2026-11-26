@@ -54,6 +54,34 @@ class DocumentFixtures(unittest.TestCase):
         for name in ('statement', 'medical', 'newsletter', 'credit_note', 'conflict'):
             self.assertIsNone(extract_document(fixture(name), merchant='Vendor'))
 
+    def test_respect_settlement_prints_two_net_charges_and_vat(self):
+        pdf = fixture('respect_settlement')
+        document = extract_document(pdf, merchant='Respect Energy', pdf=True)
+        self.assertEqual([(r['raw_name'], r['net_line_total'], r['line_kind']) for r in document.items], [
+            ('Energia elektryczna (netto)', '50.02', 'item'),
+            ('Dystrybucja energii elektrycznej (netto)', '50.01', 'item'),
+            ('VAT 23%', '23.01', 'other'),
+        ])
+        self.assertEqual((document.items[0]['quantity'], document.items[0]['raw_unit']), ('88.5', 'kWh'))
+        repeated_meter = pdf + '\nEnergia czynna - Całodobowa 01.11.2026 - 02.11.2026 kWh 18'
+        energy = extract_document(repeated_meter, merchant='Respect Energy', pdf=True).items[0]
+        self.assertEqual((energy['quantity'], energy['raw_unit']), ('1', None))
+        self.assertFalse(extract_document(pdf, merchant='Respect Energy').items)
+
+    def test_inconsistent_or_adjusted_settlement_keeps_its_original_total(self):
+        pdf = fixture('respect_settlement')
+        for changed in (pdf.replace('50,01 23', '50,00 23'),
+                        pdf.replace('23,01 123,04', '23,02 123,04'),
+                        pdf.replace(' 23 23,01', ' 8 23,01'),
+                        pdf.replace('Kwota: 123,04', 'Kwota: 100,00'),
+                        pdf.replace('wpłaty: faktura 7700000042', 'wpłaty: faktura 7711111124'),
+                        pdf.replace('50,01 23', '50,01 23\nb) Dystrybucja energii elektrycznej 50,01 23'),
+                        pdf + '\nSaldo z poprzedniego okresu: 10,00 zł',
+                        pdf.replace('Respect Energy', 'Inny sprzedawca')):
+            with self.subTest(changed=changed):
+                document = extract_document(changed, merchant='Respect Energy', pdf=True)
+                self.assertEqual((document.amount, document.items), ('123.04', ()))
+
     def test_document_sender_validation_and_query(self):
         entry = {'sender': '@Shop.example.test', 'merchant': 'Shop'}
         docs = normalize_document_senders([entry])
@@ -107,6 +135,27 @@ class DocumentPipeline(unittest.TestCase):
 
     def commit(self, item):
         return self.store.commit(OWNER, 1, {}, (item,))
+
+    def test_respect_payment_summary_gains_only_its_matching_attachment_lines(self):
+        sender = 'billing@respectenergy.pl'
+        self.settings.sender_allowlist = (sender,)
+        body = ('Wystawca: Respect Energy\nNumer faktury: 7700000042\nKwota: 123,04 PLN\n'
+                'Data wystawienia: 03.11.2026\nTermin płatności: 20.11.2026')
+        pdf = fixture('respect_settlement')
+        detailed = self.process(self.message([pdf], body=body, sender=sender))
+        self.assertEqual((detailed.outcome, detailed.source_kind), ('imported', 'email'))
+        self.assertEqual(self.commit(detailed), (1, 0, True))
+        with self.sessions() as session:
+            lines = session.scalars(select(db.BudgetReceiptLine).order_by(db.BudgetReceiptLine.line_no)).all()
+            self.assertEqual([(r.raw_name, r.quantity, r.raw_unit, r.net_line_total) for r in lines], [
+                ('Energia elektryczna (netto)', '88.5', 'kWh', '50.02'),
+                ('Dystrybucja energii elektrycznej (netto)', '1', None, '50.01'),
+                ('VAT 23%', '1', None, '23.01'),
+            ])
+        for attachments in ([], [pdf, pdf], [pdf.replace('7700000042', '7700000003')], ['unreadable']):
+            with self.subTest(attachments=len(attachments)):
+                parsed = self.process(self.message(attachments, body=body, sender=sender))
+                self.assertEqual((parsed.outcome, parsed.invoice.amount, parsed.invoice.items), ('imported', '123.04', ()))
 
     def test_gateway_sender_document_takes_precedence_and_falls_back(self):
         doc = self.process(self.message([fixture('stripe_invoice')]))

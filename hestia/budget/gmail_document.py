@@ -1,12 +1,13 @@
 """Extract labelled purchase documents from trusted senders' rendered PDFs."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 import re
 
 from .analytics_core import canonical_money
 from .gmail_invoice import _normalized_invoice_lines, _parse_nip, _safe_field
+from .gmail_respect import settlement_items
 from .gmail_payment import _following_values, _parse_amount, _parse_date, _RejectedPayment
 from .receipt_parser import MAX_TEXT_BYTES, ReceiptError
 
@@ -23,6 +24,7 @@ class ImportedDocument:
     document_kind: str
     paid: bool
     receipt_number: str | None
+    items: tuple[dict, ...] = field(default=(), compare=False)
 
 
 _REJECT = re.compile(r"wyciąg|zestawienie operacji|statement of account|historia rachunku|skierowanie|recepta|e-zwolnienie|wynik badania|newsletter|korekta|korygując|credit note", re.I)
@@ -137,7 +139,8 @@ def _vat_totals(lines: list[str]) -> tuple[dict[int, str], set[int]]:
     return totals, headers
 
 
-def extract_document(text: str, *, merchant: str, allow_unnumbered_receipt: bool = False) -> ImportedDocument | None:
+def extract_document(text: str, *, merchant: str, allow_unnumbered_receipt: bool = False,
+                     pdf: bool = False) -> ImportedDocument | None:
     """Return a document only if the labelled values are safe and unambiguous."""
     if not isinstance(text, str) or len(text) > MAX_TEXT_BYTES:
         return None
@@ -323,5 +326,7 @@ def extract_document(text: str, *, merchant: str, allow_unnumbered_receipt: bool
         nips.add(parsed)
     nip = next(iter(nips)) if len(nips) == 1 and None not in nips else None
     paid = bool(receipt_number or zero_due or dates["paid_date"] or _PAID.search(joined))
-    return ImportedDocument(seller, nip, number, canonical_money(str(total[0])), total[1], dates["issue"],
-                            dates["due"], kind, paid, receipt_number)
+    amount = canonical_money(str(total[0]))
+    items = settlement_items(lines, seller, number, amount) if pdf and kind == "invoice" and total[1] == "PLN" else ()
+    return ImportedDocument(seller, nip, number, amount, total[1], dates["issue"], dates["due"],
+                            kind, paid, receipt_number, items)

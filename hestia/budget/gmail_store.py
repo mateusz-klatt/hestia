@@ -105,10 +105,11 @@ def _inc_reset_key(owner):
     return _INC_RESET_PREFIX + owner
 
 
-def _already_processed(source, retry_untrusted_before):
+def _already_processed(source, retry_skipped_before):
     return source is not None and not (
-        retry_untrusted_before is not None and source.created_at < retry_untrusted_before
-        and source.outcome == "skipped_untrusted_sender" and source.receipt_id is None
+        retry_skipped_before is not None and source.created_at < retry_skipped_before
+        and source.outcome in ("skipped_untrusted_sender", "skipped_non_receipt", "parse_failed")
+        and source.receipt_id is None
     )
 
 
@@ -515,9 +516,9 @@ class GmailStore(BudgetStore):
             if row.grant_status == "active" and attention == "identity_mismatch":
                 row.grant_generation += 1
 
-    def known(self, owner, gmail_hmac, *, retry_untrusted_before=None):
+    def known(self, owner, gmail_hmac, *, retry_skipped_before=None):
         with self.sessions() as session:
-            return (_already_processed(session.get(BudgetGmailMessage, (owner, gmail_hmac)), retry_untrusted_before)
+            return (_already_processed(session.get(BudgetGmailMessage, (owner, gmail_hmac)), retry_skipped_before)
                     or session.get(AppMeta, gmail_card_import.waiting_key(owner, gmail_hmac)) is not None)
 
     @staticmethod
@@ -809,6 +810,9 @@ class GmailStore(BudgetStore):
         if item.document_provenance is not None:
             session.add(AppMeta(key=_document_number_key(receipt.id),
                                 value=json.dumps(item.document_provenance, sort_keys=True)))
+        if lines := getattr(invoice, "items", ()):
+            session.add_all(BudgetReceiptLine(receipt_id=receipt.id, owner=owner, **line) for line in lines)
+        elif item.document_provenance is not None:
             session.add(BudgetReceiptLine(receipt_id=receipt.id, owner=owner, line_no=1, line_kind="other",
                                          raw_name="Dokument", raw_name_key="dokument", quantity="1",
                                          gross_line_total=invoice.amount, net_line_total=invoice.amount))
@@ -866,7 +870,7 @@ class GmailStore(BudgetStore):
         return receipt.id
 
     def commit(self, owner, generation, changes, pending=(), *, starting_recovery=False, starting_incremental=False,
-               retry_untrusted_before=None, settle_cards=False, enforce_pending_cap=True):
+               retry_skipped_before=None, settle_cards=False, enforce_pending_cap=True):
         """Commit up to one chunk; never advance a page past an uncommitted message."""
         imported = skipped = 0
         drained = True
@@ -880,7 +884,7 @@ class GmailStore(BudgetStore):
             staged = set()
             for item in pending:
                 source = session.get(BudgetGmailMessage, (owner, item.gmail_id_hmac))
-                if _already_processed(source, retry_untrusted_before):
+                if _already_processed(source, retry_skipped_before):
                     continue
                 if item.card_required:
                     if session.get(AppMeta, gmail_card_import.waiting_key(owner, item.gmail_id_hmac)) is None:

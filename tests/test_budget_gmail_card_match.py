@@ -106,6 +106,29 @@ class CardPurchaseTests(AnalyticsCase):
         self.ledger("blik", lines=["Płatność BLIK Arvid Books"])
         self.assertEqual(self.match().entry_reference, "pos")
 
+    def test_legal_billing_names_require_independent_first_party_card_descriptions(self):
+        google = replace(DOCUMENT, issuer="Google Commerce Limited")
+        apple = replace(DOCUMENT, issuer="Apple Distribution International Ltd.")
+        for index, description in enumerate((
+            "GOOGLE*Indie Developer", "GOOGLE *TEMPORARY HOLD", "Bookshop GOOGLE*Google Storage",
+            "GOOGLE*Google Storage Reseller", "APPLE.COM/BILL.EXAMPLE", "Bookshop Apple.com/bill",
+        )):
+            self.ledger(f"unrelated-{index}", lines=["Card purchase", description])
+        self.assertIsNone(self.match(google))
+        self.assertIsNone(self.match(apple))
+        self.ledger("google-sale", lines=[
+            "Płatność kartą: GOOGLE*Google Storage g.co/helppay# IE", "Original amount: EUR 9.99",
+        ])
+        self.ledger("apple-sale", lines=["Card payment", "APPLE.COM/BILL CORK IE"])
+        self.assertEqual(self.match(google).entry_reference, "google-sale")
+        self.assertEqual(self.match(replace(google, amount="9.99", currency="EUR")).entry_reference, "google-sale")
+        self.assertIsNone(self.match(replace(google, amount="10.00", currency="EUR")))
+        self.assertEqual(self.match(replace(google, issuer="Google Ireland Ltd.")).entry_reference, "google-sale")
+        self.assertEqual(self.match(apple).entry_reference, "apple-sale")
+        self.assertIsNone(self.match(replace(google, issuer="Google Commerce Stationery Limited")))
+        self.ledger("second", lines=["Card purchase", "GOOGLE*YouTube Premium"])
+        self.assertIsNone(self.match(google))
+
     def test_foreign_amount_requires_unique_explicit_original(self):
         invoice = replace(DOCUMENT, currency="EUR", amount="10")
         self.ledger(lines=["Card purchase Arvid Books", "EUR rate 4.32"])

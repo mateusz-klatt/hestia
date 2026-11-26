@@ -20,8 +20,8 @@ _NOTICE = re.compile(
 )
 
 
-def _extract_purchase(text):
-    document = extract_document(text, merchant="", allow_unnumbered_receipt=True)
+def _extract_purchase(text, *, pdf=False):
+    document = extract_document(text, merchant="", allow_unnumbered_receipt=True, pdf=pdf)
     if document is not None:
         return document
     invoice = extract_invoice(text)
@@ -64,12 +64,15 @@ def discover_document(processor, message, pending, *, inline_outer=None, attachm
             return None
         if attachments_only and kind != "pdf":
             continue
-        document = _extract_purchase(text)
+        document = _extract_purchase(text, pdf=kind == "pdf")
         if document is None:
             continue
         if selected is not None and document != selected:
             return None
-        selected = document
+        if selected is None or kind == "pdf" and source_kind != "attachment":
+            selected = document
+        elif kind == "pdf" and selected.items != document.items:
+            selected = replace(selected, items=())
         if kind == "pdf":
             source_kind = "attachment"
     if selected is None:

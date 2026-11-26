@@ -18,8 +18,9 @@ from .gmail_address import canonical_mailbox
 from .gmail_apple import apple_document_number, inspect_apple_subscription_items
 from .gmail_client import GmailError, has_spam_or_trash_label
 from .gmail_document import ImportedDocument, extract_document
-from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
+from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, _normalized_invoice_lines, extract_invoice
 from .gmail_payment import _payee_key, confirms_order_cancellation, inspect_payment
+from .gmail_respect import settlement_items
 from .gmail_shop_items import inspect_shop_items
 from .gmail_store import (DOCUMENT_NUMBER_DOMAIN, DOCUMENT_RECEIPT_DOMAIN, GATEWAY_REF_DOMAIN, ORDER_REFERENCE_DOMAIN, PAYMENT_PAYEE_DOMAIN, PAYMENT_SENDER_DOMAIN,
                           RFC_MESSAGE_DOMAIN, PendingMessage, PendingPayment, digest, normalize_parse_failed_reason)
@@ -271,6 +272,22 @@ class GmailMessageProcessor:
                 return first
         return None
 
+    def _respect_items(self, message, invoice, kind, text):
+        if (invoice.issuer != "Respect Energy" or invoice.currency != "PLN"
+                or not invoice.invoice_number.isdecimal()):
+            return ()
+        if kind != "pdf":
+            # The trusted email summary can identify the invoice before its detailed PDF.
+            pdfs = (part for part in mime_parts(message) if _is_pdf_part(part))
+            attachment = next(pdfs, None)
+            if attachment is None or next(pdfs, None) is not None:
+                return ()
+            try:
+                text = self.worker.parse("pdf", _document_payload("pdf", attachment))
+            except (WorkerRejected, WorkerUnavailable):
+                return ()
+        return settlement_items(_normalized_invoice_lines(text), invoice.issuer, invoice.invoice_number, invoice.amount)
+
     def _invoice(self, message, pending):
         # This is the authenticated direct envelope or the original selected by the forward trust gate.
         sender_domain = forward_sender_domain(message) or ""
@@ -290,6 +307,8 @@ class GmailMessageProcessor:
             if invoice is not None and any(
                 domain_matches(sender_domain, domain) for domain in _ISSUER_SENDER_DOMAINS.get(invoice.issuer, ())
             ):
+                if items := self._respect_items(message, invoice, kind, text):
+                    invoice = replace(invoice, items=items)
                 return replace(pending, outcome="imported", invoice=invoice,
                                rfc_message_id_hmac=_rfc_message_hmac(message, self.settings.hmac_secret),
                                source_kind="attachment" if kind == "pdf" else "email",
@@ -333,9 +352,10 @@ class GmailMessageProcessor:
                 if forwarded and (manual or pattern is None or not pattern.fullmatch(invoice.invoice_number)):
                     continue
                 document = ImportedDocument(invoice.issuer, invoice.nip, invoice.invoice_number, invoice.amount,
-                                            invoice.currency, invoice.issue_date, invoice.due_date, "invoice", False, None)
+                                            invoice.currency, invoice.issue_date, invoice.due_date, "invoice", False, None,
+                                            self._respect_items(message, invoice, "pdf", text))
             else:
-                document = extract_document(text, merchant=sender.merchant)
+                document = extract_document(text, merchant=sender.merchant, pdf=True)
             if document is None:
                 continue
             if document.issue_date is None:
@@ -368,7 +388,8 @@ class GmailMessageProcessor:
                 preferred = document if use_document else selected
                 if use_document:
                     selected_template = invoice if document.issue_date is None else None
-                selected = replace(preferred, paid=selected.paid or document.paid,
+                selected = replace(preferred, items=selected.items if selected.items == document.items else (),
+                                   paid=selected.paid or document.paid,
                                    receipt_number=selected.receipt_number or document.receipt_number)
         if selected is None:
             return replace(failure, diagnostic_reason="pdf_no_text") if no_text else failure

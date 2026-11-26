@@ -10,6 +10,7 @@ from .analytics_core import AnalyticsError, canonical_money, financial_fingerpri
 from .bank_metadata import exchange_evidence
 from .receipt_parser import (
     contains_gateway_marker,
+    fold_text,
     merchant_score_groups,
     merchant_word_tokens,
 )
@@ -31,6 +32,18 @@ _ORIGINAL_AMOUNT = re.compile(
     re.ASCII | re.IGNORECASE,
 )
 _DATE_KEYS = ("transaction_date", "booking_date", "value_date")
+
+# The GOOGLE* prefix also covers third-party app developers and temporary holds.
+# Only the listed first-party billing descriptions corroborate these Google issuers.
+_GOOGLE_BILLING = re.compile(
+    r"google\s*\*\s*(?:google\s*(?:storage|one)|youtube(?: premium| music| videos| tv)?|cloud_[a-z0-9-]+)"
+    r"(?:\s+g\.co/helppay#?)?(?:\s+[a-z]{2})?"
+)
+_BILLING_DESCRIPTORS = {
+    ("google", "commerce"): _GOOGLE_BILLING,
+    ("google", "ireland"): _GOOGLE_BILLING,
+    ("apple", "distribution", "international"): re.compile(r"apple\.com/bill(?:\s+cork)?(?:\s+[a-z]{2})?"),
+}
 
 
 @dataclass(frozen=True, repr=False)
@@ -61,6 +74,12 @@ def _merchant_matches(invoice, lines, creditor):
         return False
     text = " ".join(filter(None, (creditor, *lines)))
     if _nip_match(invoice.nip, text.casefold())[1]:
+        return True
+    descriptor = _BILLING_DESCRIPTORS.get(merchant_word_tokens(name))
+    if descriptor and any(
+        descriptor.fullmatch(_CARD_PURCHASE.sub("", fold_text(line).strip()).lstrip(" :-"))
+        for line in filter(None, (creditor, *lines))
+    ):
         return True
     groups, _ = merchant_score_groups(name, invoice.nip)
     words = frozenset(merchant_word_tokens(text))

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 import re
 import unicodedata
@@ -22,6 +22,7 @@ class ImportedInvoice:
     currency: str
     issue_date: str | None
     due_date: str
+    items: tuple[dict, ...] = field(default=(), compare=False)
 
 
 _EMAIL = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+", re.ASCII)
