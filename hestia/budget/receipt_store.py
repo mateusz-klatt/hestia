@@ -1447,7 +1447,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 ranked.append(item)
         # Rank across all matching rows before slicing MAX_CANDIDATES so hits and current link survive the cap.
         ranked.sort(key=lambda item: item[:7])
-        if not ranked and self._extended_matching:
+        # Ambiguous exact debits still take priority even when no suggestion is shown.
+        if not ranked and self._extended_matching and nearby_exact_count == 0:
             return rounded_up_candidates(self, session, owner, row, total, scope_accounts)
         return [item[-1] for item in ranked[:MAX_CANDIDATES]]
 

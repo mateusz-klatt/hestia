@@ -315,6 +315,22 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
         exact, = self.candidates(integer)
         self.assertNotIn("match_rule", exact)
 
+    def test_ambiguous_exact_debits_block_round_up(self):
+        identifier = self.add_receipt()
+        self.add_card()
+        self.add_card("exact-a", day=_CARD_DATE, title="Płatność kartą Fikcyjny Targ", amount="42.91")
+        self.add_card("exact-b", account="b", day="2026-11-21", title="Płatność kartą Fikcyjna Apteka", amount="42.91")
+        self.assertEqual(self.candidates(identifier), [])
+
+    def test_sole_exact_debit_without_merchant_evidence_beats_round_up(self):
+        identifier = self.add_receipt()
+        self.add_card()
+        self.add_card("exact-charge", title="Płatność kartą Fikcyjny Targ", amount="42.91")
+        exact, = self.candidates(identifier)
+        self.assertEqual(exact["entry_reference"], fixtures.reference_digest("exact-charge"))
+        self.assertEqual(exact["match_strength"], "none")
+        self.assertNotIn("match_rule", exact)
+
     def test_round_up_requires_card_and_date_and_currency(self):
         identifier = self.add_receipt()
         self.add_card()
