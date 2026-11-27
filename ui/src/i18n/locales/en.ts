@@ -1109,7 +1109,10 @@ const en = {
   "budget.recurring.account": "Account",
 
   "budget.quarantine.title": "Quarantine",
-  "budget.quarantine.intro": "Why some bank entries are not counted in period totals. This read-only view contains no amounts or transaction descriptions.",
+  "budget.quarantine.intro": "Why some bank entries are not counted in period totals.",
+  "budget.quarantine.dismissItem": "Dismiss item",
+  "budget.quarantine.dismissBatch": "Dismiss all from this import",
+  "budget.quarantine.dismissError": "Could not dismiss the import entries.",
   "budget.quarantine.summary": "Entries kept out of totals",
   "budget.quarantine.total": "Total",
   "budget.quarantine.accounts": "Counts by account",

@@ -59,7 +59,18 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.61.0")
+        self.assertEqual(document["info"]["version"], "0.63.0")
+        analytics_prefix = "/api/budget/analytics/quarantine"
+        document["paths"][analytics_prefix]["get"]["parameters"].pop()
+        for suffix in ("-dismiss", "-dismiss-batch"):
+            document["paths"].pop(analytics_prefix + suffix)
+        for suffix in ("BatchRequest", "ImportKey", "Dismissal", "DismissResult"):
+            schemas.pop("BudgetAnalyticsQuarantine" + suffix)
+        schemas["BudgetAnalyticsQuarantineItem"]["properties"].pop("import_key")
+        document["info"]["version"] = "0.61.0"
+        canonical_0_61 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_61).hexdigest(),
+                         "c05f41b76492cf3f2ed47ecb3289bf96d21cc497ddf910c4dc0d3b273b811461")
         for schema in ("BudgetReceiptSummary", "BudgetReceiptDetail"):
             schemas[schema]["properties"].pop("display_shop_name")
         document["info"]["version"] = "0.60.0"
@@ -937,6 +948,7 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsMortgageSaveRequest",
         "BudgetAnalyticsMortgagePaymentSetRequest", "BudgetAnalyticsInboxKeyRequest",
         "BudgetAnalyticsInboxMarkRequest", "BudgetAnalyticsTransactionsByKeysRequest",
+        "BudgetAnalyticsQuarantineBatchRequest",
         "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest",
         "BudgetReceiptLineInput", "BudgetReceiptLinkRequest", "BudgetReceiptListRequest",
         "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",

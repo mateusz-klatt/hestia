@@ -25,6 +25,9 @@ MAX_TRANSACTIONS_BY_KEYS_BYTES = 1048576
 _MONTHLY_BUDGET_OP = "monthly-budget"
 _MONTHLY_BUDGET_CHARTS_OP = "monthly-budget/charts"
 _TRANSACTIONS_BY_KEYS_OP = "transactions-by-keys"
+_QUARANTINE_DISMISS_OP = "quarantine-dismiss"
+_QUARANTINE_DISMISS_BATCH_OP = "quarantine-dismiss-batch"
+_QUARANTINE_WRITES = frozenset({_QUARANTINE_DISMISS_OP, _QUARANTINE_DISMISS_BATCH_OP})
 READS = ("overview", "transactions", "categories", "rules", "transfers", "recurring", "spending-limits",
          "mortgages", "inbox", "quarantine", "forecast", _MONTHLY_BUDGET_OP, _MONTHLY_BUDGET_CHARTS_OP)
 WRITES = {
@@ -46,6 +49,9 @@ WRITES = {
     "mortgage-save": (api_contract.BudgetAnalyticsMortgageSaveRequest, "save_mortgage_schedule", "schedule"),
     "mortgage-payment-set": (api_contract.BudgetAnalyticsMortgagePaymentSetRequest, "set_mortgage_payment", "payment"),
     "inbox-mark": (api_contract.BudgetAnalyticsInboxMarkRequest, "mark_inbox", "inbox"),
+    _QUARANTINE_DISMISS_OP: (api_contract.BudgetAnalyticsQuarantineImportKey, "dismiss_import_quarantine", "dismissal"),
+    _QUARANTINE_DISMISS_BATCH_OP: (
+        api_contract.BudgetAnalyticsQuarantineBatchRequest, "dismiss_import_quarantine", "dismissal"),
 }
 _QUERY_FIELDS = {"overview": {"period", "currency"},
                  "transactions": {"period", "currency", "category_id", "kind", "query", "limit", "cursor"},
@@ -66,11 +72,13 @@ _CONTRACT_HEADER = "X-Hestia-Contract-Version"
 _CONTRACT_VERSION = re.compile(r"0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\Z")
 _APPOINTMENTS_INBOX_VERSION = (0, 58, 0)
 _LINK_INDICATORS_VERSION = (0, 60, 0)
+_QUARANTINE_DISMISS_VERSION = (0, 63, 0)
 _CURRENT_VERSION = tuple(int(part) for part in api_contract.CONTRACT_VERSION.split("."))
 
 
 def _contract_version(request, operation):
-    if operation not in ("inbox", "inbox-mark", "transactions", _TRANSACTIONS_BY_KEYS_OP):
+    if operation not in ("inbox", "inbox-mark", "transactions", _TRANSACTIONS_BY_KEYS_OP, "quarantine",
+                         *_QUARANTINE_WRITES):
         return (0, 0, 0)
     values = request.headers.getall(_CONTRACT_HEADER, [])
     if not values:
@@ -191,6 +199,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                     query = {**query, "include_appointments": version >= _APPOINTMENTS_INBOX_VERSION}
                 elif operation == "transactions" and version >= _LINK_INDICATORS_VERSION:
                     query = {**query, "include_receipts": True, "device_id": request.get(device_token.REQUEST_KEY)}
+                elif operation == "quarantine" and version >= _QUARANTINE_DISMISS_VERSION:
+                    query["include_import_keys"] = True
                 result = await asyncio.to_thread(_read, owner, operation, query, secret)
                 if operation in _BOUNDED_READ_CAPS:
                     return web.Response(body=result, content_type="application/json", charset="utf-8",
@@ -198,6 +208,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             else:
                 api._browser(request, owner, secret)
                 version = _contract_version(request, operation)
+                if operation in _QUARANTINE_WRITES and version < _QUARANTINE_DISMISS_VERSION:
+                    raise api._Rejected(404, "budget_analytics_not_found")
                 max_bytes = (MAX_TRANSACTIONS_BY_KEYS_BYTES if operation in (_TRANSACTIONS_BY_KEYS_OP, "translation-import")
                              else 65536 if operation == "inbox-mark"
                              else 262144 if operation == "rule-batch-preview" else 16384)

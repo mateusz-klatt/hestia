@@ -207,10 +207,30 @@ describe("budget api", () => {
     expect(sent(fetchMock).url.pathname).toMatch(/\/api\/budget\/analytics\/quarantine$/);
     expect(sent(fetchMock).url.search).toBe("");
     expect(sent(fetchMock).init.method).toBeUndefined();
+    expect(new Headers(sent(fetchMock).init.headers).get("X-Hestia-Contract-Version")).toBe("0.63.0");
     await budgetApi.quarantine("acc-1");
     expect(sent(fetchMock, 1).url.pathname).toMatch(/\/api\/budget\/analytics\/quarantine$/);
     expect(Object.fromEntries(sent(fetchMock, 1).url.searchParams)).toEqual({ account_id: "acc-1" });
     expect(sent(fetchMock, 1).init.method).toBeUndefined();
+  });
+
+  it("posts quarantine dismissals with actor binding and contract opt-in", async () => {
+    const fetchMock = respond(200, { ok: true, dismissal: { dismissed_count: 1 } });
+    await budgetApi.dismissQuarantineItem({ batch_id: "synthetic-import", ordinal: 0 });
+    await budgetApi.dismissQuarantineBatch("synthetic-import");
+    for (const [index, operation] of ["quarantine-dismiss", "quarantine-dismiss-batch"].entries()) {
+      const { url, init } = sent(fetchMock, index);
+      expect(url.pathname).toBe(`/api/budget/analytics/${operation}`);
+      expect(url.search).toBe("");
+      expect(init.method).toBe("POST");
+      const headers = new Headers(init.headers);
+      expect(headers.get("X-Hestia-Contract-Version")).toBe("0.63.0");
+      expect(headers.get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
+      expect(headers.get("Authorization")).toBeNull();
+      expect(JSON.parse(init.body as string)).toEqual(
+        index === 0 ? { batch_id: "synthetic-import", ordinal: 0 } : { batch_id: "synthetic-import" },
+      );
+    }
   });
 
   it("sends refresh with its idempotency key, JSON body and no Authorization header", async () => {

@@ -24,7 +24,7 @@ import re
 import threading
 
 from cryptography.exceptions import InvalidTag
-from sqlalchemy import and_, case, func, or_, select, text, tuple_
+from sqlalchemy import and_, case, delete, func, or_, select, text, tuple_
 from sqlalchemy.orm import aliased
 
 from .. import authz, db
@@ -1749,7 +1749,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 raise AnalyticsError(_DATA_ERROR, 500)
 
     @staticmethod
-    def _quarantine_items(session, account_ids, selected_map):
+    def _quarantine_items(session, account_ids, selected_map, *, include_import_keys):
         if not account_ids:
             return []
         cap = quarantine_mod.MAX_QUARANTINE_ITEMS
@@ -1810,14 +1810,17 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             )
             .limit(cap)).all()
         for row, acc_id, fetched_at in import_rows:
-            raw_items.append(quarantine_mod.extract_safe_item(
+            item = quarantine_mod.extract_safe_item(
                 bucket=quarantine_mod.BUCKET_IMPORT_UNRESOLVED, account_id=acc_id,
                 selected=selected_map[acc_id], payload_json=row.payload_json,
                 source="offline_import", observed_at=fetched_at, stored_reason=row.reason,
-            ))
+            )
+            if include_import_keys:
+                item["import_key"] = {"batch_id": row.batch_id, "ordinal": row.ordinal}
+            raw_items.append(item)
         return quarantine_mod.sort_quarantine_items(raw_items, limit=cap)
 
-    def quarantine(self, owner, *, account_id=None):
+    def quarantine(self, owner, *, account_id=None, include_import_keys=False):
         """Pure read-only quarantine counts and safe ref/date/status/reason details (zero prose/amounts)."""
         if account_id is not None and (not isinstance(account_id, str) or not account_id or len(account_id) > 128):
             raise AnalyticsError()
@@ -1835,7 +1838,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             uncertain_counts, unresolved_counts, import_counts = self._quarantine_counts(session, account_ids)
             self._check_quarantine_integrity(session, account_ids)
             try:
-                items = self._quarantine_items(session, account_ids, selected_map)
+                items = self._quarantine_items(session, account_ids, selected_map, include_import_keys=include_import_keys)
             except quarantine_mod.QuarantineDataError:
                 raise AnalyticsError(_DATA_ERROR, 500) from None
             account_rows = []
@@ -1868,6 +1871,29 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 "truncated": total_all > len(items),
                 "items": items,
             }
+
+    def dismiss_import_quarantine(self, owner, *, batch_id, ordinal=None):
+        """Remove one or all unresolved rows of an owned batch and audit the change atomically."""
+        with self.transaction(owner, permission="budget.edit") as session:
+            account_id = session.scalar(
+                select(db.BudgetImportBatch.account_id)
+                .join(db.BudgetAccount).join(db.BudgetConnection)
+                .where(db.BudgetImportBatch.id == batch_id,
+                       db.BudgetAccount.owner == owner, db.BudgetConnection.owner == owner)
+            )
+            if account_id is None:
+                raise AnalyticsError("budget_analytics_not_found", 404)
+            unresolved = db.BudgetImportUnresolved
+            statement = delete(unresolved).where(unresolved.batch_id == batch_id)
+            if ordinal is not None:
+                statement = statement.where(unresolved.ordinal == ordinal)
+            count = session.execute(statement).rowcount
+            if count:
+                self._analytics_audit(
+                    session, owner, "import_unresolved", batch_id, "dismiss",
+                    {"ordinal": ordinal, "count": count}, {"ordinal": ordinal, "count": 0},
+                )
+            return {"dismissed_count": count}
 
 
 def _invalid_observed_at_expr(col):

@@ -3,15 +3,16 @@ import { t, tPlural } from "../../i18n";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { QUARANTINE_BUCKET_KEYS, QUARANTINE_REASON_KEYS, QUARANTINE_STATUS_KEYS, accountName, labelOf } from "./model";
-import type { AnalyticsQuarantine } from "./model";
+import type { AnalyticsQuarantine, AnalyticsQuarantineItem } from "./model";
 
 type Shown = { state: "loading" } | { state: "error" } | { state: "ready"; data: AnalyticsQuarantine };
 
 export interface QuarantineViewProps {
-  api: Pick<BudgetApi, "quarantine">;
+  api: Pick<BudgetApi, "quarantine" | "dismissQuarantineItem" | "dismissQuarantineBatch">;
   accounts: readonly BudgetAccount[];
   connections?: readonly BudgetConnection[] | undefined;
   revision: number;
+  canDismiss: boolean;
   onAccessLoss: (result: { ok: boolean; status?: number; error?: string }) => boolean;
 }
 
@@ -20,9 +21,13 @@ function reasonText(code: string): string {
   return key !== undefined ? t(key) : t("budget.quarantine.unknownReason", { code });
 }
 
-export function QuarantineView({ api, accounts, connections = [], revision, onAccessLoss }: QuarantineViewProps) {
+export function QuarantineView({ api, accounts, connections = [], revision, canDismiss, onAccessLoss }: QuarantineViewProps) {
   const [accountId, setAccountId] = useState("");
   const [shown, setShown] = useState<Shown>({ state: "loading" });
+  const [refresh, setRefresh] = useState(0);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [dismissing, setDismissing] = useState(false);
+  const [dismissError, setDismissError] = useState(false);
   const generation = useRef(0);
 
   useEffect(() => {
@@ -36,8 +41,18 @@ export function QuarantineView({ api, accounts, connections = [], revision, onAc
       }
       setShown({ state: "ready", data: result.data });
     });
-  }, [api, accountId, revision, onAccessLoss]);
+  }, [api, accountId, revision, refresh, onAccessLoss]);
   useEffect(() => () => { generation.current += 1; }, []);
+
+  async function dismiss(key: NonNullable<AnalyticsQuarantineItem["import_key"]>, wholeBatch: boolean) {
+    setDismissError(false);
+    setDismissing(true);
+    const result = wholeBatch ? await api.dismissQuarantineBatch(key.batch_id) : await api.dismissQuarantineItem(key);
+    setDismissing(false);
+    if (onAccessLoss(result)) return;
+    if (result.ok) setRefresh((value) => value + 1);
+    else setDismissError(true);
+  }
 
   const accountTitle = t("budget.quarantine.account");
   const name = (id: string) => accountName(accounts, connections, id, accountTitle);
@@ -47,6 +62,7 @@ export function QuarantineView({ api, accounts, connections = [], revision, onAc
   const uncertainLabel = t("budget.quarantine.buckets.uncertain");
   const unresolvedLabel = t("budget.quarantine.buckets.unresolved");
   const importUnresolvedLabel = t("budget.quarantine.buckets.import_unresolved");
+  const shownBatches = new Set<string>();
 
   return (
     <section className="budget-entries" aria-label={title}>
@@ -64,6 +80,7 @@ export function QuarantineView({ api, accounts, connections = [], revision, onAc
       </div>
       {shown.state === "loading" ? <p className="budget-muted" role="status">{t("budget.quarantine.loading")}</p> : null}
       {shown.state === "error" ? <p className="budget-notice" role="alert">{t("budget.quarantine.error")}</p> : null}
+      {dismissError ? <p className="budget-notice" role="alert">{t("budget.quarantine.dismissError")}</p> : null}
       {shown.state === "ready" ? (
         <>
           <section className="budget-total" aria-label={summaryTitle}>
@@ -112,22 +129,43 @@ export function QuarantineView({ api, accounts, connections = [], revision, onAc
             </p>
           ) : null}
           {shown.data.items.length === 0 ? null : (
-            <details className="budget-recurring-evidence">
+            <details className="budget-recurring-evidence" open={detailsOpen}
+              onToggle={(event) => { setDetailsOpen(event.currentTarget.open); }}>
               <summary>{t("budget.quarantine.details", { count: shown.data.items.length })}</summary>
               <ul className="budget-entry-list">
-                {shown.data.items.map((item, index) => (
-                  <li className="budget-entry" key={`${item.account_id}/${item.entry_reference ?? ""}/${String(index)}`}>
-                    <div className="budget-entry-facts">
-                      <span>{item.date ?? t("budget.quarantine.noDate")}</span>
-                      <span className="budget-entry-text">{name(item.account_id)}</span>
-                      <span className="budget-chip">{labelOf(QUARANTINE_BUCKET_KEYS, item.bucket)}</span>
-                      <span className="budget-chip">
-                        {item.status === null ? t("budget.quarantine.noStatus") : labelOf(QUARANTINE_STATUS_KEYS, item.status)}
-                      </span>
-                    </div>
-                    <p className="budget-entry-text">{reasonText(item.reason)}</p>
-                  </li>
-                ))}
+                {shown.data.items.map((item, index) => {
+                  const key = item.bucket === "import_unresolved" ? item.import_key : undefined;
+                  const firstInBatch = key != null && !shownBatches.has(key.batch_id);
+                  if (key != null) shownBatches.add(key.batch_id);
+                  const rowKey = key == null
+                    ? `${item.bucket}/${String(index)}`
+                    : `${item.bucket}/${key.batch_id}/${String(key.ordinal)}`;
+                  return (
+                    <li className="budget-entry" key={rowKey}>
+                      <div className="budget-entry-facts">
+                        <span>{item.date ?? t("budget.quarantine.noDate")}</span>
+                        <span className="budget-entry-text">{name(item.account_id)}</span>
+                        <span className="budget-chip">{labelOf(QUARANTINE_BUCKET_KEYS, item.bucket)}</span>
+                        <span className="budget-chip">
+                          {item.status === null ? t("budget.quarantine.noStatus") : labelOf(QUARANTINE_STATUS_KEYS, item.status)}
+                        </span>
+                      </div>
+                      <p className="budget-entry-text">{reasonText(item.reason)}</p>
+                      {canDismiss && key != null ? (
+                        <div className="budget-actions">
+                          <button type="button" disabled={dismissing} onClick={() => { void dismiss(key, false); }}>
+                            {t("budget.quarantine.dismissItem")}
+                          </button>
+                          {firstInBatch ? (
+                            <button type="button" disabled={dismissing} onClick={() => { void dismiss(key, true); }}>
+                              {t("budget.quarantine.dismissBatch")}
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ul>
             </details>
           )}

@@ -86,7 +86,7 @@ class BudgetMetadataImportTests(unittest.TestCase):
         self.assertEqual((enriched.transactions, enriched.balances), (plain.transactions, plain.balances))
         report = self.store.import_snapshot(self.config, plain)
         self.assertEqual(report, {"batch_id": self.rows(db.BudgetImportBatch)[0].id, "duplicate": False,
-                                  "inserted": 1, "updated": 0, "preserved_api": 0, "stale": 0,
+                                  "inserted": 1, "updated": 0, "preserved_api": 0, "duplicates_of_api": 0, "stale": 0,
                                   "unresolved": 0, "unchanged": 0})
         self.assertEqual(json.loads(self.rows(db.BudgetImportBatch)[0].report_json), report)
         self.assertEqual(self.rows(db.BudgetAccountDisplay), [])

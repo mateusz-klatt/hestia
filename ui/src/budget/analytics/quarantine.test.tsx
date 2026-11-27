@@ -9,9 +9,10 @@ import { quarantineAccount, quarantineItem, quarantineOf } from "./fixtures";
 import { QUARANTINE_BUCKET_KEYS, QUARANTINE_REASON_KEYS, QUARANTINE_STATUS_KEYS } from "./model";
 import type { AnalyticsQuarantine, AnalyticsQuarantineItem } from "./model";
 import { QuarantineView } from "./quarantine";
+import type { QuarantineViewProps } from "./quarantine";
 
 type Settle<T> = (value: BudgetResult<T>) => void;
-type QuarantineApi = Pick<BudgetApi, "quarantine">;
+type QuarantineApi = QuarantineViewProps["api"];
 type AccessLoss = (result: { ok: boolean; status?: number; error?: string }) => boolean;
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
@@ -53,15 +54,21 @@ async function settle(): Promise<void> {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
 async function renderView(
-  api: QuarantineApi,
+  api: Pick<QuarantineApi, "quarantine"> & Partial<QuarantineApi>,
   locale: "en" | "pl" = "en",
   revision = 1,
   onAccessLoss: AccessLoss = keepAccess,
+  canDismiss = true,
 ): Promise<void> {
   await loadLocale(locale);
+  const completeApi: QuarantineApi = {
+    dismissQuarantineItem: vi.fn<QuarantineApi["dismissQuarantineItem"]>(),
+    dismissQuarantineBatch: vi.fn<QuarantineApi["dismissQuarantineBatch"]>(),
+    ...api,
+  };
   await act(async () => {
-    root.render(<QuarantineView api={api} accounts={accounts} connections={[connection]}
-      revision={revision} onAccessLoss={onAccessLoss} />);
+    root.render(<QuarantineView api={completeApi} accounts={accounts} connections={[connection]}
+      revision={revision} canDismiss={canDismiss} onAccessLoss={onAccessLoss} />);
     await Promise.resolve();
   });
   await settle();
@@ -268,5 +275,58 @@ describe("QuarantineView", () => {
     expect(setItem).not.toHaveBeenCalled();
     expect(window.location.search).toBe("");
     expect(host.querySelectorAll("input")).toHaveLength(0);
+  });
+
+  it("dismisses one item and then all from the same import, refreshing rows and counts", async () => {
+    const first = quarantineItem({ bucket: "import_unresolved", reason: "api_preserved", date: "2026-11-20",
+      import_key: { batch_id: "synthetic-import", ordinal: 0 } });
+    const second = quarantineItem({ ...first, date: "2026-11-19", import_key: { batch_id: "synthetic-import", ordinal: 1 } });
+    const apiRow = quarantineItem({ bucket: "unresolved", reason: "missing_reference", import_key: null, date: "2026-11-18" });
+    const quarantine = vi.fn<QuarantineApi["quarantine"]>()
+      .mockImplementationOnce(() => ok(quarantineOf([first, second, apiRow])))
+      .mockImplementationOnce(() => ok(quarantineOf([second, apiRow])))
+      .mockImplementationOnce(() => ok(quarantineOf([apiRow])));
+    const dismissed = { ok: true as const, dismissal: { dismissed_count: 1 } };
+    const dismissQuarantineItem = vi.fn<QuarantineApi["dismissQuarantineItem"]>(() => ok(dismissed));
+    const dismissQuarantineBatch = vi.fn<QuarantineApi["dismissQuarantineBatch"]>(() => ok(dismissed));
+    await renderView({ quarantine, dismissQuarantineItem, dismissQuarantineBatch });
+    const details = host.querySelector("details");
+    if (details === null) throw new Error("quarantine details missing");
+    await act(async () => { details.open = true; await settle(); });
+    expect([...details.querySelectorAll("button")].map((action) => action.textContent)).toEqual([
+      "Dismiss item", "Dismiss all from this import", "Dismiss item",
+    ]);
+    await click(button("Dismiss item"));
+    expect(dismissQuarantineItem).toHaveBeenCalledExactlyOnceWith(first.import_key);
+    expect(host.querySelector("details")?.open).toBe(true);
+    expect(host.textContent).not.toContain("2026-11-20");
+    expect(host.textContent).toContain("2026-11-19");
+    await click(button("Dismiss all from this import"));
+    expect(dismissQuarantineBatch).toHaveBeenCalledExactlyOnceWith("synthetic-import");
+    expect(quarantine).toHaveBeenCalledTimes(3);
+    expect(host.textContent).not.toContain("2026-11-19");
+    expect(host.textContent).toContain("2026-11-18");
+    expect(host.querySelectorAll("details button")).toHaveLength(0);
+  });
+
+  it("shows dismiss actions only when the owner can edit and the server supplies the import key", async () => {
+    const imported = quarantineItem({ bucket: "import_unresolved", reason: "api_preserved" });
+    const keyed = { ...imported, import_key: { batch_id: "synthetic-import", ordinal: 0 } };
+    await renderView({ quarantine: vi.fn(() => ok(quarantineOf([imported]))) });
+    expect(host.querySelectorAll("details button")).toHaveLength(0);
+    await renderView({ quarantine: vi.fn(() => ok(quarantineOf([keyed]))) }, "en", 1, keepAccess, false);
+    expect(host.querySelectorAll("details button")).toHaveLength(0);
+  });
+
+  it("leaves the entry visible and shows a translated error if dismissal fails", async () => {
+    const imported = quarantineItem({ bucket: "import_unresolved", reason: "api_preserved",
+      import_key: { batch_id: "synthetic-import", ordinal: 0 } });
+    const quarantine = vi.fn(() => ok(quarantineOf([imported])));
+    const dismissQuarantineItem = vi.fn<QuarantineApi["dismissQuarantineItem"]>(() => fail(500, "budget_internal_error"));
+    await renderView({ quarantine, dismissQuarantineItem }, "pl");
+    await click(button(t("budget.quarantine.dismissItem")));
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Nie udało się usunąć wpisów z kwarantanny.");
+    expect(quarantine).toHaveBeenCalledTimes(1);
+    expect(button(t("budget.quarantine.dismissItem")).disabled).toBe(false);
   });
 });

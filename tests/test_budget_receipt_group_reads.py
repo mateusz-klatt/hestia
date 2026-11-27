@@ -207,7 +207,8 @@ class ReceiptGroupHTTPReadsTests(unittest.IsolatedAsyncioTestCase):
         for version in (None, "0.57.0", "0.58.0"):
             with self.subTest(version=version):
                 self.assertEqual((await self.group(version=version)).status, 404)
-        for version in ("0.62.0", "0.59x"):
+        major, minor, _patch = (int(part) for part in api_contract.CONTRACT_VERSION.split("."))
+        for version in (f"{major}.{minor + 1}.0", "0.59x"):
             response = await self.group(version=version)
             self.assertEqual(response.status, 400)
             self.assertEqual((await response.json())["error"], "budget_receipt_contract_version_invalid")
