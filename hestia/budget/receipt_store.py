@@ -1045,6 +1045,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
             )
             session.add(row)
             session.flush()
+            if self._match_allowed and candidates and candidates[0].get("match_rule") == "rounded_up":
+                # A concurrent parse may have inserted a competing receipt since the read snapshot.
+                candidates = self._candidates(session, owner, row, parsed)
+                no_bank_data = False if candidates else self._no_bank_data(session, owner, row)
             for values in parsed["lines"]:
                 session.add(Line(receipt_id=identifier, owner=owner, **{
                     key: value for key, value in values.items() if key != "line_no"
@@ -1371,7 +1375,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 assert row is not None
                 if (canonical_money(row.total_amount) != cleaned["total_amount"]
                         or any(cleaned[key] != getattr(row, key) for key in (
-                            "receipt_date", "receipt_kind", "currency", "payment_method",
+                            "receipt_date", "receipt_kind", "currency",
                         ))):
                     raise ReceiptError("budget_receipt_stale_source", 409)
                 candidates = self._candidates(session, owner, row, {}, include_receipt_id=row.id)

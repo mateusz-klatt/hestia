@@ -3544,12 +3544,15 @@ function ReceiptDetailDrawer({
             ? null
             : strongSingleCandidate;
           const roundedSuggestion = activeDraft !== null && activeDraft.linkChoice !== "unlink"
-            && !detail.linked && !suggestionDismissed && linkOptions.canPickCandidates
-            ? candidates.find((candidate) => candidate.match_rule === "rounded_up")
+            && !detail.linked && linkOptions.canPickCandidates
+            ? candidates.find((candidate) => candidate.match_rule === "rounded_up"
+              && (candidate.match_strength === "medium" || !suggestionDismissed))
             : undefined;
           const bannerCandidate = roundedSuggestion
             ?? (activeDraft?.linkChoice === "candidate:0" ? suggestedCandidate : null);
-          const storedRoundingNote = roundingNote(detail.rounding_delta, detail.currency, locale);
+          const linkedRoundingNote = roundingNote(
+            currentCandidate?.rounding_delta ?? detail.rounding_delta, detail.currency, locale,
+          );
           const canGroupWrites = api.receiptGroupCandidates !== undefined && api.linkReceiptGroup !== undefined;
           const canGroupReceipt = group == null && canGroupWrites && isGroupMemberEligible(detail);
           const groupProposal = canGroupReceipt && linkOptions.paymentAllowsLink && strongSingleCandidate === null
@@ -3876,7 +3879,7 @@ function ReceiptDetailDrawer({
                         <strong>{receiptTotalDisplay(detail, locale)}</strong>
                       </div>
                     )}
-                    {storedRoundingNote === null ? null : <p className="budget-muted">{storedRoundingNote}</p>}
+                    {linkedRoundingNote === null ? null : <p className="budget-muted">{linkedRoundingNote}</p>}
                   </div>
                 ) : (
                   <>
@@ -4182,7 +4185,7 @@ function ReceiptDetailDrawer({
 
                   <fieldset ref={linkChoicesRef} tabIndex={-1} className="budget-receipt-link-choices">
                     <legend>{t("budget.receipts.linkChoiceHeading")}</legend>
-                    {storedRoundingNote === null ? null : <p className="budget-muted">{storedRoundingNote}</p>}
+                    {linkedRoundingNote === null ? null : <p className="budget-muted">{linkedRoundingNote}</p>}
                     {!linkOptions.paymentAllowsLink ? (
                       <p className="budget-muted">{t("budget.receipts.cashNoLinkNote")}</p>
                     ) : null}

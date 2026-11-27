@@ -122,7 +122,8 @@ def _other_receipt_matches(store, session, owner, row, transaction, account_kind
         peers = peers.where(Receipt.id != row_id)
     for peer in session.scalars(peers):
         try:
-            amount_matches = rounding_delta(peer.total_amount, amount) is not None
+            peer_total = canonical_money(peer.total_amount)
+            amount_matches = peer_total == amount or rounding_delta(peer_total, amount) is not None
         except AnalyticsError:
             continue
         if (amount_matches and _uses_card(store, peer, transaction, account_kind, payload.get("remittance_information", []))

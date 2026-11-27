@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest import mock
 from uuid import uuid4
 
 from hestia import api_contract, db
 from hestia.budget import receipt_api
+from hestia.budget.analytics_core import AnalyticsError
 from hestia.budget.gmail_store import GATEWAY_REF_DOMAIN, digest
-from hestia.budget.receipt_match_rules import invoice_number_pattern, remittance_has_invoice_number, rounding_delta
+from hestia.budget.receipt_match_rules import (
+    invoice_number_pattern, remittance_has_invoice_number, rounding_delta, stored_rounding_delta,
+)
 from hestia.budget.receipt_parser import ReceiptError
 from hestia.budget.receipt_reconcile import reconcile_receipt_links
 from hestia.budget.receipt_store import BudgetReceiptStore
@@ -51,6 +55,18 @@ class RuleTests(unittest.TestCase):
         ):
             with self.subTest(total=total, bank=bank):
                 self.assertEqual(rounding_delta(total, bank), expected)
+
+    def test_stored_rounding_delta_is_optional_and_requires_valid_evidence(self):
+        for evidence in (None, "{", "[]", "{}", '{"rounding_delta": 0.09}'):
+            with self.subTest(evidence=evidence):
+                self.assertIsNone(stored_rounding_delta(evidence))
+        self.assertEqual(stored_rounding_delta('{"rounding_delta": "0.09"}'), "0.09")
+
+    def test_old_confirm_contract_omits_rounding_delta(self):
+        response = receipt_api._response("confirm", {
+            "receipt": {"rounding_delta": "0.09", "total_amount": "42.91"},
+        }, (0, 67, 0))
+        self.assertEqual(json.loads(response.body), {"receipt": {"total_amount": "42.91"}})
 
 
 class ReceiptMatchTests(fixtures.AnalyticsCase):
@@ -99,6 +115,10 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
         candidate, = self.candidates(identifier)
         self.assertEqual(candidate["match_strength"], "id")
         self.assertEqual(candidate["entry_reference"], fixtures.reference_digest("late-transfer"))
+        old_store = BudgetReceiptStore(self.sessions, clock=lambda: self.now, cursor_secret=b"legacy-synthetic",
+                                       extended_matching=False)
+        self.assertEqual(old_store.detail("owner", identifier)["candidates"], [])
+        request = self.confirmation(identifier, candidate)
 
         for remit, amount in ((["Synthetic transfer"], "156.82"), (["SY482A"], "156.81")):
             with self.subTest(remit=remit, amount=amount):
@@ -109,6 +129,10 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
         with self.sessions.begin() as session:
             session.get(db.BudgetReceipt, identifier).invoice_number = "4821"
         self.assertEqual(self.candidates(identifier), [])
+        self.change_transaction("a", "late-transfer", remittance_information=["sY 482.a"])
+        with self.assertRaises(ReceiptError) as stale:
+            self.receipts.confirm("owner", request)
+        self.assertEqual(stale.exception.code, "budget_receipt_stale_source")
 
         self.change_transaction("a", "late-transfer", remittance_information=["SY482A"])
         with self.sessions.begin() as session:
@@ -141,6 +165,19 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
         candidate, = self.candidates(identifier)
         self.assertEqual(candidate["match_strength"], "id")
         self.assertTrue(self.receipts.confirm("owner", self.confirmation(identifier, candidate))["receipt"]["linked"])
+
+    def test_short_gateway_reference_does_not_widen_window(self):
+        short_ref = "54321"
+        identifier = self.add_receipt(
+            document_kind="invoice", receipt_date=_INVOICE_DATE, due_date=_DUE_DATE, gateway="payu",
+            gateway_ref_hmac=digest(_REFERENCE_KEY, GATEWAY_REF_DOMAIN, short_ref),
+        )
+        self.add_transaction("a", "short-gateway", amount="42.91", booking_date=_LATE_DATE, value_date=_LATE_DATE,
+                             remittance_information=[f"PayU {short_ref}"])
+        self.assertEqual(self.candidates(identifier), [])
+        self.change_transaction("a", "short-gateway", booking_date=_DUE_DATE, value_date=_DUE_DATE)
+        candidate, = self.candidates(identifier)
+        self.assertEqual(candidate["match_strength"], "id")
 
     def test_round_up_strength_confirm_and_reconciliation(self):
         identifier = self.add_receipt()
@@ -215,6 +252,70 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
         peer = self.add_receipt(total_amount="42.51")
         self.assertEqual(self.candidates(identifier), [])
         self.assertEqual(self.candidates(peer), [])
+
+    def test_exact_candidate_for_another_receipt_beats_round_up(self):
+        rounded_receipt = self.add_receipt()
+        exact_receipt = self.add_receipt(total_amount="43")
+        self.add_card()
+        self.assertEqual(self.candidates(rounded_receipt), [])
+        exact, = self.candidates(exact_receipt)
+        self.assertNotIn("match_rule", exact)
+
+    def test_round_up_link_rejects_an_edited_receipt_date(self):
+        identifier = self.add_receipt()
+        self.add_card()
+        candidate, = self.candidates(identifier)
+        request = self.confirmation(identifier, candidate)
+        with self.assertRaises(ReceiptError) as error:
+            self.receipts.confirm("owner", {**request, "receipt_date": "2026-11-20"})
+        self.assertEqual(error.exception.code, "budget_receipt_stale_source")
+
+    def test_round_up_skips_a_corrupt_competing_receipt_amount(self):
+        identifier = self.add_receipt()
+        peer = self.add_receipt()
+        with self.sessions.begin() as session:
+            session.get(db.BudgetReceipt, peer).total_amount = "invalid"
+        self.add_card()
+        candidate, = self.candidates(identifier)
+        self.assertEqual(candidate["match_rule"], "rounded_up")
+
+    def test_round_up_rechecks_draft_parse_after_concurrent_receipt(self):
+        self.add_card()
+        initial_read = self.receipts._read_candidates
+
+        def insert_competitor(owner, parsed):
+            candidates, no_bank_data = initial_read(owner, parsed)
+            self.assertEqual([c["match_rule"] for c in candidates], ["rounded_up"])
+            self.add_receipt()
+            return candidates, no_bank_data
+
+        with mock.patch.object(self.receipts, "_read_candidates", side_effect=insert_competitor):
+            draft = self.receipts.parse_text("owner", self.draft_text())
+        self.assertEqual(draft["candidates"], [])
+
+    @staticmethod
+    def draft_text():
+        return f"{_SHOP}\nPARAGON FISKALNY\n{_CARD_DATE}\nPrzejazd 1 x 42,91 42,91 A\nSUMA PLN 42,91\nKARTA PŁATNICZA"
+
+    def test_round_up_skips_bad_candidate_evidence_and_token_failures(self):
+        identifier = self.add_receipt()
+        self.add_card()
+        for changes in (
+            {"amount": "bogus"},
+            {"transaction_date": "2026-11-20T12", "booking_date": None, "value_date": None},
+            {"remittance_information": "synthetic card"},
+            {"remittance_information": [None]},
+        ):
+            with self.subTest(changes=changes):
+                defaults = {
+                    "amount": "43", "transaction_date": _CARD_DATE, "booking_date": _CARD_DATE, "value_date": _CARD_DATE,
+                    "remittance_information": [f"Płatność kartą {_SHOP}"],
+                }
+                self.change_transaction("a", "card-charge", **(defaults | changes))
+                self.assertEqual(self.candidates(identifier), [])
+        self.change_transaction("a", "card-charge", remittance_information=[f"Płatność kartą {_SHOP}"])
+        with mock.patch.object(self.receipts, "_candidate_token", side_effect=AnalyticsError):
+            self.assertEqual(self.candidates(identifier), [])
 
 
 class ReceiptMatchContractTests(unittest.IsolatedAsyncioTestCase):
