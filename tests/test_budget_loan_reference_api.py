@@ -75,7 +75,7 @@ class MortgageReferencesAPITests(unittest.IsolatedAsyncioTestCase):
         self._recurring(self.alice_id, "insurance", f"Ubezpieczenie polisy nr {_POLICY}", ("7", "7", "7"))
         self._recurring(self.alice_id, "utility", "Synthetic monthly utilities", ("3", "3", "3"))
         self._recurring(self.bob_id, "foreign", f"RATA KREDYTU NR {_FOREIGN}", ("17", "17", "17"))
-        for version in (None, "0.62.0", "0.999.0", "0.064.0"):
+        for version in (None, "0.62.0", "0.63.0", "0.999.0", "0.064.0"):
             with self.subTest(version=version):
                 response = await self.get(_CANDIDATES, headers=self._headers(version))
                 self.assertEqual(response.status, 400)
@@ -116,7 +116,7 @@ class MortgageReferencesAPITests(unittest.IsolatedAsyncioTestCase):
         api_contract.BudgetAnalyticsMortgages.model_validate(newest)
         self.assertIs(newest["match_references_supported"], True)
         self.assertCountEqual(newest["schedules"][0]["match_references"], references)
-        for version in ("0.62.0", None):
+        for version in ("0.62.0", "0.63.0", None):
             old = await self._success(await self.get("mortgages", headers=self._headers(version)))
             self.assertNotIn("match_references_supported", old)
             self.assertNotIn("match_references", old["schedules"][0])
@@ -147,7 +147,7 @@ class MortgageReferencesAPITests(unittest.IsolatedAsyncioTestCase):
 
     async def test_version_and_validation_reject_invalid_link_writes(self):
         reference = _reference(_LOAN)
-        for version in (None, "0.62.0"):
+        for version in (None, "0.62.0", "0.63.0"):
             response = await self.post("mortgage-save", _schedule(match_references=[reference]),
                                        headers=self._headers(version, origin=True))
             self.assertEqual(response.status, 400)
@@ -177,7 +177,7 @@ class MortgageReferencesAPITests(unittest.IsolatedAsyncioTestCase):
         created = await self._save(_schedule(match_references=[_reference(_LOAN), _reference(_POLICY)]))
 
         with mock.patch.object(analytics_views.BudgetAnalyticsViews, "_now", return_value=_NOW):
-            for version in ("0.64.0", "0.62.0", None):
+            for version in ("0.65.0", "0.64.0", "0.63.0", "0.62.0", None):
                 with self.subTest(version=version):
                     result = await self._success(await self.get(
                         "forecast", params={"months": "1"}, headers=self._headers(version),
@@ -189,7 +189,7 @@ class MortgageReferencesAPITests(unittest.IsolatedAsyncioTestCase):
                     audits = result["deduplications"]
                     self.assertEqual(len(audits), 2)
                     self.assertEqual({row["matched_due_date"] for row in audits}, {"2026-10-05"})
-                    if version == "0.64.0":
+                    if version in ("0.64.0", "0.65.0"):
                         self.assertEqual({row["match_type"] for row in audits}, {"linked"})
                         self.assertEqual({row["amount_delta"] for row in audits}, {"-0.5", "-93"})
                     else:

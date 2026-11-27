@@ -5203,6 +5203,76 @@
         "title": "BudgetAnalyticsQuarantineAccount",
         "type": "object"
       },
+      "BudgetAnalyticsQuarantineBatchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Batch Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batch_id"
+        ],
+        "title": "BudgetAnalyticsQuarantineBatchRequest",
+        "type": "object"
+      },
+      "BudgetAnalyticsQuarantineDismissResult": {
+        "properties": {
+          "dismissal": {
+            "$ref": "#/components/schemas/BudgetAnalyticsQuarantineDismissal"
+          },
+          "ok": {
+            "const": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "dismissal"
+        ],
+        "title": "BudgetAnalyticsQuarantineDismissResult",
+        "type": "object"
+      },
+      "BudgetAnalyticsQuarantineDismissal": {
+        "properties": {
+          "dismissed_count": {
+            "minimum": 0,
+            "title": "Dismissed Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dismissed_count"
+        ],
+        "title": "BudgetAnalyticsQuarantineDismissal",
+        "type": "object"
+      },
+      "BudgetAnalyticsQuarantineImportKey": {
+        "properties": {
+          "batch_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "ordinal": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "title": "Ordinal",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id",
+          "ordinal"
+        ],
+        "title": "BudgetAnalyticsQuarantineImportKey",
+        "type": "object"
+      },
       "BudgetAnalyticsQuarantineItem": {
         "description": "Safe non-prose quarantine entry (ref, date, status and exclusion reason only; no descriptions or amounts).",
         "properties": {
@@ -5241,6 +5311,17 @@
             ],
             "title": "Entry Reference"
           },
+          "import_key": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetAnalyticsQuarantineImportKey"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Local dismissal key on import_unresolved items only, starting at 0.63.0."
+          },
           "observed_at": {
             "title": "Observed At",
             "type": "number"
@@ -5277,6 +5358,19 @@
               }
             ],
             "title": "Status"
+          },
+          "unresolved_count": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Current total of unresolved items in the import batch, including items outside the list cap. Emitted on import_unresolved items only, starting at 0.63.0.",
+            "title": "Unresolved Count"
           }
         },
         "required": [
@@ -21510,6 +21604,16 @@
               "minLength": 1,
               "type": "string"
             }
+          },
+          {
+            "description": "Negotiate import_key and the batch's unresolved_count on offline import quarantine items starting at 0.63.0. Earlier versions or an omitted header omit these fields.",
+            "in": "header",
+            "name": "X-Hestia-Contract-Version",
+            "required": false,
+            "schema": {
+              "pattern": "^0\\.(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -21606,6 +21710,252 @@
         },
         "summary": "Read owner-private quarantine counts and safe entry metadata (read-only)",
         "x-required-permission": "budget.view",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/analytics/quarantine-dismiss": {
+      "post": {
+        "description": "Requires the exact owner, budget edit permission, browser cookie and configured HTTPS Origin. Records an audit event when rows are removed. A repeat on the same owned batch returns a dismissed_count of zero. The original import report remains available to the operator.",
+        "operationId": "dismissBudgetAnalyticsQuarantineItem",
+        "parameters": [
+          {
+            "description": "Requires contract 0.63.0 or later. Earlier versions and an omitted header receive 404.",
+            "in": "header",
+            "name": "X-Hestia-Contract-Version",
+            "required": true,
+            "schema": {
+              "pattern": "^0\\.(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetAnalyticsQuarantineImportKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetAnalyticsQuarantineDismissResult"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Explicit analytics processing or owner configuration limit; no partial totals."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Dismiss one unresolved offline import item",
+        "x-required-permission": "budget.edit",
+        "x-required-role": "admin"
+      }
+    },
+    "/api/budget/analytics/quarantine-dismiss-batch": {
+      "post": {
+        "description": "Requires the exact owner, budget edit permission, browser cookie and configured HTTPS Origin. Records an audit event when rows are removed. A repeat on the same owned batch returns a dismissed_count of zero. The original import report remains available to the operator.",
+        "operationId": "dismissBudgetAnalyticsQuarantineBatch",
+        "parameters": [
+          {
+            "description": "Requires contract 0.63.0 or later. Earlier versions and an omitted header receive 404.",
+            "in": "header",
+            "name": "X-Hestia-Contract-Version",
+            "required": true,
+            "schema": {
+              "pattern": "^0\\.(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetAnalyticsQuarantineBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetAnalyticsQuarantineDismissResult"
+                }
+              }
+            },
+            "description": "owner-scoped stored state; no bank request"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "session required; middleware may return an empty body"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "admin owner or browser-origin requirement failed; middleware may return an empty body"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "unknown, disabled or foreign resource"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Version, financial source, reserved transfer leg, preview or cursor changed; reload and review."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "Explicit analytics processing or owner configuration limit; no partial totals."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetError"
+                }
+              }
+            },
+            "description": "budget configuration unavailable"
+          }
+        },
+        "summary": "Dismiss all unresolved offline import items from one batch",
+        "x-required-permission": "budget.edit",
         "x-required-role": "admin"
       }
     },

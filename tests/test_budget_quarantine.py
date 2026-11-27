@@ -518,6 +518,7 @@ class QuarantineHTTPAPITests(unittest.IsolatedAsyncioTestCase):
     headers = analytics_fixture.BudgetAnalyticsAPITests.headers
     assert_private_headers = analytics_fixture.BudgetAnalyticsAPITests.assert_private_headers
     get = analytics_fixture.BudgetAnalyticsAPITests.get
+    post = analytics_fixture.BudgetAnalyticsAPITests.post
 
     async def asyncSetUp(self):
         await analytics_fixture.BudgetAnalyticsAPITests.asyncSetUp(self)
@@ -596,6 +597,115 @@ class QuarantineHTTPAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resp_scoped.status, 500)
         self.assert_private_headers(resp_scoped)
         self.assertEqual(await resp_scoped.json(), {"ok": False, "error": "budget_analytics_data_error"})
+
+    async def test_owner_can_dismiss_one_import_item_then_the_rest_of_its_batch(self):
+        original_report = '{"unresolved":201}'
+        with self.sessions.begin() as session:
+            for batch_id, account_id in (("alice-import", self.alice_id), ("alice-other", self.alice_id),
+                                         ("bob-import", self.bob_id)):
+                session.add(db.BudgetImportBatch(
+                    id=batch_id, fingerprint=batch_id, account_id=account_id, fetched_at=3000,
+                    imported_at=3010, balances_json=None, report_json=original_report,
+                ))
+            session.flush()
+            for batch_id, size in (("alice-import", 201), ("alice-other", 1), ("bob-import", 1)):
+                session.add_all(db.BudgetImportUnresolved(
+                    batch_id=batch_id, ordinal=i, reason="api_preserved",
+                    payload_json=_tx_json("same-reference", amount="25.12", description="Synthetic offline description"),
+                ) for i in range(size))
+            session.add(db.BudgetUnresolved(
+                account_id=self.alice_id, ordinal=0, payload_json=_tx_json("api-unresolved", status="PDNG"),
+                observed_at=3000,
+            ))
+        for version in (None, "0.61.0", "0.62.0"):
+            headers = self.headers() if version is None else self.headers() | {"X-Hestia-Contract-Version": version}
+            response = await self.get("quarantine", headers=headers)
+            self.assertEqual(response.status, 200)
+            body = await response.json()
+            self.assertTrue(body["items"])
+            self.assertTrue(all({"import_key", "unresolved_count"}.isdisjoint(item) for item in body["items"]))
+
+        version = {"X-Hestia-Contract-Version": "0.63.0"}
+        headers = self.headers(origin=True) | version
+        read = await self.get("quarantine", headers=headers)
+        self.assertEqual(read.status, 200)
+        report = await read.json()
+        for later_version in ("0.64.0", "0.65.0"):
+            with self.subTest(version=later_version):
+                current_headers = headers | {"X-Hestia-Contract-Version": later_version}
+                current = await self.get("quarantine", headers=current_headers)
+                self.assertEqual(current.status, 200)
+                self.assertEqual(await current.json(), report)
+        self.assertTrue(report["truncated"])
+        self.assertEqual(report["summary"]["import_unresolved_count"], 202)
+        api_contract.BudgetAnalyticsQuarantine.model_validate(report)
+        self.assertNotIn("Synthetic offline description", json.dumps(report))
+        self.assertNotIn("25.12", json.dumps(report))
+        api_item = next(item for item in report["items"] if item["bucket"] == "unresolved")
+        self.assertTrue({"import_key", "unresolved_count"}.isdisjoint(api_item))
+        import_items = [item for item in report["items"] if item["bucket"] == "import_unresolved"]
+        self.assertLess(len(import_items), 201)
+        keys = [item["import_key"] for item in import_items]
+        self.assertEqual({(item["import_key"]["batch_id"], item["unresolved_count"]) for item in import_items},
+                         {("alice-import", 201)})
+        self.assertEqual(len(keys), len({(key["batch_id"], key["ordinal"]) for key in keys}))
+        key = next(key for key in keys if key["batch_id"] == "alice-import")
+
+        for operation, payload in (("quarantine-dismiss", key), ("quarantine-dismiss-batch", {"batch_id": "alice-import"})):
+            with self.subTest(operation=operation):
+                reply = await self.post(operation, payload, headers=self.headers("bob", origin=True) | version)
+                self.assertEqual(reply.status, 404)
+                self.assert_private_headers(reply)
+                self.assertEqual((await self.post(operation, {**payload, "batch_id": "missing"}, headers=headers)).status, 404)
+                self.assertEqual((await self.post(operation, payload, headers=self.headers() | version)).status, 403)
+                bearer = self.headers(origin=True, bearer=True) | version
+                self.assertEqual((await self.post(operation, payload, headers=bearer)).status, 403)
+                self.assertEqual((await self.post(operation, payload)).status, 404)
+                legacy = self.headers(origin=True) | {"X-Hestia-Contract-Version": "0.61.0"}
+                self.assertEqual((await self.post(operation, payload, headers=legacy)).status, 404)
+        for bad_key in ({"batch_id": "alice-import"}, {**key, "ordinal": -1}, {**key, "ordinal": True},
+                        {**key, "ordinal": 2**53}):
+            self.assertEqual((await self.post("quarantine-dismiss", bad_key, headers=headers)).status, 400)
+        bad_version = self.headers(origin=True) | {"X-Hestia-Contract-Version": "latest"}
+        self.assertEqual((await self.post("quarantine-dismiss", key, headers=bad_version)).status, 400)
+        self.assertEqual(self.rows(db.BudgetAnalyticsAudit), [])
+
+        async def dismiss(operation, payload, expected_count):
+            response = await self.post(operation, payload, headers=headers)
+            self.assertEqual(response.status, 200, await response.text())
+            self.assert_private_headers(response)
+            body = await response.json()
+            api_contract.BudgetAnalyticsQuarantineDismissResult.model_validate(body)
+            self.assertEqual(body, {"ok": True, "dismissal": {"dismissed_count": expected_count}})
+
+        await dismiss("quarantine-dismiss", key, 1)
+        await dismiss("quarantine-dismiss", key, 0)
+        read = await self.get("quarantine", headers=headers)
+        report = await read.json()
+        self.assertEqual(report["summary"]["import_unresolved_count"], 201)
+        self.assertNotIn(key, [item.get("import_key") for item in report["items"]])
+        self.assertEqual({item["unresolved_count"] for item in report["items"] if item["bucket"] == "import_unresolved"},
+                         {200})
+        await dismiss("quarantine-dismiss-batch", {"batch_id": key["batch_id"]}, 200)
+        await dismiss("quarantine-dismiss-batch", {"batch_id": key["batch_id"]}, 0)
+        read = await self.get("quarantine", headers=headers)
+        report = await read.json()
+        self.assertEqual(report["summary"]["import_unresolved_count"], 1)
+        self.assertEqual(report["summary"]["unresolved_count"], 1)
+        item = next(item for item in report["items"] if item["bucket"] == "import_unresolved")
+        self.assertEqual((item["import_key"]["batch_id"], item["unresolved_count"]), ("alice-other", 1))
+        empty_scope = await self.get("quarantine", params={"account_id": self.credit_id}, headers=headers)
+        self.assertEqual(empty_scope.status, 200)
+        self.assertEqual((await empty_scope.json())["items"], [])
+        self.assertEqual({row.batch_id for row in self.rows(db.BudgetImportUnresolved)}, {"alice-other", "bob-import"})
+        self.assertEqual({row.report_json for row in self.rows(db.BudgetImportBatch)}, {original_report})
+        audits = sorted(self.rows(db.BudgetAnalyticsAudit), key=lambda row: row.id)
+        self.assertEqual(len(audits), 2)
+        for row, ordinal, count in zip(audits, (key["ordinal"], None), (1, 200), strict=True):
+            self.assertEqual((row.owner, row.subject_type, row.subject_id, row.action),
+                             ("alice", "import_unresolved", "alice-import", "dismiss"))
+            self.assertEqual(json.loads(row.before_json), {"ordinal": ordinal, "count": count})
+            self.assertEqual(json.loads(row.after_json), {"ordinal": ordinal, "count": 0})
 
 
 if __name__ == "__main__":
