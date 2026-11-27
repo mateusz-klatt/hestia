@@ -25,6 +25,8 @@ import {
   RECEIPT_SOURCE_KIND_KEYS,
   RECEIPT_STATUSES,
   RECEIPT_STATUS_KEYS,
+  applyInPlaceReceiptUpdate,
+  applyInPlaceReceiptUpdates,
   availableLinkOptions,
   buildBulkConfirmRequest,
   buildBulkGroupPlan,
@@ -37,9 +39,9 @@ import {
   clearStaleCandidateSelection,
   computeLinesDelta,
   createPendingReceiptStore,
+  createReceiptNavAnchor,
   editReceiptLine,
   filterReceiptRows,
-  findAdjacentReceiptId,
   findCurrentLinkedCandidate,
   findNextUnconfirmedReceiptId,
   formatBulkErrorBucket,
@@ -50,6 +52,7 @@ import {
   isExcludedDraftForBulk,
   isGroupMemberEligible,
   isReceiptGrouped,
+  isReceiptUnchangedInAutoAdvancePass,
   isRedactedValue,
   isStaleCursorError,
   keepCandidateBinding,
@@ -60,20 +63,21 @@ import {
   receiptAccountLabel,
   receiptHasRedactedLines,
   receiptMerchantGroupKey,
-  receiptSummaryFromDetail,
+  receiptNeedsConfirmation,
   receiptTotalAdjustment,
+  reconcileIncomingReceiptRows,
   reconcileLinkChoice,
   removeReceiptRowInPlace,
   resolveDraftFromDetailSession,
+  resolveReceiptNeighbors,
   sameReceiptFilter,
   selectCandidateDraft,
   selectKeepDraft,
   suggestedCandidateDates,
-  upsertReceiptRowInPlace,
-  upsertReceiptRowsInPlace,
   validReceiptDateRange,
 } from "./receipts_model";
 import type {
+  AutoAdvancePassReceiptState,
   PendingReceiptStore,
   ReceiptActionKind,
   ReceiptCandidate,
@@ -90,6 +94,7 @@ import type {
   ReceiptLinkExplicitChoice,
   ReceiptLinkGroupRef,
   ReceiptLinkSessionEntry,
+  ReceiptNavAnchor,
   ReceiptPaymentMethod,
   ReceiptSettledEvent,
   ReceiptSourceKind,
@@ -372,6 +377,7 @@ export function ReceiptsView({
   const [autoAdvance, setAutoAdvance] = useState<boolean>(readAutoAdvancePreference);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [navAnchor, setNavAnchor] = useState<ReceiptNavAnchor | null>(null);
   const [detailState, setDetailState] = useState<DetailState>({ kind: "loading" });
   const [detailRefresh, setDetailRefresh] = useState(0);
   const [imageState, setImageState] = useState<ImageState>({ kind: "none" });
@@ -412,6 +418,7 @@ export function ReceiptsView({
   const bulkCancelledRef = useRef(false);
   const bulkRunGenRef = useRef(0);
   const actorKeyRef = useRef(actorKey);
+  const revisionRef = useRef(revision);
   const groupReturnFocusRef = useRef<HTMLButtonElement | null>(null);
   const listStateRef = useRef<ListState>(listState);
   const draftRef = useRef<ReceiptFilter>(draft);
@@ -423,6 +430,10 @@ export function ReceiptsView({
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadMorePromiseRef = useRef<Promise<LoadMoreOutcome> | null>(null);
   const navGenerationRef = useRef(0);
+  const navAnchorRef = useRef<ReceiptNavAnchor | null>(null);
+  const deletedIdsRef = useRef<Set<string>>(new Set());
+  const localEditsRef = useRef<Map<string, ReceiptSummary | ReceiptDetail>>(new Map());
+  const autoAdvanceVisitedRef = useRef<Map<string, AutoAdvancePassReceiptState>>(new Map());
 
   useLayoutEffect(() => {
     openReceiptIdRef.current = selectedId;
@@ -434,6 +445,14 @@ export function ReceiptsView({
     bulkProgressRef.current = bulkProgress;
     autoAdvanceRef.current = autoAdvance;
   }, [filter, searchMode, bulkProgress, autoAdvance]);
+
+  useLayoutEffect(() => {
+    if (revisionRef.current !== revision) {
+      revisionRef.current = revision;
+      deletedIdsRef.current.clear();
+      localEditsRef.current.clear();
+    }
+  }, [revision]);
 
   const updateListState = useCallback((updater: (current: ListState) => ListState): ListState => {
     const next = updater(listStateRef.current);
@@ -469,7 +488,10 @@ export function ReceiptsView({
     receiptDrawerTriggerRef.current = null;
     loadedReceiptIdRef.current = null;
     latestReadyCandidatesRef.current = null;
+    navAnchorRef.current = null;
+    autoAdvanceVisitedRef.current.clear();
     clearImage();
+    setNavAnchor(null);
     setSelectedId(null);
     setDetailState({ kind: "loading" });
   }, [clearImage]);
@@ -488,6 +510,8 @@ export function ReceiptsView({
     bulkRunGenRef.current += 1;
     receiptFloorGenRef.current.clear();
     receiptLinkMemoryRef.current.clear();
+    deletedIdsRef.current.clear();
+    localEditsRef.current.clear();
     staleCursorReloadedRef.current = false;
     resetDrawer();
     setGroupControllerTarget(null);
@@ -670,6 +694,7 @@ export function ReceiptsView({
         }
         if (confirmRes.ok) {
           confirmed += 1;
+          recordLocalEdit(confirmRes.data.receipt);
           setSelectedForBulk((current) => {
             if (!current.has(target.receipt_id)) return current;
             const next = new Set(current);
@@ -704,7 +729,7 @@ export function ReceiptsView({
     if (!aborted) {
       reloadList();
     }
-  }, [actorKey, checkBarrier, receiptsApi, reloadList, store]);
+  }, [actorKey, checkBarrier, receiptsApi, recordLocalEdit, reloadList, store]);
 
   // Subscribe to persistent store so locks survive unmount/remount and late settlements refresh the panel.
   useEffect(() => {
@@ -728,7 +753,19 @@ export function ReceiptsView({
     });
   }, [store, reloadList, resetDrawer]);
 
-  const removeRowInPlace = useCallback((receiptId: string) => {
+  const recordLocalEdit = useCallback((row: ReceiptSummary | ReceiptDetail) => {
+    deletedIdsRef.current.delete(row.receipt_id);
+    const existing = localEditsRef.current.get(row.receipt_id);
+    if (existing === undefined || row.version >= existing.version) {
+      localEditsRef.current.set(row.receipt_id, row);
+    }
+  }, []);
+
+  const removeRowInPlace = useCallback((receiptId: string, tombstone = true) => {
+    if (tombstone) {
+      deletedIdsRef.current.add(receiptId);
+      localEditsRef.current.delete(receiptId);
+    }
     setSelectedForBulk((current) => {
       if (!current.has(receiptId)) return current;
       const next = new Set(current);
@@ -740,12 +777,15 @@ export function ReceiptsView({
       : current));
   }, [updateListState]);
 
-  const upsertRowsInPlace = useCallback((updates: readonly ReceiptSummary[]) => {
+  const upsertRowsInPlace = useCallback((updates: readonly (ReceiptSummary | ReceiptDetail)[], recordLocal = true) => {
     if (updates.length === 0) return;
+    if (recordLocal) {
+      for (const row of updates) recordLocalEdit(row);
+    }
     updateListState((current) => (current.kind === "ready"
-      ? { ...current, rows: upsertReceiptRowsInPlace(current.rows, updates) }
+      ? { ...current, rows: applyInPlaceReceiptUpdates(current.rows, updates, filterRef.current) }
       : current));
-  }, [updateListState]);
+  }, [recordLocalEdit, updateListState]);
 
   const refreshRowsInPlace = useCallback((receiptIds: readonly string[]) => {
     const cur = listStateRef.current;
@@ -758,10 +798,10 @@ export function ReceiptsView({
       void receiptsApi.receiptDetail(id).then((res) => {
         if (checkBarrier(res) || !mounted.current || token !== listGeneration.current) return;
         if (!res.ok) {
-          if (res.status === 404) removeRowInPlace(id);
+          if (res.status === 404) removeRowInPlace(id, true);
           return;
         }
-        upsertRowsInPlace([receiptSummaryFromDetail(res.data.receipt)]);
+        upsertRowsInPlace([res.data.receipt], true);
       });
     }
   }, [receiptsApi, checkBarrier, removeRowInPlace, upsertRowsInPlace]);
@@ -774,6 +814,7 @@ export function ReceiptsView({
     const token = ++listGeneration.current;
     loadMorePromiseRef.current = null;
     navGenerationRef.current += 1;
+    autoAdvanceVisitedRef.current.clear();
     updateListState(() => ({ kind: "loading" }));
     const request = searchMode
       ? receiptsApi.receiptsSearch({ query: filter.query.trim(), limit: 50 })
@@ -784,9 +825,20 @@ export function ReceiptsView({
         updateListState(() => ({ kind: "error" }));
         return;
       }
+      for (const row of result.data.receipts) {
+        const local = localEditsRef.current.get(row.receipt_id);
+        if (local !== undefined && row.version > local.version) {
+          localEditsRef.current.delete(row.receipt_id);
+        }
+      }
+      const reconciled = reconcileIncomingReceiptRows(
+        result.data.receipts,
+        { deletedIds: deletedIdsRef.current, updatedById: localEditsRef.current },
+        filterRef.current,
+      );
       updateListState(() => ({
         kind: "ready",
-        rows: result.data.receipts,
+        rows: reconciled,
         nextCursor: result.data.next_cursor,
         loadingMore: false,
         loadMoreError: false,
@@ -839,11 +891,24 @@ export function ReceiptsView({
         return { kind: "error" };
       }
       staleCursorReloadedRef.current = false;
+      for (const row of result.data.receipts) {
+        const local = localEditsRef.current.get(row.receipt_id);
+        if (local !== undefined && row.version > local.version) {
+          localEditsRef.current.delete(row.receipt_id);
+        }
+      }
+      const reconciled = reconcileIncomingReceiptRows(
+        result.data.receipts,
+        { deletedIds: deletedIdsRef.current, updatedById: localEditsRef.current },
+        activeFilter,
+      );
       const nextState = updateListState((current) => {
         if (current.kind !== "ready") return current;
-        const merged = mergeReceiptRows(current.rows, result.data.receipts);
+        const existingIds = new Set(current.rows.map((row) => row.receipt_id));
+        const merged = mergeReceiptRows(current.rows, reconciled);
         const next = result.data.next_cursor;
-        const exhausted = next === null || next === cursor || merged.length === current.rows.length;
+        const hadNewServerRow = result.data.receipts.some((row) => !existingIds.has(row.receipt_id));
+        const exhausted = next === null || next === cursor || !hadNewServerRow;
         return {
           kind: "ready",
           rows: merged,
@@ -887,7 +952,7 @@ export function ReceiptsView({
         if (result.status === 404) {
           resetDrawer();
           setNotice(t("budget.receipts.notFound"));
-          removeRowInPlace(targetId);
+          removeRowInPlace(targetId, true);
           return;
         }
         loadedReceiptIdRef.current = null;
@@ -900,7 +965,10 @@ export function ReceiptsView({
       const groupCandidates = result.data.group_candidates ?? [];
       loadedReceiptIdRef.current = receipt.receipt_id;
       latestReadyCandidatesRef.current = { receiptId: receipt.receipt_id, candidates };
-      upsertRowsInPlace([receiptSummaryFromDetail(receipt)]);
+      const existingLocal = localEditsRef.current.get(receipt.receipt_id);
+      if (existingLocal === undefined || receipt.version >= existingLocal.version) {
+        upsertRowsInPlace([receipt], false);
+      }
       setDetailState({
         kind: "ready",
         detail: receipt,
@@ -945,7 +1013,16 @@ export function ReceiptsView({
       || groupControllerTarget !== null
       || (openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null)
       || openReceiptIdRef.current === receiptId) return;
-    if (openReceiptIdRef.current === null) receiptDrawerTriggerRef.current = trigger ?? null;
+    if (openReceiptIdRef.current === null) {
+      receiptDrawerTriggerRef.current = trigger ?? null;
+      autoAdvanceVisitedRef.current.clear();
+    }
+    const curList = listStateRef.current;
+    const nextAnchor = curList.kind === "ready"
+      ? createReceiptNavAnchor(filterReceiptRows(curList.rows, filterRef.current, searchModeRef.current), receiptId)
+      : null;
+    navAnchorRef.current = nextAnchor;
+    setNavAnchor(nextAnchor);
     navGenerationRef.current += 1;
     openReceiptIdRef.current = receiptId;
     loadedReceiptIdRef.current = null;
@@ -970,12 +1047,18 @@ export function ReceiptsView({
     const curList = listStateRef.current;
     if (curList.kind !== "ready") return;
     const shown = filterReceiptRows(curList.rows, filterRef.current, searchModeRef.current);
-    const directTarget = findAdjacentReceiptId(shown, currentId, direction);
+    const liveAnchor = createReceiptNavAnchor(shown, currentId) ?? navAnchorRef.current;
+    if (liveAnchor !== null && liveAnchor.receiptId === currentId) {
+      navAnchorRef.current = liveAnchor;
+      setNavAnchor(liveAnchor);
+    }
+    const neighbors = resolveReceiptNeighbors(shown, currentId, liveAnchor);
+    const directTarget = direction === "prev" ? neighbors.prevId : neighbors.nextId;
     if (directTarget !== null) {
       openReceipt(directTarget);
       return;
     }
-    if (direction === "prev" || curList.nextCursor === null) return;
+    if (direction === "prev" || !neighbors.anchored || curList.nextCursor === null) return;
 
     const startListGen = listGeneration.current;
     const startNavGen = ++navGenerationRef.current;
@@ -989,15 +1072,18 @@ export function ReceiptsView({
       if (outcome.kind !== "loaded") return;
       nextCursor = outcome.nextCursor;
       const nextShown = filterReceiptRows(outcome.rows, filterRef.current, searchModeRef.current);
-      const nextTarget = findAdjacentReceiptId(nextShown, currentId, "next");
-      if (nextTarget !== null) {
-        openReceipt(nextTarget);
+      const nextNeighbors = resolveReceiptNeighbors(nextShown, currentId, navAnchorRef.current);
+      if (nextNeighbors.nextId !== null) {
+        openReceipt(nextNeighbors.nextId);
         return;
       }
     }
   }, [groupControllerTarget, store, openReceipt, fetchNextPage]);
 
-  const handleConfirmed = useCallback(async (updated: ReceiptDetail) => {
+  const handleConfirmed = useCallback(async (
+    updated: ReceiptDetail,
+    previous: Pick<ReceiptDetail, "status" | "version">,
+  ) => {
     receiptLinkMemoryRef.current.delete(`${actorKey}:${updated.receipt_id}`);
     const floorToken = ++detailGeneration.current;
     receiptFloorGenRef.current.set(updated.receipt_id, floorToken);
@@ -1008,15 +1094,34 @@ export function ReceiptsView({
       next.delete(updated.receipt_id);
       return next;
     });
+
+    const preAnchor = listStateRef.current.kind === "ready"
+      ? (createReceiptNavAnchor(
+          filterReceiptRows(listStateRef.current.rows, filterRef.current, searchModeRef.current),
+          updated.receipt_id,
+        ) ?? navAnchorRef.current)
+      : navAnchorRef.current;
+    if (preAnchor !== null && preAnchor.receiptId === updated.receipt_id) {
+      navAnchorRef.current = preAnchor;
+      setNavAnchor(preAnchor);
+    }
+
+    recordLocalEdit(updated);
     const nextList = updateListState((current) => (current.kind === "ready"
-      ? { ...current, rows: upsertReceiptRowInPlace(current.rows, receiptSummaryFromDetail(updated)) }
+      ? { ...current, rows: applyInPlaceReceiptUpdate(current.rows, updated, filterRef.current) }
       : current));
 
+    const serverChanged = updated.status !== previous.status || updated.version !== previous.version;
     if (!autoAdvanceRef.current || nextList.kind !== "ready") {
       setDetailState({ kind: "ready", detail: updated, candidates: [], groupCandidates: [], noBankData: false });
-      setNotice(t("budget.receipts.confirmSuccess"));
+      if (serverChanged) setNotice(t("budget.receipts.confirmSuccess"));
       return;
     }
+
+    autoAdvanceVisitedRef.current.set(updated.receipt_id, {
+      status: updated.status,
+      version: updated.version,
+    });
 
     const findVisibleNextUnconfirmed = (rows: readonly ReceiptSummary[], wrap: boolean): string | null => {
       const visibleIds = new Set(
@@ -1024,14 +1129,18 @@ export function ReceiptsView({
       );
       return findNextUnconfirmedReceiptId(rows, updated.receipt_id, {
         wrap,
-        predicate: (row) => visibleIds.has(row.receipt_id),
+        anchor: preAnchor,
+        predicate: (row) => (
+          visibleIds.has(row.receipt_id)
+          && !isReceiptUnchangedInAutoAdvancePass(row, autoAdvanceVisitedRef.current)
+        ),
       });
     };
 
     const forwardTarget = findVisibleNextUnconfirmed(nextList.rows, false);
     if (forwardTarget !== null) {
       openReceipt(forwardTarget);
-      setNotice(t("budget.receipts.confirmSuccess"));
+      if (serverChanged) setNotice(t("budget.receipts.confirmSuccess"));
       return;
     }
 
@@ -1053,7 +1162,7 @@ export function ReceiptsView({
         const nextForward = findVisibleNextUnconfirmed(latestRows, false);
         if (nextForward !== null) {
           openReceipt(nextForward);
-          setNotice(t("budget.receipts.confirmSuccess"));
+          if (serverChanged) setNotice(t("budget.receipts.confirmSuccess"));
           return;
         }
       } while (latestCursor !== null);
@@ -1062,7 +1171,15 @@ export function ReceiptsView({
     const wrappedTarget = findVisibleNextUnconfirmed(latestRows, true);
     if (wrappedTarget !== null) {
       openReceipt(wrappedTarget);
-      setNotice(t("budget.receipts.confirmSuccess"));
+      if (serverChanged) setNotice(t("budget.receipts.confirmSuccess"));
+      return;
+    }
+
+    const finalShown = filterReceiptRows(latestRows, filterRef.current, searchModeRef.current);
+    const anyStillUnconfirmed = receiptNeedsConfirmation(updated) || finalShown.some(receiptNeedsConfirmation);
+    if (anyStillUnconfirmed) {
+      setDetailState({ kind: "ready", detail: updated, candidates: [], groupCandidates: [], noBankData: false });
+      if (serverChanged) setNotice(t("budget.receipts.confirmSuccess"));
       return;
     }
 
@@ -1070,7 +1187,7 @@ export function ReceiptsView({
     resetDrawer();
     setNotice(t("budget.receipts.allConfirmed"));
     if (trigger?.isConnected === true) trigger.focus({ preventScroll: true });
-  }, [actorKey, fetchNextPage, openReceipt, resetDrawer, updateListState]);
+  }, [actorKey, fetchNextPage, openReceipt, recordLocalEdit, resetDrawer, updateListState]);
 
   const resolveDetailDraft = useCallback((
     detail: ReceiptDetail,
@@ -1569,7 +1686,7 @@ export function ReceiptsView({
                   const rowSelectable = rowConfirmable || (groupWritesAvailable && isGroupMemberEligible(row));
                   const rowMerchantText = receiptMerchantGroupKey(row, formatWithNip) ?? t("budget.receipts.unknownMerchant");
                   return (
-                    <li key={row.receipt_id} className="budget-entry budget-receipt-row">
+                    <li key={row.receipt_id} className="budget-entry budget-receipt-row" data-receipt-id={row.receipt_id}>
                       <div className="budget-receipt-row-main">
                         <input
                           type="checkbox"
@@ -1651,11 +1768,10 @@ export function ReceiptsView({
       ) : null}
 
       {selectedId === null ? null : (() => {
-        const selectedRowIndex = shownRows.findIndex((row) => row.receipt_id === selectedId);
-        const canPrev = selectedRowIndex > 0;
-        const canNext = selectedRowIndex >= 0
-          && (selectedRowIndex + 1 < shownRows.length
-            || (listState.kind === "ready" && listState.nextCursor !== null));
+        const neighbors = resolveReceiptNeighbors(shownRows, selectedId, navAnchor);
+        const canPrev = neighbors.prevId !== null;
+        const canNext = neighbors.nextId !== null
+          || (neighbors.anchored && listState.kind === "ready" && listState.nextCursor !== null);
         const loadingMoreList = listState.kind === "ready" && listState.loadingMore;
         return (
           <ReceiptDetailDrawer
@@ -1696,16 +1812,26 @@ export function ReceiptsView({
               setGroupControllerTarget({ kind: "proposal", anchor: detail, proposal });
             }}
             onRetryDetail={() => { setDetailRefresh((current) => current + 1); }}
-            onConfirmed={(updated) => { void handleConfirmed(updated); }}
+            onConfirmed={(updated, previous) => { void handleConfirmed(updated, previous); }}
             onGroupUnlinked={(receiptId, unlinkResult) => {
               receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
               const floorToken = ++detailGeneration.current;
               receiptFloorGenRef.current.set(receiptId, floorToken);
+              if (listStateRef.current.kind === "ready") {
+                const preAnchor = createReceiptNavAnchor(
+                  filterReceiptRows(listStateRef.current.rows, filterRef.current, searchModeRef.current),
+                  receiptId,
+                );
+                if (preAnchor !== null) {
+                  navAnchorRef.current = preAnchor;
+                  setNavAnchor(preAnchor);
+                }
+              }
               const updatedRows: ReceiptSummary[] = [
                 ...unlinkResult.members,
                 ...(unlinkResult.evidence === null ? [] : [unlinkResult.evidence]),
               ];
-              upsertRowsInPlace(updatedRows);
+              upsertRowsInPlace(updatedRows, true);
               setNotice(t("budget.receipts.groupUnlinkSuccess"));
               setDetailRefresh((current) => current + 1);
             }}
@@ -1722,7 +1848,7 @@ export function ReceiptsView({
               const trigger = receiptDrawerTriggerRef.current;
               resetDrawer();
               setNotice(t("budget.receipts.notFound"));
-              removeRowInPlace(receiptId);
+              removeRowInPlace(receiptId, true);
               if (trigger?.isConnected === true) trigger.focus({ preventScroll: true });
             }}
             onDeleted={(receiptId, dissolvedGroup = false, siblingIds = []) => {
@@ -1743,7 +1869,7 @@ export function ReceiptsView({
               }
               const trigger = receiptDrawerTriggerRef.current;
               resetDrawer();
-              removeRowInPlace(receiptId);
+              removeRowInPlace(receiptId, true);
               if (dissolvedGroup) {
                 setNotice(t("budget.receipts.dissolveDeleteSuccess"));
                 if (extraSiblingIds.length > 0) refreshRowsInPlace(extraSiblingIds);
@@ -1788,13 +1914,23 @@ export function ReceiptsView({
               for (const id of affectedIds) next.delete(id);
               return next;
             });
+            const openId = openReceiptIdRef.current;
+            if (openId !== null && listStateRef.current.kind === "ready") {
+              const preAnchor = createReceiptNavAnchor(
+                filterReceiptRows(listStateRef.current.rows, filterRef.current, searchModeRef.current),
+                openId,
+              );
+              if (preAnchor !== null) {
+                navAnchorRef.current = preAnchor;
+                setNavAnchor(preAnchor);
+              }
+            }
             const updatedRows: ReceiptSummary[] = [
               ...result.members,
               ...(result.evidence === null ? [] : [result.evidence]),
             ];
-            upsertRowsInPlace(updatedRows);
+            upsertRowsInPlace(updatedRows, true);
             setNotice(t("budget.receipts.groupLinkSuccess"));
-            const openId = openReceiptIdRef.current;
             if (openId !== null && affectedIds.includes(openId)) {
               receiptLinkMemoryRef.current.delete(`${actorKey}:${openId}`);
               receiptFloorGenRef.current.set(openId, ++detailGeneration.current);
@@ -1849,7 +1985,7 @@ interface DrawerProps {
   onOpenGroupCandidates: (detail: ReceiptDetail, trigger: HTMLButtonElement | null) => void;
   onReviewGroupProposal: (detail: ReceiptDetail, proposal: ReceiptGroupCandidate, trigger: HTMLButtonElement | null) => void;
   onRetryDetail: () => void;
-  onConfirmed: (receipt: ReceiptDetail) => void;
+  onConfirmed: (receipt: ReceiptDetail, previous: Pick<ReceiptDetail, "status" | "version">) => void;
   onGroupUnlinked: (receiptId: string, result: ReceiptGroupUnlinkResult) => void;
   onConflictOrStale: (receiptId: string) => void;
   onNotFound: (receiptId: string) => void;
@@ -2242,7 +2378,7 @@ function ReceiptDetailDrawer({
         return;
       }
       releaseLock();
-      onConfirmed(result.data.receipt);
+      onConfirmed(result.data.receipt, { status: detail.status, version: detail.version });
     } finally {
       releaseLock(handledInMountedDrawer ? undefined : outcome);
     }

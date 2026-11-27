@@ -1843,11 +1843,89 @@ export function sameReceiptFilter(a: ReceiptFilter, b: ReceiptFilter): boolean {
     && a.dateTo === b.dateTo;
 }
 
+export function foldReceiptSearchText(value: string): string {
+  return value
+    .normalize("NFC")
+    .replaceAll("\u0142", "l")
+    .replaceAll("\u0141", "L")
+    .normalize("NFD")
+    .replace(/\p{Mn}/gu, "")
+    .toLowerCase();
+}
+
 export function receiptSummaryFromDetail(detail: ReceiptDetail): ReceiptSummary {
-  const { lines, payment_evidence: paymentEvidence, ...summary } = detail;
-  void lines;
-  void paymentEvidence;
+  const summary: ReceiptSummary = {
+    receipt_id: detail.receipt_id,
+    status: detail.status,
+    document_kind: detail.document_kind,
+    source_kind: detail.source_kind,
+    receipt_kind: detail.receipt_kind,
+    receipt_date: detail.receipt_date,
+    receipt_time: detail.receipt_time,
+    raw_shop_name: detail.raw_shop_name,
+    raw_nip: detail.raw_nip,
+    shop_id: detail.shop_id,
+    chain_key: detail.chain_key,
+    total_amount: detail.total_amount,
+    currency: detail.currency,
+    payment_method: detail.payment_method,
+    math_delta: detail.math_delta,
+    linked: detail.linked,
+    linked_account_id: detail.linked_account_id,
+    linked_entry_ref: detail.linked_entry_ref,
+    version: detail.version,
+    image_available: detail.image_available,
+    image_expires_at: detail.image_expires_at,
+    raw_text_expires_at: detail.raw_text_expires_at,
+    invoice_number: detail.invoice_number,
+    due_date: detail.due_date,
+    import_expires_at: detail.import_expires_at,
+    forwarded_manually: detail.forwarded_manually,
+    forwarded_sender_domain: detail.forwarded_sender_domain,
+    gateway: detail.gateway,
+    gateway_status: detail.gateway_status,
+    fee_amount: detail.fee_amount,
+    payee_host: detail.payee_host,
+    evidence_for_receipt_id: detail.evidence_for_receipt_id,
+    has_document: detail.has_document,
+    card_last4: detail.card_last4,
+    created_at: detail.created_at,
+    updated_at: detail.updated_at,
+  };
+  if (detail.link_group !== undefined) {
+    summary.link_group = detail.link_group;
+  }
   return summary;
+}
+
+/** True when an in-place updated receipt still satisfies every active filter criterion. */
+export function receiptMatchesFilter(
+  receipt: ReceiptSummary | ReceiptDetail,
+  filter: ReceiptFilter,
+): boolean {
+  if (filter.status !== "" && receipt.status !== filter.status) return false;
+  if (filter.documentKind !== "" && receipt.document_kind !== filter.documentKind) return false;
+  if (filter.sourceKind !== "" && receipt.source_kind !== filter.sourceKind) return false;
+  if (filter.linked !== "" && receipt.linked !== (filter.linked === "linked")) return false;
+  if (filter.dateFrom !== "" || filter.dateTo !== "") {
+    if (receipt.receipt_date === null) return false;
+    if (filter.dateFrom !== "" && receipt.receipt_date < filter.dateFrom) return false;
+    if (filter.dateTo !== "" && receipt.receipt_date > filter.dateTo) return false;
+  }
+  const needle = foldReceiptSearchText(filter.query.trim());
+  if (needle !== "") {
+    const shopMatch = receipt.raw_shop_name !== null && foldReceiptSearchText(receipt.raw_shop_name).includes(needle);
+    const nipMatch = receipt.raw_nip !== null && foldReceiptSearchText(receipt.raw_nip).includes(needle);
+    if (shopMatch || nipMatch) return true;
+    if ("lines" in receipt) {
+      return receipt.lines.some((line) => (
+        foldReceiptSearchText(line.raw_name).includes(needle)
+        || foldReceiptSearchText(line.raw_name_key).includes(needle)
+      ));
+    }
+    return true;
+  }
+  return true;
 }
 
 export function upsertReceiptRowInPlace(
@@ -1867,14 +1945,74 @@ export function upsertReceiptRowsInPlace(
 ): ReceiptSummary[] {
   if (updates.length === 0) return [...rows];
   const byId = new Map(updates.map((row) => [row.receipt_id, row]));
-  let changed = false;
-  const next = rows.map((row) => {
+  return rows.map((row) => byId.get(row.receipt_id) ?? row);
+}
+
+/** Updates one row in place if it still matches the active filter, or removes it if it no longer matches. */
+export function applyInPlaceReceiptUpdate(
+  rows: readonly ReceiptSummary[],
+  updated: ReceiptSummary | ReceiptDetail,
+  filter: ReceiptFilter,
+): ReceiptSummary[] {
+  const idx = rows.findIndex((row) => row.receipt_id === updated.receipt_id);
+  if (idx < 0) return [...rows];
+  if (!receiptMatchesFilter(updated, filter)) {
+    return rows.filter((row) => row.receipt_id !== updated.receipt_id);
+  }
+  const next = [...rows];
+  next[idx] = "lines" in updated ? receiptSummaryFromDetail(updated) : updated;
+  return next;
+}
+
+/** Updates multiple rows in place if they still match the active filter, removing any that no longer match. */
+export function applyInPlaceReceiptUpdates(
+  rows: readonly ReceiptSummary[],
+  updates: readonly (ReceiptSummary | ReceiptDetail)[],
+  filter: ReceiptFilter,
+): ReceiptSummary[] {
+  if (updates.length === 0) return [...rows];
+  const byId = new Map(updates.map((row) => [row.receipt_id, row]));
+  const next: ReceiptSummary[] = [];
+  for (const row of rows) {
     const replacement = byId.get(row.receipt_id);
-    if (replacement === undefined) return row;
-    changed = true;
-    return replacement;
-  });
-  return changed ? next : [...rows];
+    if (replacement === undefined) {
+      next.push(row);
+      continue;
+    }
+    if (receiptMatchesFilter(replacement, filter)) {
+      next.push("lines" in replacement ? receiptSummaryFromDetail(replacement) : replacement);
+    }
+  }
+  return next;
+}
+
+export interface LocalReceiptMutationState {
+  readonly deletedIds: ReadonlySet<string>;
+  readonly updatedById: ReadonlyMap<string, ReceiptSummary | ReceiptDetail>;
+}
+
+/**
+ * Reconciles an incoming server list/search/page response against local tombstones and
+ * version-tracked local edits so a pre-mutation response never resurrects deleted rows or stale versions.
+ */
+export function reconcileIncomingReceiptRows(
+  incoming: readonly ReceiptSummary[],
+  local: LocalReceiptMutationState,
+  filter: ReceiptFilter,
+): ReceiptSummary[] {
+  const reconciled: ReceiptSummary[] = [];
+  for (const row of incoming) {
+    if (local.deletedIds.has(row.receipt_id)) continue;
+    const localEdit = local.updatedById.get(row.receipt_id);
+    if (localEdit !== undefined && localEdit.version >= row.version) {
+      if (receiptMatchesFilter(localEdit, filter)) {
+        reconciled.push("lines" in localEdit ? receiptSummaryFromDetail(localEdit) : localEdit);
+      }
+      continue;
+    }
+    reconciled.push(row);
+  }
+  return reconciled;
 }
 
 export function removeReceiptRowInPlace(
@@ -1890,6 +2028,69 @@ export function receiptNeedsConfirmation(
   return receipt.status === "imported" || receipt.status === "draft" || receipt.status === "needs_review";
 }
 
+export interface ReceiptNavAnchor {
+  readonly receiptId: string;
+  readonly beforeIds: readonly string[];
+  readonly afterIds: readonly string[];
+}
+
+export function createReceiptNavAnchor(
+  shownRows: readonly ReceiptSummary[],
+  receiptId: string,
+): ReceiptNavAnchor | null {
+  const idx = shownRows.findIndex((row) => row.receipt_id === receiptId);
+  if (idx < 0) return null;
+  return {
+    receiptId,
+    beforeIds: shownRows.slice(0, idx).map((row) => row.receipt_id),
+    afterIds: shownRows.slice(idx + 1).map((row) => row.receipt_id),
+  };
+}
+
+export function resolveReceiptNeighbors(
+  shownRows: readonly ReceiptSummary[],
+  currentId: string,
+  anchor: ReceiptNavAnchor | null,
+): { prevId: string | null; nextId: string | null; anchored: boolean } {
+  const idx = shownRows.findIndex((row) => row.receipt_id === currentId);
+  if (idx >= 0) {
+    return {
+      prevId: shownRows[idx - 1]?.receipt_id ?? null,
+      nextId: shownRows[idx + 1]?.receipt_id ?? null,
+      anchored: true,
+    };
+  }
+  if (anchor === null || anchor.receiptId !== currentId) {
+    return { prevId: null, nextId: null, anchored: false };
+  }
+  const presentIds = new Set(shownRows.map((row) => row.receipt_id));
+  let prevId: string | null = null;
+  for (let i = anchor.beforeIds.length - 1; i >= 0; i -= 1) {
+    const id = anchor.beforeIds[i];
+    if (id !== undefined && presentIds.has(id)) {
+      prevId = id;
+      break;
+    }
+  }
+  let nextId: string | null = null;
+  for (const id of anchor.afterIds) {
+    if (presentIds.has(id)) {
+      nextId = id;
+      break;
+    }
+  }
+  if (nextId === null) {
+    const knownBefore = new Set(anchor.beforeIds);
+    for (const row of shownRows) {
+      if (row.receipt_id !== currentId && !knownBefore.has(row.receipt_id)) {
+        nextId = row.receipt_id;
+        break;
+      }
+    }
+  }
+  return { prevId, nextId, anchored: true };
+}
+
 export function findAdjacentReceiptId(
   rows: readonly ReceiptSummary[],
   currentId: string,
@@ -1901,26 +2102,64 @@ export function findAdjacentReceiptId(
   return target?.receipt_id ?? null;
 }
 
+export interface AutoAdvancePassReceiptState {
+  readonly status: ReceiptStatus;
+  readonly version: number;
+}
+
+export function isReceiptUnchangedInAutoAdvancePass(
+  row: Pick<ReceiptSummary, "receipt_id" | "status" | "version">,
+  visited: ReadonlyMap<string, AutoAdvancePassReceiptState>,
+): boolean {
+  const prev = visited.get(row.receipt_id);
+  return prev !== undefined && prev.status === row.status && prev.version === row.version;
+}
+
 export function findNextUnconfirmedReceiptId(
   rows: readonly ReceiptSummary[],
   currentId: string,
-  options: { wrap?: boolean; predicate?: (row: ReceiptSummary) => boolean } = {},
+  options: {
+    wrap?: boolean;
+    anchor?: ReceiptNavAnchor | null;
+    predicate?: (row: ReceiptSummary) => boolean;
+  } = {},
 ): string | null {
-  const idx = rows.findIndex((row) => row.receipt_id === currentId);
   const matches = (row: ReceiptSummary): boolean =>
     row.receipt_id !== currentId
     && receiptNeedsConfirmation(row)
     && (options.predicate === undefined || options.predicate(row));
-  for (let i = idx + 1; i < rows.length; i += 1) {
-    const row = rows[i];
-    if (row !== undefined && matches(row)) return row.receipt_id;
-  }
-  if (options.wrap === true) {
-    const limit = idx < 0 ? rows.length : idx;
-    for (let i = 0; i < limit; i += 1) {
+
+  const idx = rows.findIndex((row) => row.receipt_id === currentId);
+  if (idx >= 0) {
+    for (let i = idx + 1; i < rows.length; i += 1) {
       const row = rows[i];
       if (row !== undefined && matches(row)) return row.receipt_id;
     }
+    if (options.wrap === true) {
+      for (let i = 0; i < idx; i += 1) {
+        const row = rows[i];
+        if (row !== undefined && matches(row)) return row.receipt_id;
+      }
+    }
+    return null;
+  }
+
+  const anchor = options.anchor?.receiptId === currentId ? options.anchor : null;
+  if (anchor !== null) {
+    const beforeSet = new Set(anchor.beforeIds);
+    for (const row of rows) {
+      if (!beforeSet.has(row.receipt_id) && matches(row)) return row.receipt_id;
+    }
+    if (options.wrap === true) {
+      for (const row of rows) {
+        if (beforeSet.has(row.receipt_id) && matches(row)) return row.receipt_id;
+      }
+    }
+    return null;
+  }
+
+  for (const row of rows) {
+    if (matches(row)) return row.receipt_id;
   }
   return null;
 }

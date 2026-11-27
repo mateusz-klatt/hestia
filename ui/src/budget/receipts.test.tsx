@@ -302,6 +302,12 @@ function openDetailButton(index: number, label = "Details"): HTMLButtonElement {
   return found;
 }
 
+function openDetailById(receiptId: string, label = "Details"): HTMLButtonElement {
+  const row = host.querySelector<HTMLElement>(`li[data-receipt-id="${receiptId}"]`);
+  if (row === null) throw new Error(`receipt row ${receiptId} missing`);
+  return button(label, row);
+}
+
 function linkRadio(value: string, scope: ParentNode): HTMLInputElement {
   const found = scope.querySelector<HTMLInputElement>(`input[name="link_choice"][value="${value}"]`);
   if (found === null) throw new Error(`link radio ${value} missing`);
@@ -864,14 +870,15 @@ describe("ReceiptsView", () => {
     await click(button("Confirm receipt", dialog()));
     expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({ expected_version: 6 }));
 
-    // Close via 404 on Confirm -> clears detailState cleanly so opening Receipt B never flashes Secret Store A.
+    // Close via 404 on Confirm -> removes rec-a in place and clears detailState cleanly so opening Receipt B never flashes Secret Store A.
     vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => fail(404, "budget_receipt_not_found"));
     await click(button("Confirm receipt", dialog()));
     expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.querySelector('[data-receipt-id="rec-a"]')).toBeNull();
 
     const loadingB = deferred<ReceiptDetailResult>();
     vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => loadingB.promise);
-    await click(openDetailButton(1));
+    await click(openDetailById("rec-b"));
     const drawerB = dialog();
     expect(drawerB.textContent).toContain("Loading document details");
     expect(drawerB.textContent).not.toContain("Secret Store A");
@@ -2857,5 +2864,217 @@ describe("ReceiptsView", () => {
     await renderReceipts(clients, { locale: "en" });
     await click(openDetailButton(0));
     expect(inputByName("auto_advance_on_confirm", dialog()).checked).toBe(true);
+  });
+
+  it("removes rows that no longer match active status or search filters after in-place edits and keeps Prev/Next anchored to neighbours", async () => {
+    const m1 = receiptSummary({ receipt_id: "m1", status: "imported", raw_shop_name: "Imported One", version: 1 });
+    const m2 = receiptSummary({ receipt_id: "m2", status: "imported", raw_shop_name: "Imported Two", version: 1 });
+    const m3 = receiptSummary({ receipt_id: "m3", status: "imported", raw_shop_name: "Imported Three", version: 1 });
+
+    const clients = fakeClients([m1, m2, m3]);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = [m1, m2, m3].find((row) => row.receipt_id === id) ?? m1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail(match), candidates: [] });
+    });
+
+    await renderReceipts(clients);
+    await choose(selectByName("status"), "imported");
+    await settle();
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(3);
+
+    // Confirm middle row with auto-advance OFF -> removed from "Imported" filter, yet Prev/Next stay enabled and anchored to m1/m3.
+    await click(openDetailById("m2"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+    await click(button("Confirm receipt", dialog()));
+
+    expect(host.querySelector('[data-receipt-id="m2"]')).toBeNull();
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(2);
+    expect(button("Previous", dialog()).disabled).toBe(false);
+    expect(button("Next", dialog()).disabled).toBe(false);
+
+    await click(button("Next", dialog()));
+    expect(dialog().textContent).toContain("Imported Three");
+    await click(button("Previous", dialog()));
+    expect(dialog().textContent).toContain("Imported One");
+    await click(button("Close", dialog()));
+
+    // Under a search query, editing away the only search match removes the row from the search results list.
+    const s1 = receiptSummary({ receipt_id: "s-lidl", status: "needs_review", raw_shop_name: "Lidl Market", total_amount: "12.50", version: 1 });
+    const s2 = receiptSummary({ receipt_id: "s-keep", status: "needs_review", raw_shop_name: "Lidl Express", total_amount: "12.50", version: 1 });
+    vi.mocked(clients.rApi.receiptsSearch).mockImplementation(() => ok<ReceiptListResult>({ receipts: [s1, s2], next_cursor: null }));
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = id === "s-lidl" ? s1 : s2;
+      return ok<ReceiptDetailResult>({
+        receipt: receiptDetail({ ...match, lines: receiptDetail().lines.slice(0, 1) }),
+        candidates: [],
+      });
+    });
+
+    await choose(selectByName("status"), "");
+    await settle();
+    await typeInto(inputByName("query"), "Lidl");
+    await submit(host.querySelector(".budget-range"));
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(2);
+
+    await click(openDetailById("s-lidl"));
+    await typeInto(inputByName("raw_shop_name", dialog()), "Biedronka Corner");
+    await click(button("Confirm receipt", dialog()));
+    expect(host.querySelector('[data-receipt-id="s-lidl"]')).toBeNull();
+    expect(host.querySelector('[data-receipt-id="s-keep"]')).not.toBeNull();
+  });
+
+  it("drops tombstoned deletes and preserves newer local edits when an older in-flight search response arrives", async () => {
+    const d1 = receiptSummary({ receipt_id: "d1", status: "needs_review", raw_shop_name: "Lidl First", total_amount: "12.50", version: 1 });
+    const d2 = receiptSummary({ receipt_id: "d2", status: "needs_review", raw_shop_name: "Lidl Old", total_amount: "12.50", version: 1 });
+
+    const pendingDeleteSearch = deferred<ReceiptListResult>();
+    const clients = fakeClients([d1, d2]);
+    vi.mocked(clients.rApi.receiptsSearch).mockImplementationOnce(() => pendingDeleteSearch.promise);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = id === "d1" ? d1 : d2;
+      return ok<ReceiptDetailResult>({
+        receipt: receiptDetail({ ...match, lines: receiptDetail().lines.slice(0, 1) }),
+        candidates: [],
+      });
+    });
+
+    const clickFake = async (el: HTMLElement): Promise<void> => {
+      await act(async () => {
+        el.click();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+    };
+
+    vi.useFakeTimers();
+    try {
+      const onAccessLoss = vi.fn(() => false);
+      await act(async () => {
+        root.render(
+          <ReceiptsView
+            receiptsApi={clients.rApi}
+            actorKey="owner-race"
+            accounts={accounts}
+            connections={[connection]}
+            locale="en"
+            revision={0}
+            onAccessLoss={onAccessLoss}
+          />,
+        );
+        await Promise.resolve();
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+      // Type search, open receipt before debounce fires, let search start, delete while search is pending.
+      await typeInto(inputByName("query"), "Lidl");
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      await clickFake(openDetailById("d1"));
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      expect(clients.rApi.receiptsSearch).toHaveBeenCalledTimes(1);
+
+      await clickFake(button("Delete document", dialog()));
+      await clickFake(button("Confirm deletion", dialog()));
+      expect(host.querySelector('[role="dialog"]')).toBeNull();
+
+      // Pre-delete search response arrives with [d1, d2] -> tombstoned d1 MUST NOT come back.
+      await act(async () => {
+        pendingDeleteSearch.resolve({ ok: true, data: { receipts: [d1, d2], next_cursor: null } });
+        await Promise.resolve();
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(host.querySelector('[data-receipt-id="d1"]')).toBeNull();
+      expect(host.querySelector('[data-receipt-id="d2"]')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // Newer local edit (v2) is preserved when a pre-edit search response returns stale v1.
+    const pendingEditSearch = deferred<ReceiptListResult>();
+    vi.mocked(clients.rApi.receiptsSearch).mockImplementationOnce(() => pendingEditSearch.promise);
+
+    await click(openDetailById("d2"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+    // Change query to trigger a fresh in-flight search while d2 drawer is open.
+    await typeInto(inputByName("query"), "Lid");
+    await act(async () => {
+      inputByName("query").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+    expect(clients.rApi.receiptsSearch).toHaveBeenCalledTimes(2);
+
+    await typeInto(inputByName("raw_shop_name", dialog()), "Lidl Fresh");
+    await click(button("Confirm receipt", dialog()));
+
+    await act(async () => {
+      pendingEditSearch.resolve({ ok: true, data: { receipts: [d1, d2], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.querySelector('[data-receipt-id="d1"]')).toBeNull();
+    expect(host.textContent).toContain("Lidl Fresh");
+    expect(host.textContent).not.toContain("Lidl Old");
+  });
+
+  it("skips unchanged receipts in auto-advance and stops after a full pass without looping", async () => {
+    const u1 = receiptSummary({
+      receipt_id: "u1",
+      status: "needs_review",
+      linked: true,
+      linked_account_id: "local-a",
+      linked_entry_ref: "a".repeat(64),
+      raw_shop_name: "Linked Review One",
+      version: 1,
+    });
+    const u2 = receiptSummary({
+      receipt_id: "u2",
+      status: "needs_review",
+      linked: true,
+      linked_account_id: "local-a",
+      linked_entry_ref: "b".repeat(64),
+      raw_shop_name: "Linked Review Two",
+      version: 1,
+    });
+
+    const clients = fakeClients([u1, u2]);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = id === "u1" ? u1 : u2;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail(match), candidates: [] });
+    });
+    // Simulate server keeping status "needs_review" (no bank-match permission): u1 unchanged (v1), u2 bumped (v2) but still needs_review.
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => {
+      const match = req.receipt_id === "u1" ? u1 : u2;
+      const nextVersion = req.receipt_id === "u1" ? req.expected_version : req.expected_version + 1;
+      return ok({
+        ok: true,
+        receipt: receiptDetail({ ...match, status: "needs_review", linked: true, version: nextVersion }),
+      });
+    });
+
+    await renderReceipts(clients);
+    await click(openDetailById("u1"));
+    expect(dialog().textContent).toContain("Linked Review One");
+
+    await click(linkRadio("unlink", dialog()));
+    await click(button("Confirm receipt", dialog()));
+    expect(dialog().textContent).toContain("Linked Review Two");
+
+    // Confirming u2 completes the full pass; u1 was unchanged so auto-advance stops on u2 without looping or claiming All confirmed.
+    await click(linkRadio("unlink", dialog()));
+    await click(button("Confirm receipt", dialog()));
+    expect(dialog().textContent).toContain("Linked Review Two");
+    expect(dialog().textContent).not.toContain("Linked Review One");
+    expect(host.textContent).not.toContain("All confirmed.");
+
+    // Confirming u2 a second time still stops without cycling back to u1.
+    await click(linkRadio("unlink", dialog()));
+    await click(button("Confirm receipt", dialog()));
+    expect(dialog().textContent).toContain("Linked Review Two");
+    expect(dialog().textContent).not.toContain("Linked Review One");
+    expect(host.textContent).not.toContain("All confirmed.");
   });
 });

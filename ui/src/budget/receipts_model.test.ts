@@ -4,6 +4,8 @@ import {
   EMPTY_RECEIPT_FILTER,
   REDACTED_VALUE,
   addDecimals,
+  applyInPlaceReceiptUpdate,
+  applyInPlaceReceiptUpdates,
   availableLinkOptions,
   buildBulkConfirmRequest,
   buildBulkGroupPlan,
@@ -18,12 +20,14 @@ import {
   clearStaleCandidateSelection,
   computeLinesDelta,
   createPendingReceiptStore,
+  createReceiptNavAnchor,
   draftFromDetail,
   editReceiptLine,
   filterReceiptRows,
   findAdjacentReceiptId,
   findCurrentLinkedCandidate,
   findNextUnconfirmedReceiptId,
+  foldReceiptSearchText,
   formatBulkErrorBucket,
   hasActiveReceiptFilter,
   hasClientSideFilter,
@@ -35,6 +39,7 @@ import {
   isGroupDateSpanValid,
   isGroupMemberEligible,
   isReceiptGrouped,
+  isReceiptUnchangedInAutoAdvancePass,
   mergeGroupPoolMembers,
   positiveGroupFee,
   isRedactedValue,
@@ -50,12 +55,15 @@ import {
   receiptHasRedactedLines,
   receiptMerchantGroupIdentity,
   receiptMerchantGroupKey,
+  receiptMatchesFilter,
   receiptNeedsConfirmation,
   receiptSummaryFromDetail,
   receiptTotalAdjustment,
+  reconcileIncomingReceiptRows,
   reconcileLinkChoice,
   removeReceiptRowInPlace,
   resolveDraftFromDetailSession,
+  resolveReceiptNeighbors,
   sameReceiptFilter,
   selectCandidateDraft,
   selectKeepDraft,
@@ -1490,5 +1498,64 @@ describe("receipts_model", () => {
     expect(findNextUnconfirmedReceiptId(rows, "r1", { wrap: false, predicate: (r) => r.receipt_id !== "r3" })).toBe("r4");
     const allConfirmed = rows.map((r) => ({ ...r, status: "confirmed" as const }));
     expect(findNextUnconfirmedReceiptId(allConfirmed, "r1", { wrap: true })).toBeNull();
+
+    // Filter re-check, Polish text folding, tombstone/version reconciliation, nav anchoring, and pass tracking.
+    expect(foldReceiptSearchText("Sklep Łódź")).toBe("sklep lodz");
+    expect(receiptMatchesFilter(det, { ...EMPTY_RECEIPT_FILTER, status: "imported" })).toBe(false);
+    expect(receiptMatchesFilter(det, { ...EMPTY_RECEIPT_FILTER, status: "confirmed" })).toBe(true);
+    expect(receiptMatchesFilter(det, { ...EMPTY_RECEIPT_FILTER, linked: "linked" })).toBe(false);
+    expect(receiptMatchesFilter(det, { ...EMPTY_RECEIPT_FILTER, dateFrom: "2026-12-01" })).toBe(false);
+    expect(receiptMatchesFilter(det, { ...EMPTY_RECEIPT_FILTER, query: "Updated" })).toBe(true);
+    expect(receiptMatchesFilter(det, { ...EMPTY_RECEIPT_FILTER, query: "MissingText" })).toBe(false);
+    expect(receiptMatchesFilter(det, { ...EMPTY_RECEIPT_FILTER, query: "Milk" })).toBe(true);
+
+    const statusFilter = { ...EMPTY_RECEIPT_FILTER, status: "imported" as const };
+    expect(applyInPlaceReceiptUpdate([r1, r3], { ...r1, status: "confirmed", version: 2 }, statusFilter).map((r) => r.receipt_id))
+      .toEqual(["r3"]);
+    expect(applyInPlaceReceiptUpdates([r1, r4], [{ ...r1, status: "confirmed", version: 2 }], statusFilter).map((r) => r.receipt_id))
+      .toEqual(["r4"]);
+
+    const localState = {
+      deletedIds: new Set(["r1"]),
+      updatedById: new Map<string, ReceiptSummary | ReceiptDetail>([
+        ["r2", detailOf({ receipt_id: "r2", status: "confirmed", raw_shop_name: "Newer Local", version: 3 })],
+      ]),
+    };
+    const reconciled = reconcileIncomingReceiptRows(
+      [r1, { ...r2, raw_shop_name: "Stale Server", version: 2 }, r3],
+      localState,
+      EMPTY_RECEIPT_FILTER,
+    );
+    expect(reconciled.map((r) => [r.receipt_id, r.raw_shop_name, r.version])).toEqual([
+      ["r2", "Newer Local", 3],
+      ["r3", "Synthetic Market", 1],
+    ]);
+    // Server version strictly newer than local edit wins.
+    const reconciledNewerServer = reconcileIncomingReceiptRows(
+      [{ ...r2, raw_shop_name: "Fresh Server v4", version: 4 }],
+      localState,
+      EMPTY_RECEIPT_FILTER,
+    );
+    expect(reconciledNewerServer[0]?.raw_shop_name).toBe("Fresh Server v4");
+
+    // Neighbor resolution remains anchored to neighbours when the open middle or tail row is removed.
+    const midAnchor = createReceiptNavAnchor([r1, r2, r3], "r2");
+    expect(resolveReceiptNeighbors([r1, r3], "r2", midAnchor)).toEqual({
+      prevId: "r1",
+      nextId: "r3",
+      anchored: true,
+    });
+    const tailAnchor = createReceiptNavAnchor([r1, r2], "r2");
+    expect(resolveReceiptNeighbors([r1, r3], "r2", tailAnchor)).toEqual({
+      prevId: "r1",
+      nextId: "r3",
+      anchored: true,
+    });
+    expect(findNextUnconfirmedReceiptId([r1, r3], "r2", { wrap: false, anchor: midAnchor })).toBe("r3");
+    expect(findNextUnconfirmedReceiptId([r1], "r2", { wrap: true, anchor: midAnchor })).toBe("r1");
+
+    const visited = new Map([["r4", { status: "needs_review" as const, version: 1 }]]);
+    expect(isReceiptUnchangedInAutoAdvancePass(r4, visited)).toBe(true);
+    expect(isReceiptUnchangedInAutoAdvancePass({ ...r4, version: 2 }, visited)).toBe(false);
   });
 });
