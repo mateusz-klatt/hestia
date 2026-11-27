@@ -1,8 +1,17 @@
 """Provider-neutral sync records; methods run in Hestia's background executor."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Protocol
+
+
+@dataclass(frozen=True)
+class PullMetrics:
+    reason: str
+    fetch_wall_ms: float = 0.0
+    fetch_cpu_ms: float = 0.0
+    parse_wall_ms: float = 0.0
+    parse_cpu_ms: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -30,6 +39,7 @@ class Snapshot:
     cursor: str | None
     complete: bool
     full: bool
+    metrics: PullMetrics | None = field(default=None, compare=False)
 
 
 class ProviderError(Exception):

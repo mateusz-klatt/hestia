@@ -24,7 +24,11 @@ import xml.etree.ElementTree as ET
 from icalendar import Calendar
 
 from . import events as codec
-from .types import CalendarInfo, ProviderError, RemoteEvent, Snapshot
+from .types import CalendarInfo, ProviderError, PullMetrics, RemoteEvent, Snapshot
+
+
+def _clocks() -> tuple[float, float]:
+    return time.perf_counter(), time.thread_time()
 
 DAV = "DAV:"
 CAL = "urn:ietf:params:xml:ns:caldav"
@@ -325,10 +329,18 @@ class GoogleCalendarProvider:
             raise ProviderError("Google event cannot be safely synchronized") from None
 
     def pull(self, cursor: str | None) -> Snapshot:
+        wall0, cpu0 = _clocks()
         self._check_calendar()
         # Query parameters form part of Google's cursor contract. Older stored
         # tokens used a list that omitted hidden invitations; rescan safely.
+        raw_cursor = cursor
         cursor = (cursor[len(self.CURSOR_PREFIX):] or None) if cursor and cursor.startswith(self.CURSOR_PREFIX) else None
+        if cursor is not None:
+            reason = "google_sync_token"
+        elif raw_cursor:
+            reason = "legacy_checkpoint"
+        else:
+            reason = "no_checkpoint"
         full = cursor is None
         try:
             items, new_cursor = self._list(cursor)
@@ -337,14 +349,18 @@ class GoogleCalendarProvider:
                 raise
             items, new_cursor = self._list(None)
             full = True
+            reason = "google_410"
         # A changed exception contains only its own delta. Reconstruct the entire
         # series from an unexpanded full list, never erase unreturned exceptions.
         if not full and any(e.get("recurringEventId") or e.get("recurrence") for e in items):
             items, new_cursor = self._list(None)
             full = True
+            reason = "google_recurring_delta"
         masters = {e["id"]: e for e in items if not e.get("recurringEventId")}
         grouped: dict[str, list[dict]] = {}
         detached, detached_parents = [], set()
+        parse_wall_ms = 0.0
+        parse_cpu_ms = 0.0
         for event in items:
             parent = event.get("recurringEventId")
             if parent:
@@ -363,12 +379,24 @@ class GoogleCalendarProvider:
                     # Google can retain a visible occurrence after its series
                     # disappears. Keep that occurrence as a mapped one-off; do
                     # not invent a recurrence rule or discard its content.
+                    pw0, pc0 = _clocks()
                     detached.append(self._record(event))
+                    pw1, pc1 = _clocks()
+                    parse_wall_ms += (pw1 - pw0) * 1000.0
+                    parse_cpu_ms += (pc1 - pc0) * 1000.0
                 else:
                     grouped.setdefault(parent, []).append(event)
+        pw0, pc0 = _clocks()
         records = [self._record(event, grouped.get(identifier)) for identifier, event in masters.items()]
+        pw1, pc1 = _clocks()
+        parse_wall_ms += (pw1 - pw0) * 1000.0
+        parse_cpu_ms += (pc1 - pc0) * 1000.0
         self._check_calendar()  # Permission loss midway must never become deletions.
-        return Snapshot(records + detached, self.CURSOR_PREFIX + new_cursor, complete=True, full=full)
+        wall1, cpu1 = _clocks()
+        fetch_wall_ms = max(0.0, (wall1 - wall0) * 1000.0 - parse_wall_ms)
+        fetch_cpu_ms = max(0.0, (cpu1 - cpu0) * 1000.0 - parse_cpu_ms)
+        metrics = PullMetrics(reason, fetch_wall_ms, fetch_cpu_ms, parse_wall_ms, parse_cpu_ms)
+        return Snapshot(records + detached, self.CURSOR_PREFIX + new_cursor, complete=True, full=full, metrics=metrics)
 
     def _current(self, remote_id: str) -> tuple[RemoteEvent, dict, list[dict]]:
         master = self._request("GET", self._events_path + "/" + quote(remote_id, safe=""))
@@ -859,30 +887,45 @@ class CalDAVProvider:
             sort_keys=True, separators=(",", ":"),
         )
 
-    def _saved_token(self, cursor: str | None, principal: str | None) -> str | None:
-        if not principal or not cursor or not cursor.startswith(self.CURSOR_PREFIX):
-            return None
+    def _match_checkpoint(self, cursor: str | None, token: str | None, principal: str | None) -> tuple[bool, str]:
+        if not token:
+            return False, "no_token"
+        if not principal:
+            return False, "principal_unverified"
+        if not cursor:
+            return False, "no_checkpoint"
+        if not cursor.startswith(self.CURSOR_PREFIX):
+            return False, "legacy_checkpoint"
         try:
             data = json.loads(cursor[len(self.CURSOR_PREFIX):])
         except ValueError:
-            return None
+            return False, "checkpoint_mismatch"
         if (not isinstance(data, dict)
                 or data.get("calendar_id") != self.calendar_id
                 or data.get("floating_time_zone") != self.floating_time_zone
                 or data.get("principal") != self._principal_digest(principal)):
-            return None
-        token = data.get("token")
-        return token if isinstance(token, str) and token else None
+            return False, "checkpoint_mismatch"
+        saved = data.get("token")
+        if not isinstance(saved, str) or not saved:
+            return False, "checkpoint_mismatch"
+        if saved != token:
+            return False, "token_changed"
+        return True, "token_unchanged"
 
     def pull(self, cursor: str | None) -> Snapshot:
+        wall0, cpu0 = _clocks()
         before, before_principal = self._check_collection()
-        if before and before == self._saved_token(cursor, before_principal):
-            return Snapshot([], self._checkpoint(before, before_principal), complete=True, full=False)
+        matched, reason = self._match_checkpoint(cursor, before, before_principal)
+        if matched:
+            wall1, cpu1 = _clocks()
+            metrics = PullMetrics(reason, (wall1 - wall0) * 1000.0, (cpu1 - cpu0) * 1000.0)
+            return Snapshot([], self._checkpoint(before, before_principal), complete=True, full=False, metrics=metrics)
         body = (f'<c:calendar-query xmlns:d="DAV:" xmlns:c="{CAL}">'
                 '<d:prop><d:getetag/><c:calendar-data/></d:prop>'
                 '<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"/>'
                 '</c:comp-filter></c:filter></c:calendar-query>').encode()
         response = self._request("REPORT", self.calendar_id, body=body, headers={"Depth": "1"})
+        parse_wall0, parse_cpu0 = _clocks()
         records = []
         seen = set()
         for item in _xml(response.body).findall("d:response", NS):
@@ -900,10 +943,17 @@ class CalDAVProvider:
                 raise ProviderError("CalDAV returned an incomplete event inventory", retryable=True)
             seen.add(remote_id)
             records.append(_ical_record(remote_id, data.text.encode(), etag.text, floating_time_zone=self.floating_time_zone))
+        parse_wall1, parse_cpu1 = _clocks()
         after, after_principal = self._check_collection()
         if before != after or before_principal != after_principal:
             raise ProviderError("CalDAV calendar changed during inventory; retry required", retryable=True)
-        return Snapshot(records, self._checkpoint(after, after_principal), complete=True, full=True)
+        wall1, cpu1 = _clocks()
+        parse_wall_ms = (parse_wall1 - parse_wall0) * 1000.0
+        parse_cpu_ms = (parse_cpu1 - parse_cpu0) * 1000.0
+        fetch_wall_ms = max(0.0, (wall1 - wall0) * 1000.0 - parse_wall_ms)
+        fetch_cpu_ms = max(0.0, (cpu1 - cpu0) * 1000.0 - parse_cpu_ms)
+        metrics = PullMetrics(reason, fetch_wall_ms, fetch_cpu_ms, parse_wall_ms, parse_cpu_ms)
+        return Snapshot(records, self._checkpoint(after, after_principal), complete=True, full=True, metrics=metrics)
 
     def _get(self, remote_id: str) -> tuple[RemoteEvent, bytes]:
         response = self._request("GET", self._resource(remote_id), headers={"Accept": "text/calendar"})

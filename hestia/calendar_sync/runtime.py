@@ -17,6 +17,15 @@ _EXECUTOR = None
 _EXECUTOR_LOCK = threading.Lock()
 
 
+def configure_debug_logging(environ=None) -> bool:
+    """Bump only the calendar-sync logger to DEBUG when explicitly opted in."""
+    env = os.environ if environ is None else environ
+    if env.get("HESTIA_CALENDAR_SYNC_DEBUG") == "1":
+        log.setLevel(logging.DEBUG)
+        return True
+    return False
+
+
 def _background_priority():
     """Pin this worker at nice 10 or worse, and leave every other thread alone.
 
@@ -109,6 +118,7 @@ async def poll_calendars() -> None:
             return
         if config is None:
             return
+        configure_debug_logging()
         log.info("Calendar synchronization enabled for %d explicit groups", len(config.groups))
         while True:
             try:
