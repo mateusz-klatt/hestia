@@ -1862,7 +1862,7 @@ describe("ReceiptsView", () => {
     }));
   });
 
-  it("keeps Odłącz across background refreshes and drawer reopen, and clears preselection if candidates change", async () => {
+  it("keeps Odłącz across background refreshes in the same open session, resets fresh on reopen, and clears preselection if candidates change", async () => {
     const candNipA = receiptCandidate({
       entry_reference: "a".repeat(64),
       candidate_token: "tok-a",
@@ -1891,16 +1891,17 @@ describe("ReceiptsView", () => {
     await click(button("Odłącz / bez powiązania", dialog()));
     expect(linkRadio("unlink", dialog()).checked).toBe(true);
 
-    // Background refresh returns the exact same strong candidate -> unlink must stay selected, banner gone.
+    // Background refresh in the same open session returns the exact same strong candidate -> unlink stays selected, banner gone.
     await renderReceipts(clients, { locale: "pl", revision: 2 });
     expect(linkRadio("unlink", dialog()).checked).toBe(true);
     expect(dialog().querySelector(".budget-receipt-suggested")).toBeNull();
 
-    // Close and re-open same receipt -> still unlink and no banner.
+    // INV-B: Close and re-open same receipt -> builds a fresh draft from server detail (preselection and banner reset).
     await click(button("Zamknij", dialog()));
     await click(openDetailButton(0, "Szczegóły"));
-    expect(linkRadio("unlink", dialog()).checked).toBe(true);
-    expect(dialog().querySelector(".budget-receipt-suggested")).toBeNull();
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
+    expect(linkRadio("unlink", dialog()).checked).toBe(false);
+    expect(dialog().querySelector(".budget-receipt-suggested")).not.toBeNull();
     await click(button("Zamknij", dialog()));
 
     // Untouched receipt where background refresh changes candidate set -> preselection must not re-apply to candNipB.
@@ -3889,6 +3890,224 @@ describe("ReceiptsView", () => {
     serverRows = [];
 
     await renderReceipts(clients, { locale: "pl", revision: 2 });
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.textContent).toContain("Dokument został usunięty");
+  });
+
+  it("INV-A: resets draft and link choice synchronously on Discard even when subsequent navigation finds no target", async () => {
+    const candNip = receiptCandidate({
+      entry_reference: "9".repeat(64),
+      candidate_token: "tok-inv-a",
+      match_strength: "nip",
+    });
+    const r1 = receiptSummary({
+      receipt_id: "inv-a-1",
+      status: "imported",
+      linked: false,
+      raw_shop_name: "Sklep Serwerowy",
+      total_amount: "12.50",
+      version: 1,
+    });
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const pendingEmptyPage2 = deferred<ReceiptListResult>();
+
+    const clients = fakeClients([r1]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      if (req?.cursor === "inv-a-empty-page-2") return pendingEmptyPage2.promise;
+      return ok<ReceiptListResult>({ receipts: [r1], next_cursor: "inv-a-empty-page-2" });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => ok<ReceiptDetailResult>({
+      receipt: receiptDetail({ ...r1, lines: singleLine }),
+      candidates: [candNip],
+    }));
+
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailById("inv-a-1", "Szczegóły"));
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
+    expect(dialog().querySelector(".budget-receipt-suggested")).not.toBeNull();
+
+    // Edit merchant AND change link choice to unlink, then click Next at page boundary.
+    await click(button("Odłącz / bez powiązania", dialog()));
+    expect(linkRadio("unlink", dialog()).checked).toBe(true);
+    await typeInto(inputByName("raw_shop_name", dialog()), "Szkic Do Odrzucenia");
+    await click(button("Następny", dialog()));
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+
+    // Click Discard -> draft AND link choice reset SYNCHRONOUSLY BEFORE page 2 even resolves!
+    await act(async () => {
+      button("Odrzuć", dialog()).click();
+      await Promise.resolve();
+    });
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Sklep Serwerowy");
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
+    expect(linkRadio("unlink", dialog()).checked).toBe(false);
+    expect(dialog().querySelector(".budget-receipt-suggested")).not.toBeNull();
+    expect(dialog().textContent).not.toContain("Masz niezapisane zmiany");
+
+    // Page 2 resolves empty (no target found) -> drawer stays on r1 with a clean draft equal to server state.
+    await act(async () => {
+      pendingEmptyPage2.resolve({ ok: true, data: { receipts: [], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(dialog().textContent).toContain("Sklep Serwerowy");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Sklep Serwerowy");
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
+
+    // Closing now succeeds immediately without an unsaved-changes prompt because draft is genuinely clean.
+    await click(button("Zamknij", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("INV-B: builds a completely fresh draft on reopen with no link choice, candidate selection, or line edits carried over", async () => {
+    const candKeep = receiptCandidate({
+      entry_reference: "a".repeat(64),
+      candidate_token: "tok-keep-b",
+      match_strength: "nip",
+    });
+    const firstLine = receiptDetail().lines[0];
+    if (firstLine === undefined) throw new Error("expected receipt line");
+    const singleLine = [firstLine];
+    let serverDetail = receiptDetail({
+      receipt_id: "inv-b-1",
+      status: "needs_review",
+      linked: true,
+      linked_account_id: "local-a",
+      linked_entry_ref: "a".repeat(64),
+      raw_shop_name: "Original Shop B",
+      total_amount: "12.50",
+      version: 2,
+      lines: singleLine,
+    });
+
+    const clients = fakeClients([serverDetail]);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => ok<ReceiptDetailResult>({
+      receipt: serverDetail,
+      candidates: [candKeep],
+    }));
+
+    await renderReceipts(clients);
+    await click(openDetailById("inv-b-1"));
+
+    // Select Keep, edit merchant and line description, then close via Discard.
+    await click(linkRadio("keep", dialog()));
+    expect(linkRadio("keep", dialog()).checked).toBe(true);
+    await typeInto(inputByName("line_name", dialog()), "Edited Line Text");
+    await typeInto(inputByName("raw_shop_name", dialog()), "Edited Shop B");
+    await click(button("Close", dialog()));
+    await click(button("Discard", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+
+    // Update server detail before reopening -> reopen MUST build a brand-new draft from freshly fetched detail.
+    serverDetail = {
+      ...serverDetail,
+      raw_shop_name: "Fresh Server Shop B",
+      version: 3,
+      lines: [{ ...firstLine, raw_name: "Fresh Server Line" }],
+    };
+
+    await click(openDetailById("inv-b-1"));
+    expect(dialog().textContent).toContain("Version 3");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Fresh Server Shop B");
+    expect(inputByName("line_name", dialog()).value).toBe("Fresh Server Line");
+    expect(linkRadio("keep", dialog()).checked).toBe(false);
+    expect(linkRadio("unlink", dialog()).checked).toBe(false);
+    expect(button("Confirm receipt", dialog()).disabled).toBe(true);
+  });
+
+  it("INV-C: reloads a clean open drawer after any list refresh so lost-response confirm updates content and 404 closes with Dokument został usunięty", async () => {
+    const store = createPendingReceiptStore();
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const v1 = receiptSummary({
+      receipt_id: "inv-c-1",
+      status: "needs_review",
+      linked: false,
+      raw_shop_name: "Przed Zapisem",
+      total_amount: "12.50",
+      version: 1,
+    });
+    const v2Committed = {
+      ...v1,
+      status: "confirmed" as const,
+      raw_shop_name: "Zapisane Po Stracie Odpowiedzi",
+      version: 2,
+    };
+    const v3Server = {
+      ...v2Committed,
+      raw_shop_name: "Zmienione W Innej Karcie",
+      version: 3,
+    };
+
+    let currentRow: ReceiptSummary | null = v1;
+    const clients = fakeClients([v1]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation(() => ok<ReceiptListResult>({
+      receipts: currentRow === null ? [] : [currentRow],
+      next_cursor: null,
+    }));
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => {
+      if (currentRow === null) return fail(404, "budget_receipt_not_found");
+      return ok<ReceiptDetailResult>({
+        receipt: receiptDetail({ ...currentRow, lines: singleLine }),
+        candidates: [],
+      });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => {
+      // Server commits confirm (v1 -> v2, confirmed), then the HTTP response is lost.
+      currentRow = v2Committed;
+      return fail(0, "budget_network_error");
+    });
+
+    await loadLocale("pl");
+    const onAccessLoss = vi.fn(() => false);
+    await act(async () => {
+      root.render(
+        <ReceiptsView
+          receiptsApi={clients.rApi}
+          pendingStore={store}
+          actorKey="owner-inv-c"
+          accounts={accounts}
+          connections={[connection]}
+          locale="pl"
+          revision={0}
+          onAccessLoss={onAccessLoss}
+        />,
+      );
+      await Promise.resolve();
+    });
+    await settle();
+
+    await click(openDetailById("inv-c-1", "Szczegóły"));
+    expect(dialog().textContent).toContain("Wersja 1");
+    expect(dialog().textContent).toContain("Przed Zapisem");
+
+    // 1. Clean confirm whose HTTP response is lost -> post-error list refresh triggers INV-C detail reload,
+    // replacing drawer content with committed Version 2 / Confirmed and clearing the stale error alert.
+    await click(button("Zatwierdź dokument", dialog()));
+    expect(dialog().textContent).toContain("Wersja 2");
+    expect(dialog().textContent).toContain("Zapisane Po Stracie Odpowiedzi");
+    expect(dialog().querySelector('[role="alert"]')).toBeNull();
+
+    // 2. Subsequent background list refresh with newer server version -> clean drawer reloads to Version 3.
+    currentRow = v3Server;
+    const lock1 = store.tryAcquire("other-rec", "confirm");
+    if (lock1 === null) throw new Error("expected lock");
+    await act(async () => {
+      store.release("other-rec", lock1, "confirmed");
+      await Promise.resolve();
+    });
+    await settle();
+    expect(dialog().textContent).toContain("Wersja 3");
+    expect(dialog().textContent).toContain("Zmienione W Innej Karcie");
+
+    // 3. Subsequent list refresh when receipt returns 404 -> closes drawer with "Dokument został usunięty".
+    currentRow = null;
+    const lock2 = store.tryAcquire("other-rec-2", "delete");
+    if (lock2 === null) throw new Error("expected lock 2");
+    await act(async () => {
+      store.release("other-rec-2", lock2, "deleted");
+      await Promise.resolve();
+    });
+    await settle();
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     expect(host.textContent).toContain("Dokument został usunięty");
   });

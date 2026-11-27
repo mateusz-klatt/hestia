@@ -427,6 +427,7 @@ export function ReceiptsView({
   const [autoAdvance, setAutoAdvance] = useState<boolean>(readAutoAdvancePreference);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [drawerOpenSession, setDrawerOpenSession] = useState(0);
   const [detailState, setDetailState] = useState<DetailState>({ kind: "loading" });
   const [detailRefresh, setDetailRefresh] = useState(0);
   const [imageState, setImageState] = useState<ImageState>({ kind: "none" });
@@ -598,6 +599,17 @@ export function ReceiptsView({
     dirtyDraftReceiptIdRef.current === receiptId
   ), []);
 
+  const linkSessionKey = useCallback((receiptId: string, openSession = drawerSessionRef.current): string => (
+    `${actorKey}:${receiptId}:${String(openSession)}`
+  ), [actorKey]);
+
+  const bumpDrawerSession = useCallback((): number => {
+    const next = drawerSessionRef.current + 1;
+    drawerSessionRef.current = next;
+    setDrawerOpenSession(next);
+    return next;
+  }, []);
+
   const deferDrawerReconcile = useCallback((receiptId: string, pending: PendingDrawerReconcile) => {
     const prev = pendingDrawerReconcileRef.current.get(receiptId);
     pendingDrawerReconcileRef.current.set(receiptId, {
@@ -608,7 +620,9 @@ export function ReceiptsView({
 
   const resetDrawer = useCallback(() => {
     const prevId = openReceiptIdRef.current;
+    const prevSession = drawerSessionRef.current;
     if (prevId !== null) {
+      receiptLinkMemoryRef.current.delete(linkSessionKey(prevId, prevSession));
       pendingDrawerReconcileRef.current.delete(prevId);
       activeRefreshRef.current?.deferredReconcileIds.delete(prevId);
       activeRefreshRef.current?.probeIfMissingIds.delete(prevId);
@@ -616,7 +630,7 @@ export function ReceiptsView({
     dirtyDraftReceiptIdRef.current = null;
     pendingNavRef.current = null;
     setPendingNavPrompt(null);
-    drawerSessionRef.current += 1;
+    bumpDrawerSession();
     detailProbeGenRef.current += 1;
     detailGeneration.current += 1;
     navGenerationRef.current += 1;
@@ -630,7 +644,7 @@ export function ReceiptsView({
     clearImage();
     setSelectedId(null);
     setDetailState({ kind: "loading" });
-  }, [clearImage]);
+  }, [bumpDrawerSession, clearImage, linkSessionKey]);
 
   const clearAllReceiptsState = useCallback((disabled: boolean, disabledRevision: number | null = null) => {
     cancelSearchDebounce();
@@ -685,7 +699,7 @@ export function ReceiptsView({
 
   const closeDrawerAsDeleted = useCallback((receiptId: string) => {
     if (openReceiptIdRef.current !== receiptId) return;
-    receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
+    receiptLinkMemoryRef.current.delete(linkSessionKey(receiptId));
     receiptFloorGenRef.current.set(receiptId, ++detailGeneration.current);
     setSelectedForBulk((current) => {
       if (!current.has(receiptId)) return current;
@@ -697,7 +711,7 @@ export function ReceiptsView({
     resetDrawer();
     setNotice(t("budget.receipts.deletedNotice"));
     if (trigger?.isConnected === true) trigger.focus({ preventScroll: true });
-  }, [actorKey, resetDrawer]);
+  }, [linkSessionKey, resetDrawer]);
 
   const probeMissingOpenReceipt = useCallback((receiptId: string) => {
     const session = drawerSessionRef.current;
@@ -832,7 +846,9 @@ export function ReceiptsView({
       }
 
       if (resolvedTarget.kind === "open") {
+        const prevSession = drawerSessionRef.current;
         if (currentId !== null) {
+          receiptLinkMemoryRef.current.delete(linkSessionKey(currentId, prevSession));
           pendingDrawerReconcileRef.current.delete(currentId);
           activeRefreshRef.current?.deferredReconcileIds.delete(currentId);
           activeRefreshRef.current?.probeIfMissingIds.delete(currentId);
@@ -842,7 +858,8 @@ export function ReceiptsView({
         }
         dirtyDraftReceiptIdRef.current = null;
         pendingDrawerReconcileRef.current.delete(resolvedTarget.receiptId);
-        drawerSessionRef.current += 1;
+        const nextSession = bumpDrawerSession();
+        receiptLinkMemoryRef.current.delete(linkSessionKey(resolvedTarget.receiptId, nextSession));
         detailProbeGenRef.current += 1;
         if (listStateRef.current.kind === "ready") {
           const shown = filterReceiptRows(listStateRef.current.rows, filterRef.current, searchModeRef.current);
@@ -895,7 +912,7 @@ export function ReceiptsView({
     };
 
     return runGuarded(target, options?.force === true);
-  }, [fetchNextPage, isDraftDirtyFor, isMounted, resetDrawer, store]);
+  }, [bumpDrawerSession, fetchNextPage, isDraftDirtyFor, isMounted, linkSessionKey, resetDrawer, store]);
 
   const discardPendingNavigation = useCallback(() => {
     const currentId = openReceiptIdRef.current;
@@ -921,7 +938,7 @@ export function ReceiptsView({
     if (currentId === null) return "none";
     if (isDraftDirtyFor(currentId)) {
       deferDrawerReconcile(currentId, {
-        reloadDetail: options?.reloadDetailForId === currentId,
+        reloadDetail: true,
         preserveNotice: options?.preserveNotice ?? null,
       });
       return "deferred";
@@ -931,10 +948,9 @@ export function ReceiptsView({
     const nextIndex = refreshedShown.findIndex((row) => row.receipt_id === currentId);
     if (nextIndex >= 0) {
       openReceiptIndexRef.current = nextIndex;
-      if (options?.reloadDetailForId === currentId) {
-        receiptFloorGenRef.current.set(currentId, ++detailGeneration.current);
-        setDetailRefresh((current) => current + 1);
-      }
+      // INV-C: Clean drawer always follows the server after any list refresh via the detail generation guard.
+      receiptFloorGenRef.current.set(currentId, ++detailGeneration.current);
+      setDetailRefresh((current) => current + 1);
       return "kept";
     }
     const fallbackId = resolvePostRefreshSelectionId(
@@ -1154,15 +1170,29 @@ export function ReceiptsView({
         }));
         const openId = openReceiptIdRef.current;
         if (openId !== null && store.get(openId) === null && !state.deferredReconcileIds.has(openId)) {
-          if (!state.probeIfMissingIds.has(openId)) {
-            const opts = state.reconcileOptionsById.get(openId);
+          const opts = state.reconcileOptionsById.get(openId);
+          const presentInList = collected.some((row) => row.receipt_id === openId);
+          if (state.probeIfMissingIds.has(openId)) {
+            if (!isDraftDirtyFor(openId)) {
+              // INV-C: Clean drawer follows the server after refresh (covers lost-response confirm/save or delete 404).
+              receiptFloorGenRef.current.set(openId, ++detailGeneration.current);
+              setDetailRefresh((current) => current + 1);
+            } else if (!presentInList) {
+              probeMissingOpenReceipt(openId);
+            }
+          } else if (!presentInList && opts?.reloadDetail !== true && !isDraftDirtyFor(openId)) {
+            // INV-C: Clean open receipt vanished on a background refresh under the same filter — reload via the
+            // detail generation guard so a 404 closes with "Dokument został usunięty" and 200 shows latest state.
+            receiptFloorGenRef.current.set(openId, ++detailGeneration.current);
+            setDetailRefresh((current) => current + 1);
+          } else {
             reconcileDrawerAfterRefresh(collected, {
               reloadDetailForId: opts?.reloadDetail === true ? openId : null,
               preserveNotice: opts?.preserveNotice ?? null,
             });
-          }
-          if (isStillOpen(openId) && !collected.some((row) => row.receipt_id === openId)) {
-            probeMissingOpenReceipt(openId);
+            if (isStillOpen(openId) && !presentInList) {
+              probeMissingOpenReceipt(openId);
+            }
           }
         }
         return { kind: "loaded", rows: collected, nextCursor: finalNextCursor };
@@ -1598,7 +1628,7 @@ export function ReceiptsView({
       && openReceiptIdRef.current === updated.receipt_id
       && drawerSessionRef.current === session
     );
-    receiptLinkMemoryRef.current.delete(`${actorKey}:${updated.receipt_id}`);
+    receiptLinkMemoryRef.current.delete(linkSessionKey(updated.receipt_id, session));
     if (dirtyDraftReceiptIdRef.current === updated.receipt_id) {
       dirtyDraftReceiptIdRef.current = null;
     }
@@ -1749,11 +1779,11 @@ export function ReceiptsView({
 
     requestDrawerNavigation({ kind: "close", preserveNotice: t("budget.receipts.allConfirmed") });
   }, [
-    actorKey,
     deferDrawerReconcile,
     fetchNextPage,
     isDraftDirtyFor,
     isMounted,
+    linkSessionKey,
     probeMissingOpenReceipt,
     quietRefetchLoadedRange,
     reconcileDrawerAfterRefresh,
@@ -1764,7 +1794,7 @@ export function ReceiptsView({
     detail: ReceiptDetail,
     candidates: readonly ReceiptCandidate[],
   ): { draft: ReceiptConfirmDraft; showSuggestedBanner: boolean; keepEvidenceInvalidated: boolean } => {
-    const key = `${actorKey}:${detail.receipt_id}`;
+    const key = linkSessionKey(detail.receipt_id);
     const resolved = resolveDraftFromDetailSession(
       detail,
       candidates,
@@ -1776,14 +1806,14 @@ export function ReceiptsView({
       showSuggestedBanner: resolved.showSuggestedBanner,
       keepEvidenceInvalidated: resolved.keepEvidenceInvalidated,
     };
-  }, [actorKey]);
+  }, [linkSessionKey]);
 
   const recordLinkChoiceTouched = useCallback((
     receiptId: string,
     choice: ReceiptLinkExplicitChoice,
     detail?: Pick<ReceiptDetail, "version" | "status" | "linked">,
   ) => {
-    const key = `${actorKey}:${receiptId}`;
+    const key = linkSessionKey(receiptId);
     const prev = receiptLinkMemoryRef.current.get(key);
     receiptLinkMemoryRef.current.set(key, {
       touched: true,
@@ -1794,7 +1824,11 @@ export function ReceiptsView({
       baselineCandidateKeys: prev?.baselineCandidateKeys ?? [],
       candidateSetChanged: prev?.candidateSetChanged ?? false,
     });
-  }, [actorKey]);
+  }, [linkSessionKey]);
+
+  const clearLinkChoiceMemory = useCallback((receiptId: string) => {
+    receiptLinkMemoryRef.current.delete(linkSessionKey(receiptId));
+  }, [linkSessionKey]);
 
   const commitFilter = useCallback((next: ReceiptFilter) => {
     cancelSearchDebounce();
@@ -2365,7 +2399,7 @@ export function ReceiptsView({
         const loadingMoreList = listState.kind === "ready" && (listState.loadingMore || listState.refreshing);
         return (
           <ReceiptDetailDrawer
-            key={`${actorKey}:${selectedId}`}
+            key={`${actorKey}:${selectedId}:${String(drawerOpenSession)}`}
             api={receiptsApi}
             store={store}
             accounts={accounts}
@@ -2387,6 +2421,7 @@ export function ReceiptsView({
             isOpenReceipt={(receiptId) => openReceiptIdRef.current === receiptId}
             getLatestCandidates={getLatestCandidates}
             resolveDetailDraft={resolveDetailDraft}
+            onClearLinkChoiceMemory={clearLinkChoiceMemory}
             onDraftDirtyChange={handleDraftDirtyChange}
             onLinkChoiceTouched={recordLinkChoiceTouched}
             onAccessLoss={checkBarrier}
@@ -2408,7 +2443,7 @@ export function ReceiptsView({
             onConfirmed={(updated, previous, opts) => { void handleConfirmed(updated, previous, opts); }}
             onGroupUnlinked={(receiptId) => {
               updateGroupControllerTarget(null);
-              receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
+              clearLinkChoiceMemory(receiptId);
               const floorToken = ++detailGeneration.current;
               receiptFloorGenRef.current.set(receiptId, floorToken);
               const unlinkNotice = t("budget.receipts.groupUnlinkSuccess");
@@ -2432,7 +2467,7 @@ export function ReceiptsView({
               pendingNavRef.current = null;
               setPendingNavPrompt(null);
               pendingDrawerReconcileRef.current.delete(receiptId);
-              recordLinkChoiceTouched(receiptId, { kind: "empty" });
+              clearLinkChoiceMemory(receiptId);
               const floorToken = ++detailGeneration.current;
               receiptFloorGenRef.current.set(receiptId, floorToken);
               setDetailRefresh((current) => current + 1);
@@ -2442,7 +2477,7 @@ export function ReceiptsView({
               void quietRefetchLoadedRange();
             }}
             onDeleted={(receiptId, dissolvedGroup = false) => {
-              receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
+              clearLinkChoiceMemory(receiptId);
               const floorToken = ++detailGeneration.current;
               receiptFloorGenRef.current.set(receiptId, floorToken);
               setSelectedForBulk((current) => {
@@ -2497,7 +2532,7 @@ export function ReceiptsView({
             });
             const openId = openReceiptIdRef.current;
             if (openId !== null && affectedIds.includes(openId)) {
-              receiptLinkMemoryRef.current.delete(`${actorKey}:${openId}`);
+              clearLinkChoiceMemory(openId);
             }
             const linkNotice = t("budget.receipts.groupLinkSuccess");
             setNotice(linkNotice);
@@ -2549,6 +2584,7 @@ interface DrawerProps {
     detail: ReceiptDetail,
     candidates: readonly ReceiptCandidate[],
   ) => { draft: ReceiptConfirmDraft; showSuggestedBanner: boolean; keepEvidenceInvalidated: boolean };
+  onClearLinkChoiceMemory: (receiptId: string) => void;
   onDraftDirtyChange: (receiptId: string, dirty: boolean) => void;
   onLinkChoiceTouched: (receiptId: string, choice: ReceiptLinkExplicitChoice) => void;
   onAccessLoss: ReceiptAccessBarrier;
@@ -2793,6 +2829,7 @@ function ReceiptDetailDrawer({
   isOpenReceipt,
   getLatestCandidates,
   resolveDetailDraft,
+  onClearLinkChoiceMemory,
   onDraftDirtyChange,
   onLinkChoiceTouched,
   onAccessLoss,
@@ -2816,7 +2853,11 @@ function ReceiptDetailDrawer({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [confirmingDissolve, setConfirmingDissolve] = useState(false);
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
-  const keepActionErrorRef = useRef(false);
+  const keepActionErrorRef = useRef<
+    | null
+    | { mode: "always" }
+    | { mode: "if_unchanged"; receiptId: string; version: number; status: ReceiptStatus }
+  >(null);
   const drawerMountedRef = useRef(true);
   const groupDetailRef = useRef<ReceiptGroupDetail | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -2842,14 +2883,26 @@ function ReceiptDetailDrawer({
   }, [onClose, actionBusy, groupControllerOpen]);
 
   useEffect(() => {
+    const shouldKeepExistingError = (detail: ReceiptDetail): boolean => {
+      const keepErr = keepActionErrorRef.current;
+      keepActionErrorRef.current = null;
+      if (keepErr === null) return false;
+      if (keepErr.mode === "always") return true;
+      return (
+        keepErr.receiptId === detail.receipt_id
+        && keepErr.version === detail.version
+        && keepErr.status === detail.status
+      );
+    };
+
     if (detailState.kind === "ready" && !isReceiptGrouped(detailState.detail)) {
       groupDetailRef.current = null;
       const resolved = resolveDetailDraft(detailState.detail, detailState.candidates);
       confirmDraftRef.current = resolved.draft;
       setConfirmDraft(resolved.draft);
       setSuggestionDismissed(!resolved.showSuggestedBanner);
-      if (keepActionErrorRef.current) {
-        keepActionErrorRef.current = false;
+      if (shouldKeepExistingError(detailState.detail)) {
+        // Keep the existing alert when explicitly preserved or when server version/status did not advance.
       } else if (resolved.keepEvidenceInvalidated) {
         setActionError(t("budget.receipts.bankEvidenceChanged"));
       } else {
@@ -2865,9 +2918,7 @@ function ReceiptDetailDrawer({
       setSuggestionDismissed(false);
       confirmDraftRef.current = null;
       setConfirmDraft(null);
-      if (keepActionErrorRef.current) {
-        keepActionErrorRef.current = false;
-      } else {
+      if (!shouldKeepExistingError(detailState.detail)) {
         setActionError(null);
       }
       setConflictReloadPending(false);
@@ -2877,14 +2928,14 @@ function ReceiptDetailDrawer({
       setSuggestionDismissed(false);
       confirmDraftRef.current = null;
       setConfirmDraft(null);
-      if (!keepActionErrorRef.current) setActionError(null);
+      if (keepActionErrorRef.current === null) setActionError(null);
       setConflictReloadPending(false);
       setConfirmingDelete(false);
       setConfirmingDissolve(false);
     } else {
       groupDetailRef.current = null;
       setSuggestionDismissed(false);
-      keepActionErrorRef.current = false;
+      keepActionErrorRef.current = null;
       confirmDraftRef.current = null;
       setConfirmDraft(null);
       setActionError(null);
@@ -2895,6 +2946,22 @@ function ReceiptDetailDrawer({
   }, [detailState, resolveDetailDraft]);
 
   const title = t("budget.receipts.detailTitle");
+
+  const resetDraftSynchronously = (
+    detail: ReceiptDetail,
+    candidates: readonly ReceiptCandidate[],
+  ): void => {
+    onClearLinkChoiceMemory(detail.receipt_id);
+    const resolved = resolveDetailDraft(detail, candidates);
+    confirmDraftRef.current = resolved.draft;
+    setConfirmDraft(resolved.draft);
+    setSuggestionDismissed(!resolved.showSuggestedBanner);
+    keepActionErrorRef.current = null;
+    setActionError(null);
+    setConflictReloadPending(false);
+    setConfirmingDelete(false);
+    setConfirmingDissolve(false);
+  };
 
   const updateLinkDraft = (next: ReceiptConfirmDraft | null) => {
     confirmDraftRef.current = next;
@@ -2942,7 +3009,7 @@ function ReceiptDetailDrawer({
     const built = buildConfirmRequest(detail, draft, currentCandidates, t("budget.receipts.summaryLineDefault"));
     if (!built.ok) {
       if (built.errorKey === "budget.receipts.candidateListChanged" || built.errorKey === "budget.receipts.bankEvidenceChanged") {
-        keepActionErrorRef.current = true;
+        keepActionErrorRef.current = { mode: "always" };
         if (built.errorKey === "budget.receipts.candidateListChanged") {
           setSuggestionDismissed(true);
         } else {
@@ -2959,7 +3026,7 @@ function ReceiptDetailDrawer({
     if (!isOpenReceipt(detail.receipt_id)) return;
     const lockToken = store.tryAcquire(detail.receipt_id, "confirm");
     if (lockToken === null) return;
-    keepActionErrorRef.current = false;
+    keepActionErrorRef.current = null;
     setActionError(null);
     setConflictReloadPending(false);
     let outcome: ReceiptSettledEvent["outcome"] = "error";
@@ -2987,7 +3054,7 @@ function ReceiptDetailDrawer({
             result.error === "budget_receipt_stale_source" && !isReceiptDraftDirty(detail, draft);
           if (cleanStaleTokenOnly) {
             setActionError(confirmErrorText(result.error));
-            keepActionErrorRef.current = true;
+            keepActionErrorRef.current = { mode: "always" };
             onConflictOrStale(detail.receipt_id);
           } else {
             setActionError(
@@ -2999,6 +3066,12 @@ function ReceiptDetailDrawer({
           }
         } else {
           setActionError(confirmErrorText(result.error));
+          keepActionErrorRef.current = {
+            mode: "if_unchanged",
+            receiptId: detail.receipt_id,
+            version: detail.version,
+            status: detail.status,
+          };
           // Reload list even on network/unknown errors in case the write committed server-side.
           onMutationError();
         }
@@ -3015,7 +3088,7 @@ function ReceiptDetailDrawer({
     if (isReceiptGrouped(detail) || !isOpenReceipt(detail.receipt_id)) return;
     const lockToken = store.tryAcquire(detail.receipt_id, "delete");
     if (lockToken === null) return;
-    keepActionErrorRef.current = false;
+    keepActionErrorRef.current = null;
     setActionError(null);
     setConflictReloadPending(false);
     let outcome: ReceiptSettledEvent["outcome"] = "error";
@@ -3048,13 +3121,19 @@ function ReceiptDetailDrawer({
             setActionError(result.error === "budget_receipt_in_group"
               ? t("budget.receipts.inGroupConflict")
               : t("budget.receipts.conflict"));
-            keepActionErrorRef.current = true;
+            keepActionErrorRef.current = { mode: "always" };
             onConflictOrStale(detail.receipt_id);
           }
         } else {
           setActionError(result.error === "budget_receipt_in_group"
             ? t("budget.receipts.inGroupConflict")
             : t("budget.receipts.deleteError"));
+          keepActionErrorRef.current = {
+            mode: "if_unchanged",
+            receiptId: detail.receipt_id,
+            version: detail.version,
+            status: detail.status,
+          };
           // Reload list even on network/unknown errors in case the delete committed server-side.
           onMutationError();
         }
@@ -3085,7 +3164,7 @@ function ReceiptDetailDrawer({
       setActionError(t("budget.receipts.groupBusyError"));
       return;
     }
-    keepActionErrorRef.current = false;
+    keepActionErrorRef.current = null;
     setActionError(null);
     let outcome: ReceiptSettledEvent["outcome"] = "error";
     let handledInMountedDrawer = false;
@@ -3107,11 +3186,17 @@ function ReceiptDetailDrawer({
       if (!result.ok) {
         if (result.status === 404 || isConflictOrStaleError(result)) {
           setActionError(t("budget.receipts.conflict"));
-          keepActionErrorRef.current = true;
+          keepActionErrorRef.current = { mode: "always" };
           onConflictOrStale(detail.receipt_id);
           return;
         }
         setActionError(t("budget.receipts.groupUnlinkError"));
+        keepActionErrorRef.current = {
+          mode: "if_unchanged",
+          receiptId: detail.receipt_id,
+          version: detail.version,
+          status: detail.status,
+        };
         onMutationError();
         return;
       }
@@ -3141,7 +3226,7 @@ function ReceiptDetailDrawer({
       setActionError(t("budget.receipts.groupBusyError"));
       return;
     }
-    keepActionErrorRef.current = false;
+    keepActionErrorRef.current = null;
     setActionError(null);
     let outcome: ReceiptSettledEvent["outcome"] = "error";
     let handledInMountedDrawer = false;
@@ -3173,9 +3258,15 @@ function ReceiptDetailDrawer({
           : t("budget.receipts.deleteError"));
         if (isConflictOrStaleError(result)) {
           setConfirmingDissolve(false);
-          keepActionErrorRef.current = true;
+          keepActionErrorRef.current = { mode: "always" };
           onConflictOrStale(detail.receipt_id);
         } else {
+          keepActionErrorRef.current = {
+            mode: "if_unchanged",
+            receiptId: detail.receipt_id,
+            version: detail.version,
+            status: detail.status,
+          };
           onMutationError();
         }
         return;
@@ -4071,7 +4162,10 @@ function ReceiptDetailDrawer({
                         <button
                           type="button"
                           disabled={actionBusy !== null}
-                          onClick={onDiscardPendingNav}
+                          onClick={() => {
+                            resetDraftSynchronously(detail, candidates);
+                            onDiscardPendingNav();
+                          }}
                         >
                           {t("budget.receipts.unsavedChangesDiscard")}
                         </button>
