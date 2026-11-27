@@ -3546,7 +3546,7 @@ function ReceiptDetailDrawer({
           const roundedSuggestion = activeDraft !== null && activeDraft.linkChoice !== "unlink"
             && !detail.linked && linkOptions.canPickCandidates
             ? candidates.find((candidate) => candidate.match_rule === "rounded_up"
-              && (candidate.match_strength === "medium" || !suggestionDismissed))
+              && (candidate.match_strength !== "strong" || !suggestionDismissed))
             : undefined;
           const bannerCandidate = roundedSuggestion
             ?? (activeDraft?.linkChoice === "candidate:0" ? suggestedCandidate : null);
@@ -3614,11 +3614,13 @@ function ReceiptDetailDrawer({
                   locale,
                   candidate.credit_debit_indicator,
                 );
-                const strengthBadge = candidate.match_strength === "id"
-                  ? t("budget.receipts.matchBadgeId")
-                  : candidate.match_strength === "nip"
-                    ? t("budget.receipts.matchBadgeNip")
-                    : t("budget.receipts.matchBadgeMerchant");
+                const strengthBadge = candidate.match_strength === "weak"
+                  ? null
+                  : candidate.match_strength === "id"
+                    ? t("budget.receipts.matchBadgeId")
+                    : candidate.match_strength === "nip"
+                      ? t("budget.receipts.matchBadgeNip")
+                      : t("budget.receipts.matchBadgeMerchant");
                 const candidateRoundingNote = roundingNote(candidate.rounding_delta, candidate.currency, locale);
                 return (
                   <section
@@ -3627,12 +3629,14 @@ function ReceiptDetailDrawer({
                   >
                     <div className="budget-receipt-suggested-head">
                       <strong>{t("budget.receipts.suggestedMatchHeading")}</strong>
-                      <span
-                        className="budget-chip budget-receipt-match-badge"
-                        data-match-strength={candidate.match_strength}
-                      >
-                        {strengthBadge}
-                      </span>
+                      {strengthBadge === null ? null : (
+                        <span
+                          className="budget-chip budget-receipt-match-badge"
+                          data-match-strength={candidate.match_strength}
+                        >
+                          {strengthBadge}
+                        </span>
+                      )}
                     </div>
                     <div className="budget-entry-main">
                       <span className="budget-muted">{dateText}</span>
@@ -3645,7 +3649,7 @@ function ReceiptDetailDrawer({
                         {amountText}
                       </strong>
                     </div>
-                    {candidate.match_strength !== "medium" && activeDraft?.linkChoice === "candidate:0" ? (
+                    {strengthBadge !== null && candidate.match_strength !== "medium" && activeDraft?.linkChoice === "candidate:0" ? (
                       <div className="budget-actions">
                         <button
                           type="button"

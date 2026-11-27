@@ -11239,7 +11239,8 @@
               "generic",
               "none",
               "medium",
-              "strong"
+              "strong",
+              "weak"
             ],
             "title": "Match Strength",
             "type": "string"

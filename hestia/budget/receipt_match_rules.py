@@ -100,22 +100,20 @@ def _rounded_up_match(store, session, owner, row, total, target, transaction, ac
     fingerprint = financial_fingerprint(payload)
     creditor, debtor = resolved_party_names(session, owner, transaction.account_id, transaction.entry_reference,
                                            payload, fingerprint)
-    if not _distinctive_merchant_hit(row, payload, creditor, debtor):
-        return None
     return payload, amount, delta, day, distance, fingerprint, creditor, debtor
 
 
 def _other_receipt_matches(store, session, owner, row, transaction, account_kind, match):
-    from .receipt_store import _receipt_in_group
+    from .receipt_store import _receipt_grouped
 
-    payload, amount, _delta, day, _distance, _fingerprint, creditor, debtor = match
+    payload, amount, _delta, day, *_ = match
     peers = select(Receipt).where(
         Receipt.owner == owner, Receipt.currency == row.currency,
         Receipt.receipt_date.between(*_date_limits(date.fromisoformat(day))),
         Receipt.receipt_kind == "purchase",
         or_(Receipt.payment_method.is_(None), Receipt.payment_method.not_in(("cash", "mixed"))),
         Receipt.evidence_for_receipt_id.is_(None), Receipt.linked_account_id.is_(None),
-        Receipt.total_amount.is_not(None),
+        Receipt.total_amount.is_not(None), ~_receipt_grouped(owner, Receipt.id),
     )
     row_id = getattr(row, "id", None)
     if row_id is not None:
@@ -126,9 +124,7 @@ def _other_receipt_matches(store, session, owner, row, transaction, account_kind
             amount_matches = peer_total == amount or rounding_delta(peer_total, amount) is not None
         except AnalyticsError:
             continue
-        if (amount_matches and _uses_card(store, peer, transaction, account_kind, payload.get("remittance_information", []))
-                and _distinctive_merchant_hit(peer, payload, creditor, debtor)
-                and not _receipt_in_group(session, owner, peer.id)):
+        if amount_matches and _uses_card(store, peer, transaction, account_kind, payload.get("remittance_information", [])):
             return True
     return False
 
@@ -174,6 +170,7 @@ def rounded_up_candidates(store, session, owner, row, total, scope_accounts):
         Transaction.account_id == account_id, Transaction.entry_reference == reference,
     ))
     try:
+        merchant_hit = _distinctive_merchant_hit(row, payload, creditor, debtor)
         evidence = link_evidence(
             owner, account_id, reference, payload, normalize_shop_name(row.raw_shop_name), row.raw_nip,
             creditor, fingerprint, debtor=debtor,
@@ -181,11 +178,12 @@ def rounded_up_candidates(store, session, owner, row, total, scope_accounts):
         token = store._candidate_token(evidence, account_id, row_id, rule="rounded_up")
     except (AnalyticsError, ValueError, TypeError, RecursionError):
         return []
+    strength = ("strong" if distance == 0 else "medium") if merchant_hit else "weak"
     return [{
         "account_id": account_id, "entry_reference": entry_reference_digest(reference),
         "amount": amount, "currency": row.currency, "credit_debit_indicator": "DBIT",
         "transaction_date": evidence["transaction_date"], "booking_date": evidence["booking_date"],
-        "value_date": evidence["value_date"], "date_distance": distance, "merchant_token_hit": True,
-        "match_strength": "strong" if distance == 0 else "medium",
+        "value_date": evidence["value_date"], "date_distance": distance, "merchant_token_hit": merchant_hit,
+        "match_strength": strength,
         "match_rule": "rounded_up", "rounding_delta": delta, "candidate_token": token,
     }]

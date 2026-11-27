@@ -3370,7 +3370,7 @@ class BudgetReceiptCandidate(BaseModel):
     booking_date: str | None
     value_date: str | None
     merchant_token_hit: bool
-    match_strength: Literal["id", "nip", "distinctive", "generic", "none", "medium", "strong"]
+    match_strength: Literal["id", "nip", "distinctive", "generic", "none", "medium", "strong", "weak"]
     date_distance: int
     candidate_token: Annotated[str, Field(min_length=1, max_length=4096)]
     match_rule: Annotated[Literal["rounded_up"] | None, Field(

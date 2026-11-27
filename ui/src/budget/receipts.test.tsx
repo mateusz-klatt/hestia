@@ -1912,11 +1912,12 @@ describe("ReceiptsView", () => {
     await click(button("Close", dCash));
   });
 
-  it.each(["medium", "strong"] as const)("shows a %s card round-up in the match and confirm rows", async (strength) => {
+  it.each(["weak", "medium", "strong"] as const)("shows a %s card round-up in the match and confirm rows", async (strength) => {
     const candidate = receiptCandidate({
       amount: "43",
-      date_distance: strength === "medium" ? 1 : 0,
-      booking_date: strength === "medium" ? "2026-11-15" : "2026-11-14",
+      date_distance: strength === "strong" ? 0 : 1,
+      transaction_date: strength === "strong" ? "2026-11-14" : "2026-11-15",
+      merchant_token_hit: strength !== "weak",
       match_strength: strength,
       match_rule: "rounded_up",
       rounding_delta: "0.5",
@@ -1930,9 +1931,13 @@ describe("ReceiptsView", () => {
 
     const drawer = dialog();
     const radio = linkRadio("candidate:0", drawer);
-    expect(drawer.querySelector(".budget-receipt-suggested")?.textContent).toContain("zaokrąglenie +0,50 zł");
-    expect(radio.closest("label")?.textContent).toContain("zaokrąglenie +0,50 zł");
+    const matchRow = drawer.querySelector(".budget-receipt-suggested .budget-entry-main");
+    expect(matchRow?.textContent ?? "").toContain("zaokrąglenie +0,50 zł");
+    expect(radio.closest("form.budget-receipt-confirm label")?.textContent ?? "").toContain("zaokrąglenie +0,50 zł");
+    const badge = drawer.querySelector(".budget-receipt-suggested [data-match-strength]");
+    expect(badge?.getAttribute("data-match-strength") ?? null).toBe(strength === "weak" ? null : strength);
     expect(radio.checked).toBe(strength === "strong");
+    expect(clients.rApi.confirmReceipt).not.toHaveBeenCalled();
   });
 
   it("preselects the bank candidate and confirms a partially read receipt on one click", async () => {

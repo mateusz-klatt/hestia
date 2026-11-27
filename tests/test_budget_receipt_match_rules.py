@@ -179,15 +179,27 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
         candidate, = self.candidates(identifier)
         self.assertEqual(candidate["match_strength"], "id")
 
+    def test_round_up_without_distinctive_merchant_is_weak_even_on_the_same_day(self):
+        identifier = self.add_receipt()
+        self.add_card(day=_CARD_DATE, title="Płatność kartą Fikcyjny Targ")
+        candidate, = self.candidates(identifier)
+        self.assertEqual((candidate["match_rule"], candidate["match_strength"], candidate["rounding_delta"]),
+                         ("rounded_up", "weak", "0.09"))
+        self.assertEqual(candidate["date_distance"], 0)
+        self.assertFalse(candidate["merchant_token_hit"])
+        self.assertFalse(self.receipts.detail("owner", identifier)["receipt"]["linked"])
+
     def test_round_up_strength_confirm_and_reconciliation(self):
         identifier = self.add_receipt()
         self.add_card()
         candidate, = self.candidates(identifier)
         self.assertEqual((candidate["match_rule"], candidate["match_strength"], candidate["rounding_delta"]),
                          ("rounded_up", "medium", "0.09"))
+        self.assertTrue(candidate["merchant_token_hit"])
         self.change_transaction("a", "card-charge", transaction_date=_CARD_DATE)
         candidate, = self.candidates(identifier)
         self.assertEqual((candidate["match_strength"], candidate["date_distance"]), ("strong", 0))
+        self.assertTrue(candidate["merchant_token_hit"])
 
         saved = self.receipts.confirm("owner", self.confirmation(identifier, candidate))["receipt"]
         self.assertEqual((saved["total_amount"], saved["rounding_delta"], saved["linked_entry_ref"]),
@@ -217,15 +229,13 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
         exact, = self.candidates(integer)
         self.assertNotIn("match_rule", exact)
 
-    def test_round_up_requires_merchant_and_card_and_date_and_currency(self):
+    def test_round_up_requires_card_and_date_and_currency(self):
         identifier = self.add_receipt()
         self.add_card()
         for changes in (
-            {"remittance_information": ["Płatność kartą Fikcyjny Targ"]},
             {"remittance_information": [f"Bank transfer {_SHOP}"]},
             {"transaction_date": "2026-11-22"},
             {"currency": "EUR"},
-            {"remittance_information": ["Płatność kartą SP. Z O.O."]},
         ):
             with self.subTest(changes=changes):
                 defaults = {
@@ -234,28 +244,25 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
                 }
                 self.change_transaction("a", "card-charge", **(defaults | changes))
                 self.assertEqual(self.candidates(identifier), [])
-        with self.sessions.begin() as session:
-            session.get(db.BudgetReceipt, identifier).raw_shop_name = "SP. Z O.O."
-        self.assertEqual(self.candidates(identifier), [])
 
     def test_round_up_rejects_both_directions_of_ambiguity_even_at_confirm(self):
         identifier = self.add_receipt()
         self.add_card()
         candidate, = self.candidates(identifier)
         request = self.confirmation(identifier, candidate)
-        self.add_card("additional-charge", account="b")
+        self.add_card("additional-charge", account="b", title="Płatność kartą Fikcyjny Targ")
         self.assertEqual(self.candidates(identifier), [])
         with self.assertRaises(ReceiptError) as error:
             self.receipts.confirm("owner", request)
         self.assertEqual(error.exception.code, "budget_receipt_stale_source")
         self.change_transaction("b", "additional-charge", status="PDNG")
-        peer = self.add_receipt(total_amount="42.51")
+        peer = self.add_receipt(total_amount="42.51", raw_shop_name="Fikcyjny Targ")
         self.assertEqual(self.candidates(identifier), [])
         self.assertEqual(self.candidates(peer), [])
 
     def test_exact_candidate_for_another_receipt_beats_round_up(self):
         rounded_receipt = self.add_receipt()
-        exact_receipt = self.add_receipt(total_amount="43")
+        exact_receipt = self.add_receipt(total_amount="43", raw_shop_name="Fikcyjny Targ")
         self.add_card()
         self.assertEqual(self.candidates(rounded_receipt), [])
         exact, = self.candidates(exact_receipt)
@@ -293,7 +300,7 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
         identifier = self.add_receipt()
         peer = self.add_receipt()
         self.add_receipt(total_amount="41")
-        self.add_receipt(raw_shop_name="Fikcyjny Targ")
+        self.add_receipt(card_last4="1234")
         with self.sessions.begin() as session:
             session.get(db.BudgetReceipt, peer).total_amount = "invalid"
         self.add_card()

@@ -866,7 +866,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         document = contract.build_openapi()
         cand_schema = document["components"]["schemas"]["BudgetReceiptCandidate"]
         self.assertIn("match_strength", cand_schema["required"])
-        strengths = ["id", "nip", "distinctive", "generic", "none", "medium", "strong"]
+        strengths = ["id", "nip", "distinctive", "generic", "none", "medium", "strong", "weak"]
         self.assertEqual(
             cand_schema["properties"]["match_strength"]["enum"],
             strengths,

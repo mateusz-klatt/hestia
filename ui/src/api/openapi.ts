@@ -6156,7 +6156,7 @@ export interface components {
              * Match Strength
              * @enum {string}
              */
-            match_strength: "id" | "nip" | "distinctive" | "generic" | "none" | "medium" | "strong";
+            match_strength: "id" | "nip" | "distinctive" | "generic" | "none" | "medium" | "strong" | "weak";
             /** Merchant Token Hit */
             merchant_token_hit: boolean;
             /**
