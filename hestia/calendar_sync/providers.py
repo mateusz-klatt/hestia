@@ -834,18 +834,22 @@ class CalDAVProvider:
         token = properties.get(f"{{{DAV}}}sync-token")
         value = token.text.strip() if token is not None and token.text else ""
         principal_prop = properties.get(f"{{{DAV}}}current-user-principal")
-        principal_href = (principal_prop.findtext("d:href", namespaces=NS) or "").strip() if principal_prop is not None else ""
+        principal_href = (
+            (principal_prop.findtext("d:href", namespaces=NS) or "").strip()
+            if principal_prop is not None and principal_prop.find("d:unauthenticated", NS) is None
+            else ""
+        )
         principal = urljoin(self.calendar_id, principal_href) if principal_href else None
         return value or None, principal
 
     def _check_calendar(self) -> str | None:
         return self._check_collection()[0]
 
-    def _principal_digest(self, principal: str | None) -> str:
-        return hashlib.sha256(f"{self._account_hash}\0{principal or ''}".encode("utf-8")).hexdigest()
+    def _principal_digest(self, principal: str) -> str:
+        return hashlib.sha256(f"{self._account_hash}\0{principal}".encode("utf-8")).hexdigest()
 
-    def _checkpoint(self, token: str | None, principal: str | None = None) -> str | None:
-        if not token:
+    def _checkpoint(self, token: str | None, principal: str | None) -> str | None:
+        if not token or not principal:
             return None
         return self.CURSOR_PREFIX + json.dumps(
             {"calendar_id": self.calendar_id,
@@ -855,8 +859,8 @@ class CalDAVProvider:
             sort_keys=True, separators=(",", ":"),
         )
 
-    def _saved_token(self, cursor: str | None, principal: str | None = None) -> str | None:
-        if not cursor or not cursor.startswith(self.CURSOR_PREFIX):
+    def _saved_token(self, cursor: str | None, principal: str | None) -> str | None:
+        if not principal or not cursor or not cursor.startswith(self.CURSOR_PREFIX):
             return None
         try:
             data = json.loads(cursor[len(self.CURSOR_PREFIX):])

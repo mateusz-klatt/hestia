@@ -71,9 +71,10 @@ def multistatus(*responses):
     return response(('<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">' + ''.join(responses) + '</d:multistatus>').encode(), status=207)
 
 
-def dav_acl(privileges=("read", "write"), *, token="one", href=CALENDAR, extra=""):
+def dav_acl(privileges=("read", "write"), *, token="one", href=CALENDAR, principal="/principal/", extra=""):
     value = ('<d:resourcetype><c:calendar/></d:resourcetype><d:displayname>Family</d:displayname>'
              '<d:current-user-privilege-set>' + ''.join(f'<d:privilege><d:{name}/></d:privilege>' for name in privileges) + '</d:current-user-privilege-set>'
+             + (f'<d:current-user-principal><d:href>{escape(principal)}</d:href></d:current-user-principal>' if principal is not None else '')
              + (f'<d:sync-token>{token}</d:sync-token>' if token is not None else '') + extra)
     return multistatus(dav_response(value, href=href))
 
@@ -283,7 +284,7 @@ class CalDAVReadTests(unittest.TestCase):
         provider, transport = dav(dav_acl(), multistatus(dav_item(), item), dav_acl())
         result = provider.pull("old-token")
         self.assertTrue(result.full and result.complete)
-        self.assertEqual(result.cursor, provider._checkpoint("one"))
+        self.assertEqual(result.cursor, provider._checkpoint("one", "https://caldav.icloud.com/principal/"))
         self.assertEqual([e.deleted for e in result.events], [False, True])
         self.assertEqual(transport.calls[1][0], "REPORT")
         self.assertNotIn(b"time-range", transport.calls[1][2]["body"])

@@ -28,6 +28,9 @@ from hestia.calendar_sync.store import SyncStore
 from tests import test_calendar_providers as http
 
 
+DEFAULT_PRINCIPAL = "https://caldav.icloud.com/principal/"
+
+
 def fixed_ical(payload=None, *, uid="family-uid", stamp="20261021T100000Z"):
     raw = codec.to_ical(payload or http.PAYLOAD, uid)
     lines = [b"DTSTAMP:" + stamp.encode() if line.startswith(b"DTSTAMP:") else line
@@ -42,12 +45,6 @@ def fixed_dav_item(payload=None, *, uid="family-uid", href=http.RESOURCE, etag='
         '<d:getetag>' + escape(etag) + '</d:getetag><c:calendar-data>' + escape(data.decode()) + '</c:calendar-data>',
         href=href,
     )
-
-
-def principal_acl(principal_href, *, token="tok-1"):
-    extra = (f'<d:current-user-principal><d:href>{escape(principal_href)}</d:href></d:current-user-principal>'
-             if principal_href is not None else "")
-    return http.dav_acl(token=token, extra=extra)
 
 
 class CalendarIncrementalFastPathTests(unittest.TestCase):
@@ -89,9 +86,9 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
         self.configure_endpoints("apple", "google")
         principal_url = "https://caldav.icloud.com/1/principal/"
         caldav_transport = http.QueueTransport(
-            principal_acl("/1/principal/", token="tok-1"),
+            http.dav_acl(token="tok-1", principal="/1/principal/"),
             http.multistatus(fixed_dav_item(http.PAYLOAD, uid="family-uid", href=http.RESOURCE, etag='"v1"')),
-            principal_acl("/1/principal/", token="tok-1"),
+            http.dav_acl(token="tok-1", principal="/1/principal/"),
         )
         caldav = p.CalDAVProvider(http.CALENDAR, username="user", password="secret", transport=caldav_transport)
         google_transport = http.QueueTransport(
@@ -117,7 +114,7 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
             google_transport.calls.clear()
             self.now += 60
             monotonic_now = 160.0
-            caldav_transport.responses.append(principal_acl("/1/principal/", token="tok-1"))
+            caldav_transport.responses.append(http.dav_acl(token="tok-1", principal="/1/principal/"))
             google_transport.responses.extend([
                 http.google_acl(),
                 http.google_page([], token="g-2"),
@@ -170,7 +167,7 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
             # Round 3: unchanged clock and unchanged tokens produce zero SQL writes at all.
             caldav_transport.calls.clear()
             google_transport.calls.clear()
-            caldav_transport.responses.append(principal_acl("/1/principal/", token="tok-1"))
+            caldav_transport.responses.append(http.dav_acl(token="tok-1", principal="/1/principal/"))
             google_transport.responses.extend([
                 http.google_acl(),
                 http.google_page([], token="g-2"),
@@ -219,7 +216,8 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
         self.assertFalse(any(unchanged_id in str(params) for _, params in row_updates))
         self.assertTrue(all(edited_id in str(params) for _, params in row_updates))
         with self.sessions() as session:
-            self.assertEqual(session.get(db.CalendarEndpoint, "apple").cursor, caldav._checkpoint("tok-2"))
+            self.assertEqual(session.get(db.CalendarEndpoint, "apple").cursor,
+                             caldav._checkpoint("tok-2", DEFAULT_PRINCIPAL))
             self.assertEqual(session.get(db.CalendarEvent, edited_id).revision, 2)
             self.assertEqual(session.get(db.CalendarEvent, unchanged_id).revision, 1)
 
@@ -234,9 +232,9 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
         self.configure_endpoints("apple")
         item = fixed_dav_item(http.PAYLOAD, uid="family-uid", href=http.RESOURCE, etag='"v1"')
         caldav, transport = http.dav(
-            principal_acl("/1/principal/", token="tok-1"),
+            http.dav_acl(token="tok-1", principal="/1/principal/"),
             http.multistatus(item),
-            principal_acl("/1/principal/", token="tok-1"),
+            http.dav_acl(token="tok-1", principal="/1/principal/"),
         )
         engine = SyncEngine(self.store, {"apple": caldav})
         self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
@@ -249,7 +247,7 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
         # Same principal and same token take the metadata-only fast path.
         transport.calls.clear()
         self.now += 60
-        transport.responses.append(principal_acl("/1/principal/", token="tok-1"))
+        transport.responses.append(http.dav_acl(token="tok-1", principal="/1/principal/"))
         self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
         self.assertEqual([call[0] for call in transport.calls], ["PROPFIND"])
 
@@ -257,9 +255,9 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
         transport.calls.clear()
         self.now += 60
         transport.responses.extend([
-            principal_acl("/2/principal/", token="tok-1"),
+            http.dav_acl(token="tok-1", principal="/2/principal/"),
             http.multistatus(item),
-            principal_acl("/2/principal/", token="tok-1"),
+            http.dav_acl(token="tok-1", principal="/2/principal/"),
         ])
         self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
         self.assertEqual([call[0] for call in transport.calls], ["PROPFIND", "REPORT", "PROPFIND"])
@@ -268,20 +266,12 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
         self.assertEqual(second_cursor, caldav._checkpoint("tok-1", "https://caldav.icloud.com/2/principal/"))
         self.assertNotEqual(second_cursor, first_cursor)
 
-        # Principal disappearing / becoming unauthenticated also forces a full read.
-        transport.calls.clear()
-        self.now += 60
-        unauth = http.dav_acl(token="tok-1", extra='<d:current-user-principal><d:unauthenticated/></d:current-user-principal>')
-        transport.responses.extend([unauth, http.multistatus(item), unauth])
-        self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
-        self.assertEqual([call[0] for call in transport.calls], ["PROPFIND", "REPORT", "PROPFIND"])
-
         # Switching the authenticated CalDAV account username forces a full read even when token and principal match.
         self.now += 60
         other_transport = http.QueueTransport(
-            principal_acl(None, token="tok-1"),
+            http.dav_acl(token="tok-1", principal="/2/principal/"),
             http.multistatus(item),
-            principal_acl(None, token="tok-1"),
+            http.dav_acl(token="tok-1", principal="/2/principal/"),
         )
         other_user = p.CalDAVProvider(http.CALENDAR, username="other-account", password="secret",
                                       transport=other_transport)
@@ -290,20 +280,89 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
         self.assertEqual([call[0] for call in other_transport.calls], ["PROPFIND", "REPORT", "PROPFIND"])
         with self.sessions() as session:
             switched_cursor = session.get(db.CalendarEndpoint, "apple").cursor
-        self.assertEqual(switched_cursor, other_user._checkpoint("tok-1", None))
+        self.assertEqual(switched_cursor, other_user._checkpoint("tok-1", "https://caldav.icloud.com/2/principal/"))
         self.assertNotIn("other-account", switched_cursor)
 
         # A principal change during inventory aborts without advancing the checkpoint.
         self.now += 60
         other_transport.responses.extend([
-            principal_acl("/1/principal/", token="tok-1"),
+            http.dav_acl(token="tok-1", principal="/1/principal/"),
             http.multistatus(item),
-            principal_acl("/2/principal/", token="tok-1"),
+            http.dav_acl(token="tok-1", principal="/2/principal/"),
         ])
         self.assertEqual(SyncEngine(self.store, {"apple": other_user}).run_once(),
                          {"read": 0, "delivered": 0, "errors": {"apple": "provider_error"}})
         with self.sessions() as session:
             self.assertEqual(session.get(db.CalendarEndpoint, "apple").cursor, switched_cursor)
+
+    def test_missing_and_unauthenticated_principals_require_full_read_without_checkpoint(self):
+        self.configure_endpoints("apple")
+        item = fixed_dav_item(http.PAYLOAD, uid="family-uid", href=http.RESOURCE, etag='"v1"')
+
+        # Missing principal -> always full path, never writes a fast-path-eligible checkpoint.
+        missing_acl = http.dav_acl(token="tok-1", principal=None)
+        caldav, transport = http.dav(
+            missing_acl, http.multistatus(item), missing_acl,
+            missing_acl, http.multistatus(item), missing_acl,
+        )
+        engine = SyncEngine(self.store, {"apple": caldav})
+        for _ in range(2):
+            transport.calls.clear()
+            self.now += 60
+            self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
+            self.assertEqual([call[0] for call in transport.calls], ["PROPFIND", "REPORT", "PROPFIND"])
+            with self.sessions() as session:
+                self.assertIsNone(session.get(db.CalendarEndpoint, "apple").cursor)
+        self.assertEqual(transport.responses, [])
+
+        # DAV:unauthenticated (including malformed sibling href or blank href) -> always full path, no checkpoint.
+        unverified_acls = [
+            http.dav_acl(token="tok-1", principal=None,
+                         extra='<d:current-user-principal><d:unauthenticated/></d:current-user-principal>'),
+            http.dav_acl(token="tok-1", principal=None,
+                         extra='<d:current-user-principal><d:unauthenticated/><d:href>/1/principal/</d:href></d:current-user-principal>'),
+            http.dav_acl(token="tok-1", principal="   "),
+        ]
+        for acl in unverified_acls:
+            with self.subTest(acl=acl):
+                provider, tr = http.dav(
+                    acl, http.multistatus(item), acl,
+                    acl, http.multistatus(item), acl,
+                )
+                first = provider.pull(None)
+                self.assertTrue(first.complete and first.full)
+                self.assertIsNone(first.cursor)
+                second = provider.pull(first.cursor)
+                self.assertTrue(second.complete and second.full)
+                self.assertIsNone(second.cursor)
+                self.assertEqual([call[0] for call in tr.calls],
+                                 ["PROPFIND", "REPORT", "PROPFIND", "PROPFIND", "REPORT", "PROPFIND"])
+
+        # Verified principal -> saves checkpoint, then transition to missing principal forces full read and clears it.
+        verified_acl = http.dav_acl(token="tok-1", principal="/1/principal/")
+        transport.calls.clear()
+        self.now += 60
+        transport.responses.extend([verified_acl, http.multistatus(item), verified_acl])
+        self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
+        with self.sessions() as session:
+            verified_cursor = session.get(db.CalendarEndpoint, "apple").cursor
+        self.assertEqual(verified_cursor, caldav._checkpoint("tok-1", "https://caldav.icloud.com/1/principal/"))
+
+        transport.calls.clear()
+        self.now += 60
+        transport.responses.extend([missing_acl, http.multistatus(item), missing_acl])
+        self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
+        self.assertEqual([call[0] for call in transport.calls], ["PROPFIND", "REPORT", "PROPFIND"])
+        with self.sessions() as session:
+            self.assertIsNone(session.get(db.CalendarEndpoint, "apple").cursor)
+
+        # Verified checkpoint presented with unauthenticated principal also forces full read and clears it.
+        unauth_acl = unverified_acls[0]
+        provider, tr = http.dav(unauth_acl, http.multistatus(item), unauth_acl)
+        snapshot = provider.pull(verified_cursor)
+        self.assertTrue(snapshot.complete and snapshot.full)
+        self.assertIsNone(snapshot.cursor)
+        self.assertEqual([call[0] for call in tr.calls], ["PROPFIND", "REPORT", "PROPFIND"])
 
     def test_legacy_invalid_mismatched_and_empty_token_checkpoints_take_full_path(self):
         self.configure_endpoints("apple")
@@ -319,21 +378,22 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
         self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
         self.assertEqual([call[0] for call in transport.calls], ["PROPFIND", "REPORT", "PROPFIND"])
         with self.sessions() as session:
-            self.assertEqual(session.get(db.CalendarEndpoint, "apple").cursor, caldav._checkpoint("tok-1"))
+            self.assertEqual(session.get(db.CalendarEndpoint, "apple").cursor,
+                             caldav._checkpoint("tok-1", DEFAULT_PRINCIPAL))
 
         other_calendar = p.CalDAVProvider(http.CALENDAR + "other/", username="user", password="secret")
         warsaw_provider = p.CalDAVProvider(http.CALENDAR, username="user", password="secret",
                                            floating_time_zone="Europe/Warsaw")
         other_account = p.CalDAVProvider(http.CALENDAR, username="different", password="secret")
-        principal_digest = caldav._principal_digest(None)
+        principal_digest = caldav._principal_digest(DEFAULT_PRINCIPAL)
         invalid_cursors = [
             None,
             "tok-1",
             p.CalDAVProvider.CURSOR_PREFIX + "{invalid",
             p.CalDAVProvider.CURSOR_PREFIX + "[]",
-            other_calendar._checkpoint("tok-1"),
-            warsaw_provider._checkpoint("tok-1"),
-            other_account._checkpoint("tok-1"),
+            other_calendar._checkpoint("tok-1", DEFAULT_PRINCIPAL),
+            warsaw_provider._checkpoint("tok-1", DEFAULT_PRINCIPAL),
+            other_account._checkpoint("tok-1", DEFAULT_PRINCIPAL),
             caldav._checkpoint("tok-1", "https://caldav.icloud.com/other/principal/"),
             p.CalDAVProvider.CURSOR_PREFIX + json.dumps(
                 {"calendar_id": http.CALENDAR, "floating_time_zone": None, "token": "tok-1"}),
@@ -353,7 +413,7 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
                 )
                 snapshot = provider.pull(bad_cursor)
                 self.assertTrue(snapshot.complete and snapshot.full)
-                self.assertEqual(snapshot.cursor, provider._checkpoint("tok-1"))
+                self.assertEqual(snapshot.cursor, provider._checkpoint("tok-1", DEFAULT_PRINCIPAL))
                 self.assertEqual([call[0] for call in tr.calls], ["PROPFIND", "REPORT", "PROPFIND"])
 
         # Changing floating_time_zone invalidates the checkpoint; matching policy takes the fast path.
@@ -364,9 +424,9 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
             http.dav_acl(token="tok-1"),
             floating_time_zone="Europe/Warsaw",
         )
-        full_snap = zoned.pull(caldav._checkpoint("tok-1"))
+        full_snap = zoned.pull(caldav._checkpoint("tok-1", DEFAULT_PRINCIPAL))
         self.assertTrue(full_snap.complete and full_snap.full)
-        self.assertEqual(full_snap.cursor, zoned._checkpoint("tok-1"))
+        self.assertEqual(full_snap.cursor, zoned._checkpoint("tok-1", DEFAULT_PRINCIPAL))
         fast_snap = zoned.pull(full_snap.cursor)
         self.assertTrue(fast_snap.complete and not fast_snap.full)
         self.assertEqual(fast_snap.events, [])
@@ -381,7 +441,7 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
                     http.multistatus(item),
                     http.dav_acl(token=empty_token),
                 )
-                snapshot = provider.pull(provider._checkpoint("tok-1"))
+                snapshot = provider.pull(provider._checkpoint("tok-1", DEFAULT_PRINCIPAL))
                 self.assertTrue(snapshot.complete and snapshot.full)
                 self.assertIsNone(snapshot.cursor)
                 self.assertEqual([call[0] for call in tr.calls], ["PROPFIND", "REPORT", "PROPFIND"])
@@ -518,7 +578,7 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
         )
         engine = SyncEngine(self.store, {"apple": caldav})
         self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
-        saved_cursor = caldav._checkpoint("tok-1")
+        saved_cursor = caldav._checkpoint("tok-1", DEFAULT_PRINCIPAL)
         saved_success = self.now
 
         failures = [
@@ -584,17 +644,17 @@ class CalendarPollerCredentialRotationTests(unittest.IsolatedAsyncioTestCase):
         }
         transport = http.QueueTransport(
             # Poll 1: CalDAV full pull (alice) + Google OAuth + full pull (ref-1)
-            principal_acl("/alice/principal/", token="tok-1"),
+            http.dav_acl(token="tok-1", principal="/alice/principal/"),
             http.multistatus(item),
-            principal_acl("/alice/principal/", token="tok-1"),
+            http.dav_acl(token="tok-1", principal="/alice/principal/"),
             http.response({"access_token": "acc-1", "expires_in": 3600}),
             http.google_acl(),
             http.google_page([google_ev], token="g-1"),
             http.google_acl(),
             # Poll 2: credentials rotated -> CalDAV forced full pull (bob, same tok-1) + Google OAuth (ref-2) + incremental pull
-            principal_acl("/bob/principal/", token="tok-1"),
+            http.dav_acl(token="tok-1", principal="/bob/principal/"),
             http.multistatus(item),
-            principal_acl("/bob/principal/", token="tok-1"),
+            http.dav_acl(token="tok-1", principal="/bob/principal/"),
             http.response({"access_token": "acc-2", "expires_in": 3600}),
             http.google_acl(),
             http.google_page([], token="g-2"),
