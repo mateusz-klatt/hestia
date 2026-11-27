@@ -522,6 +522,8 @@ const en = {
   "budget.receipts.imageLoading": "Loading image…",
   "budget.receipts.imageUnavailable": "Image preview is unavailable.",
   "budget.receipts.transactionPicker": "Choose transaction…",
+  "budget.receipts.transactionPickerWide": "Show all amounts and merchants",
+  "budget.receipts.transactionWithFee": "with fee",
   "budget.receipts.linkSection": "Linked bank transaction",
   "budget.receipts.linkedAccount": "Account: {account}",
   "budget.receipts.unlinkedState": "Not linked to any bank transaction.",

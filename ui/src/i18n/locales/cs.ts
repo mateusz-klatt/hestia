@@ -500,6 +500,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "Načítání obrázku…",
   "budget.receipts.imageUnavailable": "Náhled obrázku není dostupný.",
   "budget.receipts.transactionPicker": "Vybrat transakci…",
+  "budget.receipts.transactionPickerWide": "Zobrazit všechny částky a obchodníky",
+  "budget.receipts.transactionWithFee": "s poplatkem",
   "budget.receipts.linkSection": "Propojená bankovní transakce",
   "budget.receipts.linkedAccount": "Účet: {account}",
   "budget.receipts.unlinkedState": "Není propojeno s žádnou bankovní transakcí.",

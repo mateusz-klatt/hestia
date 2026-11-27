@@ -504,6 +504,8 @@ const pl: Partial<Messages> = {
   "budget.receipts.imageLoading": "Wczytywanie obrazu…",
   "budget.receipts.imageUnavailable": "Podgląd obrazu jest niedostępny.",
   "budget.receipts.transactionPicker": "Wybierz transakcję…",
+  "budget.receipts.transactionPickerWide": "Pokaż wszystkie kwoty i sprzedawców",
+  "budget.receipts.transactionWithFee": "z opłatą",
   "budget.receipts.linkSection": "Powiązana transakcja bankowa",
   "budget.receipts.linkedAccount": "Konto: {account}",
   "budget.receipts.unlinkedState": "Brak powiązania z transakcją bankową.",

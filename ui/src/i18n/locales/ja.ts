@@ -501,6 +501,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "画像を読み込み中…",
   "budget.receipts.imageUnavailable": "画像プレビューは利用できません。",
   "budget.receipts.transactionPicker": "取引を選択…",
+  "budget.receipts.transactionPickerWide": "すべての金額と販売店を表示",
+  "budget.receipts.transactionWithFee": "手数料込み",
   "budget.receipts.linkSection": "紐付けられた銀行取引",
   "budget.receipts.linkedAccount": "口座：{account}",
   "budget.receipts.unlinkedState": "銀行取引に紐付けられていません。",

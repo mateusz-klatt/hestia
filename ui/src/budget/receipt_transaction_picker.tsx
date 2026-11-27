@@ -1,11 +1,11 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../i18n";
-import { formatScaledBigInt, parseScaledInt } from "./analytics/model";
+import { formatScaledBigInt, parseScaledInt, validIsoDate } from "./analytics/model";
 import type { BudgetResult } from "./api";
 import { formatAmount } from "./model";
 import type { BudgetAccount, BudgetConnection } from "./model";
-import { receiptAccountLabel } from "./receipts_model";
+import { addDecimals, receiptAccountLabel } from "./receipts_model";
 import type {
   ReceiptTransactionSearchItem, ReceiptTransactionSearchRequest, ReceiptTransactionSearchResult,
 } from "./receipts_model";
@@ -16,6 +16,8 @@ interface Props {
   receiptId: string;
   receiptDate: string;
   receiptTotal: string;
+  receiptFee: string | null;
+  currency: string;
   accounts: readonly BudgetAccount[];
   connections: readonly BudgetConnection[];
   locale: string;
@@ -26,9 +28,7 @@ interface Props {
 }
 
 function offsetDate(value: string, offset: number): string {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return "";
   const date = new Date(`${value}T00:00:00Z`);
-  if (!Number.isFinite(date.getTime())) return "";
   date.setUTCDate(date.getUTCDate() + offset);
   if (date.getUTCFullYear() < 1) return "0001-01-01";
   if (date.getUTCFullYear() > 9999) return "9999-12-31";
@@ -36,8 +36,8 @@ function offsetDate(value: string, offset: number): string {
 }
 
 function amountBound(total: string, multiplier: bigint): string {
-  const value = parseScaledInt(total.trim().replace(",", "."));
-  return value === null || value.negative ? "" : formatScaledBigInt(value.coeff * multiplier, value.scale + 1);
+  const value = parseScaledInt(total);
+  return value === null ? "" : formatScaledBigInt(value.coeff * multiplier, value.scale + 2);
 }
 
 function normalizeAmount(value: string): string | null {
@@ -53,6 +53,13 @@ export function transactionPickerDescription(item: ReceiptTransactionSearchItem,
   ].filter(Boolean).join(" · ");
 }
 
+function transactionAmountDelta(item: ReceiptTransactionSearchItem, locale: string): string {
+  if (item.amount_delta === null) return "Δ —";
+  const currency = item.currency === "PLN" && locale.startsWith("pl") ? "zł" : item.currency;
+  const sign = item.amount_delta === "0" || item.amount_delta.startsWith("-") ? "" : "+";
+  return sign + formatAmount(item.amount_delta, currency, locale);
+}
+
 interface Page {
   request: ReceiptTransactionSearchRequest;
   items: ReceiptTransactionSearchItem[];
@@ -62,7 +69,7 @@ interface Page {
 }
 
 export function ReceiptTransactionPicker({
-  receiptId, receiptDate, receiptTotal, accounts, connections, locale, search, onAccessLoss, onClose, onPick,
+  receiptId, receiptDate, receiptTotal, receiptFee, currency, accounts, connections, locale, search, onAccessLoss, onClose, onPick,
 }: Props) {
   const id = useId();
   const dialog = useRef<HTMLDivElement>(null);
@@ -70,27 +77,40 @@ export function ReceiptTransactionPicker({
   const generation = useRef(0);
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [dateFrom, setDateFrom] = useState(() => offsetDate(receiptDate, -14));
-  const [dateTo, setDateTo] = useState(() => offsetDate(receiptDate, 30));
-  const [amountFrom, setAmountFrom] = useState(() => amountBound(receiptTotal, 8n));
-  const [amountTo, setAmountTo] = useState(() => amountBound(receiptTotal, 12n));
+  const [today] = useState(() => new Date().toISOString().slice(0, 10));
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [amountFrom, setAmountFrom] = useState("");
+  const [amountTo, setAmountTo] = useState("");
+  const [wide, setWide] = useState(false);
   const [accountId, setAccountId] = useState("");
   const [page, setPage] = useState<Page | null>(null);
   const [retry, setRetry] = useState(0);
   const waitingForQuery = query !== debouncedQuery;
-  const badDates = dateFrom !== "" && dateTo !== "" && dateFrom > dateTo;
+  const day = validIsoDate(receiptDate) ? receiptDate : null;
+  const total = normalizeAmount(receiptTotal);
+  const from = dateFrom || offsetDate(day ?? today, day === null ? -90 : -30);
+  const to = dateTo || offsetDate(day ?? today, day === null ? 0 : 60);
+  const badDates = from > to;
   const min = normalizeAmount(amountFrom);
   const max = normalizeAmount(amountTo);
   const badAmounts = (amountFrom.trim() !== "" && min === null) || (amountTo.trim() !== "" && max === null);
+  const defaultAmounts = amountFrom.trim() === "" && amountTo.trim() === "" && total !== null;
+  const fee = receiptFee === null ? null : normalizeAmount(receiptFee);
+  const upperTotal = total !== null && fee !== null ? addDecimals([total, fee]) : total;
   const request = useMemo<ReceiptTransactionSearchRequest>(() => ({
     receipt_id: receiptId,
-    amount_min: min,
-    amount_max: max,
-    date_from: dateFrom || null,
-    date_to: dateTo || null,
+    ...(day === null ? {} : { receipt_date: day }),
+    ...(total === null ? {} : { total_amount: total }),
+    ...(min === null ? {} : { amount_min: min }),
+    ...(max === null ? {} : { amount_max: max }),
+    currency,
+    date_from: from,
+    date_to: to,
+    wide,
     account_id: accountId || null,
     query: debouncedQuery.trim(),
-  }), [receiptId, min, max, dateFrom, dateTo, accountId, debouncedQuery]);
+  }), [receiptId, day, total, currency, min, max, from, to, wide, accountId, debouncedQuery]);
   const visiblePage = page?.request === request && !waitingForQuery ? page : null;
   const validFilters = !badDates && !badAmounts;
 
@@ -181,12 +201,14 @@ export function ReceiptTransactionPicker({
             <label>
               <span id={`${id}-amount-from`}>{t("budget.main.from")}</span>
               <input type="text" inputMode="decimal" maxLength={80} value={amountFrom}
+                placeholder={defaultAmounts ? amountBound(total, wide ? 80n : 95n) : undefined}
                 aria-labelledby={`${id}-amount ${id}-amount-from`}
                 onChange={(event) => { setAmountFrom(event.currentTarget.value); }} />
             </label>
             <label>
               <span id={`${id}-amount-to`}>{t("budget.main.to")}</span>
               <input type="text" inputMode="decimal" maxLength={80} value={amountTo}
+                placeholder={defaultAmounts && upperTotal !== null ? amountBound(upperTotal, wide ? 120n : 105n) : undefined}
                 aria-labelledby={`${id}-amount ${id}-amount-to`}
                 onChange={(event) => { setAmountTo(event.currentTarget.value); }} />
             </label>
@@ -195,16 +217,24 @@ export function ReceiptTransactionPicker({
             <legend id={`${id}-date`}>{t("budget.transactions.date")}</legend>
             <label>
               <span id={`${id}-date-from`}>{t("budget.main.from")}</span>
-              <input type="date" value={dateFrom} aria-labelledby={`${id}-date ${id}-date-from`}
+              <input type="date" name="date_from" value={from} aria-labelledby={`${id}-date ${id}-date-from`}
                 onChange={(event) => { setDateFrom(event.currentTarget.value); }} />
             </label>
             <label>
               <span id={`${id}-date-to`}>{t("budget.main.to")}</span>
-              <input type="date" value={dateTo} aria-labelledby={`${id}-date ${id}-date-to`}
+              <input type="date" name="date_to" value={to} aria-labelledby={`${id}-date ${id}-date-to`}
                 onChange={(event) => { setDateTo(event.currentTarget.value); }} />
             </label>
           </fieldset>
         </div>
+        <label className="budget-toggle">
+          <input type="checkbox" checked={wide} onChange={(event) => {
+            setWide(event.currentTarget.checked);
+            setAmountFrom("");
+            setAmountTo("");
+          }} />
+          {t("budget.receipts.transactionPickerWide")}
+        </label>
         {badDates ? <p role="alert">{t("budget.main.badRange")}</p> : null}
         {badAmounts ? <p role="alert">{t("budget.transactions.error")}</p> : null}
         {validFilters && (visiblePage === null || visiblePage.loading) ? (
@@ -226,7 +256,8 @@ export function ReceiptTransactionPicker({
             {visiblePage.items.map((item) => (
               <li key={item.id}>
                 <button type="button" onClick={() => { onPick(item); }}>
-                  {transactionPickerDescription(item, locale)}
+                  {transactionPickerDescription(item, locale)} · {transactionAmountDelta(item, locale)}
+                  {item.includes_fee ? ` · ${t("budget.receipts.transactionWithFee")}` : null}
                 </button>
               </li>
             ))}

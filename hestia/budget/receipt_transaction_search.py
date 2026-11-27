@@ -1,28 +1,30 @@
 """Owner-private stored transaction search and manual selection validation."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
+from decimal import Decimal, localcontext
+from functools import partial
 import hashlib
 import hmac
 import json
 import re
 from typing import NamedTuple
 
-from sqlalchemy import and_, bindparam, exists, func, literal_column, or_, select, text
+from sqlalchemy import and_, bindparam, exists, func, literal_column, select, text, tuple_
 
 from ..db import (
     BudgetAccount as Account, BudgetAccountDisplay as Display, BudgetConnection as Connection,
     BudgetReceipt as Receipt, BudgetReceiptLinkGroup as Group, BudgetReceiptLinkMember as Member,
     BudgetTransaction as Transaction, BudgetTransactionMetadata as Metadata, BudgetTransferLeg as Leg,
 )
-from .analytics_core import AnalyticsError, canonical_money, compare_money, financial_fingerprint
-from .receipt_parser import ReceiptError, fold_text, normalize_shop_name, redact_digit_field, redact_pan
+from .analytics_core import AnalyticsError, canonical_money, compare_money, financial_fingerprint, negate_money, sum_money
+from .receipt_parser import (ReceiptError, fold_text, merchant_tokens, merchant_word_tokens, normalize_shop_name,
+                             redact_digit_field, redact_pan)
 from .receipt_reconcile import _payload_party_name, evidence_json, link_evidence, resolved_party_names
 from .receipt_store import BudgetReceiptStore, _ROW_ID, _enabled_account_filters, _json, _shift_clamped, _short_account_label
 from .views import BudgetHTTPStore, BudgetQueryError, _date_filter
 
 MANUAL_LINK_VERSION = (0, 67, 0)
-_FIRST_DAY = "0001-01-01"
 _BOOKING_DATE = literal_column("""CASE WHEN json_valid(budget_transactions.payload_json) THEN coalesce(
     json_extract(budget_transactions.payload_json, '$.booking_date'),
     json_extract(budget_transactions.payload_json, '$.value_date'),
@@ -37,32 +39,52 @@ _OCCUPIED = "budget_receipt_tx_already_linked"
 
 
 class SearchFilters(NamedTuple):
-    date_from: str | None
-    date_to: str | None
-    amount_min: str | None
-    amount_max: str | None
+    date_from: str
+    date_to: str
+    closest_date: str
+    currency: str
+    total: str | None
+    fee_total: str | None
+    amounts: tuple[tuple[str | None, str | None], ...]
+    merchants: tuple[str, ...]
     query: str
     account_id: str | None
 
 
-def _date_bound(values, key, receipt_date, offset):
-    if key in values:
-        return _date_filter(values[key])
-    return _shift_clamped(date.fromisoformat(receipt_date), offset).isoformat() if receipt_date else None
+def _amount_range(total, percent):
+    with localcontext(prec=256):
+        value = Decimal(total)
+        return tuple(format(value * multiplier / 100, "f") for multiplier in (100 - percent, 100 + percent))
 
 
-def _filters(values, receipt):
+def _filters(values, receipt, today):
     try:
-        date_from = _date_bound(values, "date_from", receipt.receipt_date, -14)
-        date_to = _date_bound(values, "date_to", receipt.receipt_date, 30)
-    except (BudgetQueryError, ValueError):
+        day = _date_filter(values.get("receipt_date") or receipt.receipt_date)
+        anchor = date.fromisoformat(day) if day else today
+        date_from = _date_filter(values.get("date_from")) or _shift_clamped(anchor, -30 if day else -90).isoformat()
+        date_to = _date_filter(values.get("date_to")) or _shift_clamped(anchor, 60 if day else 0).isoformat()
+    except BudgetQueryError:
         raise ReceiptError() from None
-    amount_min, amount_max = values.get("amount_min"), values.get("amount_max")
-    if date_from is not None and date_to is not None and date_from > date_to:
+    if not 0 <= (date.fromisoformat(date_to) - date.fromisoformat(date_from)).days <= 400:
         raise ReceiptError()
-    if amount_min is not None and amount_max is not None and compare_money(amount_min, amount_max) > 0:
+    minimum, maximum = values.get("amount_min"), values.get("amount_max")
+    if minimum is not None and maximum is not None and compare_money(minimum, maximum) > 0:
         raise ReceiptError()
-    return SearchFilters(date_from, date_to, amount_min, amount_max,
+    total = values.get("total_amount") or receipt.total_amount
+    fee = receipt.fee_amount if receipt.gateway else None
+    fee_total = sum_money((total, fee)) if total is not None and fee is not None and compare_money(fee, "0") > 0 else None
+    wide = values.get("wide", False)
+    amounts = ((minimum, maximum),)
+    if minimum is None and maximum is None and total is not None:
+        amounts = tuple(_amount_range(target, 20 if wide else 5) for target in (total, fee_total) if target is not None)
+    merchants = ()
+    if not wide:
+        shop = receipt.raw_shop_name
+        if receipt.forwarded_manually and shop == "przekazane ręcznie":
+            shop = None
+        merchants = tuple(sorted(merchant_tokens(shop, receipt.raw_nip).union(merchant_word_tokens(receipt.gateway))))
+    currency = receipt.currency or values.get("currency") or "PLN"
+    return SearchFilters(date_from, date_to, day or date_to, currency, total, fee_total, amounts, merchants,
                          fold_text((values.get("query") or "").strip()), values.get("account_id"))
 
 
@@ -81,22 +103,37 @@ def _bank_text(payload, metadata_json, metadata_fingerprint, fingerprint):
     return creditor or _payload_party_name(payload, "creditor"), titles
 
 
-def _matches(payload_json, metadata_json, metadata_fingerprint, minimum, maximum, query):
-    """SQLite predicate for exact decimal bounds and literal, Unicode-folded text."""
+def _amount_delta(amount, total):
+    return None if total is None else sum_money((amount, negate_money(total)))
+
+
+def _rank(payload_json, metadata_json, metadata_fingerprint, *, filters):
+    """Return a sortable exact amount distance for eligible rows, or SQL NULL."""
     try:
         payload = _json(payload_json)
         fingerprint = financial_fingerprint(payload)
-    except (AnalyticsError, TypeError, ValueError, RecursionError):
-        return False
+        booking_date = _date_filter(payload.get("booking_date") or payload.get("value_date")
+                                    or payload.get("transaction_date"))
+    except (TypeError, ValueError, RecursionError, BudgetQueryError):
+        return None
+    if booking_date is None:
+        return None
     amount = payload["amount"]
-    if minimum is not None and compare_money(amount, minimum) < 0:
-        return False
-    if maximum is not None and compare_money(amount, maximum) > 0:
-        return False
-    if not query:
-        return True
-    creditor, titles = _bank_text(payload, metadata_json, metadata_fingerprint, fingerprint)
-    return any(query in fold_text(_private_text(value) or "") for value in [creditor, *titles])
+    if not any((minimum is None or compare_money(amount, minimum) >= 0)
+               and (maximum is None or compare_money(amount, maximum) <= 0)
+               for minimum, maximum in filters.amounts):
+        return None
+    if filters.query or filters.merchants:
+        creditor, titles = _bank_text(payload, metadata_json, metadata_fingerprint, fingerprint)
+        texts = [_private_text(value) or "" for value in [creditor, *titles]]
+        if filters.query and not any(filters.query in fold_text(value) for value in texts):
+            return None
+        if filters.merchants and not set(filters.merchants).intersection(merchant_word_tokens("\n".join(texts))):
+            return None
+    distance = (_amount_delta(amount, filters.total) or "0").lstrip("-")
+    # A length prefix orders integral parts numerically. Canonical fractional parts
+    # already sort lexically, including when one is a prefix of the other.
+    return f"{len(distance.partition('.')[0]):03d}{distance}"
 
 
 def _private_text(value):
@@ -130,13 +167,16 @@ def _transfer_leg(account_id, reference):
     return exists().where(Leg.account_id == account_id, Leg.entry_reference == reference)
 
 
-def _query(owner, receipt, filters, after, limit):
+def _query(owner, receipt_id, filters, after, limit):
     account_id, reference = Transaction.account_id, Transaction.entry_reference
     payload = Transaction.payload_json
     # CASE protects the JSON functions even when SQLite reorders predicates.
     valid_payload = func.iif(func.json_valid(payload), payload, None)
+    amount_rank = func.hestia_receipt_tx_rank(payload, Metadata.payload_json, Metadata.ledger_fingerprint)
+    date_distance = func.abs(func.julianday(_BOOKING_DATE) - func.julianday(filters.closest_date))
     statement = (
         select(_BOOKING_DATE.label("booking_date"), _ROW_ID.label("row_id"), account_id, reference, payload,
+               amount_rank.label("amount_rank"), date_distance.label("date_distance"),
                Connection.bank_name, Display.product, Display.masked_suffix,
                Metadata.payload_json.label("metadata_json"), Metadata.ledger_fingerprint)
         .select_from(Account)
@@ -148,27 +188,23 @@ def _query(owner, receipt, filters, after, limit):
         .where(
             *_enabled_account_filters(owner, require_enabled_connection=False),
             Transaction.uncertain.is_(False),
-            _BOOKING_DATE >= bindparam("picker_start", filters.date_from or _FIRST_DAY),
-            _BOOKING_DATE <= bindparam("picker_end", filters.date_to or date.max.isoformat()),
+            _BOOKING_DATE >= bindparam("picker_start", filters.date_from),
+            _BOOKING_DATE <= bindparam("picker_end", filters.date_to),
             func.json_extract(valid_payload, "$.status") == "BOOK",
             func.json_extract(valid_payload, "$.credit_debit_indicator") == "DBIT",
-            func.json_extract(valid_payload, "$.currency") == receipt.currency,
-            ~_other_receipt(owner, receipt.id, account_id, reference),
-            ~_group_reserved(owner, account_id, reference, own_receipt_id=receipt.id),
+            func.json_extract(valid_payload, "$.currency") == filters.currency,
+            ~_other_receipt(owner, receipt_id, account_id, reference),
+            ~_group_reserved(owner, account_id, reference, own_receipt_id=receipt_id),
             ~_transfer_leg(account_id, reference),
-            func.hestia_receipt_tx_matches(payload, Metadata.payload_json, Metadata.ledger_fingerprint,
-                                           filters.amount_min, filters.amount_max, filters.query),
+            amount_rank.is_not(None),
         )
-        .order_by(_BOOKING_DATE.desc(), _ROW_ID)
+        .order_by("amount_rank", "date_distance", _ROW_ID)
         .limit(limit + 1)
     )
     if filters.account_id is not None:
         statement = statement.where(account_id == filters.account_id)
     if after is not None:
-        last_date, last_id = after
-        boundary = bindparam("picker_boundary", last_date)
-        boundary_id = bindparam("picker_boundary_id", int(last_id))
-        statement = statement.where(_BOOKING_DATE <= boundary, or_(_BOOKING_DATE < boundary, _ROW_ID > boundary_id))
+        statement = statement.where(tuple_(amount_rank, date_distance, _ROW_ID) > tuple_(*after))
     return statement
 
 
@@ -183,26 +219,28 @@ class ReceiptTransactionSearch(BudgetReceiptStore):
             session.execute(text("BEGIN"))
             owner = self._owner(session, owner, "budget.receipts.match", require_same_target=True)
             receipt = self._owned(session, owner, values["receipt_id"])
-            filters = _filters(values, receipt)
-            context = {"operation": "receipt-transaction-search", "owner": owner, "receipt": receipt.id,
-                       "currency": receipt.currency, **filters._asdict()}
             now = self._now()
+            filters = _filters(values, receipt, datetime.fromtimestamp(now, UTC).date())
+            context = {"operation": "receipt-transaction-search", "owner": owner, "receipt": receipt.id,
+                       "filters": json.dumps(filters, separators=(",", ":"))}
             try:
                 after = BudgetHTTPStore._decode_cursor(self, values.get("cursor"), context, now)
             except BudgetQueryError:
                 raise ReceiptError() from None
             connection = session.connection().connection.driver_connection
-            connection.create_function("hestia_receipt_tx_matches", 6, _matches, deterministic=True)
+            connection.create_function("hestia_receipt_tx_rank", 3, partial(_rank, filters=filters), deterministic=True)
             limit = values.get("limit", 25)
-            results = session.execute(_query(owner, receipt, filters, after, limit)).all()
+            results = session.execute(_query(owner, receipt.id, filters, None if after is None else json.loads(after[1]),
+                                             limit)).all()
             page = results[:limit]
             next_cursor = None
             if len(results) > limit:
                 last = page[-1]
-                next_cursor = self._cursor(context, (last.booking_date, str(last.row_id)), now)
-            return {"items": [self._item(owner, receipt.id, entry) for entry in page], "next_cursor": next_cursor}
+                rank = json.dumps((last.amount_rank, last.date_distance, last.row_id), separators=(",", ":"))
+                next_cursor = self._cursor(context, (last.booking_date, rank), now)
+            return {"items": [self._item(owner, receipt.id, entry, filters) for entry in page], "next_cursor": next_cursor}
 
-    def _item(self, owner, receipt_id, entry):
+    def _item(self, owner, receipt_id, entry, filters):
         payload = _json(entry.payload_json)
         fingerprint = financial_fingerprint(payload)
         creditor, titles = _bank_text(payload, entry.metadata_json, entry.ledger_fingerprint, fingerprint)
@@ -211,11 +249,15 @@ class ReceiptTransactionSearch(BudgetReceiptStore):
             _private_text(entry.bank_name) or "", _private_text(entry.product),
             suffix if suffix and _MASKED_SUFFIX.fullmatch(suffix) else None,
         )
+        delta = _amount_delta(payload["amount"], filters.total)
+        fee_delta = _amount_delta(payload["amount"], filters.fee_total)
         return {
             "id": self._transaction_id(owner, receipt_id, entry.row_id, entry.account_id,
                                        entry.entry_reference, fingerprint),
-            "date": payload.get("booking_date") or payload.get("value_date") or payload.get("transaction_date"),
+            "date": entry.booking_date,
             "amount": canonical_money(payload["amount"]), "currency": payload["currency"],
+            "amount_delta": delta,
+            "includes_fee": fee_delta is not None and compare_money(fee_delta.lstrip("-"), delta.lstrip("-")) < 0,
             "account_label": label, "counterparty": _private_text(creditor),
             "title": _private_text("\n".join(titles)),
         }
@@ -237,7 +279,8 @@ class ReceiptTransactionSearch(BudgetReceiptStore):
                 Transaction.uncertain.is_(False),
             )
         )
-        if transaction is None or cleaned["receipt_kind"] != "purchase" or cleaned["currency"] != row.currency:
+        currency = row.currency or cleaned["currency"]
+        if transaction is None or cleaned["receipt_kind"] != "purchase" or cleaned["currency"] != currency:
             raise ReceiptError(_STALE, 409)
         account_id, reference = transaction.account_id, transaction.entry_reference
         try:
@@ -246,7 +289,7 @@ class ReceiptTransactionSearch(BudgetReceiptStore):
         except (AnalyticsError, TypeError, ValueError, RecursionError):
             raise ReceiptError(_STALE, 409) from None
         if (payload["status"] != "BOOK" or payload["credit_debit_indicator"] != "DBIT"
-                or payload["currency"] != row.currency
+                or payload["currency"] != currency
                 or not hmac.compare_digest(transaction_id, self._transaction_id(
                     owner, row.id, row_id, account_id, reference, fingerprint,
                 ))):

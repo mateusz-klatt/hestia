@@ -3247,14 +3247,28 @@ _ReceiptTransactionAmount = Annotated[str, Field(max_length=80, pattern=r"^[0-9]
 class BudgetReceiptTransactionSearchRequest(BaseModel):
     model_config = _STRICT
     receipt_id: BudgetReceiptId
-    amount_min: Annotated[_ReceiptTransactionAmount | None, Field(json_schema_extra=_OMIT)] = None
-    amount_max: Annotated[_ReceiptTransactionAmount | None, Field(json_schema_extra=_OMIT)] = None
+    receipt_date: Annotated[_ReceiptTransactionDay | None, Field(
+        description="Draft receipt date for the default date range and date-distance ranking. Defaults to the stored receipt date.",
+        json_schema_extra=_OMIT)] = None
+    total_amount: Annotated[_ReceiptTransactionAmount | None, Field(
+        description="Draft receipt total for the percentage filter and amount differences. Defaults to the stored receipt total.",
+        json_schema_extra=_OMIT)] = None
+    currency: Annotated[Annotated[str, Field(pattern=r"^[A-Z]{3}$")] | None, Field(
+        description="Draft currency for a receipt with no stored currency. Defaults to PLN for those receipts.",
+        json_schema_extra=_OMIT)] = None
+    amount_min: Annotated[_ReceiptTransactionAmount | None, Field(
+        description="Custom minimum. Any custom amount bound replaces the percentage range.", json_schema_extra=_OMIT)] = None
+    amount_max: Annotated[_ReceiptTransactionAmount | None, Field(
+        description="Custom maximum. Any custom amount bound replaces the percentage range.", json_schema_extra=_OMIT)] = None
     date_from: Annotated[_ReceiptTransactionDay | None, Field(
-        description="Defaults to 14 days before the receipt date. Send null to remove the lower bound.",
+        description="Omit or send null for 30 days before the receipt date, or 90 days before today (UTC) when undated.",
         json_schema_extra=_OMIT)] = None
     date_to: Annotated[_ReceiptTransactionDay | None, Field(
-        description="Defaults to 30 days after the receipt date. Send null to remove the upper bound.",
+        description="Omit or send null for 60 days after the receipt date, or today (UTC) when undated.",
         json_schema_extra=_OMIT)] = None
+    wide: Annotated[bool, Field(
+        description="Use ±20% of the total and allow any merchant. Defaults to ±5% and matches distinctive merchant tokens when available.",
+        json_schema_extra=_OMIT)] = False
     query: Annotated[Annotated[str, Field(max_length=128)] | None, Field(json_schema_extra=_OMIT)] = None
     account_id: Annotated[BudgetId | None, Field(json_schema_extra=_OMIT)] = None
     limit: Annotated[int, Field(ge=1, le=50, json_schema_extra=_OMIT)] = 25
@@ -3266,6 +3280,8 @@ class BudgetReceiptTransactionSearchItem(BaseModel):
     id: str
     date: _ReceiptTransactionDay | None
     amount: _ReceiptTransactionAmount
+    amount_delta: Annotated[str | None, Field(description="Signed transaction amount minus the receipt total, if known.")]
+    includes_fee: Annotated[bool, Field(description="The transaction is closer to the receipt total plus the gateway fee.")]
     currency: str
     account_label: str
     counterparty: str | None
@@ -5140,6 +5156,7 @@ def _receipt_paths():
             paths[prefix + name]["post"]["parameters"] = [contract_version]
     responses = _budget_responses("BudgetReceiptTransactionSearchResult")
     responses.update({
+        "400": _receipt_error("Invalid filters or cursor. The effective date span must be between 0 and 400 days."),
         "404": _receipt_error("Unknown, disabled or foreign receipt, or contract version below 0.67.0."),
         "409": _receipt_error("SQLite users backend is required (budget_requires_sqlite_users)."),
         "411": _receipt_error("Content-Length is required."),
@@ -5150,7 +5167,9 @@ def _receipt_paths():
         "operationId": "searchBudgetReceiptTransactions",
         "summary": "Find booked outflows in the owned receipt's currency for manual linking.",
         "description": "Browser owner and budget.receipts.match required. Searches stored transactions only. "
-                       "Confirm the receipt with link.transaction_id to use a selected result.",
+                       "Percentage filters also consider the receipt total plus any positive gateway fee. "
+                       "Results sort by absolute amount difference, then by distance from the receipt date "
+                       "(most recent first without a receipt date). Confirm with link.transaction_id to link a result.",
         "parameters": [{**contract_version, "required": True, "description": "Available from 0.67.0."}],
         "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref("BudgetReceiptTransactionSearchRequest")}}},
         "responses": responses,

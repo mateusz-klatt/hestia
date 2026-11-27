@@ -3864,7 +3864,9 @@ function ReceiptDetailDrawer({
                     ) : null}
                     {manualPickerVisible ? (
                       <ReceiptTransactionPicker receiptId={detail.receipt_id} receiptDate={activeDraft.receiptDate}
-                        receiptTotal={activeDraft.totalAmount} accounts={accounts} connections={connections} locale={locale}
+                        receiptTotal={activeDraft.totalAmount} receiptFee={detail.gateway === null ? null : detail.fee_amount}
+                        currency={activeDraft.currency.trim().toUpperCase()}
+                        accounts={accounts} connections={connections} locale={locale}
                         search={searchTransactions} onAccessLoss={onAccessLoss} onClose={closeManualPicker}
                         onPick={(item) => {
                           onLinkChoiceTouched(detail.receipt_id, { kind: "empty" });

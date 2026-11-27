@@ -501,6 +501,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "Պատկերը բեռնվում է…",
   "budget.receipts.imageUnavailable": "Պատկերի նախադիտումը հասանելի չէ։",
   "budget.receipts.transactionPicker": "Ընտրեք գործարքը…",
+  "budget.receipts.transactionPickerWide": "Ցուցադրել բոլոր գումարներն ու վաճառողներին",
+  "budget.receipts.transactionWithFee": "վճարով",
   "budget.receipts.linkSection": "Կապված բանկային գործարք",
   "budget.receipts.linkedAccount": "Հաշիվ՝ {account}",
   "budget.receipts.unlinkedState": "Կապված չէ որևէ բանկային գործարքի հետ։",

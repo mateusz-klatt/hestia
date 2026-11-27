@@ -1895,7 +1895,7 @@ export interface paths {
         put?: never;
         /**
          * Find booked outflows in the owned receipt's currency for manual linking.
-         * @description Browser owner and budget.receipts.match required. Searches stored transactions only. Confirm the receipt with link.transaction_id to use a selected result.
+         * @description Browser owner and budget.receipts.match required. Searches stored transactions only. Percentage filters also consider the receipt total plus any positive gateway fee. Results sort by absolute amount difference, then by distance from the receipt date (most recent first without a receipt date). Confirm with link.transaction_id to link a result.
          */
         post: operations["searchBudgetReceiptTransactions"];
         delete?: never;
@@ -7202,6 +7202,11 @@ export interface components {
             account_label: string;
             /** Amount */
             amount: string;
+            /**
+             * Amount Delta
+             * @description Signed transaction amount minus the receipt total, if known.
+             */
+            amount_delta: string | null;
             /** Counterparty */
             counterparty: string | null;
             /** Currency */
@@ -7210,6 +7215,11 @@ export interface components {
             date: string | null;
             /** Id */
             id: string;
+            /**
+             * Includes Fee
+             * @description The transaction is closer to the receipt total plus the gateway fee.
+             */
+            includes_fee: boolean;
             /** Title */
             title: string | null;
         };
@@ -7217,28 +7227,54 @@ export interface components {
         BudgetReceiptTransactionSearchRequest: {
             /** Account Id */
             account_id?: string | null;
-            /** Amount Max */
+            /**
+             * Amount Max
+             * @description Custom maximum. Any custom amount bound replaces the percentage range.
+             */
             amount_max?: string | null;
-            /** Amount Min */
+            /**
+             * Amount Min
+             * @description Custom minimum. Any custom amount bound replaces the percentage range.
+             */
             amount_min?: string | null;
+            /**
+             * Currency
+             * @description Draft currency for a receipt with no stored currency. Defaults to PLN for those receipts.
+             */
+            currency?: string | null;
             /** Cursor */
             cursor?: string | null;
             /**
              * Date From
-             * @description Defaults to 14 days before the receipt date. Send null to remove the lower bound.
+             * @description Omit or send null for 30 days before the receipt date, or 90 days before today (UTC) when undated.
              */
             date_from?: string | null;
             /**
              * Date To
-             * @description Defaults to 30 days after the receipt date. Send null to remove the upper bound.
+             * @description Omit or send null for 60 days after the receipt date, or today (UTC) when undated.
              */
             date_to?: string | null;
             /** Limit */
             limit?: number;
             /** Query */
             query?: string | null;
+            /**
+             * Receipt Date
+             * @description Draft receipt date for the default date range and date-distance ranking. Defaults to the stored receipt date.
+             */
+            receipt_date?: string | null;
             /** Receipt Id */
             receipt_id: string;
+            /**
+             * Total Amount
+             * @description Draft receipt total for the percentage filter and amount differences. Defaults to the stored receipt total.
+             */
+            total_amount?: string | null;
+            /**
+             * Wide
+             * @description Use ±20% of the total and allow any merchant. Defaults to ±5% and matches distinctive merchant tokens when available.
+             */
+            wide?: boolean;
         };
         /** BudgetReceiptTransactionSearchResult */
         BudgetReceiptTransactionSearchResult: {
@@ -17840,7 +17876,7 @@ export interface operations {
                     "application/json": components["schemas"]["BudgetReceiptTransactionSearchResult"];
                 };
             };
-            /** @description invalid request */
+            /** @description Invalid filters or cursor. The effective date span must be between 0 and 400 days. */
             400: {
                 headers: {
                     [name: string]: unknown;

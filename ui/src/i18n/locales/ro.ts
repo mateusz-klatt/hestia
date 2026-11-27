@@ -500,6 +500,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "Se încarcă imaginea…",
   "budget.receipts.imageUnavailable": "Previzualizarea imaginii nu este disponibilă.",
   "budget.receipts.transactionPicker": "Alege tranzacția…",
+  "budget.receipts.transactionPickerWide": "Afișează toate sumele și comercianții",
+  "budget.receipts.transactionWithFee": "cu comision",
   "budget.receipts.linkSection": "Tranzacție bancară asociată",
   "budget.receipts.linkedAccount": "Cont: {account}",
   "budget.receipts.unlinkedState": "Nu este asociat cu nicio tranzacție bancară.",

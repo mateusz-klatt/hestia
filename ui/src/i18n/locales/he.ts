@@ -500,6 +500,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "טוען תמונה…",
   "budget.receipts.imageUnavailable": "תצוגה מקדימה של התמונה אינה זמינה.",
   "budget.receipts.transactionPicker": "בחירת עסקה…",
+  "budget.receipts.transactionPickerWide": "הצגת כל הסכומים ובתי העסק",
+  "budget.receipts.transactionWithFee": "כולל עמלה",
   "budget.receipts.linkSection": "תנועת בנק מקושרת",
   "budget.receipts.linkedAccount": "חשבון: {account}",
   "budget.receipts.unlinkedState": "לא מקושר לאף תנועת בנק.",

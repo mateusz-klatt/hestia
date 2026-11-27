@@ -500,6 +500,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "Indlæser billede…",
   "budget.receipts.imageUnavailable": "Billedvisning er ikke tilgængelig.",
   "budget.receipts.transactionPicker": "Vælg transaktion…",
+  "budget.receipts.transactionPickerWide": "Vis alle beløb og forhandlere",
+  "budget.receipts.transactionWithFee": "inkl. gebyr",
   "budget.receipts.linkSection": "Koblet bankpostering",
   "budget.receipts.linkedAccount": "Konto: {account}",
   "budget.receipts.unlinkedState": "Ikke koblet til nogen bankpostering.",

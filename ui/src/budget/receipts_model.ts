@@ -632,8 +632,10 @@ export function canPickManualTransaction(
   detail: Pick<ReceiptDetail, "currency" | "evidence_for_receipt_id" | "link_group">,
   draft: Pick<ReceiptConfirmDraft, "currency" | "receiptKind" | "paymentMethod">,
 ): boolean {
+  const currency = draft.currency.trim().toUpperCase();
   return !isReceiptGrouped(detail) && detail.evidence_for_receipt_id === null
-    && draft.receiptKind === "purchase" && draft.currency.trim() === detail.currency
+    && draft.receiptKind === "purchase" && /^[A-Z]{3}$/.test(currency)
+    && (detail.currency === null || currency === detail.currency)
     && draft.paymentMethod !== "cash" && draft.paymentMethod !== "mixed";
 }
 
@@ -1450,7 +1452,7 @@ export function buildConfirmRequest(
   if (draft.linkChoice === "unlink") {
     link = null;
   } else if (draft.linkChoice === "manual") {
-    if (draft.manualTransaction === undefined || !canPickManualTransaction(detail, draft)) {
+    if (draft.manualTransaction?.currency !== currency || !canPickManualTransaction(detail, draft)) {
       return { ok: false, errorKey: "budget.receipts.invalidForm" };
     }
     link = { transaction_id: draft.manualTransaction.id };

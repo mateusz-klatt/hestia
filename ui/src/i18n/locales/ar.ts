@@ -500,6 +500,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "جارٍ تحميل الصورة…",
   "budget.receipts.imageUnavailable": "معاينة الصورة غير متاحة.",
   "budget.receipts.transactionPicker": "اختر معاملة…",
+  "budget.receipts.transactionPickerWide": "عرض كل المبالغ والتجار",
+  "budget.receipts.transactionWithFee": "شامل الرسوم",
   "budget.receipts.linkSection": "المعاملة البنكية المرتبطة",
   "budget.receipts.linkedAccount": "الحساب: {account}",
   "budget.receipts.unlinkedState": "غير مرتبط بأي معاملة بنكية.",

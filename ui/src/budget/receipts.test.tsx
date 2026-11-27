@@ -298,6 +298,12 @@ function dialog(scope: ParentNode = host): HTMLElement {
 }
 
 describe("manual bank transaction picker", () => {
+  function picker(): HTMLElement {
+    const element = document.body.querySelector<HTMLElement>(".budget-receipt-picker");
+    if (element === null) throw new Error("transaction picker missing");
+    return element;
+  }
+
   it("is hidden without server capability even when the client implements search", async () => {
     const clients = fakeClients();
     const search = vi.fn<NonNullable<ReceiptsApi["searchReceiptTransactions"]>>();
@@ -311,10 +317,13 @@ describe("manual bank transaction picker", () => {
   it("prefills filters, traps focus, debounces search, pages results, and saves a guarded draft choice", async () => {
     const clients = fakeClients();
     const item: ReceiptTransactionSearchItem = {
-      id: "7." + "a".repeat(64), amount: "38", currency: "PLN", date: "2026-11-13",
+      id: "7." + "a".repeat(64), amount: "41.73", currency: "PLN", date: "2026-11-13",
       account_label: "Synthetic Checking ••1001", counterparty: "Synthetic market", title: "Purchase",
+      amount_delta: "-0.77", includes_fee: false,
     };
-    const second: ReceiptTransactionSearchItem = { ...item, id: "8." + "b".repeat(64), title: "Another purchase" };
+    const second: ReceiptTransactionSearchItem = {
+      ...item, id: "8." + "b".repeat(64), title: "Another purchase", amount: "49.39", amount_delta: "6.89", includes_fee: true,
+    };
     const search = vi.fn<NonNullable<ReceiptsApi["searchReceiptTransactions"]>>((request) =>
       ok(request.cursor === "page-2"
         ? { items: [second], next_cursor: null }
@@ -324,21 +333,19 @@ describe("manual bank transaction picker", () => {
     await click(openDetailButton(0));
     const trigger = button("Choose transaction…", dialog());
     await click(trigger);
-    const picker = () => {
-      const element = document.body.querySelector<HTMLElement>(".budget-receipt-picker");
-      if (element === null) throw new Error("transaction picker missing");
-      return element;
-    };
     const searchBox = () => {
       const element = picker().querySelector<HTMLInputElement>('input[type="search"]');
       if (element === null) throw new Error("search field missing");
       return element;
     };
     const initial = {
-      receipt_id: receiptSummary().receipt_id, amount_min: "34", amount_max: "51",
-      date_from: "2026-10-31", date_to: "2026-12-14", account_id: null, query: "",
+      receipt_id: receiptSummary().receipt_id, receipt_date: "2026-11-14", total_amount: "42.50", currency: "PLN",
+      date_from: "2026-10-15", date_to: "2027-01-13", account_id: null, query: "", wide: false,
     };
     expect(search).toHaveBeenLastCalledWith(initial);
+    expect(picker().textContent).toContain("−0.77 PLN");
+    expect([...picker().querySelectorAll<HTMLInputElement>('input[inputmode="decimal"]')]
+      .map((input) => input.placeholder)).toEqual(["40.375", "44.625"]);
     expect(document.activeElement).toBe(searchBox());
     expect(dialog().hasAttribute("inert")).toBe(true);
     const trapFirst = button("Close", picker());
@@ -354,6 +361,22 @@ describe("manual bank transaction picker", () => {
     expect(dialog().textContent).not.toContain("You have unsaved changes");
 
     await click(trigger);
+    for (const key of ["date_from", "date_to"] as const) {
+      const input = inputByName(key, picker());
+      expect(input.value).toBe(initial[key]);
+      await typeInto(input, "2026-11-15");
+      expect(search).toHaveBeenLastCalledWith({ ...initial, [key]: "2026-11-15" });
+      await typeInto(input, "");
+      expect(input.value).toBe(initial[key]);
+      expect(search).toHaveBeenLastCalledWith(initial);
+    }
+    const wide = picker().querySelector<HTMLInputElement>('input[type="checkbox"]');
+    if (wide === null) throw new Error("wide toggle missing");
+    await click(wide);
+    expect(search).toHaveBeenLastCalledWith({ ...initial, wide: true });
+    expect([...picker().querySelectorAll<HTMLInputElement>('input[inputmode="decimal"]')]
+      .map((input) => input.placeholder)).toEqual(["34", "51"]);
+    await click(wide);
     vi.useFakeTimers();
     try {
       const before = search.mock.calls.length;
@@ -374,6 +397,7 @@ describe("manual bank transaction picker", () => {
     const result = [...picker().querySelectorAll("button")].find((candidate) =>
       candidate.textContent.includes("Another purchase"));
     if (result === undefined) throw new Error("next-page transaction missing");
+    expect(result.textContent).toContain("+6.89 PLN · with fee");
     await click(result);
     expect(linkRadio("manual", dialog()).checked).toBe(true);
     expect(clients.rApi.confirmReceipt).not.toHaveBeenCalled();
@@ -383,6 +407,58 @@ describe("manual bank transaction picker", () => {
     expect(clients.rApi.confirmReceipt).toHaveBeenCalledWith(expect.objectContaining({
       receipt_id: receiptSummary().receipt_id, link: { transaction_id: second.id },
     }));
+  });
+
+  it("uses the date and total typed on a partial forward and confirms through the same form", async () => {
+    const detail = receiptDetail({
+      document_kind: "invoice", source_kind: "email", forwarded_manually: true, raw_shop_name: "przekazane ręcznie",
+      receipt_date: null, receipt_time: null, total_amount: null, currency: null, payment_method: null,
+      math_delta: null, raw_nip: null, lines: [],
+    });
+    const item: ReceiptTransactionSearchItem = {
+      id: "1." + "f".repeat(64), amount: "28", amount_delta: "-0.77", includes_fee: false, currency: "PLN",
+      date: "2026-08-25", account_label: "Synthetic Checking ••1001", counterparty: "Test shop", title: null,
+    };
+    const clients = fakeClients([detail], detail);
+    const search = vi.fn<NonNullable<ReceiptsApi["searchReceiptTransactions"]>>((request) =>
+      ok({ items: request.total_amount === undefined ? [] : [item], next_cursor: null }));
+    clients.rApi.searchReceiptTransactions = search;
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-12-03T12:00:00Z"));
+    try {
+      await renderReceipts(clients, { transactionSearchSupported: true, locale: "pl" });
+      await click(openDetailButton(0, "Szczegóły"));
+      const drawer = dialog();
+      const trigger = button("Wybierz transakcję…", drawer);
+      const date = inputByName("receipt_date", drawer);
+      const total = inputByName("total_amount", drawer);
+      expect(date.value).toBe("");
+      expect(total.value).toBe("");
+      await click(trigger);
+      const request = { receipt_id: detail.receipt_id, currency: "PLN", account_id: null, query: "", wide: false };
+      expect(search).toHaveBeenLastCalledWith({ ...request, date_from: "2026-09-04", date_to: "2026-12-03" });
+      expect(picker().textContent).toContain("Pokaż wszystkie kwoty i sprzedawców");
+      await click(button("Zamknij", picker()));
+
+      await typeInto(date, "2026-08-20");
+      await typeInto(total, "28,77");
+      await click(trigger);
+      expect(search).toHaveBeenLastCalledWith({
+        ...request, receipt_date: "2026-08-20", total_amount: "28.77", date_from: "2026-07-21", date_to: "2026-10-19",
+      });
+      const result = picker().querySelector<HTMLButtonElement>(".budget-receipt-picker-results button");
+      if (result === null) throw new Error("transaction result missing");
+      expect(result.textContent).toContain("−0,77 zł");
+      await click(result);
+      expect(linkRadio("manual", drawer).checked).toBe(true);
+      await click(button("Zatwierdź dokument", drawer));
+      expect(clients.rApi.confirmReceipt).toHaveBeenCalledWith(expect.objectContaining({
+        receipt_date: "2026-08-20", total_amount: "28.77", currency: "PLN", link: { transaction_id: item.id },
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

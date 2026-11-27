@@ -500,6 +500,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "Учитавање слике…",
   "budget.receipts.imageUnavailable": "Преглед слике није доступан.",
   "budget.receipts.transactionPicker": "Изаберите трансакцију…",
+  "budget.receipts.transactionPickerWide": "Прикажи све износе и трговце",
+  "budget.receipts.transactionWithFee": "са накнадом",
   "budget.receipts.linkSection": "Повезана банковна трансакција",
   "budget.receipts.linkedAccount": "Рачун: {account}",
   "budget.receipts.unlinkedState": "Није повезано ни са једном банковном трансакцијом.",

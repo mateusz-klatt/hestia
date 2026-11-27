@@ -500,6 +500,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "Ielādē attēlu…",
   "budget.receipts.imageUnavailable": "Attēla priekšskatījums nav pieejams.",
   "budget.receipts.transactionPicker": "Izvēlieties darījumu…",
+  "budget.receipts.transactionPickerWide": "Rādīt visas summas un tirgotājus",
+  "budget.receipts.transactionWithFee": "ar komisijas maksu",
   "budget.receipts.linkSection": "Sasaistītais bankas darījums",
   "budget.receipts.linkedAccount": "Konts: {account}",
   "budget.receipts.unlinkedState": "Nav sasaistīts ne ar vienu bankas darījumu.",

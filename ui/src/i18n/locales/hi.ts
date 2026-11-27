@@ -501,6 +501,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "छवि लोड हो रही है…",
   "budget.receipts.imageUnavailable": "छवि पूर्वावलोकन उपलब्ध नहीं है।",
   "budget.receipts.transactionPicker": "लेन-देन चुनें…",
+  "budget.receipts.transactionPickerWide": "सभी राशियाँ और व्यापारी दिखाएँ",
+  "budget.receipts.transactionWithFee": "शुल्क सहित",
   "budget.receipts.linkSection": "लिंक किया गया बैंक लेन-देन",
   "budget.receipts.linkedAccount": "खाता: {account}",
   "budget.receipts.unlinkedState": "किसी बैंक लेन-देन से लिंक नहीं है।",

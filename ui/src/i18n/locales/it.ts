@@ -499,6 +499,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "Caricamento immagine…",
   "budget.receipts.imageUnavailable": "Anteprima immagine non disponibile.",
   "budget.receipts.transactionPicker": "Scegli transazione…",
+  "budget.receipts.transactionPickerWide": "Mostra tutti gli importi e gli esercenti",
+  "budget.receipts.transactionWithFee": "con commissione",
   "budget.receipts.linkSection": "Movimento bancario collegato",
   "budget.receipts.linkedAccount": "Conto: {account}",
   "budget.receipts.unlinkedState": "Non collegata ad alcun movimento bancario.",

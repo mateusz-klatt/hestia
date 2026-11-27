@@ -500,6 +500,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "Inapakia picha…",
   "budget.receipts.imageUnavailable": "Hakikisho la picha halipatikani.",
   "budget.receipts.transactionPicker": "Chagua muamala…",
+  "budget.receipts.transactionPickerWide": "Onyesha kiasi chote na wauzaji wote",
+  "budget.receipts.transactionWithFee": "pamoja na ada",
   "budget.receipts.linkSection": "Muamala wa benki uliounganishwa",
   "budget.receipts.linkedAccount": "Akaunti: {account}",
   "budget.receipts.unlinkedState": "Haijaunganishwa na muamala wowote wa benki.",

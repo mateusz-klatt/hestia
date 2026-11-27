@@ -501,6 +501,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "Memuat gambar…",
   "budget.receipts.imageUnavailable": "Pratinjau gambar tidak tersedia.",
   "budget.receipts.transactionPicker": "Pilih transaksi…",
+  "budget.receipts.transactionPickerWide": "Tampilkan semua nominal dan penjual",
+  "budget.receipts.transactionWithFee": "termasuk biaya",
   "budget.receipts.linkSection": "Transaksi bank tertaut",
   "budget.receipts.linkedAccount": "Rekening: {account}",
   "budget.receipts.unlinkedState": "Belum tertaut dengan transaksi bank mana pun.",

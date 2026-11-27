@@ -501,6 +501,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "Φόρτωση εικόνας…",
   "budget.receipts.imageUnavailable": "Η προεπισκόπηση εικόνας δεν είναι διαθέσιμη.",
   "budget.receipts.transactionPicker": "Επιλέξτε συναλλαγή…",
+  "budget.receipts.transactionPickerWide": "Εμφάνιση όλων των ποσών και εμπόρων",
+  "budget.receipts.transactionWithFee": "με προμήθεια",
   "budget.receipts.linkSection": "Συνδεδεμένη τραπεζική συναλλαγή",
   "budget.receipts.linkedAccount": "Λογαριασμός: {account}",
   "budget.receipts.unlinkedState": "Δεν συνδέεται με καμία τραπεζική συναλλαγή.",

@@ -500,6 +500,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "Hleður mynd…",
   "budget.receipts.imageUnavailable": "Forskoðun myndar er ekki tiltæk.",
   "budget.receipts.transactionPicker": "Veldu færslu…",
+  "budget.receipts.transactionPickerWide": "Sýna allar upphæðir og söluaðila",
+  "budget.receipts.transactionWithFee": "með gjaldi",
   "budget.receipts.linkSection": "Tengd bankafærsla",
   "budget.receipts.linkedAccount": "Reikningur: {account}",
   "budget.receipts.unlinkedState": "Ekki tengd neinni bankafærslu.",

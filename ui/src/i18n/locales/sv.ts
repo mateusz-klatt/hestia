@@ -499,6 +499,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageLoading": "Läser in bild…",
   "budget.receipts.imageUnavailable": "Bildförhandsgranskning är inte tillgänglig.",
   "budget.receipts.transactionPicker": "Välj transaktion…",
+  "budget.receipts.transactionPickerWide": "Visa alla belopp och handlare",
+  "budget.receipts.transactionWithFee": "med avgift",
   "budget.receipts.linkSection": "Kopplad banktransaktion",
   "budget.receipts.linkedAccount": "Konto: {account}",
   "budget.receipts.unlinkedState": "Inte kopplad till någon banktransaktion.",
