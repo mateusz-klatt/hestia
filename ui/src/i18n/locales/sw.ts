@@ -615,6 +615,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Inayofuata",
   "budget.receipts.autoAdvanceLabel": "Nenda kwa inayofuata baada ya kuthibitisha",
   "budget.receipts.allConfirmed": "Zote zimethibitishwa.",
+  "budget.receipts.refreshing": "Inasasisha…",
   "budget.consent.title": "Muhtasari wa hali na usasishaji wa idhini",
   "budget.consent.intro": "Muhtasari wa kusoma tu wa uhalali wa idhini ya benki na rekodi za uidhinishaji zilizohifadhiwa. Hakuna kufunga kwa mbali, kufuta au ombi la benki linalofanywa hapa.",
   "budget.consent.loading": "Inapakia muhtasari wa idhini…",

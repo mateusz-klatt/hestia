@@ -615,6 +615,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "التالي",
   "budget.receipts.autoAdvanceLabel": "الانتقال إلى التالي بعد التأكيد",
   "budget.receipts.allConfirmed": "تم تأكيد الكل.",
+  "budget.receipts.refreshing": "جارٍ التحديث…",
   "budget.consent.title": "نظرة عامة على حالة الموافقات وتجديدها",
   "budget.consent.intro": "ملخص للقراءة فقط لصلاحية الموافقات المصرفية وسجلات التفويض المحفوظة. لا تُنفّذ هنا عمليات إغلاق عن بُعد أو حذف أو طلبات إلى البنك.",
   "budget.consent.loading": "جارٍ تحميل ملخص الموافقات…",

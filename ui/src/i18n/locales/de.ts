@@ -614,6 +614,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Nächster",
   "budget.receipts.autoAdvanceLabel": "Nach dem Bestätigen zum nächsten wechseln",
   "budget.receipts.allConfirmed": "Alles bestätigt.",
+  "budget.receipts.refreshing": "Wird aktualisiert…",
   "budget.consent.title": "Einwilligungsstatus & Verlängerungsübersicht",
   "budget.consent.intro": "Schreibgeschützte Übersicht zur Gültigkeit der Bankeinwilligungen und zu gespeicherten Autorisierungen. Hier werden weder Einwilligungen bei der Bank beendet noch Daten gelöscht oder Bankanfragen ausgeführt.",
   "budget.consent.loading": "Einwilligungsübersicht wird geladen…",

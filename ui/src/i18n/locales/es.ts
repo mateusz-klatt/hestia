@@ -614,6 +614,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Siguiente",
   "budget.receipts.autoAdvanceLabel": "Ir al siguiente tras confirmar",
   "budget.receipts.allConfirmed": "Todo confirmado.",
+  "budget.receipts.refreshing": "Actualizando…",
   "budget.consent.title": "Estado & renovación de consentimientos",
   "budget.consent.intro": "Resumen de solo lectura de la validez de los consentimientos bancarios y los registros de autorización guardados. Aquí no se ejecutan cierres remotos, eliminaciones ni solicitudes al banco.",
   "budget.consent.loading": "Cargando resumen de consentimientos…",

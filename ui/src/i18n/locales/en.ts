@@ -637,6 +637,7 @@ const en = {
   "budget.receipts.nextAction": "Next",
   "budget.receipts.autoAdvanceLabel": "Go to next after confirming",
   "budget.receipts.allConfirmed": "All confirmed.",
+  "budget.receipts.refreshing": "Refreshing…",
 
   "budget.consent.title": "Consent status & renewal overview",
   "budget.consent.intro": "Read-only summary of bank consent validity and stored authorization records. No remote closure, deletion or bank request runs here.",

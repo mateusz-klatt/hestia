@@ -614,6 +614,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Nästa",
   "budget.receipts.autoAdvanceLabel": "Gå till nästa efter bekräftelse",
   "budget.receipts.allConfirmed": "Allt är bekräftat.",
+  "budget.receipts.refreshing": "Uppdaterar…",
   "budget.consent.title": "Samtyckesstatus & förnyelseöversikt",
   "budget.consent.intro": "Skrivskyddad sammanställning av banksamtyckens giltighet och sparade auktoriseringsposter. Inga fjärravslut, raderingar eller bankförfrågningar utförs här.",
   "budget.consent.loading": "Läser in samtyckesöversikt…",

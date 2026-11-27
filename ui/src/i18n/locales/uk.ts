@@ -615,6 +615,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Наступний",
   "budget.receipts.autoAdvanceLabel": "Переходити до наступного після підтвердження",
   "budget.receipts.allConfirmed": "Усе підтверджено.",
+  "budget.receipts.refreshing": "Оновлення…",
   "budget.consent.title": "Стан згод і огляд поновлень",
   "budget.consent.intro": "Зведення строків дії банківських згод і збережених записів авторизації лише для перегляду. Тут не виконуються дистанційне закриття, видалення чи запити до банку.",
   "budget.consent.loading": "Завантаження огляду згод…",

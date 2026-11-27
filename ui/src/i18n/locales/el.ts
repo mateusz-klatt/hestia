@@ -616,6 +616,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Επόμενο",
   "budget.receipts.autoAdvanceLabel": "Μετάβαση στο επόμενο μετά την επιβεβαίωση",
   "budget.receipts.allConfirmed": "Επιβεβαιώθηκαν όλα.",
+  "budget.receipts.refreshing": "Ανανέωση…",
   "budget.consent.title": "Επισκόπηση κατάστασης & ανανέωσης συγκαταθέσεων",
   "budget.consent.intro": "Σύνοψη μόνο για ανάγνωση της ισχύος των τραπεζικών συγκαταθέσεων και των αποθηκευμένων εγγραφών εξουσιοδότησης. Εδώ δεν εκτελούνται απομακρυσμένα κλεισίματα, διαγραφές ή αιτήματα προς τράπεζες.",
   "budget.consent.loading": "Φόρτωση επισκόπησης συγκαταθέσεων…",

@@ -615,6 +615,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "بعدی",
   "budget.receipts.autoAdvanceLabel": "پس از تأیید به مورد بعدی برو",
   "budget.receipts.allConfirmed": "همه تأیید شدند.",
+  "budget.receipts.refreshing": "در حال بازخوانی…",
   "budget.consent.title": "نمای کلی وضعیت و تمدید رضایت‌نامه‌ها",
   "budget.consent.intro": "خلاصهٔ فقط خواندنی از اعتبار رضایت‌نامه‌های بانکی و سوابق مجوز ذخیره‌شده. اینجا هیچ بستن از راه دور، حذف یا درخواست بانکی اجرا نمی‌شود.",
   "budget.consent.loading": "در حال بارگیری نمای رضایت‌نامه‌ها…",

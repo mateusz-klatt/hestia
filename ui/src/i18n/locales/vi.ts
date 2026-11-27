@@ -616,6 +616,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Tiếp",
   "budget.receipts.autoAdvanceLabel": "Chuyển sang mục tiếp theo sau khi xác nhận",
   "budget.receipts.allConfirmed": "Đã xác nhận tất cả.",
+  "budget.receipts.refreshing": "Đang làm mới…",
   "budget.consent.title": "Tổng quan trạng thái & gia hạn chấp thuận",
   "budget.consent.intro": "Bản tóm tắt chỉ đọc về hiệu lực chấp thuận ngân hàng và hồ sơ ủy quyền đã lưu. Không thực hiện việc đóng từ xa, xóa hay gửi yêu cầu ngân hàng tại đây.",
   "budget.consent.loading": "Đang tải tổng quan chấp thuận…",

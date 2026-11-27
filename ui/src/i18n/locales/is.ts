@@ -615,6 +615,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Næsta",
   "budget.receipts.autoAdvanceLabel": "Fara á næsta eftir staðfestingu",
   "budget.receipts.allConfirmed": "Allt staðfest.",
+  "budget.receipts.refreshing": "Endurhleður…",
   "budget.consent.title": "Yfirlit yfir stöðu & endurnýjun samþykkis",
   "budget.consent.intro": "Yfirlit til skoðunar yfir gildistíma bankasamþykkis og vistaðar heimildarskrár. Hér fer hvorki fram fjarlokun, eyðing né fyrirspurn til banka.",
   "budget.consent.loading": "Hleð samþykkisyfirliti…",

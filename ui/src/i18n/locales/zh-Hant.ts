@@ -615,6 +615,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "下一筆",
   "budget.receipts.autoAdvanceLabel": "確認後自動前往下一筆",
   "budget.receipts.allConfirmed": "已全部確認。",
+  "budget.receipts.refreshing": "正在重新整理…",
   "budget.consent.title": "授權狀態與續期概覽",
   "budget.consent.intro": "銀行授權效期與已儲存授權紀錄的唯讀摘要。此處不會執行遠端關閉、刪除或銀行請求。",
   "budget.consent.loading": "正在載入授權概覽…",

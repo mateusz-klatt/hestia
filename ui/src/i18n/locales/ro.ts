@@ -615,6 +615,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Următor",
   "budget.receipts.autoAdvanceLabel": "Treci la următorul după confirmare",
   "budget.receipts.allConfirmed": "Totul este confirmat.",
+  "budget.receipts.refreshing": "Se reîmprospătează…",
   "budget.consent.title": "Starea consimțămintelor și reînnoirile",
   "budget.consent.intro": "Rezumat doar pentru citire al valabilității consimțămintelor bancare și al înregistrărilor de autorizare salvate. Aici nu se execută închideri la distanță, ștergeri sau cereri bancare.",
   "budget.consent.loading": "Se încarcă rezumatul consimțămintelor…",

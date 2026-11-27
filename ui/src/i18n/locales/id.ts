@@ -616,6 +616,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Berikutnya",
   "budget.receipts.autoAdvanceLabel": "Lanjut ke berikutnya setelah konfirmasi",
   "budget.receipts.allConfirmed": "Semua sudah dikonfirmasi.",
+  "budget.receipts.refreshing": "Menyegarkan…",
   "budget.consent.title": "Ringkasan status & pembaruan persetujuan",
   "budget.consent.intro": "Ringkasan masa berlaku persetujuan bank dan catatan otorisasi tersimpan yang hanya dapat dibaca. Tidak ada penutupan jarak jauh, penghapusan, atau permintaan bank yang dijalankan di sini.",
   "budget.consent.loading": "Memuat ringkasan persetujuan…",

@@ -615,6 +615,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "הבא",
   "budget.receipts.autoAdvanceLabel": "עבור לבא לאחר האישור",
   "budget.receipts.allConfirmed": "הכול אושר.",
+  "budget.receipts.refreshing": "מרענן…",
   "budget.consent.title": "סקירת מצב ההסכמות וחידושן",
   "budget.consent.intro": "סיכום לקריאה בלבד של תוקף ההסכמות לבנקים ורשומות ההרשאה השמורות. לא מתבצעים כאן סגירה מרחוק, מחיקה או בקשה לבנק.",
   "budget.consent.loading": "סקירת ההסכמות נטענת…",

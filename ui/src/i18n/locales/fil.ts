@@ -616,6 +616,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Susunod",
   "budget.receipts.autoAdvanceLabel": "Pumunta sa susunod pagkatapos kumpirmahin",
   "budget.receipts.allConfirmed": "Nakumpirma na ang lahat.",
+  "budget.receipts.refreshing": "Nire-refresh…",
   "budget.consent.title": "Buod ng katayuan & pag-renew ng pahintulot",
   "budget.consent.intro": "Buod na para sa pagbasa lamang ng bisa ng pahintulot sa bangko at mga nakaimbak na tala ng awtorisasyon. Walang malayuang pagsasara, pagtanggal o kahilingan sa bangko na isinasagawa rito.",
   "budget.consent.loading": "Nilo-load ang buod ng pahintulot…",

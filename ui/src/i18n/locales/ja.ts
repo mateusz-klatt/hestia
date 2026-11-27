@@ -616,6 +616,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "次へ",
   "budget.receipts.autoAdvanceLabel": "確定後に次へ進む",
   "budget.receipts.allConfirmed": "すべて確定しました。",
+  "budget.receipts.refreshing": "更新中…",
   "budget.consent.title": "同意の状態と更新の概要",
   "budget.consent.intro": "銀行への同意の有効期限と保存された認可記録を読み取り専用で表示します。ここではリモート終了、削除、銀行へのリクエストは実行しません。",
   "budget.consent.loading": "同意の概要を読み込み中…",

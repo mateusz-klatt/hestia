@@ -616,6 +616,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Tjetri",
   "budget.receipts.autoAdvanceLabel": "Kalo te tjetri pas konfirmimit",
   "budget.receipts.allConfirmed": "Të gjitha u konfirmuan.",
+  "budget.receipts.refreshing": "Duke rifreskuar…",
   "budget.consent.title": "Përmbledhje e gjendjes & rinovimit të pëlqimeve",
   "budget.consent.intro": "Përmbledhje vetëm për lexim e vlefshmërisë së pëlqimeve bankare dhe e regjistrimeve të ruajtura të autorizimit. Këtu nuk kryhen mbyllje në distancë, fshirje ose kërkesa bankare.",
   "budget.consent.loading": "Duke ngarkuar përmbledhjen e pëlqimeve…",

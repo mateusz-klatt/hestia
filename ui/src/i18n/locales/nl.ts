@@ -614,6 +614,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Volgende",
   "budget.receipts.autoAdvanceLabel": "Na bevestigen doorgaan naar de volgende",
   "budget.receipts.allConfirmed": "Alles bevestigd.",
+  "budget.receipts.refreshing": "Vernieuwen…",
   "budget.consent.title": "Toestemmingsstatus & verlengingsoverzicht",
   "budget.consent.intro": "Alleen-lezen overzicht van de geldigheid van banktoestemmingen en opgeslagen autorisatiegegevens. Hier worden geen toestemmingen op afstand gesloten, gegevens verwijderd of bankverzoeken uitgevoerd.",
   "budget.consent.loading": "Toestemmingsoverzicht laden…",

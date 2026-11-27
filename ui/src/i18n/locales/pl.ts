@@ -619,6 +619,7 @@ const pl: Partial<Messages> = {
   "budget.receipts.nextAction": "Następny",
   "budget.receipts.autoAdvanceLabel": "Przejdź do następnego po zatwierdzeniu",
   "budget.receipts.allConfirmed": "Wszystko zatwierdzone.",
+  "budget.receipts.refreshing": "Odświeżanie…",
 
   "budget.consent.title": "Stan zgód i przypomnienia o odnowieniu",
   "budget.consent.intro": "Wyłącznie podgląd ważności zgód bankowych oraz zapisanych prób autoryzacji. Nie zamyka sesji w banku, niczego nie usuwa i nie wysyła żądań do banku.",

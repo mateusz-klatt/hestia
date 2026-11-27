@@ -615,6 +615,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Seuraava",
   "budget.receipts.autoAdvanceLabel": "Siirry seuraavaan vahvistuksen jälkeen",
   "budget.receipts.allConfirmed": "Kaikki vahvistettu.",
+  "budget.receipts.refreshing": "Päivitetään…",
   "budget.consent.title": "Suostumusten tila & uusimisen yleiskatsaus",
   "budget.consent.intro": "Vain luettavissa oleva yhteenveto pankkisuostumusten voimassaolosta ja tallennetuista valtuutustiedoista. Tässä ei tehdä etäsulkemisia, poistoja tai pankkipyyntöjä.",
   "budget.consent.loading": "Ladataan suostumusten yleiskatsausta…",

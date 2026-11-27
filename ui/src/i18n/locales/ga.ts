@@ -616,6 +616,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Ar aghaidh",
   "budget.receipts.autoAdvanceLabel": "Téigh go dtí an chéad cheann eile tar éis deimhniú",
   "budget.receipts.allConfirmed": "Deimhníodh gach ceann.",
+  "budget.receipts.refreshing": "Ag athnuachan…",
   "budget.consent.title": "Forbhreathnú ar stádas toilithe & athnuachan",
   "budget.consent.intro": "Achoimre inléite amháin ar bhailíocht toilithe bainc agus ar thaifid údaraithe stóráilte. Ní dhéantar ciandúnadh, scriosadh ná iarratas bainc anseo.",
   "budget.consent.loading": "Forbhreathnú toilithe á lódáil…",

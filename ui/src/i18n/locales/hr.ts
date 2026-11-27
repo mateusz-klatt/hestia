@@ -615,6 +615,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Sljedeći",
   "budget.receipts.autoAdvanceLabel": "Prijeđi na sljedeći nakon potvrde",
   "budget.receipts.allConfirmed": "Sve je potvrđeno.",
+  "budget.receipts.refreshing": "Osvježavanje…",
   "budget.consent.title": "Pregled stanja i obnove privola",
   "budget.consent.intro": "Pregled valjanosti privola banci i spremljenih zapisa autorizacije samo za čitanje. Ovdje se ne pokreću udaljeno zatvaranje, brisanje ni zahtjevi banci.",
   "budget.consent.loading": "Učitavanje pregleda privola…",

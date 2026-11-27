@@ -615,6 +615,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Další",
   "budget.receipts.autoAdvanceLabel": "Po potvrzení přejít na další",
   "budget.receipts.allConfirmed": "Vše je potvrzeno.",
+  "budget.receipts.refreshing": "Obnovování…",
   "budget.consent.title": "Přehled stavu a obnovy souhlasů",
   "budget.consent.intro": "Přehled platnosti bankovních souhlasů a uložených autorizačních záznamů pouze pro čtení. Neprovádí vzdálené ukončení, mazání ani požadavky na banku.",
   "budget.consent.loading": "Načítání přehledu souhlasů…",

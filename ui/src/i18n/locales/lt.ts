@@ -615,6 +615,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Kitas",
   "budget.receipts.autoAdvanceLabel": "Patvirtinus pereiti prie kito",
   "budget.receipts.allConfirmed": "Viskas patvirtinta.",
+  "budget.receipts.refreshing": "Atnaujinama…",
   "budget.consent.title": "Sutikimų būsenos ir atnaujinimo apžvalga",
   "budget.consent.intro": "Tik skaitoma banko sutikimų galiojimo ir išsaugotų autorizavimo įrašų suvestinė. Čia nevykdomas nuotolinis uždarymas, trynimas ar banko užklausos.",
   "budget.consent.loading": "Įkeliama sutikimų apžvalga…",

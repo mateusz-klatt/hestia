@@ -614,6 +614,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Successivo",
   "budget.receipts.autoAdvanceLabel": "Passa al successivo dopo la conferma",
   "budget.receipts.allConfirmed": "Tutto confermato.",
+  "budget.receipts.refreshing": "Aggiornamento…",
   "budget.consent.title": "Stato dei consensi & riepilogo dei rinnovi",
   "budget.consent.intro": "Riepilogo di sola lettura della validità dei consensi bancari e delle autorizzazioni memorizzate. Qui non vengono eseguite chiusure remote, eliminazioni o richieste bancarie.",
   "budget.consent.loading": "Caricamento del riepilogo dei consensi…",

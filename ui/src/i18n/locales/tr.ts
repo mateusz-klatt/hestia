@@ -615,6 +615,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Sonraki",
   "budget.receipts.autoAdvanceLabel": "Onayladıktan sonra sonrakine geç",
   "budget.receipts.allConfirmed": "Tümü onaylandı.",
+  "budget.receipts.refreshing": "Yenileniyor…",
   "budget.consent.title": "İzin durumu ve yenileme özeti",
   "budget.consent.intro": "Banka izinlerinin geçerliliği ve kayıtlı yetkilendirmelerin salt okunur özeti. Burada uzaktan kapatma, silme veya bankaya istek gönderme işlemi yapılmaz.",
   "budget.consent.loading": "İzin özeti yükleniyor…",

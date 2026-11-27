@@ -616,6 +616,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "পরবর্তী",
   "budget.receipts.autoAdvanceLabel": "নিশ্চিত করার পর পরবর্তীতে যান",
   "budget.receipts.allConfirmed": "সব নিশ্চিত হয়েছে।",
+  "budget.receipts.refreshing": "রিফ্রেশ হচ্ছে…",
   "budget.consent.title": "সম্মতির অবস্থা ও নবায়নের সারাংশ",
   "budget.consent.intro": "ব্যাংকের সম্মতির মেয়াদ ও সংরক্ষিত অনুমোদন রেকর্ডের শুধু দেখার উপযোগী সারাংশ। এখানে দূর থেকে বন্ধ করা, মুছে ফেলা বা ব্যাংকে অনুরোধ পাঠানো হয় না।",
   "budget.consent.loading": "সম্মতির সারাংশ লোড হচ্ছে…",

@@ -615,6 +615,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Nākamais",
   "budget.receipts.autoAdvanceLabel": "Pēc apstiprināšanas pāriet uz nākamo",
   "budget.receipts.allConfirmed": "Viss apstiprināts.",
+  "budget.receipts.refreshing": "Atsvaidzina…",
   "budget.consent.title": "Piekrišanu statusa un atjaunošanas pārskats",
   "budget.consent.intro": "Tikai lasāms bankas piekrišanu derīguma un saglabāto autorizācijas ierakstu kopsavilkums. Šeit netiek veikta attāla slēgšana, dzēšana vai bankas pieprasījumi.",
   "budget.consent.loading": "Ielādē piekrišanu pārskatu…",

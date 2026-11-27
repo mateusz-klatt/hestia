@@ -616,6 +616,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Հաջորդը",
   "budget.receipts.autoAdvanceLabel": "Հաստատելուց հետո անցնել հաջորդին",
   "budget.receipts.allConfirmed": "Ամենը հաստատված է։",
+  "budget.receipts.refreshing": "Թարմացվում է…",
   "budget.consent.title": "Համաձայնությունների վիճակի և երկարաձգման ամփոփում",
   "budget.consent.intro": "Բանկային համաձայնությունների վավերության և պահված լիազորման գրառումների ամփոփում՝ միայն դիտման համար։ Այստեղ հեռակա փակումներ, ջնջումներ կամ բանկային հարցումներ չեն կատարվում։",
   "budget.consent.loading": "Համաձայնությունների ամփոփումը բեռնվում է…",

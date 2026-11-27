@@ -616,6 +616,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "ถัดไป",
   "budget.receipts.autoAdvanceLabel": "ไปยังรายการถัดไปหลังยืนยัน",
   "budget.receipts.allConfirmed": "ยืนยันครบทั้งหมดแล้ว",
+  "budget.receipts.refreshing": "กำลังรีเฟรช…",
   "budget.consent.title": "ภาพรวมสถานะความยินยอม และ การต่ออายุ",
   "budget.consent.intro": "สรุปแบบอ่านอย่างเดียวของอายุความยินยอมของธนาคารและบันทึกการอนุญาตที่เก็บไว้ ไม่มีการปิดจากระยะไกล การลบ หรือคำขอไปยังธนาคารจากที่นี่",
   "budget.consent.loading": "กำลังโหลดภาพรวมความยินยอม…",

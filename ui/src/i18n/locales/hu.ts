@@ -615,6 +615,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.nextAction": "Következő",
   "budget.receipts.autoAdvanceLabel": "Jóváhagyás után ugrás a következőre",
   "budget.receipts.allConfirmed": "Minden jóváhagyva.",
+  "budget.receipts.refreshing": "Frissítés…",
   "budget.consent.title": "Hozzájárulások állapota és megújítása",
   "budget.consent.intro": "A banki hozzájárulások érvényességének és a tárolt engedélyezési adatoknak csak olvasható összefoglalója. Itt nem történik távoli lezárás, törlés vagy banki kérés.",
   "budget.consent.loading": "Hozzájárulások áttekintésének betöltése…",
