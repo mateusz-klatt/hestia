@@ -3845,7 +3845,7 @@ function ReceiptDetailDrawer({
                 />
               ) : <section className="budget-receipt-section" aria-label={t("budget.receipts.linkSection")}>
                 <h5>{t("budget.receipts.linkSection")}</h5>
-                {canPickManually && activeDraft !== null && searchTransactions !== undefined ? (
+                {canPickManually ? (
                   <>
                     <div className="budget-actions">
                       <button type="button" disabled={actionBusy !== null || groupControllerOpen}

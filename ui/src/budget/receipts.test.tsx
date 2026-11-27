@@ -371,9 +371,8 @@ describe("manual bank transaction picker", () => {
     expect(search).toHaveBeenLastCalledWith({ ...initial, query: "market", account_id: "local-a" });
     await click(button("Load more", picker()));
     expect(search).toHaveBeenLastCalledWith({ ...initial, query: "market", account_id: "local-a", cursor: "page-2" });
-    const result = [...picker().querySelectorAll("button")].find((candidate) => (
-      candidate.textContent?.includes("Another purchase") === true
-    ));
+    const result = [...picker().querySelectorAll("button")].find((candidate) =>
+      candidate.textContent.includes("Another purchase"));
     if (result === undefined) throw new Error("next-page transaction missing");
     await click(result);
     expect(linkRadio("manual", dialog()).checked).toBe(true);
