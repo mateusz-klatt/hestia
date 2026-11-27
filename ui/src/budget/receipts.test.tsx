@@ -2765,7 +2765,7 @@ describe("ReceiptsView", () => {
     try {
       const searchClients = fakeClients([receiptSummary({ receipt_id: "s0", raw_shop_name: "Base Store" })]);
       vi.mocked(searchClients.rApi.receiptsSearch).mockImplementation((req) => ok<ReceiptListResult>({
-        receipts: [receiptSummary({ receipt_id: `res-${req.query}`, raw_shop_name: `Found ${req.query}` })],
+        receipts: [receiptSummary({ receipt_id: `res-${req.query}`, raw_shop_name: `Found ${req.query}`, status: "confirmed" })],
         next_cursor: null,
       }));
       const onAccessLoss = vi.fn(() => false);
@@ -3136,6 +3136,10 @@ describe("ReceiptsView", () => {
     vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => ok({
       receipt: receiptDetail(rows.find((row) => row.receipt_id === id)),
       candidates: [],
+    }));
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation(() => ok({
+      ok: true,
+      receipt: receiptDetail({ ...current, status: "confirmed", version: current.version + 1 }),
     }));
     const refresh = deferred<ReceiptListResult>();
     let simulatedScrollY = 400;
