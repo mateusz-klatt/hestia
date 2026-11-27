@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Prečo niektoré bankové položky nie sú zahrnuté v súhrnoch obdobia.",
   "budget.quarantine.dismissItem": "Odstrániť položku",
   "budget.quarantine.dismissBatch": "Odstrániť všetky položky z tohto importu",
+  "budget.quarantine.dismissBatchConfirm": "Potvrdením odstránite všetky nevyriešené položky z dávky {batch} (spolu {entries}), vrátane položiek mimo zobrazeného zoznamu. Opätovný import rovnakého súboru ich neobnoví.",
   "budget.quarantine.dismissError": "Položky z importu sa nepodarilo odstrániť.",
   "budget.quarantine.summary": "Položky nezahrnuté do súhrnov",
   "budget.quarantine.total": "Spolu",

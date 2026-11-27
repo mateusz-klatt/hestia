@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Sababu za baadhi ya maingizo ya benki kutojumuishwa katika jumla za kipindi.",
   "budget.quarantine.dismissItem": "Ondoa ingizo",
   "budget.quarantine.dismissBatch": "Ondoa maingizo yote kutoka uingizaji huu",
+  "budget.quarantine.dismissBatchConfirm": "Ukithibitisha, maingizo yote ambayo hayajatatuliwa katika kundi {batch} (jumla ya {entries}) yataondolewa, yakiwemo yaliyo nje ya orodha inayoonyeshwa. Kuagiza tena faili ileile hakutayarejesha.",
   "budget.quarantine.dismissError": "Maingizo yaliyoingizwa hayakuweza kuondolewa.",
   "budget.quarantine.summary": "Maingizo yaliyotengwa na jumla",
   "budget.quarantine.total": "Jumla",

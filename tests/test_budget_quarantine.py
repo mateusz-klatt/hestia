@@ -623,7 +623,7 @@ class QuarantineHTTPAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 200)
             body = await response.json()
             self.assertTrue(body["items"])
-            self.assertTrue(all("import_key" not in item for item in body["items"]))
+            self.assertTrue(all({"import_key", "unresolved_count"}.isdisjoint(item) for item in body["items"]))
 
         version = {"X-Hestia-Contract-Version": "0.63.0"}
         headers = self.headers(origin=True) | version
@@ -635,8 +635,13 @@ class QuarantineHTTPAPITests(unittest.IsolatedAsyncioTestCase):
         api_contract.BudgetAnalyticsQuarantine.model_validate(report)
         self.assertNotIn("Synthetic offline description", json.dumps(report))
         self.assertNotIn("25.12", json.dumps(report))
-        self.assertNotIn("import_key", next(item for item in report["items"] if item["bucket"] == "unresolved"))
-        keys = [item["import_key"] for item in report["items"] if item["bucket"] == "import_unresolved"]
+        api_item = next(item for item in report["items"] if item["bucket"] == "unresolved")
+        self.assertTrue({"import_key", "unresolved_count"}.isdisjoint(api_item))
+        import_items = [item for item in report["items"] if item["bucket"] == "import_unresolved"]
+        self.assertLess(len(import_items), 201)
+        keys = [item["import_key"] for item in import_items]
+        self.assertEqual({(item["import_key"]["batch_id"], item["unresolved_count"]) for item in import_items},
+                         {("alice-import", 201)})
         self.assertEqual(len(keys), len({(key["batch_id"], key["ordinal"]) for key in keys}))
         key = next(key for key in keys if key["batch_id"] == "alice-import")
 
@@ -673,12 +678,19 @@ class QuarantineHTTPAPITests(unittest.IsolatedAsyncioTestCase):
         report = await read.json()
         self.assertEqual(report["summary"]["import_unresolved_count"], 201)
         self.assertNotIn(key, [item.get("import_key") for item in report["items"]])
+        self.assertEqual({item["unresolved_count"] for item in report["items"] if item["bucket"] == "import_unresolved"},
+                         {200})
         await dismiss("quarantine-dismiss-batch", {"batch_id": key["batch_id"]}, 200)
         await dismiss("quarantine-dismiss-batch", {"batch_id": key["batch_id"]}, 0)
         read = await self.get("quarantine", headers=headers)
         report = await read.json()
         self.assertEqual(report["summary"]["import_unresolved_count"], 1)
         self.assertEqual(report["summary"]["unresolved_count"], 1)
+        item = next(item for item in report["items"] if item["bucket"] == "import_unresolved")
+        self.assertEqual((item["import_key"]["batch_id"], item["unresolved_count"]), ("alice-other", 1))
+        empty_scope = await self.get("quarantine", params={"account_id": self.credit_id}, headers=headers)
+        self.assertEqual(empty_scope.status, 200)
+        self.assertEqual((await empty_scope.json())["items"], [])
         self.assertEqual({row.batch_id for row in self.rows(db.BudgetImportUnresolved)}, {"alice-other", "bob-import"})
         self.assertEqual({row.report_json for row in self.rows(db.BudgetImportBatch)}, {original_report})
         audits = sorted(self.rows(db.BudgetAnalyticsAudit), key=lambda row: row.id)

@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "دلیل محاسبه نشدن برخی رکوردهای بانکی در جمع‌های دوره.",
   "budget.quarantine.dismissItem": "کنار گذاشتن رکورد",
   "budget.quarantine.dismissBatch": "کنار گذاشتن همهٔ رکوردهای این واردسازی",
+  "budget.quarantine.dismissBatchConfirm": "با تأیید، همهٔ رکوردهای حل‌نشدهٔ دستهٔ {batch} (در مجموع {entries})، از جمله موارد بیرون از فهرست نمایش‌داده‌شده، کنار گذاشته می‌شوند. وارد کردن دوبارهٔ همان فایل آن‌ها را برنمی‌گرداند.",
   "budget.quarantine.dismissError": "رکوردهای واردشده کنار گذاشته نشدند.",
   "budget.quarantine.summary": "رکوردهای کنارگذاشته‌شده از جمع‌ها",
   "budget.quarantine.total": "مجموع",

@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Чому деякі банківські записи не враховуються в підсумках періоду.",
   "budget.quarantine.dismissItem": "Прибрати запис",
   "budget.quarantine.dismissBatch": "Прибрати всі записи з цього імпорту",
+  "budget.quarantine.dismissBatchConfirm": "Підтвердження прибере всі невирішені записи з пакета {batch} (усього {entries}), зокрема й ті, що не відображені у списку. Повторне імпортування того самого файлу їх не відновить.",
   "budget.quarantine.dismissError": "Не вдалося прибрати записи з імпорту.",
   "budget.quarantine.summary": "Записи поза підсумками",
   "budget.quarantine.total": "Разом",

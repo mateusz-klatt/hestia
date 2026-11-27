@@ -1809,6 +1809,14 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 db.BudgetImportUnresolved.ordinal,
             )
             .limit(cap)).all()
+        batch_counts = {}
+        if include_import_keys and import_rows:
+            unresolved = db.BudgetImportUnresolved
+            batch_counts = dict(session.execute(
+                select(unresolved.batch_id, func.count())
+                .where(unresolved.batch_id.in_({row.batch_id for row, _, _ in import_rows}))
+                .group_by(unresolved.batch_id)
+            ).all())
         for row, acc_id, fetched_at in import_rows:
             item = quarantine_mod.extract_safe_item(
                 bucket=quarantine_mod.BUCKET_IMPORT_UNRESOLVED, account_id=acc_id,
@@ -1817,6 +1825,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             )
             if include_import_keys:
                 item["import_key"] = {"batch_id": row.batch_id, "ordinal": row.ordinal}
+                item["unresolved_count"] = batch_counts[row.batch_id]
             raw_items.append(item)
         return quarantine_mod.sort_quarantine_items(raw_items, limit=cap)
 

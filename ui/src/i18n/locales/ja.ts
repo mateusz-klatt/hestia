@@ -1079,6 +1079,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "一部の銀行取引が期間合計に含まれない理由を示します。",
   "budget.quarantine.dismissItem": "項目を除外",
   "budget.quarantine.dismissBatch": "このインポートの項目をすべて除外",
+  "budget.quarantine.dismissBatchConfirm": "確認すると、バッチ {batch} の未解決項目がすべて除外されます（合計 {entries}）。表示されていない項目も対象です。同じファイルを再インポートしても復元できません。",
   "budget.quarantine.dismissError": "インポートした項目を除外できませんでした。",
   "budget.quarantine.summary": "合計から除外された取引",
   "budget.quarantine.total": "合計",

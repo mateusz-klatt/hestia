@@ -1077,6 +1077,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Por que alguns registros bancários não entram nos totais do período.",
   "budget.quarantine.dismissItem": "Descartar registro",
   "budget.quarantine.dismissBatch": "Descartar todos os registros desta importação",
+  "budget.quarantine.dismissBatchConfirm": "A confirmação descartará todos os registros pendentes do lote {batch} ({entries} no total), inclusive os que estão fora da lista exibida. Importar novamente o mesmo arquivo não os restaurará.",
   "budget.quarantine.dismissError": "Não foi possível descartar os registros da importação.",
   "budget.quarantine.summary": "Registros fora dos totais",
   "budget.quarantine.total": "Total",

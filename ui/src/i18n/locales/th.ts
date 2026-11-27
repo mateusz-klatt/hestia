@@ -1079,6 +1079,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "เหตุผลที่รายการธนาคารบางรายการไม่นับในยอดรวมของช่วงเวลา",
   "budget.quarantine.dismissItem": "นำรายการออก",
   "budget.quarantine.dismissBatch": "นำทุกรายการจากการนำเข้านี้ออก",
+  "budget.quarantine.dismissBatchConfirm": "การยืนยันจะนำรายการที่ยังไม่ได้แก้ไขทั้งหมดจากชุด {batch} ออก (รวม {entries}) รวมถึงรายการที่ไม่แสดงในลิสต์ การนำเข้าไฟล์เดิมอีกครั้งจะไม่กู้คืนรายการเหล่านี้",
   "budget.quarantine.dismissError": "ไม่สามารถนำรายการที่นำเข้าออกได้",
   "budget.quarantine.summary": "รายการที่ไม่นับในยอดรวม",
   "budget.quarantine.total": "รวม",

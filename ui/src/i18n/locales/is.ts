@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Ástæður þess að sumar bankafærslur teljast ekki með í samtölum tímabilsins.",
   "budget.quarantine.dismissItem": "Hunsa færslu",
   "budget.quarantine.dismissBatch": "Hunsa allar færslur úr þessum innflutningi",
+  "budget.quarantine.dismissBatchConfirm": "Staðfesting fjarlægir allar óafgreiddar færslur í innflutningslotu {batch} (alls {entries}), einnig þær sem eru utan listans sem birtist. Endurinnflutningur sömu skrár endurheimtir þær ekki.",
   "budget.quarantine.dismissError": "Ekki tókst að hunsa innfluttu færslurnar.",
   "budget.quarantine.summary": "Færslur sem eru undanskildar samtölum",
   "budget.quarantine.total": "Samtals",

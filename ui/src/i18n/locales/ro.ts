@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "De ce unele înregistrări bancare nu sunt incluse în totalurile perioadei.",
   "budget.quarantine.dismissItem": "Elimină înregistrarea",
   "budget.quarantine.dismissBatch": "Elimină toate înregistrările din acest import",
+  "budget.quarantine.dismissBatchConfirm": "Confirmarea va elimina toate înregistrările nerezolvate din lotul {batch} (în total {entries}), inclusiv pe cele din afara listei afișate. Reimportarea aceluiași fișier nu le va restabili.",
   "budget.quarantine.dismissError": "Înregistrările din import nu au putut fi eliminate.",
   "budget.quarantine.summary": "Înregistrări excluse din totaluri",
   "budget.quarantine.total": "Total",

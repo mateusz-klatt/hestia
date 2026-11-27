@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "أسباب عدم احتساب بعض القيود المصرفية في إجماليات الفترة.",
   "budget.quarantine.dismissItem": "استبعاد القيد",
   "budget.quarantine.dismissBatch": "استبعاد كل قيود هذا الاستيراد",
+  "budget.quarantine.dismissBatchConfirm": "سيؤدي التأكيد إلى استبعاد كل القيود من دفعة الاستيراد {batch} (الإجمالي {entries})، بما فيها القيود خارج القائمة المعروضة. لن تؤدي إعادة استيراد الملف نفسه إلى استعادتها.",
   "budget.quarantine.dismissError": "تعذّر استبعاد قيود الاستيراد.",
   "budget.quarantine.summary": "القيود المستبعدة من الإجماليات",
   "budget.quarantine.total": "الإجمالي",

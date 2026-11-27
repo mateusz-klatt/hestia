@@ -1079,6 +1079,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Sebab sesetengah entri bank tidak dikira dalam jumlah tempoh.",
   "budget.quarantine.dismissItem": "Ketepikan entri",
   "budget.quarantine.dismissBatch": "Ketepikan semua entri daripada import ini",
+  "budget.quarantine.dismissBatchConfirm": "Pengesahan akan mengetepikan semua entri yang belum diselesaikan daripada kelompok {batch} (jumlah {entries}), termasuk entri di luar senarai yang dipaparkan. Mengimport semula fail yang sama tidak akan memulihkannya.",
   "budget.quarantine.dismissError": "Entri import tidak dapat diketepikan.",
   "budget.quarantine.summary": "Entri dikecualikan daripada jumlah",
   "budget.quarantine.total": "Jumlah",

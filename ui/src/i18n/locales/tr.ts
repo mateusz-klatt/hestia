@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Bazı banka kayıtlarının dönem toplamlarına neden dahil edilmediği.",
   "budget.quarantine.dismissItem": "Kaydı kaldır",
   "budget.quarantine.dismissBatch": "Bu içe aktarmadaki tüm kayıtları kaldır",
+  "budget.quarantine.dismissBatchConfirm": "Onayladığınızda {batch} grubundaki çözülmemiş kayıtların tamamı (toplam {entries}), görüntülenen listenin dışındakiler de dahil olmak üzere kaldırılır. Aynı dosyayı yeniden içe aktarmak bu kayıtları geri getirmez.",
   "budget.quarantine.dismissError": "İçe aktarılan kayıtlar kaldırılamadı.",
   "budget.quarantine.summary": "Toplamlara dahil edilmeyen kayıtlar",
   "budget.quarantine.total": "Toplam",

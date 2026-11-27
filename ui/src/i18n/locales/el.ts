@@ -1079,6 +1079,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Γιατί ορισμένες τραπεζικές εγγραφές δεν προσμετρώνται στα σύνολα της περιόδου.",
   "budget.quarantine.dismissItem": "Απόρριψη εγγραφής",
   "budget.quarantine.dismissBatch": "Απόρριψη όλων των εγγραφών αυτής της εισαγωγής",
+  "budget.quarantine.dismissBatchConfirm": "Η επιβεβαίωση απορρίπτει όλες τις ανεπίλυτες εγγραφές της παρτίδας {batch} (σύνολο: {entries}), ακόμη και όσες βρίσκονται εκτός της εμφανιζόμενης λίστας. Η επανεισαγωγή του ίδιου αρχείου δεν θα τις επαναφέρει.",
   "budget.quarantine.dismissError": "Δεν ήταν δυνατή η απόρριψη των εγγραφών της εισαγωγής.",
   "budget.quarantine.summary": "Εγγραφές εκτός συνόλων",
   "budget.quarantine.total": "Σύνολο",

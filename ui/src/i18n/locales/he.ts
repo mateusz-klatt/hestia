@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "הסיבות לכך שחלק מהרשומות הבנקאיות אינן נספרות בסכומי התקופה.",
   "budget.quarantine.dismissItem": "הסרת הרשומה",
   "budget.quarantine.dismissBatch": "הסרת כל הרשומות מהייבוא הזה",
+  "budget.quarantine.dismissBatchConfirm": "האישור יסיר את כל הרשומות שלא נפתרו באצווה {batch} (סה״כ {entries}), כולל רשומות מחוץ לרשימה המוצגת. ייבוא חוזר של אותו קובץ לא ישחזר אותן.",
   "budget.quarantine.dismissError": "לא ניתן היה להסיר את רשומות הייבוא.",
   "budget.quarantine.summary": "רשומות שאינן נכללות בסכומים",
   "budget.quarantine.total": "סך הכול",

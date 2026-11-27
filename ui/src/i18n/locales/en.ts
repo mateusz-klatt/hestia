@@ -1112,6 +1112,7 @@ const en = {
   "budget.quarantine.intro": "Why some bank entries are not counted in period totals.",
   "budget.quarantine.dismissItem": "Dismiss item",
   "budget.quarantine.dismissBatch": "Dismiss all from this import",
+  "budget.quarantine.dismissBatchConfirm": "Confirm to dismiss all unresolved entries from batch {batch} ({entries} total), including entries outside the displayed list. Importing the same file again will not restore them.",
   "budget.quarantine.dismissError": "Could not dismiss the import entries.",
   "budget.quarantine.summary": "Entries kept out of totals",
   "budget.quarantine.total": "Total",

@@ -1079,6 +1079,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Pse disa regjistrime bankare nuk llogariten në totalet e periudhës.",
   "budget.quarantine.dismissItem": "Hiqe regjistrimin",
   "budget.quarantine.dismissBatch": "Hiqi të gjitha regjistrimet nga ky import",
+  "budget.quarantine.dismissBatchConfirm": "Me konfirmimin do të hiqen të gjitha regjistrimet e pazgjidhura nga grupi {batch} (gjithsej {entries}), edhe ato jashtë listës së shfaqur. Riimportimi i të njëjtit skedar nuk do t’i rikthejë.",
   "budget.quarantine.dismissError": "Nuk u arrit të hiqeshin regjistrimet e importuara.",
   "budget.quarantine.summary": "Regjistrime jashtë totaleve",
   "budget.quarantine.total": "Totali",

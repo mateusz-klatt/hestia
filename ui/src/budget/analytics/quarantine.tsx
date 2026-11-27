@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { t, tPlural } from "../../i18n";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
@@ -28,6 +28,9 @@ export function QuarantineView({ api, accounts, connections = [], revision, canD
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [dismissError, setDismissError] = useState(false);
+  const [confirmBatchId, setConfirmBatchId] = useState<string | null>(null);
+  const confirmDescriptionId = useId();
+  const cancelConfirmation = useRef<HTMLButtonElement>(null);
   const generation = useRef(0);
 
   useEffect(() => {
@@ -43,15 +46,27 @@ export function QuarantineView({ api, accounts, connections = [], revision, canD
     });
   }, [api, accountId, revision, refresh, onAccessLoss]);
   useEffect(() => () => { generation.current += 1; }, []);
+  useEffect(() => {
+    setDismissError(false);
+    setConfirmBatchId(null);
+  }, [accountId, revision]);
+  useEffect(() => {
+    if (confirmBatchId !== null) cancelConfirmation.current?.focus();
+  }, [confirmBatchId]);
 
   async function dismiss(key: NonNullable<AnalyticsQuarantineItem["import_key"]>, wholeBatch: boolean) {
+    const token = generation.current;
     setDismissError(false);
     setDismissing(true);
     const result = wholeBatch ? await api.dismissQuarantineBatch(key.batch_id) : await api.dismissQuarantineItem(key);
     setDismissing(false);
     if (onAccessLoss(result)) return;
-    if (result.ok) setRefresh((value) => value + 1);
-    else setDismissError(true);
+    if (result.ok) {
+      setConfirmBatchId(null);
+      setRefresh((value) => value + 1);
+    } else if (token === generation.current) {
+      setDismissError(true);
+    }
   }
 
   const accountTitle = t("budget.quarantine.account");
@@ -62,6 +77,8 @@ export function QuarantineView({ api, accounts, connections = [], revision, canD
   const uncertainLabel = t("budget.quarantine.buckets.uncertain");
   const unresolvedLabel = t("budget.quarantine.buckets.unresolved");
   const importUnresolvedLabel = t("budget.quarantine.buckets.import_unresolved");
+  const dismissBatchLabel = t("budget.quarantine.dismissBatch");
+  const dismissActionsDisabled = dismissing || confirmBatchId !== null;
   const shownBatches = new Set<string>();
 
   return (
@@ -137,6 +154,7 @@ export function QuarantineView({ api, accounts, connections = [], revision, canD
                   const key = item.bucket === "import_unresolved" ? item.import_key : undefined;
                   const firstInBatch = key != null && !shownBatches.has(key.batch_id);
                   if (key != null) shownBatches.add(key.batch_id);
+                  const batchCount = item.unresolved_count;
                   const rowKey = key == null
                     ? `${item.bucket}/${String(index)}`
                     : `${item.bucket}/${key.batch_id}/${String(key.ordinal)}`;
@@ -153,14 +171,34 @@ export function QuarantineView({ api, accounts, connections = [], revision, canD
                       <p className="budget-entry-text">{reasonText(item.reason)}</p>
                       {canDismiss && key != null ? (
                         <div className="budget-actions">
-                          <button type="button" disabled={dismissing} onClick={() => { void dismiss(key, false); }}>
+                          <button type="button" disabled={dismissActionsDisabled} onClick={() => { void dismiss(key, false); }}>
                             {t("budget.quarantine.dismissItem")}
                           </button>
-                          {firstInBatch ? (
-                            <button type="button" disabled={dismissing} onClick={() => { void dismiss(key, true); }}>
-                              {t("budget.quarantine.dismissBatch")}
+                          {firstInBatch && batchCount != null ? (
+                            <button type="button" disabled={dismissActionsDisabled} onClick={() => { setConfirmBatchId(key.batch_id); }}>
+                              {dismissBatchLabel}
                             </button>
                           ) : null}
+                        </div>
+                      ) : null}
+                      {canDismiss && key != null && firstInBatch && batchCount != null && confirmBatchId === key.batch_id ? (
+                        <div className="budget-notice" role="alertdialog" aria-label={dismissBatchLabel}
+                          aria-describedby={confirmDescriptionId}>
+                          <p className="budget-entry-text" id={confirmDescriptionId}>
+                            {t("budget.quarantine.dismissBatchConfirm", {
+                              batch: key.batch_id, entries: tPlural("budget.quarantine.entries", batchCount),
+                            })}
+                          </p>
+                          <div className="budget-actions">
+                            <button ref={cancelConfirmation} type="button" disabled={dismissing}
+                              onClick={() => { setConfirmBatchId(null); }}>
+                              {t("budget.main.cancel")}
+                            </button>
+                            <button type="button" className="budget-primary" disabled={dismissing}
+                              onClick={() => { void dismiss(key, true); }}>
+                              {dismissBatchLabel}
+                            </button>
+                          </div>
                         </div>
                       ) : null}
                     </li>

@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Hvorfor noen bankposteringer ikke regnes med i periodetotalene.",
   "budget.quarantine.dismissItem": "Avvis postering",
   "budget.quarantine.dismissBatch": "Avvis alle posteringer fra denne importen",
+  "budget.quarantine.dismissBatchConfirm": "Bekreft for å avvise alle uavklarte posteringer i import {batch} (totalt {entries}), også dem utenfor den viste listen. Ny import av samme fil gjenoppretter dem ikke.",
   "budget.quarantine.dismissError": "Kunne ikke avvise de importerte posteringene.",
   "budget.quarantine.summary": "Posteringer utelatt fra totalene",
   "budget.quarantine.total": "Totalt",

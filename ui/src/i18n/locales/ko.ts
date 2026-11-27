@@ -1079,6 +1079,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "일부 은행 항목이 기간 합계에 포함되지 않는 이유입니다.",
   "budget.quarantine.dismissItem": "항목 제거",
   "budget.quarantine.dismissBatch": "이 가져오기의 모든 항목 제거",
+  "budget.quarantine.dismissBatchConfirm": "확인하면 {batch} 일괄 가져오기의 미해결 항목을 모두 제거합니다(총 {entries}). 표시된 목록 밖의 항목도 포함됩니다. 같은 파일을 다시 가져와도 복원되지 않습니다.",
   "budget.quarantine.dismissError": "가져온 항목을 제거하지 못했습니다.",
   "budget.quarantine.summary": "합계에서 제외된 항목",
   "budget.quarantine.total": "합계",

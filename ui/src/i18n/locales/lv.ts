@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Kāpēc daži bankas ieraksti netiek ieskaitīti perioda kopsummās.",
   "budget.quarantine.dismissItem": "Noraidīt ierakstu",
   "budget.quarantine.dismissBatch": "Noraidīt visus šī importa ierakstus",
+  "budget.quarantine.dismissBatchConfirm": "Apstiprinot tiks noraidīti visi neatrisinātie partijas {batch} ieraksti (kopā {entries}), arī tie, kuri atrodas ārpus parādītā saraksta. Atkārtoti importējot to pašu failu, tie netiks atjaunoti.",
   "budget.quarantine.dismissError": "Neizdevās noraidīt importētos ierakstus.",
   "budget.quarantine.summary": "Kopsummās neiekļautie ieraksti",
   "budget.quarantine.total": "Kopā",

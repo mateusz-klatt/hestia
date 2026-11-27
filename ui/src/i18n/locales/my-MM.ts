@@ -1079,6 +1079,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "ဘဏ်စာရင်းအချို့ကို ကာလစုစုပေါင်းတွင် မတွက်သည့်အကြောင်းများ။",
   "budget.quarantine.dismissItem": "စာရင်းကို ဖယ်ရှားရန်",
   "budget.quarantine.dismissBatch": "ဤတင်သွင်းမှုမှ စာရင်းအားလုံးကို ဖယ်ရှားရန်",
+  "budget.quarantine.dismissBatchConfirm": "အတည်ပြုပါက {batch} တင်သွင်းမှု၏ မဖြေရှင်းရသေးသော စာရင်းအားလုံး (စုစုပေါင်း {entries}) ကို ဖယ်ရှားမည်။ ပြထားသောစာရင်းတွင် မပါသည့် အချက်များလည်း ပါဝင်သည်။ ဖိုင်တစ်ခုတည်းကို ပြန်တင်သွင်းလျှင်လည်း ၎င်းတို့ကို ပြန်ရမည်မဟုတ်ပါ။",
   "budget.quarantine.dismissError": "တင်သွင်းထားသော စာရင်းများကို ဖယ်ရှား၍ မရပါ။",
   "budget.quarantine.summary": "စုစုပေါင်းမှ ချန်လှပ်ထားသော စာရင်းများ",
   "budget.quarantine.total": "စုစုပေါင်း",

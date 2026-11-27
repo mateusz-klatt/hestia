@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "說明部分銀行紀錄未計入期間總額的原因。",
   "budget.quarantine.dismissItem": "移除這筆紀錄",
   "budget.quarantine.dismissBatch": "移除此匯入批次的所有紀錄",
+  "budget.quarantine.dismissBatchConfirm": "確認後會移除批次 {batch} 的所有未解決紀錄（共 {entries}），包括清單上未顯示的紀錄。重新匯入相同檔案也無法還原這些紀錄。",
   "budget.quarantine.dismissError": "無法移除匯入的紀錄。",
   "budget.quarantine.summary": "未計入總額的紀錄",
   "budget.quarantine.total": "總計",

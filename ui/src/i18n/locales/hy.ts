@@ -1079,6 +1079,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Ինչու որոշ բանկային գրառումներ չեն հաշվվում ժամանակահատվածի ընդհանուր գումարներում։",
   "budget.quarantine.dismissItem": "Հեռացնել գրառումը",
   "budget.quarantine.dismissBatch": "Հեռացնել այս ներմուծման բոլոր գրառումները",
+  "budget.quarantine.dismissBatchConfirm": "Հաստատելու դեպքում {batch} խմբաքանակի բոլոր չլուծված գրառումները կհեռացվեն (ընդամենը՝ {entries}), ներառյալ ցուցադրված ցանկից դուրս գտնվողները։ Նույն ֆայլի կրկնակի ներմուծումը դրանք չի վերականգնի։",
   "budget.quarantine.dismissError": "Չհաջողվեց հեռացնել ներմուծված գրառումները։",
   "budget.quarantine.summary": "Ընդհանուր գումարներից դուրս մնացած գրառումներ",
   "budget.quarantine.total": "Ընդամենը",

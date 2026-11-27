@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Зашто неки банкарски записи нису урачунати у укупне износе периода.",
   "budget.quarantine.dismissItem": "Одбаци запис",
   "budget.quarantine.dismissBatch": "Одбаци све записе из овог увоза",
+  "budget.quarantine.dismissBatchConfirm": "Потврдом ћете одбацити све нерешене записе из увоза {batch} (укупно {entries}), укључујући записе изван приказаног списка. Поновни увоз исте датотеке их неће вратити.",
   "budget.quarantine.dismissError": "Није могуће одбацити записе из увоза.",
   "budget.quarantine.summary": "Записи искључени из укупних износа",
   "budget.quarantine.total": "Укупно",

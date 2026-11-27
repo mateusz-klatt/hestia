@@ -1077,6 +1077,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Warum einige Bankeinträge nicht in den Zeitraumssummen enthalten sind.",
   "budget.quarantine.dismissItem": "Eintrag verwerfen",
   "budget.quarantine.dismissBatch": "Alle Einträge aus diesem Import verwerfen",
+  "budget.quarantine.dismissBatchConfirm": "Mit der Bestätigung verwerfen Sie alle ungeklärten Einträge aus Import {batch} (insgesamt {entries}), auch Einträge außerhalb der angezeigten Liste. Ein erneuter Import derselben Datei stellt sie nicht wieder her.",
   "budget.quarantine.dismissError": "Die Einträge aus dem Import konnten nicht verworfen werden.",
   "budget.quarantine.summary": "Aus den Summen ausgeschlossene Einträge",
   "budget.quarantine.total": "Gesamt",

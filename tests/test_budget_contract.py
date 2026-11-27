@@ -803,9 +803,9 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertEqual(
             set(q_item_props),
             {"bucket", "account_id", "selected", "entry_reference", "date", "status", "reason", "source",
-             "observed_at", "import_key"},
+             "observed_at", "import_key", "unresolved_count"},
         )
-        self.assertNotIn("import_key", schemas["BudgetAnalyticsQuarantineItem"]["required"])
+        self.assertTrue({"import_key", "unresolved_count"}.isdisjoint(schemas["BudgetAnalyticsQuarantineItem"]["required"]))
         for forbidden in ("amount", "currency", "remittance_information", "description", "creditor_name",
                           "debtor_name", "credit_debit_indicator", "transaction_id", "identification_hash"):
             self.assertNotIn(forbidden, q_item_props)

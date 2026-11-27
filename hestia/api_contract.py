@@ -2831,6 +2831,12 @@ class BudgetAnalyticsQuarantineItem(BaseModel):
         description="Local dismissal key on import_unresolved items only, starting at 0.63.0.",
         json_schema_extra=_OMIT,
     )] = None
+    unresolved_count: Annotated[int | None, Field(
+        ge=1,
+        description="Current total of unresolved items in the import batch, including items outside the list cap. "
+                    "Emitted on import_unresolved items only, starting at 0.63.0.",
+        json_schema_extra=_OMIT,
+    )] = None
 
 
 class BudgetAnalyticsQuarantine(BaseModel):
@@ -5335,8 +5341,8 @@ def _analytics_paths():
     }
     quarantine_contract_version = {
         **tx_contract_version,
-        "description": "Negotiate import_key on offline import quarantine items starting at 0.63.0. "
-                       "Earlier versions or an omitted header omit the key.",
+        "description": "Negotiate import_key and the batch's unresolved_count on offline import quarantine items "
+                       "starting at 0.63.0. Earlier versions or an omitted header omit these fields.",
     }
     reads = (
         ("overview", "getBudgetAnalyticsOverview", "BudgetAnalyticsOverview", [period, currency]),

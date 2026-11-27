@@ -1077,6 +1077,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Pourquoi certaines écritures bancaires sont exclues des totaux de la période.",
   "budget.quarantine.dismissItem": "Écarter cette écriture",
   "budget.quarantine.dismissBatch": "Écarter toutes les écritures de cet import",
+  "budget.quarantine.dismissBatchConfirm": "La confirmation écarte toutes les écritures non résolues de l’import {batch} ({entries} au total), y compris celles hors de la liste affichée. Réimporter le même fichier ne les rétablira pas.",
   "budget.quarantine.dismissError": "Impossible d’écarter les écritures de l’import.",
   "budget.quarantine.summary": "Écritures exclues des totaux",
   "budget.quarantine.total": "Total",

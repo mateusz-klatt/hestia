@@ -1079,6 +1079,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "बैंक की कुछ प्रविष्टियाँ अवधि के कुल में क्यों नहीं गिनी जातीं।",
   "budget.quarantine.dismissItem": "प्रविष्टि हटाएँ",
   "budget.quarantine.dismissBatch": "इस आयात की सभी प्रविष्टियाँ हटाएँ",
+  "budget.quarantine.dismissBatchConfirm": "पुष्टि करने पर बैच {batch} की सभी अनसुलझी प्रविष्टियाँ (कुल {entries}) हट जाएँगी, जिनमें दिखाई गई सूची के बाहर की प्रविष्टियाँ भी शामिल हैं। उसी फ़ाइल को फिर से आयात करने पर ये वापस नहीं आएँगी।",
   "budget.quarantine.dismissError": "आयात की प्रविष्टियाँ हटाई नहीं जा सकीं।",
   "budget.quarantine.summary": "कुल से बाहर रखी प्रविष्टियाँ",
   "budget.quarantine.total": "कुल",

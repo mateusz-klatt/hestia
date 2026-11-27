@@ -1079,6 +1079,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "说明部分银行记录未计入期间合计的原因。",
   "budget.quarantine.dismissItem": "移除这条记录",
   "budget.quarantine.dismissBatch": "移除此导入批次的所有记录",
+  "budget.quarantine.dismissBatchConfirm": "确认后会移除批次 {batch} 的所有未解决记录（共 {entries}），包括列表中未显示的记录。重新导入同一文件也无法恢复这些记录。",
   "budget.quarantine.dismissError": "无法移除导入的记录。",
   "budget.quarantine.summary": "未计入合计的记录",
   "budget.quarantine.total": "合计",

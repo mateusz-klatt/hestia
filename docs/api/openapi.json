@@ -5248,6 +5248,19 @@
               }
             ],
             "title": "Status"
+          },
+          "unresolved_count": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Current total of unresolved items in the import batch, including items outside the list cap. Emitted on import_unresolved items only, starting at 0.63.0.",
+            "title": "Unresolved Count"
           }
         },
         "required": [
@@ -21278,7 +21291,7 @@
             }
           },
           {
-            "description": "Negotiate import_key on offline import quarantine items starting at 0.63.0. Earlier versions or an omitted header omit the key.",
+            "description": "Negotiate import_key and the batch's unresolved_count on offline import quarantine items starting at 0.63.0. Earlier versions or an omitted header omit these fields.",
             "in": "header",
             "name": "X-Hestia-Contract-Version",
             "required": false,

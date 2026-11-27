@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Miért nem számítanak bele egyes banki tételek az időszaki összesítésekbe.",
   "budget.quarantine.dismissItem": "Tétel elvetése",
   "budget.quarantine.dismissBatch": "Az importálás összes tételének elvetése",
+  "budget.quarantine.dismissBatchConfirm": "A megerősítéssel elveted a(z) {batch} importálás minden rendezetlen tételét (összesen {entries}), a megjelenített listán kívüli tételeket is. Ugyanannak a fájlnak az újbóli importálása nem állítja vissza őket.",
   "budget.quarantine.dismissError": "Nem sikerült elvetni az importált tételeket.",
   "budget.quarantine.summary": "Az összesítésekből kihagyott tételek",
   "budget.quarantine.total": "Összesen",

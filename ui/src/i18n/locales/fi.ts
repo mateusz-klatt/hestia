@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Miksi joitakin pankkikirjauksia ei lasketa jakson yhteissummiin.",
   "budget.quarantine.dismissItem": "Hylkää kirjaus",
   "budget.quarantine.dismissBatch": "Hylkää kaikki tämän tuonnin kirjaukset",
+  "budget.quarantine.dismissBatchConfirm": "Vahvistaaksesi hylkäät kaikki tuontierän {batch} selvittämättömät kirjaukset (yhteensä {entries}), myös näytetyn luettelon ulkopuoliset. Saman tiedoston tuominen uudelleen ei palauta niitä.",
   "budget.quarantine.dismissError": "Tuonnin kirjauksia ei voitu hylätä.",
   "budget.quarantine.summary": "Yhteissummista pois jätetyt kirjaukset",
   "budget.quarantine.total": "Yhteensä",

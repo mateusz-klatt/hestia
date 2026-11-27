@@ -1077,6 +1077,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Varför vissa bankposter inte räknas in i periodens summor.",
   "budget.quarantine.dismissItem": "Avfärda posten",
   "budget.quarantine.dismissBatch": "Avfärda alla poster från den här importen",
+  "budget.quarantine.dismissBatchConfirm": "Bekräfta för att avfärda alla olösta poster från import {batch} (totalt {entries}), även de som inte visas i listan. Att importera samma fil igen återställer dem inte.",
   "budget.quarantine.dismissError": "Det gick inte att avfärda de importerade posterna.",
   "budget.quarantine.summary": "Poster utanför summorna",
   "budget.quarantine.total": "Totalt",

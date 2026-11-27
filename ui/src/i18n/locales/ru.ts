@@ -1078,6 +1078,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Почему некоторые банковские записи не учитываются в итогах периода.",
   "budget.quarantine.dismissItem": "Убрать запись",
   "budget.quarantine.dismissBatch": "Убрать все записи из этого импорта",
+  "budget.quarantine.dismissBatchConfirm": "Подтверждение удалит все неразрешённые записи из партии {batch} (всего {entries}), включая записи за пределами показанного списка. Повторный импорт того же файла их не восстановит.",
   "budget.quarantine.dismissError": "Не удалось убрать записи из импорта.",
   "budget.quarantine.summary": "Записи вне итогов",
   "budget.quarantine.total": "Итого",

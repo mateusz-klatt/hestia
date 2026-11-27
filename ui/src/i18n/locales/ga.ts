@@ -1079,6 +1079,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "An fáth nach n-áirítear roinnt iontrálacha bainc in iomláin na tréimhse.",
   "budget.quarantine.dismissItem": "Bain an iontráil",
   "budget.quarantine.dismissBatch": "Bain gach iontráil ón iompórtáil seo",
+  "budget.quarantine.dismissBatchConfirm": "Má dheimhníonn tú é, bainfear gach iontráil gan réiteach ón mbaisc {batch} ({entries} san iomlán), fiú na cinn nach bhfuil ar an liosta ar taispeáint. Ní thabharfaidh athiompórtáil an chomhaid chéanna ar ais iad.",
   "budget.quarantine.dismissError": "Níorbh fhéidir na hiontrálacha iompórtáilte a bhaint.",
   "budget.quarantine.summary": "Iontrálacha fágtha as na hiomláin",
   "budget.quarantine.total": "Iomlán",

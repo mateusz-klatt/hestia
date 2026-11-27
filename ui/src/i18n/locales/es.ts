@@ -1077,6 +1077,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Por qué algunos movimientos bancarios no se contabilizan en los totales del período.",
   "budget.quarantine.dismissItem": "Descartar movimiento",
   "budget.quarantine.dismissBatch": "Descartar todos los movimientos de esta importación",
+  "budget.quarantine.dismissBatchConfirm": "Al confirmar, se descartarán todos los movimientos pendientes del lote {batch} (en total, {entries}), incluidos los que estén fuera de la lista visible. Volver a importar el mismo archivo no los restaurará.",
   "budget.quarantine.dismissError": "No se pudieron descartar los movimientos de la importación.",
   "budget.quarantine.summary": "Movimientos excluidos de los totales",
   "budget.quarantine.total": "Total",

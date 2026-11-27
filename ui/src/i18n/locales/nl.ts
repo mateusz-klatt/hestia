@@ -1077,6 +1077,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Waarom sommige bankboekingen niet meetellen in de periodetotalen.",
   "budget.quarantine.dismissItem": "Boeking verwerpen",
   "budget.quarantine.dismissBatch": "Alle boekingen uit deze import verwerpen",
+  "budget.quarantine.dismissBatchConfirm": "Met uw bevestiging verwerpt u alle onopgeloste boekingen uit import {batch} (in totaal {entries}), ook buiten de weergegeven lijst. Het opnieuw importeren van hetzelfde bestand herstelt ze niet.",
   "budget.quarantine.dismissError": "De geïmporteerde boekingen konden niet worden verworpen.",
   "budget.quarantine.summary": "Boekingen buiten de totalen",
   "budget.quarantine.total": "Totaal",

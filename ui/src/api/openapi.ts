@@ -4239,6 +4239,11 @@ export interface components {
             source: string;
             /** Status */
             status: string | null;
+            /**
+             * Unresolved Count
+             * @description Current total of unresolved items in the import batch, including items outside the list cap. Emitted on import_unresolved items only, starting at 0.63.0.
+             */
+            unresolved_count?: number | null;
         };
         /** BudgetAnalyticsQuarantineSummary */
         BudgetAnalyticsQuarantineSummary: {
@@ -11097,7 +11102,7 @@ export interface operations {
                 account_id?: string;
             };
             header?: {
-                /** @description Negotiate import_key on offline import quarantine items starting at 0.63.0. Earlier versions or an omitted header omit the key. */
+                /** @description Negotiate import_key and the batch's unresolved_count on offline import quarantine items starting at 0.63.0. Earlier versions or an omitted header omit these fields. */
                 "X-Hestia-Contract-Version"?: string;
             };
             path?: never;

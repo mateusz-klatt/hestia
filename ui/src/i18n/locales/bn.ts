@@ -1079,6 +1079,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "ব্যাংকের কিছু এন্ট্রি সময়কালের মোট হিসাবে কেন ধরা হয় না।",
   "budget.quarantine.dismissItem": "এন্ট্রি সরান",
   "budget.quarantine.dismissBatch": "এই আমদানির সব এন্ট্রি সরান",
+  "budget.quarantine.dismissBatchConfirm": "নিশ্চিত করলে {batch} ব্যাচের সব অমীমাংসিত এন্ট্রি সরানো হবে (মোট {entries}), প্রদর্শিত তালিকার বাইরের এন্ট্রিসহ। একই ফাইল আবার আমদানি করলে সেগুলি ফিরবে না।",
   "budget.quarantine.dismissError": "আমদানি করা এন্ট্রিগুলি সরানো যায়নি।",
   "budget.quarantine.summary": "মোট হিসাবের বাইরে রাখা এন্ট্রি",
   "budget.quarantine.total": "মোট",

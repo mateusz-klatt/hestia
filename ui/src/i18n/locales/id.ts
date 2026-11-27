@@ -1079,6 +1079,7 @@ const messages: Partial<Messages> = {
   "budget.quarantine.intro": "Alasan beberapa entri bank tidak dihitung dalam total periode.",
   "budget.quarantine.dismissItem": "Singkirkan entri",
   "budget.quarantine.dismissBatch": "Singkirkan semua entri dari impor ini",
+  "budget.quarantine.dismissBatchConfirm": "Konfirmasi akan menyingkirkan semua entri yang belum terselesaikan pada batch {batch} (total {entries}), termasuk entri di luar daftar yang ditampilkan. Mengimpor kembali berkas yang sama tidak akan memulihkannya.",
   "budget.quarantine.dismissError": "Entri dari impor tidak dapat disingkirkan.",
   "budget.quarantine.summary": "Entri yang dikecualikan dari total",
   "budget.quarantine.total": "Jumlah total",

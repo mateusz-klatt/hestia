@@ -66,7 +66,8 @@ class OpenApiArtifactTests(unittest.TestCase):
             document["paths"].pop(analytics_prefix + suffix)
         for suffix in ("BatchRequest", "ImportKey", "Dismissal", "DismissResult"):
             schemas.pop("BudgetAnalyticsQuarantine" + suffix)
-        schemas["BudgetAnalyticsQuarantineItem"]["properties"].pop("import_key")
+        for field in ("import_key", "unresolved_count"):
+            schemas["BudgetAnalyticsQuarantineItem"]["properties"].pop(field)
         document["info"]["version"] = "0.61.0"
         canonical_0_61 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.assertEqual(hashlib.sha256(canonical_0_61).hexdigest(),
