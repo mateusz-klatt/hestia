@@ -446,10 +446,12 @@ worker.serve(sys.argv[1])
             self.assertFalse(worker.ReceiptParserWorker(path).ready())
             self.assertLess(time.monotonic() - started, 2)
 
-    def test_supervisor_kills_child_on_timeout_and_peer_disconnect(self):
+    @patch.object(worker, "time")
+    def test_supervisor_kills_child_on_timeout_and_peer_disconnect(self, clock):
         listener, client = MagicMock(), MagicMock()
         reader, writer = MagicMock(), MagicMock()
-        deadline = time.monotonic() + 1
+        clock.monotonic.return_value = 100.0
+        deadline = 101.0
         with patch.object(worker.socket, "socketpair", return_value=(reader, writer)), \
              patch.object(worker.os, "fork", return_value=1), \
              patch.object(worker, "_read_frame", side_effect=(b"Tfixture", b"+fixture")), \
@@ -459,18 +461,20 @@ worker.serve(sys.argv[1])
             worker._serve_request(listener, client, deadline)
         send.assert_called_once_with(client, b"+fixture", deadline)
         cleanup.assert_called_once_with(1)
-        for ready in ([client, reader], []):
-            with patch.object(worker.socket, "socketpair", return_value=(reader, writer)), \
+        for reason, ready in (("timeout", []), ("peer disconnect", [client, reader])):
+            with self.subTest(reason=reason), \
+                 patch.object(worker.socket, "socketpair", return_value=(reader, writer)), \
                  patch.object(worker.os, "fork", return_value=2), \
                  patch.object(worker, "_read_frame", return_value=b"Tfixture"), \
                  patch.object(worker, "_send_frame") as send, \
-                 patch.object(worker.select, "select", return_value=(ready, [], [])), \
+                 patch.object(worker.select, "select", return_value=(ready, [], [])) as select, \
                  patch.object(worker.os, "kill") as kill, \
                  patch.object(worker.os, "waitpid") as wait:
                 worker._serve_request(listener, client, deadline)
-            send.assert_not_called()
-            kill.assert_called_once_with(2, signal.SIGKILL)
-            wait.assert_called_once_with(2, 0)
+                select.assert_called_once_with((client, reader), (), (), 1.0)
+                send.assert_not_called()
+                kill.assert_called_once_with(2, signal.SIGKILL)
+                wait.assert_called_once_with(2, 0)
         with patch.object(worker.os, "kill", side_effect=ProcessLookupError), patch.object(worker.os, "waitpid") as wait:
             worker._kill_and_wait(3)
         wait.assert_called_once_with(3, 0)
