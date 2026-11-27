@@ -238,6 +238,7 @@ const FX_SOURCE_LABEL = {
 
 function ReceiptFxDetails({ fx, ambiguous, locale }: { fx: ReceiptFx; ambiguous?: boolean; locale: string }) {
   const { quote, stated_rate: stated, explicit_fee: fee } = fx;
+  const referenceRate = quote === null ? null : formatAmount(quote.rate, `PLN/${quote.unit_currency}`, locale);
   const implied = formatAmount(fx.implied_rate, `${fx.booked_currency}/${fx.receipt_currency}`, locale);
   const booked = formatAmount(fx.booked_amount, fx.booked_currency, locale);
   return (
@@ -247,7 +248,7 @@ function ReceiptFxDetails({ fx, ambiguous, locale }: { fx: ReceiptFx; ambiguous?
           amount: formatEstimate(quote.estimated_amount, fx.booked_currency, locale),
           date: quote.publication_date,
           table: quote.table_number,
-        })}</>
+        })} · {referenceRate}</>
       ) : fx.source !== "nbp" ? (
         <><br />{t(FX_SOURCE_LABEL[fx.source])}</>
       ) : null}

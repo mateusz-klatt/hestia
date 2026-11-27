@@ -148,6 +148,16 @@ def _receipt_contract(request, operation):
 
 
 def _response(operation, result, version):
+    if version < _FX_VERSION and operation in _RECEIPT_RESULT_KEY:
+        key = _RECEIPT_RESULT_KEY[operation]
+        receipts = result[key] if key == "receipts" else (result[key],)
+        for receipt in receipts:
+            receipt.pop("fx_link", None)
+        if "candidates" in result:
+            result["candidates"] = [
+                candidate for candidate in result["candidates"]
+                if candidate.pop("fx", None) is None and candidate["match_strength"] not in ("medium", "ambiguous")
+            ]
     if version < _DISPLAY_SHOP_NAME_VERSION and operation in _RECEIPT_RESULT_KEY:
         key = _RECEIPT_RESULT_KEY[operation]
         receipts = result[key] if key == "receipts" else (result[key],)

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from dataclasses import replace
 from datetime import date, datetime, timezone
+from decimal import Decimal
 import json
 import os
 import unittest
@@ -159,6 +161,49 @@ class FXReceiptTests(fixture.AnalyticsCase):
         self.assertEqual(result["fx_link"], match["fx"])
         self.transport.assert_not_called()
 
+    def test_market_estimates_normalize_published_quote_units(self):
+        cases = (
+            ("CLP", "0.40", "10000", "40", "4000", "0.004"),
+            ("HUF", "1.15", "10000", "115", "11500", "0.0115"),
+            ("IDR", "2.25", "1000000", "225", "2250000", "0.000225"),
+            ("INR", "4.40", "10000", "440", "44000", "0.044"),
+            ("ISK", "3.25", "10000", "325", "32500", "0.0325"),
+            ("JPY", "2.50", "10000", "250", "25000", "0.025"),
+            ("KRW", "0.30", "10000", "30", "3000", "0.003"),
+            ("EUR", "4.0000", "100", "400", "4", "4.0000"),
+        )
+        for index, (currency, mid, total, correct, wrong, per_unit) in enumerate(cases):
+            with self.subTest(currency=currency):
+                day = f"2026-11-{10 + index:02d}"
+                self.bank(f"{currency}-correct", amount=correct, day=day)
+                self.bank(f"{currency}-wrong", amount=wrong, day=day)
+                receipt = self.receipt(currency=currency, amount=total, day=day)
+                with self.sessions.begin() as session:
+                    _cache(session, currency=currency, day=day, quote=_quote(mid, day))
+                match, = self.detail(receipt)["candidates"]
+                self.assertEqual((match["amount"], match["match_strength"]), (correct, "medium"))
+                fx = match["fx"]
+                self.assertEqual(Decimal(fx["implied_rate"]), Decimal(per_unit))
+                self.assertEqual(fx["quote"], {
+                    "rate": per_unit, "unit_currency": currency, "publication_date": day,
+                    "table_number": _TABLE, "estimated_amount": correct, "difference": "0",
+                })
+        self.transport.assert_not_called()
+
+    def test_inverse_market_normalizes_per_hundred_quote(self):
+        self.bank("correct", currency="HUF", amount="10000")
+        self.bank("wrong", currency="HUF", amount="100")
+        receipt = self.receipt(currency="PLN", amount="115")
+        with self.sessions.begin() as session:
+            _cache(session, currency="HUF", quote=_quote("1.15"))
+        match, = self.detail(receipt)["candidates"]
+        self.assertEqual((match["amount"], match["match_strength"]), ("10000", "medium"))
+        self.assertEqual(match["fx"]["implied_rate"], "86.95652174")
+        self.assertEqual(match["fx"]["quote"], {
+            "rate": "0.0115", "unit_currency": "HUF", "publication_date": _PUBLISHED,
+            "table_number": _TABLE, "estimated_amount": "10000", "difference": "0",
+        })
+
     def test_inverse_market_for_refund_and_known_account(self):
         self.bank("wrong-account", account="a", amount="100", currency="EUR", direction="CRDT")
         self.bank("refund", account="b", amount="98", currency="EUR", direction="CRDT")
@@ -260,6 +305,49 @@ class FXReceiptTests(fixture.AnalyticsCase):
             self.assertEqual(reconcile_receipt_links(session, "owner", _NOW + 1), 0)
             _cache(session, quote=_quote("4.01"))
             self.assertEqual(reconcile_receipt_links(session, "owner", _NOW + 2), 1)
+
+    def test_scaled_market_link_survives_cache_eviction_and_refetch(self):
+        self.bank(amount="115")
+        receipt = self.receipt(currency="HUF", amount="10000")
+        with mock.patch.object(rates, "fetch_nbp_quote", return_value=_quote("1.15")) as fetch:
+            self.assertEqual(rates.prefetch_nbp_quotes(self.sessions, _NOW), 1)
+        fetch.assert_called_once_with("HUF", date.fromisoformat(_DAY))
+        detail = self.detail(receipt)
+        match, = detail["candidates"]
+        self.assertEqual(match["fx"]["quote"]["rate"], "0.0115")
+        self.assertEqual(self.receipts.confirm("owner", _values(detail, match), include_fx=True)["receipt"]["fx_link"],
+                         match["fx"])
+        with self.sessions.begin() as session:
+            cache_key = rates._key("HUF", date.fromisoformat(_DAY))
+            cached = session.get(db.AppMeta, cache_key)
+            self.assertEqual(json.loads(cached.value)["quote"]["mid"], "1.15")
+            session.delete(cached)
+            self.assertEqual(reconcile_receipt_links(session, "owner", _NOW + 1), 0)
+        with mock.patch.object(rates, "fetch_nbp_quote", return_value=_quote("1.15")):
+            self.assertEqual(rates.prefetch_nbp_quotes(self.sessions, _NOW + 2), 1)
+        self.assertEqual(self.detail(receipt)["receipt"]["status"], "confirmed")
+        self.transport.assert_not_called()
+
+    def test_legacy_scaled_market_link_shows_corrected_estimate_and_requires_review(self):
+        self.bank(amount="11500")
+        receipt = self.receipt(currency="HUF", amount="10000")
+        with self.sessions.begin() as session:
+            _cache(session, currency="HUF", quote=_quote("1.15"))
+        with mock.patch.object(receipt_fx, "NBP_QUOTE_UNITS", {}):
+            detail = self.detail(receipt)
+            match, = detail["candidates"]
+            self.receipts.confirm("owner", _values(detail, match), include_fx=True)
+        with self.sessions.begin() as session:
+            session.delete(session.get(db.AppMeta, rates._key("HUF", date.fromisoformat(_DAY))))
+            self.assertEqual(reconcile_receipt_links(session, "owner", _NOW + 1), 1)
+        detail = self.detail(receipt)
+        self.assertEqual(detail["candidates"], [])
+        self.assertEqual(detail["receipt"]["status"], "needs_review")
+        self.assertEqual(detail["receipt"]["fx_link"]["quote"], {
+            "rate": "0.0115", "unit_currency": "HUF", "publication_date": _PUBLISHED,
+            "table_number": _TABLE, "estimated_amount": "115", "difference": "11385",
+        })
+        self.assertEqual(detail["receipt"]["fx_link"]["booked_amount"], "11500")
 
     def test_prefetch_revalidates_accepted_links_when_quote_is_revised(self):
         self.bank()
@@ -434,7 +522,6 @@ class FXReceiptTests(fixture.AnalyticsCase):
 
     def test_merchant_evidence_outranks_a_closer_market_amount(self):
         self.bank("merchant", amount="408")
-        self.bank("look-alike", amount="400", remittance=["Another provider"])
         identifier = self.receipt()
         with self.sessions.begin() as session:
             _cache(session)
@@ -442,9 +529,13 @@ class FXReceiptTests(fixture.AnalyticsCase):
             _receipt(session, card_last4="1234")
             _receipt(session, day="2026-11-30")
             _receipt(session, merchant="Unrelated seller", amount="200")
+        sole, = self.detail(identifier)["candidates"]
+        self.assertEqual(sole["match_strength"], "medium")
+        self.bank("look-alike", amount="400", remittance=["Another provider"])
         candidates = self.detail(identifier)["candidates"]
         self.assertEqual([item["amount"] for item in candidates], ["408", "400"])
-        self.assertEqual([item["match_strength"] for item in candidates], ["medium", "medium"])
+        self.assertEqual([item["merchant_token_hit"] for item in candidates], [True, False])
+        self.assertEqual([item["match_strength"] for item in candidates], ["ambiguous", "ambiguous"])
 
     def test_peer_pool_limit_stays_ambiguous(self):
         self.bank(original=("EUR", "100"))
@@ -590,6 +681,7 @@ class ReceiptFXHTTPTests(unittest.IsolatedAsyncioTestCase):
                                                      "HESTIA_BUDGET_POLLER_ENABLED": "0"})
         environment.start()
         self.addCleanup(environment.stop)
+        self.enterContext(mock.patch.object(rates, "HTTPSConnection", side_effect=AssertionError("unexpected network")))
         await http_fixture.BudgetAPITests.asyncSetUp(self)
 
     async def test_prefetch_skips_an_unauthoritative_database(self):
@@ -628,6 +720,34 @@ class ReceiptFXHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(attempts), 2)
         self.assertIn("Receipt exchange-rate prefetch failed", log.output[0])
 
+    async def test_legacy_responses_strip_fx_even_if_the_store_returns_it(self):
+        fx = {"source": "nbp"}
+        receipt_id = str(uuid.uuid4())
+        result = {
+            "receipt": {"receipt_id": receipt_id, "fx_link": fx},
+            "candidates": [
+                {"match_strength": "medium", "fx": fx},
+                {"match_strength": "ambiguous"},
+                {"match_strength": "id", "fx": {"source": "bank_original"}},
+                {"match_strength": "distinctive", "fx": None},
+                {"match_strength": "nip"},
+            ],
+        }
+        with mock.patch.object(receipt_api, "_run_read", side_effect=lambda *_a, **_kw: deepcopy(result)):
+            for version in ("0.64.0", "0.65.0", "0.68.0"):
+                with self.subTest(version=version):
+                    headers = {**self.headers("alice", origin=True), "X-Hestia-Contract-Version": version}
+                    response = await self.client.get(receipt_api.PREFIX + "/detail",
+                                                     params={"receipt_id": receipt_id}, headers=headers)
+                    self.assertEqual(response.status, 200)
+                    if version == "0.68.0":
+                        self.assertEqual(await response.json(), result)
+                    else:
+                        self.assertEqual(await response.json(), {
+                            "receipt": {"receipt_id": receipt_id},
+                            "candidates": [{"match_strength": "distinctive"}, {"match_strength": "nip"}],
+                        })
+
     async def test_opt_in_gates_candidates_and_link_details(self):
         tx = http_fixture.transaction("synthetic-fx", amount="408", booking_date=_DAY,
                                      remittance_information=[_MERCHANT])
@@ -639,7 +759,7 @@ class ReceiptFXHTTPTests(unittest.IsolatedAsyncioTestCase):
         path = receipt_api.PREFIX + "/detail"
         with mock.patch.object(rates, "HTTPSConnection", side_effect=AssertionError("review called network")) as transport:
             versions = {}
-            for version in (None, "0.64.0", "0.67.0", "0.68.0"):
+            for version in (None, "0.64.0", "0.65.0", "0.67.0", "0.68.0"):
                 headers = self.headers("alice", origin=True)
                 if version is not None:
                     headers["X-Hestia-Contract-Version"] = version

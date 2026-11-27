@@ -7,7 +7,7 @@ import re
 
 from ..db import AppMeta, BudgetTransactionMetadata
 from .bank_metadata import exchange_evidence
-from .receipt_fx_rates import cached_quote, quote_currency, reference_day, validate_quote
+from .receipt_fx_rates import NBP_QUOTE_UNITS, cached_quote, quote_currency, reference_day, validate_quote
 
 _MONEY = r"[0-9]{1,16}(?:[.,][0-9]{1,12})?"
 _CURRENCY = r"[A-Z]{3}"
@@ -167,12 +167,13 @@ def merge_receipt_conversion(primary, alternate):
 
 
 def _quote_explanation(rate, unit, total, currency, booked):
-    mid = _decimal(rate["mid"])
+    units = NBP_QUOTE_UNITS.get(unit, 1)
+    mid = _decimal(rate["mid"]) / units
     estimate = total / mid if currency == "PLN" else total * mid
     difference = booked - estimate
     deviation = abs(difference) / estimate
     return {
-        "rate": rate["mid"], "unit_currency": unit,
+        "rate": rate["mid"] if units == 1 else _format(mid), "unit_currency": unit,
         "publication_date": rate["effectiveDate"], "table_number": rate["no"],
         "estimated_amount": _format(estimate.quantize(_QUANT)),
         "difference": _format(difference.quantize(_QUANT)),
@@ -223,7 +224,7 @@ def fx_candidate(session, owner, row, transaction, payload, fingerprint, *, rece
                    or (original is not None and _money_key(original) != receipt_key)
                    or len({_money_key(fee) for fee in fees}) > 1
                    or not _stated_rates_agree(stated_rates, currency, booked_currency))
-    quote, deviation = None, Decimal(0)
+    quote, deviation, published_mid = None, Decimal(0), None
     with localcontext() as context:
         # Ledger decimal strings are bounded at 80 digits. Preserve precision until display rounding.
         context.prec = 180
@@ -244,6 +245,8 @@ def fx_candidate(session, owner, row, transaction, payload, fingerprint, *, rece
                 if deviation > _TOLERANCE:
                     return None
                 source = "nbp"
+                if unit in NBP_QUOTE_UNITS:
+                    published_mid = rate["mid"]
         return {
             "source": source, "receipt_amount": _format(total), "receipt_currency": currency,
             "booked_amount": _format(booked), "booked_currency": booked_currency,
@@ -251,17 +254,38 @@ def fx_candidate(session, owner, row, transaction, payload, fingerprint, *, rece
             "quote": quote, "stated_rate": stated_rates[0] if stated_rates else None,
             "explicit_fee": fees[0] if fees and len({_money_key(fee) for fee in fees}) == 1 else None,
             "conflicting": conflicting,
-        }, deviation
+        }, deviation, published_mid
 
 
-def fx_link_evidence(row, fx):
-    return {"details": fx, "receipt_id": getattr(row, "id", None), "reference_date": row.receipt_date,
-            "receipt_kind": row.receipt_kind, "document_kind": getattr(row, "document_kind", None), "due_date": getattr(row, "due_date", None),
-            "card_last4": getattr(row, "card_last4", None)}
+def fx_link_evidence(row, fx, published_mid):
+    evidence = {"details": fx, "receipt_id": getattr(row, "id", None), "reference_date": row.receipt_date,
+                "receipt_kind": row.receipt_kind, "document_kind": getattr(row, "document_kind", None),
+                "due_date": getattr(row, "due_date", None), "card_last4": getattr(row, "card_last4", None)}
+    if published_mid is not None:
+        # Preserve the original observation for revalidation after cache eviction.
+        evidence["published_mid"] = published_mid
+    return evidence
 
 
 def accepted_fx_quote(linked_fx):
     quote = linked_fx["details"]["quote"]
     if quote is None:
         return None
-    return {"effectiveDate": quote["publication_date"], "no": quote["table_number"], "mid": quote["rate"]}
+    return {"effectiveDate": quote["publication_date"], "no": quote["table_number"],
+            "mid": linked_fx.get("published_mid", quote["rate"])}
+
+
+def accepted_fx_details(linked_fx):
+    fx = linked_fx["details"]
+    quote = fx["quote"]
+    if quote is None or "published_mid" in linked_fx or quote["unit_currency"] not in NBP_QUOTE_UNITS:
+        return fx
+    # Older snapshots recorded the published mid as a per-unit rate. Keep the
+    # original evidence for reconciliation and show the corrected calculation.
+    with localcontext() as context:
+        context.prec = 180
+        normalized, _ = _quote_explanation(
+            accepted_fx_quote(linked_fx), quote["unit_currency"], _decimal(fx["receipt_amount"]),
+            fx["receipt_currency"], _decimal(fx["booked_amount"]),
+        )
+    return {**fx, "quote": normalized}

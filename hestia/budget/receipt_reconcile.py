@@ -319,7 +319,8 @@ def _reconcile_one_to_one(session, owner, now):
                     suggestion = fx_candidate(session, owner, row, transaction, payload, current,
                                               accepted_quote=accepted_fx_quote(linked_fx))
                     if suggestion is not None and not suggestion[0]["conflicting"]:
-                        fx = fx_link_evidence(row, suggestion[0])
+                        details, _, published_mid = suggestion
+                        fx = fx_link_evidence(row, details, published_mid)
                         expected_evidence.update(evidence_json({**ev, "fx": fx}) for ev in evidences)
         except (AnalyticsError, ValueError, TypeError, KeyError, RecursionError):
             evidences = ()

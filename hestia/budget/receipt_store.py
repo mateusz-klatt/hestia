@@ -35,7 +35,7 @@ from .gmail_config import normalize_card_accounts
 from .gmail_payment import _payee_key, bank_payee_texts, bank_ref_tokens, canonical_gateway
 from .gmail_store import (GATEWAY_REF_DOMAIN, _payment_payee_key, digest, receipt_ref_hmacs,
                           retain_imports, tombstone_receipt)
-from .receipt_fx import (fx_candidate, fx_link_evidence, receipt_conversion_fields,
+from .receipt_fx import (accepted_fx_details, fx_candidate, fx_link_evidence, receipt_conversion_fields,
                          write_receipt_conversion)
 from .receipt_group_solver import MAX_GROUP_POOL, MAX_GROUP_PROPOSALS, find_receipt_groups
 from .receipt_parser import (GATEWAY_PHRASE_TOKENS, _IBAN_COUNTRY_SPECS, _IBAN_MAX, _IBAN_MIN,
@@ -964,7 +964,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         if include_fx and self._match_allowed and row.linked_evidence is not None:
             linked_fx = _json(row.linked_evidence).get("fx")
             if linked_fx is not None:
-                detail["fx_link"] = linked_fx["details"]
+                detail["fx_link"] = accepted_fx_details(linked_fx)
         return detail
 
     def _purge(self, session, owner, now):
@@ -1284,8 +1284,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
                                               receipt_fields=fx_fields)
                     if suggestion is None:
                         continue
-                    fx, deviation = suggestion
-                    evidence["fx"] = fx_link_evidence(row, fx)
+                    fx, deviation, published_mid = suggestion
+                    evidence["fx"] = fx_link_evidence(row, fx, published_mid)
                 token = self._candidate_token(evidence, transaction.account_id, tx_row_id,
                                               id_match=id_hit and not cross_currency, fx=cross_currency)
             except (AnalyticsError, ValueError, TypeError, RecursionError):
@@ -1334,15 +1334,19 @@ class BudgetReceiptStore(BudgetHTTPStore):
     def _mark_fx_ambiguity(self, session, owner, row, ranked, *, limit):
         if not ranked or limit <= 0:
             return
-        # A market-rate deviation can rank look-alikes, but cannot resolve their identity.
+        # Merchant evidence and rate deviation order market estimates. Every
+        # in-band market candidate still competes for the same receipt.
         counts = {}
+        market_count = 0
         for item in ranked:
             tier = item[2:7]
             counts[tier] = counts.get(tier, 0) + 1
+            market_count += item[2]
         peers = self._fx_peers(session, owner, row)
         for item in ranked[:limit]:
             candidate = item[-1]
-            if (counts[item[2:7]] > 1 or self._fx_has_competing_receipt(session, owner, peers, item)):
+            if ((item[2] and market_count > 1) or counts[item[2:7]] > 1
+                    or self._fx_has_competing_receipt(session, owner, peers, item)):
                 candidate["match_strength"] = "ambiguous"
 
     @staticmethod
@@ -1541,7 +1545,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 suggestion = fx_candidate(session, owner, fx_row, transaction, payload, fingerprint)
                 if suggestion is None or suggestion[0]["conflicting"]:
                     raise ReceiptError("budget_receipt_stale_source", 409)
-                current["fx"] = fx_link_evidence(fx_row, suggestion[0])
+                details, _, published_mid = suggestion
+                current["fx"] = fx_link_evidence(fx_row, details, published_mid)
             expected = self._evidence_mac(current)
             stored = evidence_json(current)
         except (AnalyticsError, ValueError, TypeError, KeyError, RecursionError):

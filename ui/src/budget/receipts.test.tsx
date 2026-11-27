@@ -1950,16 +1950,16 @@ describe("ReceiptsView", () => {
     expect(button("Confirm receipt", dialog()).disabled).toBe(true);
   });
 
-  it("shows the dated NBP estimate separately from the booked debit and requires selecting the FX candidate", async () => {
-    const summary = receiptSummary({ receipt_id: "receipt-market-fx", currency: "EUR", status: "imported" });
+  it("shows the dated NBP estimate and per-unit rate separately from the booked debit and requires selecting the FX candidate", async () => {
+    const summary = receiptSummary({ receipt_id: "receipt-market-fx", total_amount: "10000", currency: "HUF", status: "imported" });
     const fx = receiptCandidate({
-      amount: "172.55", currency: "PLN", match_strength: "medium", candidate_token: "fx-nbp-token",
+      amount: "117.30", currency: "PLN", match_strength: "medium", candidate_token: "fx-nbp-token",
       fx: {
-        source: "nbp", receipt_amount: "42.5", receipt_currency: "EUR", booked_amount: "172.55",
-        booked_currency: "PLN", implied_rate: "4.06", stated_rate: null, explicit_fee: null, conflicting: false,
+        source: "nbp", receipt_amount: "10000", receipt_currency: "HUF", booked_amount: "117.30",
+        booked_currency: "PLN", implied_rate: "0.01173", stated_rate: null, explicit_fee: null, conflicting: false,
         quote: {
-          rate: "4.0000", unit_currency: "EUR", publication_date: "2026-11-13", table_number: "220/A/NBP/2026",
-          estimated_amount: "170", difference: "2.55",
+          rate: "0.0115", unit_currency: "HUF", publication_date: "2026-11-13", table_number: "220/A/NBP/2026",
+          estimated_amount: "115", difference: "2.30",
         },
       },
     });
@@ -1967,17 +1967,17 @@ describe("ReceiptsView", () => {
     await renderReceipts(clients, { locale: "pl" });
     await click(openDetailButton(0, "Szczegóły"));
     const d = dialog();
-    expect(d.textContent).toContain("42,50 EUR");
-    expect(d.textContent).toContain("≈ 170,00 PLN (kurs NBP z dnia 2026-11-13, tabela 220/A/NBP/2026)");
-    expect(d.textContent).toContain("Zaksięgowano 172,55 PLN · kurs wynikowy 4,06 PLN/EUR");
-    expect(d.textContent).toContain("Różnica względem szacunku 2,55 PLN");
+    expect(d.textContent).toContain("10 000,00 HUF");
+    expect(d.textContent).toContain("≈ 115,00 PLN (kurs NBP z dnia 2026-11-13, tabela 220/A/NBP/2026) · 0,0115 PLN/HUF");
+    expect(d.textContent).toContain("Zaksięgowano 117,30 PLN · kurs wynikowy 0,01173 PLN/HUF");
+    expect(d.textContent).toContain("Różnica względem szacunku 2,30 PLN");
     expect(linkRadio("candidate:0", d).checked).toBe(false);
     expect(clients.rApi.confirmReceipt).not.toHaveBeenCalled();
 
     await click(linkRadio("candidate:0", d));
     await click(button("Zatwierdź dokument", d));
     expect(clients.rApi.confirmReceipt).toHaveBeenCalledWith(expect.objectContaining({
-      receipt_id: summary.receipt_id, total_amount: "42.5", currency: "EUR",
+      receipt_id: summary.receipt_id, total_amount: "10000", currency: "HUF",
       link: { account_id: fx.account_id, entry_reference: fx.entry_reference, candidate_token: fx.candidate_token },
     }));
   });

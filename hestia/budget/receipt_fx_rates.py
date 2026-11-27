@@ -20,6 +20,9 @@ NBP_CURRENCIES = frozenset("""
 AUD BGN BRL CAD CHF CLP CNY CZK DKK EUR GBP HKD HUF IDR ILS INR ISK JPY KRW
 MXN MYR NOK NZD PHP RON SEK SGD THB TRY UAH USD XDR ZAR
 """.split())
+# Table A quotes these codes per block of units. Its JSON API returns the
+# published mid without the unit count. Cache entries retain that published mid.
+NBP_QUOTE_UNITS = {"CLP": 100, "HUF": 100, "IDR": 10_000, "INR": 100, "ISK": 100, "JPY": 100, "KRW": 100}
 LOOKBACK_DAYS = 10
 MAX_CACHE_ROWS = 512
 MAX_FETCHES = 12
