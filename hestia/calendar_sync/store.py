@@ -276,7 +276,12 @@ class SyncStore:
 
     def endpoints(self):
         with self.sessions() as s:
-            return [{"id": e.id, "group_id": e.group_id, "cursor": e.cursor}
+            s.execute(text("BEGIN"))
+            needs_reobservation = set(s.scalars(select(Outbox.endpoint_id).distinct()))
+            needs_reobservation.update(s.scalars(
+                select(Replica.endpoint_id).where(Replica.uncertain.is_(True)).distinct()))
+            return [{"id": e.id, "group_id": e.group_id, "provider": e.provider, "cursor": e.cursor,
+                     "needs_reobservation": e.id in needs_reobservation}
                     for e in s.scalars(select(Endpoint).where(Endpoint.enabled).order_by(Endpoint.id))]
 
     def endpoint_error(self, endpoint_id, code):
@@ -285,6 +290,8 @@ class SyncStore:
 
     def ingest(self, snapshots, *, isolate_errors=False):
         """Checkpoint only complete reads. All sources are reconciled before delivery."""
+        if not snapshots:
+            return {}
         errors = {}
         with self.transaction() as s:
             touched = set()
@@ -296,19 +303,20 @@ class SyncStore:
                         if not snapshot.complete:
                             raise ValueError("Incomplete calendar snapshot")
                         endpoint = s.get(Endpoint, endpoint_id)
-                        inventory = self._inventory(s, endpoint, snapshot)
-                        seen_ids = set()
                         observed = set()
-                        for remote in snapshot.events:
-                            seen_ids.add(remote.remote_id)
-                            observed.add(self._observe(s, endpoint, remote, inventory))
-                        if snapshot.full:
-                            for replica in inventory.replicas.values():
-                                if replica.seen and not replica.deleted and replica.remote_id not in seen_ids:
-                                    self._tombstone(inventory.events[replica.event_id], endpoint_id)
-                                    replica.deleted = True
-                                    replica.uncertain = False
-                                    observed.add(replica.event_id)
+                        if snapshot.full or snapshot.events:
+                            inventory = self._inventory(s, endpoint, snapshot)
+                            seen_ids = set()
+                            for remote in snapshot.events:
+                                seen_ids.add(remote.remote_id)
+                                observed.add(self._observe(s, endpoint, remote, inventory))
+                            if snapshot.full:
+                                for replica in inventory.replicas.values():
+                                    if replica.seen and not replica.deleted and replica.remote_id not in seen_ids:
+                                        self._tombstone(inventory.events[replica.event_id], endpoint_id)
+                                        replica.deleted = True
+                                        replica.uncertain = False
+                                        observed.add(replica.event_id)
                         endpoint.cursor = snapshot.cursor
                         endpoint.last_success = self.clock()
                         endpoint.last_error = None
@@ -318,8 +326,9 @@ class SyncStore:
                     if not isolate_errors:
                         raise
                     errors[endpoint_id] = exc
-            s.flush()
-            self._reconcile(s, touched)
+            if touched:
+                s.flush()
+                self._reconcile(s, touched)
         return errors
 
     @staticmethod
@@ -355,8 +364,6 @@ class SyncStore:
         return _Inventory(events, events_by_uid, replicas, replicas_by_event)
 
     def _reconcile(self, s, touched):
-        if not touched:
-            return
         events = list(self._by_values(s, Event, Event.id, touched))
         replicas = {(row.endpoint_id, row.event_id): row
                     for row in self._by_values(s, Replica, Replica.event_id, touched)}
