@@ -364,8 +364,9 @@ class PaymentExtractionTests(unittest.TestCase):
 
     def test_payment_fields_do_not_store_an_iban_before_a_suffix(self):
         iban = "NL91 ABNA 0417 1643 00"
-        payment = _extract("Total 3 PLN", f"{iban} zł")
-        self.assertEqual(payment.description, "zł")
+        for subject in (f"{iban} zł", "[usunięto] zł", "[usuni&eogon;to] zł"):
+            with self.subTest(subject=subject):
+                self.assertEqual(_extract("Total 3 PLN", subject).description, "Płatność")
 
         # Contact cleanup can bring the IBAN fragments back together after the initial scan.
         body = "Odbiorca: NL91 ABNA person@example.test 0417 1643 00 zł\nTotal 3 PLN"

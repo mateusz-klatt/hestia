@@ -376,6 +376,25 @@ NR KARTY ****5555
                 self.assertEqual(redacted, f"{expected}\n{following}")
                 self.assertEqual(redact_pan(redacted), redacted)
 
+    def test_iban_redaction_retries_after_a_glued_invalid_checksum(self):
+        invalid = "MT00MALT01100ABCDEFGHIJKLMNOPQR"
+        maltese = "MT86MALT01100ABCDEFGHIJKLMNOPQR"
+        dutch = "NL91ABNA0417164300"
+        for raw, expected in (
+            (invalid + maltese, f"{invalid}[usunięto]"),
+            (invalid + dutch + "zł", f"{invalid}[usunięto]zł"),
+            (invalid * 2 + maltese, f"{invalid * 2}[usunięto]"),
+            (invalid + maltese * 2, f"{invalid}[usunięto]"),
+            (maltese + invalid + dutch, f"[usunięto]{invalid}[usunięto]"),
+            (f"{invalid[:13]}\n{invalid[13:]}{maltese}", f"{invalid[:13]}\n{invalid[13:]}[usunięto]"),
+            # Keep checking starts inside a failed candidate that spanned a separator.
+            (f"{invalid[:16]} {dutch}EXTRA", "[usunięto]EXTRA"),
+        ):
+            with self.subTest(raw=raw):
+                redacted = redact_pan(raw)
+                self.assertEqual(redacted, expected)
+                self.assertEqual(redact_pan(redacted), redacted)
+
     def test_iban_redaction_keeps_separated_suffix_and_parseable_nip(self):
         iban = "NL91 ABNA 0417 1643 00"
         nip = "NIP 5260250274"

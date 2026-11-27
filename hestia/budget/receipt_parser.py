@@ -608,6 +608,8 @@ def _mark_ibans(text):
     space-delimited or glued suffix stays on the final line for further checks.
     """
     redactions = {}
+    kept_prefixes = {}
+    retry_starts = {}
     digit_scan_parts = []
     masked_through = 0
     line_of = []
@@ -620,12 +622,15 @@ def _mark_ibans(text):
     index = 0
     while index < length:
         char = text[index]
-        if not (char.isascii() and char.isalpha()) or (index > masked_through and text[index - 1].isalnum()):
+        failed_start = max(retry_starts.pop(index, index), masked_through)
+        at_boundary = failed_start < index or index == masked_through or not text[index - 1].isalnum()
+        if not (char.isascii() and char.isalpha() and at_boundary):
             index += 1
             continue
         compact = [char.upper()]
         positions = [index]
         cursor = index + 1
+        next_index = cursor
         spec = None
         matched_end = None
         while cursor < length:
@@ -651,6 +656,13 @@ def _mark_ibans(text):
                     # Only standalone PL candidates can skip the checksum.
                     if (token[:2] == "PL" and not glued) or _iban_checksum(token):
                         matched_end = cursor
+                    else:
+                        # Retry at the end of this candidate. Keep looking for
+                        # earlier starts inside it if it crossed a separator.
+                        if cursor - index == len(compact) and not retry_starts:
+                            next_index = cursor
+                        if glued:
+                            retry_starts.setdefault(cursor, failed_start)
                     break
                 continue
             if current in _JOIN_SEPARATORS:
@@ -658,14 +670,22 @@ def _mark_ibans(text):
                 continue
             break
         if matched_end is None:
-            index += 1
+            index = next_index
             continue
+        first_line = line_of[index]
+        if failed_start < index:
+            line_start = text.rfind("\n", failed_start, index) + 1
+            prefix = text[max(failed_start, line_start):index]
+            if first_line in redactions:
+                prefix = kept_prefixes.get(first_line, "") + _REMOVED + prefix
+            kept_prefixes[first_line] = prefix
         for pos in positions:
-            redactions[line_of[pos]] = ""
+            line = line_of[pos]
+            redactions[line] = kept_prefixes.get(line, "") + _REMOVED
         last_line = line_of[positions[-1]]
         if glued or next_char == " ":
             line_end = text.find("\n", matched_end)
-            redactions[last_line] = text[matched_end:line_end if line_end >= 0 else length].rstrip()
+            redactions[last_line] += text[matched_end:line_end if line_end >= 0 else length].rstrip()
         # Keep the original line indices and separate any digit runs around the IBAN.
         digit_scan_parts.extend((text[masked_through:index], "\n" * (last_line - line_of[index]), _REMOVED))
         masked_through = matched_end
@@ -719,7 +739,7 @@ def _secret_lines(text):
                 bad.add(index - 1)
                 masked[index] = "x" + masked[index]
     _mark_digit_runs("\n".join(masked), bad)
-    return ibans | dict.fromkeys(bad, "")
+    return ibans | dict.fromkeys(bad, _REMOVED)
 
 
 def _redact_normalized(text):
@@ -727,10 +747,7 @@ def _redact_normalized(text):
     redactions = _secret_lines(text)
     if not redactions:
         return text
-    return "\n".join(
-        _REMOVED + redactions[number] if number in redactions else line
-        for number, line in enumerate(text.split("\n"))
-    )
+    return "\n".join(redactions.get(number, line) for number, line in enumerate(text.split("\n")))
 
 
 def _contains_secret(value):
