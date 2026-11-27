@@ -773,9 +773,19 @@ class GmailStore(BudgetStore):
                 existing["paid"] |= incoming["paid"]
                 if incoming["receipt_number_hmac"]:
                     existing["receipt_number_hmac"] = incoming["receipt_number_hmac"]
-                meta.value = json.dumps(existing, sort_keys=True)
                 if (receipt.status == "imported" and receipt.document_kind == "receipt"
                         and item.invoice.document_kind == "invoice"):
+                    before = audit_payload(receipt, "document_upgrade")
+                    suffix = item.invoice.card_last4
+                    method = item.invoice.payment_method
+                    suffixes = {receipt.card_last4, suffix} - {None}
+                    methods = {receipt.payment_method, method} - {None}
+                    if suffixes:
+                        methods.add("card")
+                    if receipt.version == 1 and len(suffixes) <= 1 and len(methods) <= 1:
+                        existing["auto_promoted_version"] = receipt.version + 1
+                        receipt.card_last4 = receipt.card_last4 or suffix
+                        receipt.payment_method = receipt.payment_method or method
                     receipt.document_kind = "invoice"
                     receipt.invoice_number = item.invoice.invoice_number
                     receipt.receipt_date = item.invoice.issue_date
@@ -783,6 +793,8 @@ class GmailStore(BudgetStore):
                     receipt.raw_nip = item.invoice.nip
                     receipt.version += 1
                     receipt.updated_at = now
+                    write_audit(session, owner, receipt, "document_upgrade", before,
+                                audit_payload(receipt, "document_upgrade", "gmail_import"), now)
                     attached = session.scalars(select(BudgetReceipt).where(
                         BudgetReceipt.owner == owner, BudgetReceipt.gateway.is_not(None),
                         BudgetReceipt.evidence_for_receipt_id == receipt.id,
@@ -791,6 +803,7 @@ class GmailStore(BudgetStore):
                     for gateway_row in attached:
                         self._attach_evidence(session, owner, gateway_row, revalidate=True)
                     self._attach_gateway_for_document(session, owner, receipt)
+                meta.value = json.dumps(existing, sort_keys=True)
                 return "skipped_duplicate"
         return None
 

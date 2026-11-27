@@ -746,14 +746,19 @@ def _decode_polish_letters(value: str) -> str:
 def _description(candidates: list[str]) -> str:
     fallback = "Płatność"
     for candidate in candidates:
-        value = _clean_field(_decode_polish_letters(candidate))
+        value = _decode_polish_letters(candidate)
+        if _REDACTED in value:
+            continue
+        value = _clean_field(value)
         if value.strip(" .,:;!?").casefold() in _GENERIC_DESCRIPTIONS:
             continue
         digit_heavy = bool(_LONG_DIGITS.search(value)) or redact_digit_field(value) != value
         value = " ".join(_LONG_DIGITS.sub(" ", value).split())
         value = redact_pan(value) if value else ""
+        if _REDACTED in value:
+            continue
         value = value[:128].strip()
-        if not value or value == _REDACTED:
+        if not value:
             continue
         if not digit_heavy:
             return value
