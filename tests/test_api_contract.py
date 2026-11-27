@@ -1039,6 +1039,7 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest",
         "BudgetReceiptLineInput", "BudgetReceiptLinkRequest", "BudgetReceiptListRequest",
         "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",
+        "BudgetReceiptManualLinkRequest", "BudgetReceiptTransactionSearchRequest",
         "BudgetReceiptGroupCandidatesRequest", "BudgetReceiptGroupMemberInput",
         "BudgetReceiptGroupLinkRequest", "BudgetReceiptGroupUnlinkRequest",
         "BudgetReceiptDeviceBrowserRequest", "BudgetReceiptDeviceRedeemRequest",
