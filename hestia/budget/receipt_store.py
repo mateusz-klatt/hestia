@@ -24,7 +24,7 @@ from sqlalchemy.orm import aliased
 
 from .. import authz
 from ..db import (AppMeta, BudgetAccount as Account, BudgetAccountDisplay as AccountDisplay,
-                  BudgetConnection as Connection, BudgetReceipt as Receipt,
+                  BudgetAnalyticsAudit as Audit, BudgetConnection as Connection, BudgetReceipt as Receipt,
                   BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line,
                   BudgetReceiptLinkGroup as ReceiptLinkGroup, BudgetReceiptLinkMember as ReceiptLinkMember,
                   BudgetShop as Shop,
@@ -56,6 +56,7 @@ MAX_GROUP_SPAN_DAYS = 14
 _GROUP_STRENGTH_ORDER = {"id": 0, "nip": 1, "distinctive": 2, "generic": 3, "none": 4}
 _CUR3 = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _OCR_SOURCES = ("local_ocr", "photo", "cloud_ai")
+_SHOP_NAME_CONFIRMED = "shop_name_confirmed"
 
 
 class ReceiptGroupError(ReceiptError):
@@ -353,28 +354,37 @@ def _group_links_for_receipts(session, owner, receipt_ids):
     return {receipt_id: (group, count) for receipt_id, group, count in rows}
 
 
-def _seller_names_query(owner, nips=None):
+def _seller_names_query(owner, nips):
     """Return at most one confirmed name and one registered name per NIP."""
+    # Old confirmations lack the boolean. Use their audit time as a fallback.
+    # A known link-only save has a false flag and does not change the ranking.
+    valid_after = case((func.json_valid(Audit.after_json), Audit.after_json))
+    latest_confirm_id = select(Audit.id).where(
+        Audit.owner == Receipt.owner, Audit.subject_id == Receipt.id,
+        Audit.subject_type == "receipt", Audit.action == "confirm",
+        valid_after.is_not(None),
+        func.json_extract(valid_after, "$." + _SHOP_NAME_CONFIRMED).is_not(False),
+    ).order_by(Audit.changed_at.desc(), Audit.id.desc()).limit(1).correlate(Receipt).scalar_subquery()
+    confirmation = aliased(Audit)
     confirmed_name = func.trim(Receipt.raw_shop_name)
     shop_name = func.trim(Shop.name)
     confirmed = select(
         Receipt.raw_nip.label("nip"), confirmed_name.label("name"), literal(0).label("source"),
-        Receipt.updated_at.label("updated_at"), Receipt.id.label("id"),
-    ).where(
+        func.coalesce(confirmation.changed_at, Receipt.created_at).label("named_at"),
+        confirmation.id.label("audit_id"), Receipt.id.label("id"),
+    ).outerjoin(confirmation, confirmation.id == latest_confirm_id).where(
         Receipt.owner == owner, Receipt.status == "confirmed",
-        Receipt.document_kind != "payment_confirmation", Receipt.raw_nip.is_not(None),
+        Receipt.document_kind == "receipt", Receipt.source_kind.in_(_OCR_SOURCES), Receipt.raw_nip.in_(nips),
         confirmed_name.not_in(("", _REMOVED)),
     )
-    registered = select(Shop.nip, shop_name, literal(1), Shop.updated_at, Shop.id).where(
-        Shop.owner == owner, Shop.nip.is_not(None), shop_name.not_in(("", _REMOVED)),
+    registered = select(Shop.nip, shop_name, literal(1), Shop.updated_at, literal(None), Shop.id).where(
+        Shop.owner == owner, Shop.nip.in_(nips), shop_name.not_in(("", _REMOVED)),
     )
-    if nips is not None:
-        confirmed = confirmed.where(Receipt.raw_nip.in_(nips))
-        registered = registered.where(Shop.nip.in_(nips))
     names = confirmed.union_all(registered).subquery()
     ranked = select(names.c.nip, names.c.name, names.c.source, func.row_number().over(
         partition_by=(names.c.nip, names.c.source),
-        order_by=(names.c.updated_at.desc(), names.c.id),
+        order_by=(names.c.audit_id.is_not(None).desc(), names.c.named_at.desc(), names.c.audit_id.desc(),
+                  case((names.c.source == 0, names.c.id)).desc(), names.c.id),
     ).label("rank")).subquery()
     return select(
         ranked.c.nip,
@@ -383,14 +393,18 @@ def _seller_names_query(owner, nips=None):
     ).where(ranked.c.rank == 1).group_by(ranked.c.nip)
 
 
-def _ocr_seller_nip(row):
-    if row.document_kind == "receipt" and row.source_kind in _OCR_SOURCES and valid_nip(row.raw_nip):
+def _is_ocr_receipt(row):
+    return row.document_kind == "receipt" and row.source_kind in _OCR_SOURCES
+
+
+def _ocr_receipt_nip(row):
+    if _is_ocr_receipt(row) and valid_nip(row.raw_nip):
         return row.raw_nip
     return None
 
 
 def _display_shop_name(row, confirmed=None, registered=None):
-    nip = _ocr_seller_nip(row)
+    nip = _ocr_receipt_nip(row)
     if nip is None:
         return None
     for name in (confirmed, registered):
@@ -403,7 +417,7 @@ def _display_shop_name(row, confirmed=None, registered=None):
 
 
 def _page_shop_names(session, owner, rows):
-    nips = sorted({nip for row in rows if (nip := _ocr_seller_nip(row)) is not None})
+    nips = sorted({nip for row in rows if (nip := _ocr_receipt_nip(row)) is not None})
     if not nips:
         return {}
     return {nip: (confirmed, registered) for nip, confirmed, registered in session.execute(
@@ -1492,6 +1506,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             if effective["lines"] is None and not group_conflict:
                 self._check_stored_lines(session, owner, row.id, effective["total_amount"])
             row_was_draft = row.status == "draft"
+            shop_name_confirmed = row_was_draft or effective["raw_shop_name"] != row.raw_shop_name
             preserve_link = row.linked_account_id is not None and not self._match_allowed
             if link is not None and not self._match_allowed:
                 raise DeviceTokenError(403, "budget_forbidden")
@@ -1527,6 +1542,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             except IntegrityError:
                 raise ReceiptError("budget_receipt_tx_already_linked", 409) from None
             after = audit_payload(row, "confirm", self._actor)
+            if _is_ocr_receipt(row):
+                after[_SHOP_NAME_CONFIRMED] = shop_name_confirmed
             if grouped:
                 before["linked"] = after["linked"] = True
             write_audit(session, owner, row, "confirm", before, after, now)
@@ -1708,7 +1725,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
     def _search_page(self, session, owner, ordered, needle, limit, include_display_shop_name):
         if include_display_shop_name:
             # Resolve in SQL before pagination so a canonical-only match can be anywhere in the ledger.
-            names = _seller_names_query(owner).subquery()
+            candidate_nips = ordered.with_only_columns(Receipt.raw_nip).order_by(None).where(
+                Receipt.document_kind == "receipt", Receipt.source_kind.in_(_OCR_SOURCES),
+                Receipt.raw_nip.is_not(None),
+            ).distinct().cte("receipt_search_nips")
+            names = _seller_names_query(owner, select(candidate_nips.c.raw_nip)).subquery()
             ordered = ordered.outerjoin(names, and_(
                 names.c.nip == Receipt.raw_nip, Receipt.document_kind == "receipt",
                 Receipt.source_kind.in_(_OCR_SOURCES),

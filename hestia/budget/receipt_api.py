@@ -133,6 +133,11 @@ def _receipt_contract(request, operation):
 
 
 def _response(operation, result, version):
+    if version < _DISPLAY_SHOP_NAME_VERSION and operation in _RECEIPT_RESULT_KEY:
+        key = _RECEIPT_RESULT_KEY[operation]
+        receipts = result[key] if key == "receipts" else (result[key],)
+        for receipt in receipts:
+            receipt.pop("display_shop_name", None)
     if version < _LINK_INDICATORS_VERSION and operation in _RECEIPT_RESULT_KEY:
         key = _RECEIPT_RESULT_KEY[operation]
         receipts = result[key] if key == "receipts" else (result[key],)
