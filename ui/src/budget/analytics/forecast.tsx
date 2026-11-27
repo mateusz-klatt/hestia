@@ -353,7 +353,7 @@ export function ForecastView({ api, accounts, connections = [], locale, revision
               <summary>{t("budget.forecast.merged")}</summary>
               <ul className="budget-entry-list">
                 {data.deduplications.map((item, index) => (
-                  <li key={`${item.schedule_id}/${item.matched_due_date}/${index}`} className="budget-entry">
+                  <li key={`${item.schedule_id}/${item.matched_due_date}/${String(index)}`} className="budget-entry">
                     <div className="budget-recurring-main">
                       <span className="budget-entry-text">{item.recurring_label} → {item.schedule_label}</span>
                       <strong className="budget-recurring-amount">{formatAmount(item.amount, item.currency, locale)}</strong>

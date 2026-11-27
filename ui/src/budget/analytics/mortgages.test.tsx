@@ -236,6 +236,7 @@ describe("MortgagesView", () => {
     ] }));
     await act(async () => {
       root.render(<MortgagesView api={api} accounts={accounts} locale="pl-PL" revision={1} onAccessLoss={() => false} />);
+      await Promise.resolve();
     });
     await settle();
     expect(api.mortgageReferenceCandidates).not.toHaveBeenCalled();
@@ -267,6 +268,7 @@ describe("MortgagesView", () => {
     api.mortgages.mockImplementation(() => ok(mortgagesOf([], [], { match_references_supported: true })));
     await act(async () => {
       root.render(<MortgagesView api={api} accounts={accounts} locale="en-US" revision={1} onAccessLoss={() => false} />);
+      await Promise.resolve();
     });
     await settle();
     await click(button("New schedule"));
