@@ -523,6 +523,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "รายการธนาคารที่เลือกเชื่อมโยงกับเอกสารอื่นอยู่แล้ว",
   "budget.receipts.staleSource": "โทเค็นตัวเลือกการเชื่อมโยงใช้ไม่ได้แล้ว (รายการเดินบัญชีหรือร้านค้า/NIP เปลี่ยนแปลง) โหลดรายละเอียดใหม่แล้ว — โปรดตรวจสอบและยืนยันอีกครั้ง",
   "budget.receipts.totalMismatch": "ผลรวมของรายการต้องเท่ากับยอดรวมเอกสาร",
+  "budget.receipts.partialLinesRemainder": "อ่านรายการได้เพียงบางส่วน — ส่วนต่าง {amount} จะบันทึกเป็นรายการอื่น ๆ",
+  "budget.receipts.partialLinesSummary": "อ่านรายการได้เพียงบางส่วน — จะบันทึกเฉพาะยอดรวม",
   "budget.receipts.invalidForm": "ตรวจสอบชื่อร้านค้า วันที่ถูกต้อง ยอดรวมบวก สกุลเงิน และ NIP",
   "budget.receipts.confirmError": "การยืนยันล้มเหลว ตรวจสอบการแก้ไขแล้วลองอีกครั้ง",
   "budget.receipts.deleteAction": "ลบเอกสาร",

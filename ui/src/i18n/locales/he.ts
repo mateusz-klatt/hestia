@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "תנועת הבנק שנבחרה כבר מקושרת למסמך אחר.",
   "budget.receipts.staleSource": "אסימון המועמד פג או אינו תקף עוד (היומן התעדכן או העסק/NIP שונו). הפרטים נטענו מחדש — בדקו את הקישור ואשרו שוב.",
   "budget.receipts.totalMismatch": "סכום השורות חייב להיות שווה לסכום הכולל.",
+  "budget.receipts.partialLinesRemainder": "הפריטים זוהו רק באופן חלקי — ההפרש בסך {amount} יירשם כפריטים אחרים.",
+  "budget.receipts.partialLinesSummary": "הפריטים זוהו רק באופן חלקי — רק הסכום הכולל יישמר.",
   "budget.receipts.invalidForm": "בדקו את שם העסק, תאריך תקין, סכום חיובי, מטבע ו-NIP.",
   "budget.receipts.confirmError": "האישור נכשל. בדקו את השינויים ונסו שוב.",
   "budget.receipts.deleteAction": "מחק מסמך",

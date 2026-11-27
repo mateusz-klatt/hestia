@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "A kiválasztott banki tranzakció már egy másik dokumentumhoz kapcsolódik.",
   "budget.receipts.staleSource": "A jelölt hivatkozási token már érvénytelen (főkönyv vagy kereskedő/NIP módosult). Részletek újratöltve — ellenőrizze a kapcsolatot és hagyja jóvá újra.",
   "budget.receipts.totalMismatch": "A tételek összegének meg kell egyeznie a végösszeggel.",
+  "budget.receipts.partialLinesRemainder": "A tételek felismerése részleges — a(z) {amount} különbözet egyéb tételekként kerül rögzítésre.",
+  "budget.receipts.partialLinesSummary": "A tételek felismerése részleges — csak a végösszeget mentjük.",
   "budget.receipts.invalidForm": "Ellenőrizze a kereskedőt, az érvényes dátumot, a pozitív összeget, a pénznemet és a NIP-et.",
   "budget.receipts.confirmError": "A jóváhagyás sikertelen. Ellenőrizze a módosításokat, majd próbálja újra.",
   "budget.receipts.deleteAction": "Dokumentum törlése",

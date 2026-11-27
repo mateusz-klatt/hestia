@@ -57,6 +57,7 @@ import {
   receiptAccountLabel,
   receiptHasRedactedLines,
   receiptMerchantGroupKey,
+  receiptTotalAdjustment,
   reconcileLinkChoice,
   resolveDraftFromDetailSession,
   selectCandidateDraft,
@@ -2119,11 +2120,16 @@ function ReceiptDetailDrawer({
           const linkOptions = availableLinkOptions(detail, candidates, draftMethod, matchingChanged);
           const { currentCandidate } = linkOptions;
           const hasStoredKeepCandidate = storedKeepCandidate !== null;
-          const lineDelta = activeDraft === null
+          const lineAdjustment = activeDraft === null ? null : receiptTotalAdjustment(detail, activeDraft);
+          const lineDelta = activeDraft === null || lineAdjustment !== null
             || (detail.document_kind === "invoice" && detail.lines.length === 0 && activeDraft.lines.length === 0)
             ? null
             : computeLinesDelta(activeDraft.lines, activeDraft.totalAmount);
           const deltaCurrency = (activeDraft?.currency.trim() || detail.currency) ?? "PLN";
+          const adjustmentCurrency = lineAdjustment?.kind === "remainder" && /^[A-Z]{3}$/i.test(deltaCurrency)
+            ? new Intl.NumberFormat(locale, { style: "currency", currency: deltaCurrency })
+                .formatToParts(0).find((part) => part.type === "currency")?.value ?? deltaCurrency
+            : deltaCurrency;
           const lineDeltaDisplay = lineDelta !== null && lineDelta !== "0"
             ? formatAmount(lineDelta, deltaCurrency, locale)
             : null;
@@ -2357,7 +2363,8 @@ function ReceiptDetailDrawer({
                     <dd>{detail.due_date}</dd>
                   </>
                 )}
-                {detail.math_delta !== null && detail.math_delta !== "0" && detail.currency !== null ? (
+                {lineAdjustment === null && detail.math_delta !== null && detail.math_delta !== "0"
+                  && detail.currency !== null ? (
                   <>
                     <dt>{t("budget.receipts.mathDelta")}</dt>
                     <dd className="budget-warn">{formatAmount(detail.math_delta, detail.currency, locale)}</dd>
@@ -2680,9 +2687,18 @@ function ReceiptDetailDrawer({
                         )}
                       </div>
                     </div>
-                    {hasRedactedLines ? (
+                    {hasRedactedLines && lineAdjustment?.kind !== "summary" ? (
                       <p className="budget-warn" role="note">{t("budget.receipts.redactedLinesEditBlocked")}</p>
                     ) : null}
+                    {lineAdjustment === null ? null : (
+                      <p className="budget-muted" role="note">
+                        {lineAdjustment.kind === "remainder"
+                          ? t("budget.receipts.partialLinesRemainder", {
+                              amount: formatAmount(lineAdjustment.amount, adjustmentCurrency, locale),
+                            })
+                          : t("budget.receipts.partialLinesSummary")}
+                      </p>
+                    )}
                     {lineDeltaDisplay === null ? null : (
                       <p className="budget-warn">
                         {t("budget.receipts.mathDelta")}: {lineDeltaDisplay}

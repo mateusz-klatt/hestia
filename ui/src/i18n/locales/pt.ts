@@ -521,6 +521,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "A transação selecionada já está vinculada a outro documento.",
   "budget.receipts.staleSource": "O token de candidato expirou ou ficou inválido (lançamento ou comerciante/NIP alterado). Detalhes recarregados — revise o vínculo e confirme novamente.",
   "budget.receipts.totalMismatch": "A soma dos itens deve ser igual ao total do documento.",
+  "budget.receipts.partialLinesRemainder": "Apenas alguns itens foram reconhecidos — a diferença de {amount} será registada como outros itens.",
+  "budget.receipts.partialLinesSummary": "Apenas alguns itens foram reconhecidos — só será guardado o total.",
   "budget.receipts.invalidForm": "Verifique estabelecimento, data válida, total positivo, moeda e NIP.",
   "budget.receipts.confirmError": "Falha ao confirmar. Verifique os dados e tente novamente.",
   "budget.receipts.deleteAction": "Excluir documento",

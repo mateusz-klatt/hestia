@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Vybraná bankovní transakce je již propojena s jiným dokladem.",
   "budget.receipts.staleSource": "Token kandidáta už neplatí (změna v deníku nebo obchodníka/NIP). Podrobnosti znovu načteny — zkontrolujte vazbu a potvrďte znovu.",
   "budget.receipts.totalMismatch": "Součet položek se musí rovnat celkové částce.",
+  "budget.receipts.partialLinesRemainder": "Položky byly rozpoznány jen částečně — rozdíl {amount} se zaznamená jako ostatní položky.",
+  "budget.receipts.partialLinesSummary": "Položky byly rozpoznány jen částečně — uloží se pouze celková částka.",
   "budget.receipts.invalidForm": "Zkontrolujte obchodníka, platné datum, kladnou částku, měnu a NIP.",
   "budget.receipts.confirmError": "Potvrzení se nezdařilo. Zkontrolujte změny a zkuste to znovu.",
   "budget.receipts.deleteAction": "Smazat doklad",

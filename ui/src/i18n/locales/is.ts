@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Valin bankafærsla er þegar tengd öðru skjali.",
   "budget.receipts.staleSource": "Tengitóki frambjóðanda gildir ekki lengur (færsla eða söluaðili/NIP breyttist). Upplýsingar endurhlaðnar — skoðaðu tengingu og staðfestu aftur.",
   "budget.receipts.totalMismatch": "Summa lína verður að jafnast á við heildarupphæð.",
+  "budget.receipts.partialLinesRemainder": "Aðeins hluti færslna var lesinn — mismunurinn {amount} verður skráður sem aðrar færslur.",
+  "budget.receipts.partialLinesSummary": "Aðeins hluti færslna var lesinn — aðeins heildarupphæðin verður vistuð.",
   "budget.receipts.invalidForm": "Athugaðu söluaðila, gilda dagsetningu, jákvæða upphæð, gjaldmiðil og NIP.",
   "budget.receipts.confirmError": "Staðfesting mistókst. Athugaðu breytingar þínar og reyndu aftur.",
   "budget.receipts.deleteAction": "Eyða skjali",

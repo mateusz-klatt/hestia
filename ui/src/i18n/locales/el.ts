@@ -523,6 +523,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Η επιλεγμένη τραπεζική συναλλαγή είναι ήδη συνδεδεμένη με άλλο έγγραφο.",
   "budget.receipts.staleSource": "Το token υποψηφίου δεν ισχύει πλέον (ενημέρωση κινήσεων ή αλλαγή εμπόρου/NIP). Τα στοιχεία ανανεώθηκαν — ελέγξτε τη σύνδεση και επιβεβαιώστε ξανά.",
   "budget.receipts.totalMismatch": "Το άθροισμα των γραμμών πρέπει να ισούται με το σύνολο.",
+  "budget.receipts.partialLinesRemainder": "Τα είδη αναγνωρίστηκαν μόνο εν μέρει — η διαφορά {amount} θα καταχωριστεί ως λοιπά είδη.",
+  "budget.receipts.partialLinesSummary": "Τα είδη αναγνωρίστηκαν μόνο εν μέρει — θα αποθηκευτεί μόνο το συνολικό ποσό.",
   "budget.receipts.invalidForm": "Ελέγξτε έμπορο, έγκυρη ημερομηνία, θετικό ποσό, νόμισμα και NIP.",
   "budget.receipts.confirmError": "Η επιβεβαίωση απέτυχε. Ελέγξτε τις αλλαγές σας και δοκιμάστε ξανά.",
   "budget.receipts.deleteAction": "Διαγραφή εγγράφου",

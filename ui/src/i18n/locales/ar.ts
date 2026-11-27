@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "المعاملة البنكية المحددة مرتبطة بالفعل بمستند آخر.",
   "budget.receipts.staleSource": "رمز المرشح لم يعد صالحًا (تحدّث السجل أو تغيّر التاجر/NIP). أُعيد تحميل التفاصيل — راجع الربط وأكّد مجددًا.",
   "budget.receipts.totalMismatch": "يجب أن يساوي مجموع البنود الإجمالي.",
+  "budget.receipts.partialLinesRemainder": "تم التعرّف على بعض البنود فقط — سيُسجّل الفرق البالغ {amount} ضمن البنود الأخرى.",
+  "budget.receipts.partialLinesSummary": "تم التعرّف على بعض البنود فقط — سيُحفظ الإجمالي وحده.",
   "budget.receipts.invalidForm": "تحقق من اسم التاجر، والتاريخ الصالح، والمبلغ الموجب، والعملة، والرقم الضريبي NIP.",
   "budget.receipts.confirmError": "فشل التأكيد. راجع تعديلاتك وحاول مرة أخرى.",
   "budget.receipts.deleteAction": "حذف المستند",

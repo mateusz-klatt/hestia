@@ -667,6 +667,41 @@ NR KARTY ****5555
                                  ("budget_receipt_total_mismatch", 400))
         self.assertEqual(validate_confirm(valid)["total_amount"], "100")
 
+    def test_receipt_confirm_by_total_links_despite_inconsistent_ocr_lines(self):
+        for total, math_delta, line_kind, line_name, line_amount in (
+            ("67.01", "-7.01", "item", "Pozostałe / nierozpoznane pozycje", "7.01"),
+            ("52.99", "7.01", "other", "Tylko suma", "52.99"),
+        ):
+            with self.subTest(total=total):
+                reference = f"confirm-by-total-{total}"
+                self.add_transaction("a", reference, amount=total, remittance_information=["SKLEP TESTOWY"])
+                parsed = self.receipts.parse_text(
+                    "owner",
+                    "SKLEP TESTOWY\nPARAGON FISKALNY\n2026-11-30 12:34\n"
+                    "JABŁKA 1 x 10,00 10,00 A\nCHLEB 1 x 20,00 20,00 A\nMLEKO 1 x 30,00 30,00 A\n"
+                    f"SUMA PLN {total.replace('.', ',')}\nKARTA PŁATNICZA",
+                    source_kind="local_ocr",
+                )
+                self.assertEqual(parsed["draft"]["math_delta"], math_delta)
+                self.assertEqual(
+                    [(candidate["entry_reference"], candidate["match_strength"]) for candidate in parsed["candidates"]],
+                    [(reference_digest(reference), "distinctive")],
+                )
+
+                request = confirm_values(parsed, link=self.link(reference=reference))
+                extra_line = dict(
+                    line_kind=line_kind, raw_name=line_name, ptu_code=None, quantity="1", raw_unit=None,
+                    unit_price_raw=None, gross_line_total=line_amount, discount_amount="0", net_line_total=line_amount,
+                )
+                request["lines"] = [*request["lines"], extra_line] if line_kind == "item" else [extra_line]
+                cleaned = validate_confirm(request)
+                self.assertEqual(cleaned["total_amount"], total)
+
+                saved = self.receipts.confirm("owner", request)["receipt"]
+                self.assertEqual((saved["status"], saved["math_delta"], saved["linked_entry_ref"]),
+                                 ("confirmed", "0", reference_digest(reference)))
+                self.assertEqual(saved["lines"], cleaned["lines"])
+
     def test_parse_text_resolves_candidates_outside_the_write_transaction(self):
         from contextlib import contextmanager
         in_write = False

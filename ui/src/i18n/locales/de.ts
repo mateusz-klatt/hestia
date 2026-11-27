@@ -521,6 +521,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Der gewählte Bankumsatz ist bereits mit einem anderen Dokument verknüpft.",
   "budget.receipts.staleSource": "Das Verknüpfungs-Token ist veraltet (Buchung geändert oder Händler/NIP bearbeitet). Details neu geladen — Verknüpfung prüfen und erneut bestätigen.",
   "budget.receipts.totalMismatch": "Die Summe der Positionen muss dem Gesamtbetrag entsprechen.",
+  "budget.receipts.partialLinesRemainder": "Positionen wurden nur teilweise erkannt — die Differenz von {amount} wird als sonstige Positionen erfasst.",
+  "budget.receipts.partialLinesSummary": "Positionen wurden nur teilweise erkannt — nur der Gesamtbetrag wird gespeichert.",
   "budget.receipts.invalidForm": "Händlername, gültiges Datum, positiven Betrag, Währung und NIP prüfen.",
   "budget.receipts.confirmError": "Bestätigung fehlgeschlagen. Eingaben prüfen und erneut versuchen.",
   "budget.receipts.deleteAction": "Dokument löschen",

@@ -521,6 +521,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Den valda banktransaktionen är redan kopplad till ett annat dokument.",
   "budget.receipts.staleSource": "Kandidattoken är inte längre giltig (bokföring eller handlare/NIP har ändrats). Detaljer har lästs in igen — kontrollera kopplingen och bekräfta på nytt.",
   "budget.receipts.totalMismatch": "Summan av raderna måste vara lika med totalbeloppet.",
+  "budget.receipts.partialLinesRemainder": "Bara vissa poster kunde läsas av — mellanskillnaden på {amount} registreras som övriga poster.",
+  "budget.receipts.partialLinesSummary": "Bara vissa poster kunde läsas av — endast totalbeloppet sparas.",
   "budget.receipts.invalidForm": "Kontrollera handlare, giltigt datum, positivt belopp, valuta och NIP.",
   "budget.receipts.confirmError": "Bekräftelsen misslyckades. Kontrollera dina ändringar och försök igen.",
   "budget.receipts.deleteAction": "Ta bort dokument",

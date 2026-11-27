@@ -521,6 +521,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "L’opération bancaire sélectionnée est déjà liée à un autre document.",
   "budget.receipts.staleSource": "Le jeton du candidat n’est plus valide (écriture modifiée ou commerçant/NIP édité). Détails rechargés — vérifiez le lien et reconfirmez.",
   "budget.receipts.totalMismatch": "La somme des lignes doit être égale au total du document.",
+  "budget.receipts.partialLinesRemainder": "Les articles n’ont été reconnus qu’en partie — l’écart de {amount} sera enregistré comme autres articles.",
+  "budget.receipts.partialLinesSummary": "Les articles n’ont été reconnus qu’en partie — seul le total sera enregistré.",
   "budget.receipts.invalidForm": "Vérifiez le commerçant, la date, le montant positif, la devise et le NIP.",
   "budget.receipts.confirmError": "Échec de la confirmation. Vérifiez vos modifications et réessayez.",
   "budget.receipts.deleteAction": "Supprimer le document",
