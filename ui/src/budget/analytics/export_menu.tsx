@@ -4,6 +4,7 @@ import { t } from "../../i18n";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { transactionRowKey } from "./model";
+import { KIND_FILTER_EXCLUDE_SKIPPED, isSkipInBudgetKind } from "./kind_filter";
 import type { AnalyticsTransaction, AnalyticsTransactionsByKeysRequest, TransactionFilter } from "./model";
 import {
   EXPORT_PAGE_SIZE, ExportCancelled, ExportFailed, ExportSnapshotChanged, ExportStopped, buildCsv, categoryIndex,
@@ -98,6 +99,8 @@ export function ExportMenu({ filename, periods, filter, rowKeys, accounts, conne
   const start = (next: Format) => {
     const token = ++run.current;
     const activeFilter = filter;
+    const excludeSkipped = activeFilter.kind === KIND_FILTER_EXCLUDE_SKIPPED;
+    const requestFilter: TransactionFilter = excludeSkipped ? { ...activeFilter, kind: "" } : activeFilter;
     const activeKeys = rowKeys;
     const activePeriods = activeKeys === undefined ? periods : [periods[0] ?? "keys"];
     setFormat(next);
@@ -108,7 +111,7 @@ export function ExportMenu({ filename, periods, filter, rowKeys, accounts, conne
       if (activeKeys !== undefined) {
         const byKeys = api.analyticsTransactionsByKeys;
         if (byKeys === undefined) throw new ExportFailed("export_unavailable");
-        const result = await byKeys(keyRequest(activeKeys, activeFilter, cursor));
+        const result = await byKeys(keyRequest(activeKeys, requestFilter, cursor));
         if (onAccessLoss(result)) throw new ExportStopped();
         if (!result.ok) throw new ExportFailed(result.error);
         const allowed = new Set(activeKeys);
@@ -119,8 +122,8 @@ export function ExportMenu({ filename, periods, filter, rowKeys, accounts, conne
         };
       }
       const result = cursor === undefined
-        ? await api.analyticsTransactions(period, activeFilter, undefined, EXPORT_PAGE_SIZE)
-        : await api.analyticsTransactions(period, activeFilter, cursor, EXPORT_PAGE_SIZE);
+        ? await api.analyticsTransactions(period, requestFilter, undefined, EXPORT_PAGE_SIZE)
+        : await api.analyticsTransactions(period, requestFilter, cursor, EXPORT_PAGE_SIZE);
       if (onAccessLoss(result)) throw new ExportStopped();
       if (!result.ok) throw new ExportFailed(result.error);
       return { transactions: result.data.transactions, nextCursor: result.data.next_cursor, snapshotDigest: result.data.snapshot_digest };
@@ -151,7 +154,8 @@ export function ExportMenu({ filename, periods, filter, rowKeys, accounts, conne
           rows = await loadRows();
         }
         if (token !== run.current) return;
-        const records = rows.map((row) => mapExportRow(row, { accounts, connections, categories: names }));
+        const exported = excludeSkipped ? rows.filter((row) => !isSkipInBudgetKind(row.effective.kind)) : rows;
+        const records = exported.map((row) => mapExportRow(row, { accounts, connections, categories: names }));
         const blob = await fileBlob(next, records);
         if (token !== run.current) return;
         write(blob, `${filename}.${next}`);
