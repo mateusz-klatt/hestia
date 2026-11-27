@@ -59,7 +59,21 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.59.0")
+        self.assertEqual(document["info"]["version"], "0.60.0")
+        # 0.60.0 additive receipt link indicators on analytics transactions and receipt list summaries.
+        tx_get_params = document["paths"]["/api/budget/analytics/transactions"]["get"]["parameters"]
+        tx_header = tx_get_params.pop()
+        self.assertEqual((tx_header["name"], tx_header["in"], tx_header["required"]),
+                         ("X-Hestia-Contract-Version", "header", False))
+        tx_keys_header, = document["paths"]["/api/budget/analytics/transactions-by-keys"]["post"].pop("parameters")
+        self.assertEqual((tx_keys_header["name"], tx_keys_header["in"], tx_keys_header["required"]),
+                         ("X-Hestia-Contract-Version", "header", False))
+        schemas["BudgetAnalyticsTransaction"]["properties"].pop("receipt")
+        schemas.pop("BudgetAnalyticsTransactionReceipt")
+        for schema in ("BudgetReceiptSummary", "BudgetReceiptDetail"):
+            schemas[schema]["properties"].pop("linked_transaction")
+        schemas.pop("BudgetReceiptLinkedTransaction")
+        document["info"]["version"] = "0.59.0"
         # 0.59.0 additive receipt group detail, group controller routes, and receipt summary metadata.
         group_detail = document["paths"].pop("/api/budget/receipts/group/detail")["get"]
         self.assertEqual(group_detail["x-required-permission"], "legacy_receipts")

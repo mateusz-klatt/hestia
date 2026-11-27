@@ -17,11 +17,13 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from sqlalchemy import delete, exists, func, literal_column, or_, select
+from sqlalchemy import and_, delete, exists, func, literal_column, or_, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from .. import authz
-from ..db import (AppMeta, BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
+from ..db import (AppMeta, BudgetAccount as Account, BudgetAccountDisplay as AccountDisplay,
+                  BudgetConnection as Connection, BudgetReceipt as Receipt,
                   BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line,
                   BudgetReceiptLinkGroup as ReceiptLinkGroup, BudgetReceiptLinkMember as ReceiptLinkMember,
                   BudgetShop as Shop,
@@ -469,6 +471,18 @@ def _merchant_tx_match(payload, creditor, debtor, *, direction, raw_nip, chain, 
     }
 
 
+_UNSET = object()
+
+
+def _short_account_label(bank_name, product, masked_suffix):
+    base = (
+        f"{bank_name} · {product}"
+        if product and bank_name.casefold() not in product.casefold()
+        else (product or bank_name)
+    )
+    return f"{base} ••{masked_suffix}" if masked_suffix else base
+
+
 def _group_ref(group, member_count):
     return {
         "group_id": group.id, "group_status": group.status, "group_version": group.version,
@@ -650,6 +664,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         self._session_actor = actor
         self._actor = f"device:{device_id}" if device_id is not None else None
         self._match_allowed = False
+        self._tx_summary_allowed = False
         self._ref_hmac_secret = ref_hmac_secret
         self._card_accounts = (
             normalize_card_accounts(card_accounts, allow_tuples=True) if card_accounts is not None else {}
@@ -701,6 +716,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
             raise DeviceTokenError(403, "budget_forbidden")
         self._permissions = permissions
         self._match_allowed = "budget.receipts.match" in permissions
+        self._tx_summary_allowed = (
+            self._device_id is None
+            and self._match_allowed
+            and (phase == authz.POLICY_PHASE_LEGACY or "budget.view" in permissions)
+        )
         self._actor = f"device:{self._device_id}" if self._device_id is not None else (
             actor if actor != target else None
         )
@@ -743,7 +763,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             Line.receipt_id == row.id, Line.owner == row.owner)))
         return sum_money((net, negate_money(row.total_amount)))
 
-    def _summary(self, session, row, *, group_link=None):
+    def _summary(self, session, row, *, group_link=None, linked_transaction=_UNSET):
         shop = None if row.shop_id is None else session.get(Shop, row.shop_id)
         group = None if group_link is None else group_link[0]
         linked_account_id = row.linked_account_id if group is None else group.account_id
@@ -772,6 +792,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
         summary = {key: values[key] for key in _SUMMARY_FIELDS}
         if group_link is not None:
             summary["link_group"] = _group_ref(*group_link)
+        if linked_transaction is not _UNSET:
+            summary["linked_transaction"] = linked_transaction
         return summary
 
     def _detail(self, session, row):
@@ -1490,7 +1512,53 @@ class BudgetReceiptStore(BudgetHTTPStore):
             now = self._now()
             self._purge(session, owner, now)
             cursor = self._decode_cursor(owner, context, values.get("cursor"))
-            query_obj = select(Receipt).where(Receipt.owner == owner)
+            member = aliased(ReceiptLinkMember, name="m")
+            group_member = aliased(ReceiptLinkGroup, name="gm")
+            group_evidence = aliased(ReceiptLinkGroup, name="ge")
+            tx = aliased(Transaction, name="tx")
+            acct = aliased(Account, name="acct")
+            conn = aliased(Connection, name="conn")
+            display = aliased(AccountDisplay, name="disp")
+            tx_account_id = func.coalesce(Receipt.linked_account_id, group_member.account_id, group_evidence.account_id)
+            tx_entry_ref = func.coalesce(Receipt.linked_entry_ref, group_member.entry_reference, group_evidence.entry_reference)
+            query_obj = (
+                select(
+                    Receipt,
+                    conn.bank_name,
+                    display.product,
+                    display.masked_suffix,
+                    func.coalesce(
+                        func.json_extract(tx.payload_json, "$.booking_date"),
+                        func.json_extract(tx.payload_json, "$.value_date"),
+                        func.json_extract(tx.payload_json, "$.transaction_date"),
+                    ),
+                    func.coalesce(
+                        func.json_extract(tx.payload_json, "$.amount"),
+                        group_member.tx_amount,
+                        group_evidence.tx_amount,
+                    ),
+                    func.coalesce(
+                        func.json_extract(tx.payload_json, "$.currency"),
+                        group_member.currency,
+                        group_evidence.currency,
+                    ),
+                )
+                .outerjoin(member, and_(member.receipt_id == Receipt.id, member.owner == Receipt.owner))
+                .outerjoin(group_member, and_(group_member.id == member.group_id, group_member.owner == Receipt.owner))
+                .outerjoin(
+                    group_evidence,
+                    and_(
+                        group_evidence.evidence_receipt_id == Receipt.id,
+                        group_evidence.owner == Receipt.owner,
+                        group_evidence.evidence_receipt_id.is_not(None),
+                    ),
+                )
+                .outerjoin(tx, and_(tx.account_id == tx_account_id, tx.entry_reference == tx_entry_ref))
+                .outerjoin(acct, and_(acct.id == tx.account_id, acct.owner == Receipt.owner))
+                .outerjoin(conn, and_(conn.id == acct.connection_id, conn.owner == Receipt.owner))
+                .outerjoin(display, display.account_id == acct.id)
+                .where(Receipt.owner == owner)
+            )
             if month is not None:
                 query_obj = query_obj.where(Receipt.receipt_date >= month + "-01", Receipt.receipt_date <= month + "-31")
             if status is not None:
@@ -1506,23 +1574,36 @@ class BudgetReceiptStore(BudgetHTTPStore):
             if linked is not None:
                 is_linked = or_(Receipt.linked_account_id.is_not(None), _receipt_grouped(owner, Receipt.id))
                 query_obj = query_obj.where(is_linked if linked else ~is_linked)
-            rows = session.scalars(query_obj.order_by(Receipt.receipt_date.desc(), Receipt.id)).all()
+            rows = session.execute(query_obj.order_by(Receipt.receipt_date.desc(), Receipt.id)).all()
             needle = fold_for_match(query.strip()) if search else None
             selected = []
-            for row in rows:
+            for item in rows:
+                row = item[0]
                 if not self._after_cursor(row, cursor):
                     continue
                 if search and not self._matches(session, row, needle):
                     continue
-                selected.append(row)
+                selected.append(item)
                 if len(selected) > limit:
                     break
             more = len(selected) > limit
             selected = selected[:limit]
-            next_cursor = self._encode_cursor(owner, context, selected[-1]) if more and selected else None
-            links = _group_links_for_receipts(session, owner, [row.id for row in selected])
-            return {"receipts": [self._summary(session, row, group_link=links.get(row.id)) for row in selected],
-                    "next_cursor": next_cursor}
+            next_cursor = self._encode_cursor(owner, context, selected[-1][0]) if more and selected else None
+            links = _group_links_for_receipts(session, owner, [item[0].id for item in selected])
+            receipts = []
+            for row, bank_name, product, masked_suffix, booking_date, tx_amount, tx_currency in selected:
+                linked_tx = (
+                    {
+                        "account_label": _short_account_label(bank_name, product, masked_suffix),
+                        "booking_date": booking_date,
+                        "amount": tx_amount,
+                        "currency": tx_currency,
+                    }
+                    if self._tx_summary_allowed and bank_name is not None
+                    else None
+                )
+                receipts.append(self._summary(session, row, group_link=links.get(row.id), linked_transaction=linked_tx))
+            return {"receipts": receipts, "next_cursor": next_cursor}
 
     def list(self, owner, values):
         return self._list(owner, values, search=False)

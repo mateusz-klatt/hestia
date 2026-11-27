@@ -38,6 +38,7 @@ _NATIVE_GMAIL_VERSION = (0, 40, 0)
 _GATEWAY_EVIDENCE_VERSION = (0, 52, 0)
 _ID_MATCH_VERSION = (0, 57, 0)
 _MANY_TO_ONE_VERSION = (0, 59, 0)
+_LINK_INDICATORS_VERSION = (0, 60, 0)
 _CURRENT_VERSION = tuple(int(part) for part in api_contract.CONTRACT_VERSION.split("."))
 _RECEIPT_RESULT_KEY = {"parse-text": "draft", "confirm": "receipt", "list": "receipts",
                        "search": "receipts", "detail": "receipt"}
@@ -125,6 +126,11 @@ def _receipt_contract(request, operation):
 
 
 def _response(operation, result, version):
+    if version < _LINK_INDICATORS_VERSION and operation in _RECEIPT_RESULT_KEY:
+        key = _RECEIPT_RESULT_KEY[operation]
+        receipts = result[key] if key == "receipts" else (result[key],)
+        for receipt in receipts:
+            receipt.pop("linked_transaction", None)
     if version < _MANY_TO_ONE_VERSION and operation in _RECEIPT_RESULT_KEY:
         key = _RECEIPT_RESULT_KEY[operation]
         receipts = result[key] if key == "receipts" else (result[key],)

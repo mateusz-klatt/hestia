@@ -367,6 +367,26 @@
   max-width: 100%;
   overflow-wrap: break-word;
 }
+.budget-link-indicator {
+  min-width: 0;
+  white-space: nowrap;
+}
+.budget-link-icon {
+  flex: 0 0 auto;
+  line-height: 1;
+}
+.budget-link-detail {
+  min-width: 0;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 480px) {
+  .budget-link-detail {
+    display: none;
+  }
+}
 .budget-one-off { font-style: italic; }
 .budget-one-off-tag { font-style: normal; font-size: .75rem; margin-inline-start: .35rem; color: var(--fg-soft); }
 .budget-cat-swatch {

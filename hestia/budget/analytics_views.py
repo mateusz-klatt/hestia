@@ -24,9 +24,10 @@ import re
 import threading
 
 from cryptography.exceptions import InvalidTag
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select, tuple_
+from sqlalchemy.orm import aliased
 
-from .. import db
+from .. import authz, db
 from . import analytics_core as core
 from . import device_token
 from . import forecast as forecast_mod
@@ -37,6 +38,7 @@ from .analytics_core import AnalyticsError
 from .analytics_store import BudgetAnalyticsStore, _CATEGORY_LIMIT_FIELDS, _dict
 from .client import _reject_constant, _unique_error_fields
 from .mortgage_reminders import MAX_PAID_MONTHS, MAX_SCHEDULES, MortgageSchedule
+from .receipt_parser import redact_digit_field
 from .scheduler import shared_state
 from .store import BudgetStoreError, load_credit_limits
 from .views import BudgetHTTPStore
@@ -666,6 +668,123 @@ def _category_totals(rows, categories, *, split_one_offs=False, pass_through_cat
     return result
 
 
+def _receipt_shop_name(raw_shop_name, shop_name, forwarded_sender_domain):
+    candidate = raw_shop_name or shop_name
+    return redact_digit_field(candidate) if candidate else forwarded_sender_domain
+
+
+def _can_view_receipts(session, owner, device_id=None):
+    phase = authz.policy_phase(session)
+    if phase != authz.POLICY_PHASE_LEGACY and not authz.authorize(
+        session, owner, "budget.receipts.view", owner=owner,
+    ):
+        return False
+    if device_id is None:
+        return True
+    token = session.get(db.BudgetReceiptDeviceToken, device_id)
+    return token is not None and "budget.receipts.view" in device_token._issued_mask(token)
+
+
+def _linked_receipts_for_transactions(session, owner, keys):
+    """Fetch 1:1 or group-linked receipt summaries for one transaction page in a single indexed LEFT JOIN."""
+    t = db.BudgetTransaction
+    r1 = aliased(db.BudgetReceipt, name="r1")
+    s1 = aliased(db.BudgetShop, name="s1")
+    g = aliased(db.BudgetReceiptLinkGroup, name="g")
+    mc = aliased(db.BudgetReceiptLinkMember, name="mc")
+    m1 = aliased(db.BudgetReceiptLinkMember, name="m1")
+    mr1 = aliased(db.BudgetReceipt, name="mr1")
+    first_mr = aliased(db.BudgetReceipt, name="first_mr")
+    first_ms = aliased(db.BudgetShop, name="first_ms")
+
+    member_count_sq = (
+        select(func.count())
+        .where(mc.group_id == g.id, mc.owner == owner)
+        .correlate(g)
+        .scalar_subquery()
+    )
+    first_member_id_sq = (
+        select(m1.receipt_id)
+        .join(mr1, mr1.id == m1.receipt_id)
+        .where(m1.group_id == g.id, m1.owner == owner)
+        .order_by(mr1.receipt_date.desc(), mr1.id.asc())
+        .limit(1)
+        .correlate(g)
+        .scalar_subquery()
+    )
+    stmt = (
+        select(
+            t.account_id,
+            t.entry_reference,
+            r1.id,
+            r1.raw_shop_name,
+            s1.name,
+            r1.forwarded_sender_domain,
+            r1.total_amount,
+            r1.currency,
+            r1.status,
+            g.tx_amount,
+            g.currency,
+            g.status,
+            member_count_sq,
+            first_mr.id,
+            first_mr.raw_shop_name,
+            first_ms.name,
+            first_mr.forwarded_sender_domain,
+        )
+        .outerjoin(
+            r1,
+            and_(
+                r1.linked_account_id == t.account_id,
+                r1.linked_entry_ref == t.entry_reference,
+                r1.owner == owner,
+                r1.status.in_(("confirmed", "needs_review")),
+                r1.linked_account_id.is_not(None),
+                r1.linked_entry_ref.is_not(None),
+            ),
+        )
+        .outerjoin(s1, and_(s1.id == r1.shop_id, s1.owner == owner))
+        .outerjoin(
+            g,
+            and_(
+                g.account_id == t.account_id,
+                g.entry_reference == t.entry_reference,
+                g.owner == owner,
+            ),
+        )
+        .outerjoin(first_mr, and_(first_mr.id == first_member_id_sq, first_mr.owner == owner))
+        .outerjoin(first_ms, and_(first_ms.id == first_mr.shop_id, first_ms.owner == owner))
+        .where(tuple_(t.account_id, t.entry_reference).in_(keys))
+    )
+    result = {}
+    for (
+        acct_id, entry_ref,
+        r1_id, r1_raw_shop, r1_shop, r1_domain, r1_total, r1_currency, r1_status,
+        g_total, g_currency, g_status, g_count,
+        gm_id, gm_raw_shop, gm_shop, gm_domain,
+    ) in session.execute(stmt):
+        if r1_id is not None:
+            result[(acct_id, entry_ref)] = {
+                "receipt_id": r1_id,
+                "shop_name": _receipt_shop_name(r1_raw_shop, r1_shop, r1_domain),
+                "total": r1_total,
+                "currency": r1_currency,
+                "status": r1_status,
+            }
+        elif gm_id is not None:
+            base = _receipt_shop_name(gm_raw_shop, gm_shop, gm_domain)
+            extra = int(g_count) - 1
+            shop_name = (f"{base} +{extra}" if base else f"+{extra}") if extra > 0 else base
+            result[(acct_id, entry_ref)] = {
+                "receipt_id": gm_id,
+                "shop_name": shop_name,
+                "total": g_total,
+                "currency": g_currency,
+                "status": g_status,
+            }
+    return result
+
+
 def _wire_transaction(row):
     metadata = row["metadata"]
     accounts = row["_counterparty_accounts"]
@@ -901,7 +1020,8 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             raise AnalyticsError()
         return None if query is None else query.casefold().strip()
 
-    def _transactions_response(self, owner, period, start, end, cursor, filters, select_rows):
+    def _transactions_response(self, owner, period, start, end, cursor, filters, select_rows, *,
+                               include_receipts=False, device_id=None):
         category_id, kind, query = filters["category_id"], filters["kind"], filters["query"]
         with _read_lock, self._read(owner) as session:
             snapshot = self._projection(session, owner)
@@ -912,12 +1032,23 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             rows.sort(key=lambda row: (core.effective_date(row["payload"]), row["account_id"], row["entry_reference"]),
                       reverse=True)
             page, next_cursor = self._page(rows, cursor, filters, snapshot["digest"])
+            wired = deepcopy([_wire_transaction(row) for row in page])
+            if include_receipts:
+                receipts_by_key = (
+                    _linked_receipts_for_transactions(
+                        session, owner, [(row["account_id"], row["entry_reference"]) for row in page],
+                    )
+                    if page and _can_view_receipts(session, owner, device_id)
+                    else {}
+                )
+                for item in wired:
+                    item["receipt"] = receipts_by_key.get((item["account_id"], item["entry_reference"]))
             return {"period": period, "start": start, "end": end, "snapshot_digest": snapshot["digest"],
-                    "transactions": deepcopy([_wire_transaction(row) for row in page]), "filtered_total": len(rows),
+                    "transactions": wired, "filtered_total": len(rows),
                     "next_cursor": next_cursor}
 
     def transactions(self, owner, period, *, currency=None, category_id=None, kind=None, query=None, limit=50,
-                     cursor=None):
+                     cursor=None, include_receipts=False, device_id=None):
         start, end = core.parse_period(period)
         currency = _currency(currency)
         query = self._validate_transaction_filters(category_id, kind, query)
@@ -926,10 +1057,11 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
         return self._transactions_response(
             owner, period, start, end, cursor, filters,
             lambda snapshot: _period_rows(snapshot, start, end, currency),
+            include_receipts=include_receipts, device_id=device_id,
         )
 
     def transactions_by_keys(self, owner, *, row_keys, currency=None, category_id=None, kind=None, query=None,
-                             limit=50, cursor=None):
+                             limit=50, cursor=None, include_receipts=False):
         if row_keys is None:
             raise AnalyticsError()
         parsed_keys = _validate_row_keys(row_keys)
@@ -944,6 +1076,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             lambda snapshot: [row for row in snapshot["transactions"]
                               if (row["account_id"], row["entry_reference"]) in key_set
                               and (currency is None or row["payload"]["currency"] == currency)],
+            include_receipts=include_receipts,
         )
 
     def transfers(self, owner, period, *, currency=None, status="suggested", limit=50, cursor=None):
