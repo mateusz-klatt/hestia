@@ -834,7 +834,7 @@ def _deduplicate(schedules, active_hints):
     exact = []
     for active in active_hints:
         label = active.hint.normalized_label
-        hint_references = extract_reference_hashes(label)
+        hint_references = extract_reference_hashes(active.hint.label)
         loan_label = _LOAN_KEYWORDS.search(normalized_loan_label(label))
         last_month = _month_number(active.last_date)
         first_month = max(_FIRST_MONTH, last_month - 1)

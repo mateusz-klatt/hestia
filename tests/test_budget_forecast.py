@@ -407,7 +407,8 @@ class BudgetForecastTests(unittest.TestCase):
                 self.assertIn("1234", result["deduplications"][0]["recurring_label"])
 
     def test_links_keep_same_day_loans_separate_and_also_cover_insurance(self):
-        first, second, insurance = "TESTLN1234", "TESTLN5678", "TESTINS3456"
+        first, second, insurance = "TESTLN1234", "TESTLN5678", "INSURANCE3456"
+        bank_insurance_reference = "İNSURANCE3456"
         schedules = [
             _schedule("loan-one", due_day=5, match_references=[_match_reference(first), _match_reference(insurance)]),
             _schedule("loan-two", due_day=5, match_references=[_match_reference(second)]),
@@ -415,7 +416,7 @@ class BudgetForecastTests(unittest.TestCase):
         ]
         hints = [_hint(f"RATA KREDYTU NR {first}", last_date="2026-10-05", amount="99.5"),
                  _hint(f"RATA KREDYTU NR {second}", last_date="2026-10-05", amount="100.5"),
-                 _hint(f"UBEZPIECZENIE NR {insurance}", last_date="2026-10-10", amount="25")]
+                 _hint(f"UBEZPIECZENIE NR {bank_insurance_reference}", last_date="2026-10-10", amount="25")]
         result = _forecast(evaluation_date="2026-11-01", schedules=schedules, hints=hints, months=1)
         self.assertEqual(result, _forecast(evaluation_date="2026-11-01", schedules=schedules[::-1], hints=hints[::-1], months=1))
         self.assertEqual([(row["schedule_id"], row["match_type"], row["amount_delta"], row["day_distance"])
@@ -425,8 +426,8 @@ class BudgetForecastTests(unittest.TestCase):
         self.assertEqual(result["totals"], [
             {"currency": "PLN", "total": "300", "scheduled_total": "300", "estimated_total": "0"},
         ])
-        for reference in (first, second, insurance):
-            self.assertNotIn(reference, json.dumps(result))
+        for reference in (first, second, bank_insurance_reference):
+            self.assertNotIn(reference, json.dumps(result, ensure_ascii=False))
 
     def test_link_checks_reference_currency_and_due_window(self):
         reference = "TESTLN1234"
