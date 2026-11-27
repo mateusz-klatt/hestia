@@ -8,8 +8,9 @@ from __future__ import annotations
 import math
 import threading
 
+from .diagnostics import round_collector
 from .events import validate_payload
-from .types import ProviderError
+from .types import PollContext, ProviderError
 
 
 def error_code(exc):
@@ -49,44 +50,63 @@ class SyncEngine:
 
     def run_once(self):
         with self._lock:
+            collector = round_collector()
+            poll_context = PollContext()
             snapshots, errors = {}, {}
             for endpoint in self.store.endpoints():
                 endpoint_id = endpoint["id"]
+                forced_pending = endpoint["needs_reobservation"] and endpoint["provider"] == "caldav"
+                state = collector.start_pull(endpoint_id, endpoint["provider"])
                 try:
-                    cursor = (None if endpoint["needs_reobservation"] and endpoint["provider"] == "caldav"
-                              else endpoint["cursor"])
-                    snapshot = self.providers[endpoint_id].pull(cursor)
+                    cursor = None if forced_pending else endpoint["cursor"]
+                    provider = self.providers[endpoint_id]
+                    if getattr(provider, "supports_poll_context", False):
+                        snapshot = provider.pull(cursor, poll_context=poll_context)
+                    else:
+                        snapshot = provider.pull(cursor)
+                    collector.after_pull(state)
                     validate_snapshot(snapshot)
                     snapshots[endpoint_id] = snapshot
+                    collector.finish_pull(state, snapshot, forced_pending=forced_pending)
                 except Exception as exc:
+                    collector.fail_pull(state)
                     code = error_code(exc)
                     self.store.endpoint_error(endpoint_id, code)
                     errors[endpoint_id] = code
-            ingestion_errors = self.store.ingest(snapshots, isolate_errors=True)
+            ingestion_errors = self.store.ingest(snapshots, isolate_errors=True, stats=collector.ingest_stats)
+            collector.finish_ingest()
             for endpoint_id, exc in ingestion_errors.items():
                 code = error_code(exc)
                 self.store.endpoint_error(endpoint_id, code)
                 errors[endpoint_id] = code
                 snapshots.pop(endpoint_id)
             delivered = 0
-            for endpoint_id, event_id in self.store.due(list(snapshots)):
-                provider = self.providers[endpoint_id]
-                intent = self.store.prepare(endpoint_id, event_id, provider.allocate_id)
-                if intent is None:
-                    continue
+            due_state = collector.start_due()
+            due_jobs = self.store.due(list(snapshots))
+            collector.finish_due(due_state, snapshots)
+            for endpoint_id, event_id in due_jobs:
+                out_state = collector.start_outbox()
                 try:
-                    if intent["deleted"]:
-                        provider.delete(intent["remote_id"], intent["etag"], uid=intent["uid"])
-                        remote = None
-                    else:
-                        remote = provider.put(intent["remote_id"], intent["payload"], intent["etag"],
-                                              create=intent["create"], uid=intent["uid"])
-                    self.store.acknowledge(endpoint_id, event_id, intent, remote)
-                    delivered += 1
-                except Exception as exc:
-                    code = error_code(exc)
-                    self.store.failed(endpoint_id, event_id, code,
-                                      no_mutation=isinstance(exc, ProviderError) and exc.no_mutation,
-                                      prior_uncertain=intent.get("prior_uncertain", True))
-                    errors[endpoint_id] = code
+                    provider = self.providers[endpoint_id]
+                    intent = self.store.prepare(endpoint_id, event_id, provider.allocate_id)
+                    if intent is None:
+                        continue
+                    try:
+                        if intent["deleted"]:
+                            provider.delete(intent["remote_id"], intent["etag"], uid=intent["uid"])
+                            remote = None
+                        else:
+                            remote = provider.put(intent["remote_id"], intent["payload"], intent["etag"],
+                                                  create=intent["create"], uid=intent["uid"])
+                        self.store.acknowledge(endpoint_id, event_id, intent, remote)
+                        delivered += 1
+                    except Exception as exc:
+                        code = error_code(exc)
+                        self.store.failed(endpoint_id, event_id, code,
+                                          no_mutation=isinstance(exc, ProviderError) and exc.no_mutation,
+                                          prior_uncertain=intent.get("prior_uncertain", True))
+                        errors[endpoint_id] = code
+                finally:
+                    collector.finish_outbox(endpoint_id, out_state)
+            collector.emit(len(snapshots), delivered, len(errors))
             return {"read": len(snapshots), "delivered": delivered, "errors": errors}

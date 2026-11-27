@@ -288,14 +288,16 @@ class SyncStore:
         with self.transaction() as s:
             s.get(Endpoint, endpoint_id).last_error = code
 
-    def ingest(self, snapshots, *, isolate_errors=False):
+    def ingest(self, snapshots, *, isolate_errors=False, stats=None):
         """Checkpoint only complete reads. All sources are reconciled before delivery."""
         if not snapshots:
             return {}
         errors = {}
         with self.transaction() as s:
             touched = set()
+            observed_counts = {}
             for endpoint_id, snapshot in sorted(snapshots.items()):
+                ep_wall0, ep_cpu0 = (time.perf_counter(), time.thread_time()) if stats is not None else (0.0, 0.0)
                 try:
                     # A malformed endpoint rolls back its entire inventory, including
                     # any earlier objects and cursor, without blocking healthy sources.
@@ -322,13 +324,29 @@ class SyncStore:
                         endpoint.last_error = None
                     # IDs belonging to a rolled-back savepoint must not escape.
                     touched.update(observed)
+                    if stats is not None:
+                        observed_counts[endpoint_id] = len(observed)
                 except Exception as exc:
                     if not isolate_errors:
                         raise
                     errors[endpoint_id] = exc
+                if stats is not None:
+                    stats[endpoint_id] = [
+                        (time.perf_counter() - ep_wall0) * 1000.0,
+                        (time.thread_time() - ep_cpu0) * 1000.0,
+                    ]
             if touched:
+                rec_wall0, rec_cpu0 = (time.perf_counter(), time.thread_time()) if stats is not None else (0.0, 0.0)
                 s.flush()
                 self._reconcile(s, touched)
+                if stats is not None:
+                    rec_wall_ms = (time.perf_counter() - rec_wall0) * 1000.0
+                    rec_cpu_ms = (time.thread_time() - rec_cpu0) * 1000.0
+                    total_observed = sum(observed_counts.values())
+                    for endpoint_id, count in observed_counts.items():
+                        share = count / total_observed
+                        stats[endpoint_id][0] += rec_wall_ms * share
+                        stats[endpoint_id][1] += rec_cpu_ms * share
         return errors
 
     @staticmethod

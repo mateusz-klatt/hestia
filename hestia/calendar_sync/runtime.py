@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .config import ConfigError, load_config, make_providers
+from .diagnostics import configure_diagnostics
 
 log = logging.getLogger("hestia.calendar_sync")
 _EXECUTOR = None
@@ -109,6 +110,7 @@ async def poll_calendars() -> None:
             return
         if config is None:
             return
+        configure_diagnostics()
         log.info("Calendar synchronization enabled for %d explicit groups", len(config.groups))
         while True:
             try:

@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from xml.sax.saxutils import escape
@@ -298,32 +299,37 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
     def test_missing_and_unauthenticated_principals_require_full_read_without_checkpoint(self):
         self.configure_endpoints("apple")
         item = fixed_dav_item(http.PAYLOAD, uid="family-uid", href=http.RESOURCE, etag='"v1"')
+        empty_root = http.multistatus()
 
-        # Missing principal -> always full path, never writes a fast-path-eligible checkpoint.
+        # Missing collection principal + failing root lookup -> always full path, no checkpoint.
         missing_acl = http.dav_acl(token="tok-1", principal=None)
         caldav, transport = http.dav(
-            missing_acl, http.multistatus(item), missing_acl,
-            missing_acl, http.multistatus(item), missing_acl,
+            missing_acl, empty_root, http.multistatus(item), missing_acl,
+            missing_acl, empty_root, http.multistatus(item), missing_acl,
         )
         engine = SyncEngine(self.store, {"apple": caldav})
         for _ in range(2):
             transport.calls.clear()
             self.now += 60
             self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
-            self.assertEqual([call[0] for call in transport.calls], ["PROPFIND", "REPORT", "PROPFIND"])
+            self.assertEqual([call[0] for call in transport.calls], ["PROPFIND", "PROPFIND", "REPORT", "PROPFIND"])
             with self.sessions() as session:
                 self.assertIsNone(session.get(db.CalendarEndpoint, "apple").cursor)
         self.assertEqual(transport.responses, [])
 
-        # DAV:unauthenticated (including malformed sibling href or blank href) -> always full path, no checkpoint.
-        unverified_acls = [
+        # _check_calendar() (used by put/delete) does not trigger a service-root lookup.
+        check_only, check_tr = http.dav(missing_acl)
+        self.assertEqual(check_only._check_calendar(), "tok-1")
+        self.assertEqual([call[0] for call in check_tr.calls], ["PROPFIND"])
+
+        # Explicit DAV:unauthenticated -> always full path without querying root, no checkpoint.
+        unauth_acls = [
             http.dav_acl(token="tok-1", principal=None,
                          extra='<d:current-user-principal><d:unauthenticated/></d:current-user-principal>'),
             http.dav_acl(token="tok-1", principal=None,
                          extra='<d:current-user-principal><d:unauthenticated/><d:href>/1/principal/</d:href></d:current-user-principal>'),
-            http.dav_acl(token="tok-1", principal="   "),
         ]
-        for acl in unverified_acls:
+        for acl in unauth_acls:
             with self.subTest(acl=acl):
                 provider, tr = http.dav(
                     acl, http.multistatus(item), acl,
@@ -338,7 +344,15 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
                 self.assertEqual([call[0] for call in tr.calls],
                                  ["PROPFIND", "REPORT", "PROPFIND", "PROPFIND", "REPORT", "PROPFIND"])
 
-        # Verified principal -> saves checkpoint, then transition to missing principal forces full read and clears it.
+        # Blank principal href falls back to root; when root fails, full path and no checkpoint.
+        blank_acl = http.dav_acl(token="tok-1", principal="   ")
+        provider, tr = http.dav(blank_acl, empty_root, http.multistatus(item), blank_acl)
+        snap = provider.pull(None)
+        self.assertTrue(snap.complete and snap.full)
+        self.assertIsNone(snap.cursor)
+        self.assertEqual([call[0] for call in tr.calls], ["PROPFIND", "PROPFIND", "REPORT", "PROPFIND"])
+
+        # Verified principal -> saves checkpoint, then transition to missing + failed root forces full read and clears it.
         verified_acl = http.dav_acl(token="tok-1", principal="/1/principal/")
         transport.calls.clear()
         self.now += 60
@@ -350,19 +364,291 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
 
         transport.calls.clear()
         self.now += 60
-        transport.responses.extend([missing_acl, http.multistatus(item), missing_acl])
+        transport.responses.extend([missing_acl, empty_root, http.multistatus(item), missing_acl])
         self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
-        self.assertEqual([call[0] for call in transport.calls], ["PROPFIND", "REPORT", "PROPFIND"])
+        self.assertEqual([call[0] for call in transport.calls], ["PROPFIND", "PROPFIND", "REPORT", "PROPFIND"])
         with self.sessions() as session:
             self.assertIsNone(session.get(db.CalendarEndpoint, "apple").cursor)
 
         # Verified checkpoint presented with unauthenticated principal also forces full read and clears it.
-        unauth_acl = unverified_acls[0]
+        unauth_acl = unauth_acls[0]
         provider, tr = http.dav(unauth_acl, http.multistatus(item), unauth_acl)
         snapshot = provider.pull(verified_cursor)
         self.assertTrue(snapshot.complete and snapshot.full)
         self.assertIsNone(snapshot.cursor)
         self.assertEqual([call[0] for call in tr.calls], ["PROPFIND", "REPORT", "PROPFIND"])
+
+    def test_service_root_principal_fallback_enables_fast_path_and_shares_once_per_poll(self):
+        root_url = "https://caldav.icloud.com"
+        cal1_url = http.CALENDAR
+        cal2_url = "https://caldav.icloud.com/1/calendars/work/"
+        cal3_url = "https://caldav.icloud.com/2/calendars/other/"
+        root_principal_ok = http.multistatus(http.dav_response(
+            '<d:current-user-principal><d:href>/1/principal/</d:href></d:current-user-principal>', href="/"))
+        root_principal_other = http.multistatus(http.dav_response(
+            '<d:current-user-principal><d:href>/2/principal/</d:href></d:current-user-principal>', href="/"))
+        item1 = fixed_dav_item(http.PAYLOAD, uid="cal1@synthetic.test", href=cal1_url + "one.ics", etag='"v1"')
+        item2 = fixed_dav_item(http.PAYLOAD, uid="cal2@synthetic.test", href=cal2_url + "two.ics", etag='"v1"')
+        item3 = fixed_dav_item(http.PAYLOAD, uid="cal3@synthetic.test", href=cal3_url + "three.ics", etag='"v1"')
+
+        # 1. Collection omits principal + root lookup succeeds -> fast path on subsequent poll.
+        self.configure_endpoints("apple")
+        missing_acl = http.dav_acl(token="tok-1", principal=None)
+        caldav, transport = http.dav(
+            missing_acl, root_principal_ok, http.multistatus(item1), missing_acl,
+            missing_acl, root_principal_ok,
+        )
+        engine = SyncEngine(self.store, {"apple": caldav})
+        self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
+        self.assertEqual([call[0] for call in transport.calls], ["PROPFIND", "PROPFIND", "REPORT", "PROPFIND"])
+        self.assertEqual(transport.calls[1][1], root_url)
+        with self.sessions() as session:
+            saved_cursor = session.get(db.CalendarEndpoint, "apple").cursor
+        self.assertEqual(saved_cursor, caldav._checkpoint("tok-1", "https://caldav.icloud.com/1/principal/"))
+
+        transport.calls.clear()
+        self.now += 60
+        self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
+        self.assertEqual([call[0] for call in transport.calls], ["PROPFIND", "PROPFIND"])
+        self.assertEqual(transport.calls[0][1], cal1_url)
+        self.assertEqual(transport.calls[1][1], root_url)
+        self.assertEqual(transport.responses, [])
+
+        # 2. Root lookup fails (HTTP 503, empty, unauthenticated, blank href) -> full path, no checkpoint.
+        root_failures = [
+            http.response(status=503),
+            http.multistatus(),
+            http.multistatus(http.dav_response(
+                '<d:current-user-principal><d:unauthenticated/></d:current-user-principal>', href="/")),
+            http.multistatus(http.dav_response(
+                '<d:current-user-principal><d:href>   </d:href></d:current-user-principal>', href="/")),
+        ]
+        for failure in root_failures:
+            with self.subTest(failure=failure):
+                provider, tr = http.dav(missing_acl, failure, http.multistatus(item1), missing_acl)
+                snap = provider.pull(saved_cursor)
+                self.assertTrue(snap.complete and snap.full)
+                self.assertIsNone(snap.cursor)
+                self.assertEqual([call[0] for call in tr.calls], ["PROPFIND", "PROPFIND", "REPORT", "PROPFIND"])
+
+        # 3. Collection explicitly reports DAV:unauthenticated -> full path EVEN IF root lookup would succeed.
+        unauth_acl = http.dav_acl(token="tok-1", principal=None,
+                                  extra='<d:current-user-principal><d:unauthenticated/></d:current-user-principal>')
+
+        class _RootAlwaysSucceedsTransport:
+            def __init__(self):
+                self.calls = []
+
+            def request(self, method, url, **kwargs):
+                self.calls.append((method, url, kwargs))
+                if url == root_url:
+                    return root_principal_ok
+                if method == "PROPFIND":
+                    return unauth_acl
+                return http.multistatus(item1)
+
+        unauth_transport = _RootAlwaysSucceedsTransport()
+        unauth_provider = p.CalDAVProvider(cal1_url, username="user", password="secret", transport=unauth_transport)
+        snap = unauth_provider.pull(saved_cursor)
+        self.assertTrue(snap.complete and snap.full)
+        self.assertIsNone(snap.cursor)
+        self.assertEqual([call[0] for call in unauth_transport.calls], ["PROPFIND", "REPORT", "PROPFIND"])
+        self.assertFalse(any(call[1] == root_url for call in unauth_transport.calls))
+
+        # 4. Root lookup runs ONCE per poll for 2 endpoints sharing credentials, and is scoped by credentials.
+        self.store.configure([
+            {"id": "group-1", "calendars": [
+                {"id": "apple-1", "provider": "caldav", "account": "wife", "calendar_id": cal1_url},
+            ]},
+            {"id": "group-2", "calendars": [
+                {"id": "apple-2", "provider": "caldav", "account": "wife", "calendar_id": cal2_url},
+            ]},
+            {"id": "group-3", "calendars": [
+                {"id": "apple-other", "provider": "caldav", "account": "other", "calendar_id": cal3_url},
+            ]},
+        ])
+        auth_main = "Basic " + base64.b64encode(b"user:secret").decode()
+        auth_other = "Basic " + base64.b64encode(b"user:other-password").decode()
+
+        class _SharedAccountTransport:
+            def __init__(self):
+                self.calls = []
+
+            def request(self, method, url, **kwargs):
+                self.calls.append((method, url, kwargs))
+                auth = kwargs["headers"]["Authorization"]
+                if url == root_url:
+                    return root_principal_ok if auth == auth_main else root_principal_other
+                if method == "PROPFIND":
+                    return http.dav_acl(token="tok-1", href=url, principal=None)
+                if url == cal1_url:
+                    return http.multistatus(item1)
+                if url == cal2_url:
+                    return http.multistatus(item2)
+                return http.multistatus(item3)
+
+        shared_transport = _SharedAccountTransport()
+        providers = {
+            "apple-1": p.CalDAVProvider(cal1_url, username="user", password="secret", transport=shared_transport),
+            "apple-2": p.CalDAVProvider(cal2_url, username="user", password="secret", transport=shared_transport),
+            "apple-other": p.CalDAVProvider(cal3_url, username="user", password="other-password",
+                                            transport=shared_transport),
+        }
+        multi_engine = SyncEngine(self.store, providers)
+
+        # Poll 1 (initial): 1 root lookup for (user, secret) shared by apple-1 & apple-2, 1 for (user, other-password).
+        self.assertEqual(multi_engine.run_once(), {"read": 3, "delivered": 0, "errors": {}})
+        root_calls = [c for c in shared_transport.calls if c[1] == root_url]
+        self.assertEqual(len([c for c in root_calls if c[2]["headers"]["Authorization"] == auth_main]), 1)
+        self.assertEqual(len([c for c in root_calls if c[2]["headers"]["Authorization"] == auth_other]), 1)
+
+        # Poll 2 (idle): again 1 root lookup for apple-1 + apple-2, 1 for apple-other, and 0 REPORTs across all 3.
+        shared_transport.calls.clear()
+        self.now += 60
+        self.assertEqual(multi_engine.run_once(), {"read": 3, "delivered": 0, "errors": {}})
+        root_calls = [c for c in shared_transport.calls if c[1] == root_url]
+        self.assertEqual(len([c for c in root_calls if c[2]["headers"]["Authorization"] == auth_main]), 1)
+        self.assertEqual(len([c for c in root_calls if c[2]["headers"]["Authorization"] == auth_other]), 1)
+        self.assertFalse(any(c[0] == "REPORT" for c in shared_transport.calls))
+
+    def test_overlapping_rounds_keep_separate_principal_caches_and_discard_after_round(self):
+        root_url = "https://caldav.icloud.com"
+        cal1_url = "https://caldav.icloud.com/1/calendars/home/"
+        cal2_url = "https://caldav.icloud.com/1/calendars/work/"
+        item1 = fixed_dav_item(http.PAYLOAD, uid="overlap-uid-1", href=cal1_url + "one.ics", etag='"v1"')
+        item2 = fixed_dav_item(http.PAYLOAD, uid="overlap-uid-2", href=cal2_url + "two.ics", etag='"v1"')
+        groups = [
+            {"id": "group-1", "calendars": [
+                {"id": "apple-1", "provider": "caldav", "account": "wife", "calendar_id": cal1_url},
+            ]},
+            {"id": "group-2", "calendars": [
+                {"id": "apple-2", "provider": "caldav", "account": "wife", "calendar_id": cal2_url},
+            ]},
+        ]
+        self.store.configure(groups)
+        _, sessions2 = db.init_db(self.temp.name + "/incremental-2.db")
+        store2 = SyncStore(sessions2, clock=lambda: self.now)
+        store2.configure(groups)
+
+        round1_paused = threading.Event()
+        round2_done = threading.Event()
+
+        class _OverlappingTransport:
+            def __init__(self):
+                self.lock = threading.Lock()
+                self.root_calls: dict[str, int] = {}
+                self.report_calls: dict[str, int] = {}
+                self.round_principals = {
+                    "round-1": "/principal-round-1/",
+                    "round-2": "/principal-round-2/",
+                    "round-3": "/principal-round-1/",
+                    "round-4": "/principal-round-3/",
+                }
+                self.active_label = "round-1"
+
+            def request(self, method, url, **kwargs):
+                label = threading.current_thread().name
+                if label not in self.round_principals:
+                    label = self.active_label
+                if label == "round-1" and method == "PROPFIND" and url == cal2_url and not round1_paused.is_set():
+                    round1_paused.set()
+                    if not round2_done.wait(timeout=5):
+                        raise TimeoutError("round-2 did not finish while round-1 was paused")
+                with self.lock:
+                    if url == root_url:
+                        self.root_calls[label] = self.root_calls.get(label, 0) + 1
+                    elif method == "REPORT":
+                        self.report_calls[label] = self.report_calls.get(label, 0) + 1
+                if url == root_url:
+                    return http.multistatus(http.dav_response(
+                        f'<d:current-user-principal><d:href>{self.round_principals[label]}</d:href></d:current-user-principal>',
+                        href="/",
+                    ))
+                if method == "PROPFIND":
+                    return http.dav_acl(token="tok-1", href=url, principal=None)
+                return http.multistatus(item1 if url == cal1_url else item2)
+
+        transport = _OverlappingTransport()
+        shared_providers = {
+            "apple-1": p.CalDAVProvider(cal1_url, username="user", password="secret", transport=transport),
+            "apple-2": p.CalDAVProvider(cal2_url, username="user", password="secret", transport=transport),
+        }
+        engine1 = SyncEngine(self.store, shared_providers)
+        engine2 = SyncEngine(store2, shared_providers)
+
+        results: dict[str, dict] = {}
+        errors: dict[str, BaseException] = {}
+
+        def run_round1():
+            try:
+                results["round-1"] = engine1.run_once()
+            except BaseException as exc:
+                errors["round-1"] = exc
+            finally:
+                round1_paused.set()
+
+        def run_round2():
+            try:
+                if not round1_paused.wait(timeout=5):
+                    raise TimeoutError("round-1 did not pause mid-round")
+                results["round-2"] = engine2.run_once()
+            except BaseException as exc:
+                errors["round-2"] = exc
+            finally:
+                round2_done.set()
+
+        t1 = threading.Thread(target=run_round1, name="round-1")
+        t2 = threading.Thread(target=run_round2, name="round-2")
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        self.assertFalse(t1.is_alive())
+        self.assertFalse(t2.is_alive())
+        self.assertEqual(errors, {})
+        self.assertEqual(results, {
+            "round-1": {"read": 2, "delivered": 0, "errors": {}},
+            "round-2": {"read": 2, "delivered": 0, "errors": {}},
+        })
+        # Each overlapping round resolved the root principal once in its own round-local cache.
+        self.assertEqual(transport.root_calls, {"round-1": 1, "round-2": 1})
+        self.assertEqual(transport.report_calls, {"round-1": 2, "round-2": 2})
+
+        cal1, cal2 = shared_providers["apple-1"], shared_providers["apple-2"]
+        with self.sessions() as session:
+            self.assertEqual(session.get(db.CalendarEndpoint, "apple-1").cursor,
+                             cal1._checkpoint("tok-1", "https://caldav.icloud.com/principal-round-1/"))
+            self.assertEqual(session.get(db.CalendarEndpoint, "apple-2").cursor,
+                             cal2._checkpoint("tok-1", "https://caldav.icloud.com/principal-round-1/"))
+        with sessions2() as session:
+            self.assertEqual(session.get(db.CalendarEndpoint, "apple-1").cursor,
+                             cal1._checkpoint("tok-1", "https://caldav.icloud.com/principal-round-2/"))
+            self.assertEqual(session.get(db.CalendarEndpoint, "apple-2").cursor,
+                             cal2._checkpoint("tok-1", "https://caldav.icloud.com/principal-round-2/"))
+
+        # No cache is stored on shared provider or engine objects.
+        for obj in (cal1, cal2, engine1, engine2):
+            self.assertFalse(hasattr(obj, "_principal_cache"))
+
+        # After round-1 finishes, its cache is gone: round-3 performs a fresh root lookup (shared within round-3).
+        transport.active_label = "round-3"
+        self.now += 60
+        self.assertEqual(engine1.run_once(), {"read": 2, "delivered": 0, "errors": {}})
+        self.assertEqual(transport.root_calls["round-3"], 1)
+        self.assertEqual(transport.report_calls.get("round-3", 0), 0)
+
+        # Round-4 sees a newly resolved principal at the root and takes the full path for both endpoints.
+        transport.active_label = "round-4"
+        self.now += 60
+        self.assertEqual(engine1.run_once(), {"read": 2, "delivered": 0, "errors": {}})
+        self.assertEqual(transport.root_calls["round-4"], 1)
+        self.assertEqual(transport.report_calls["round-4"], 2)
+        with self.sessions() as session:
+            self.assertEqual(session.get(db.CalendarEndpoint, "apple-1").cursor,
+                             cal1._checkpoint("tok-1", "https://caldav.icloud.com/principal-round-3/"))
+            self.assertEqual(session.get(db.CalendarEndpoint, "apple-2").cursor,
+                             cal2._checkpoint("tok-1", "https://caldav.icloud.com/principal-round-3/"))
 
     def test_legacy_invalid_mismatched_and_empty_token_checkpoints_take_full_path(self):
         self.configure_endpoints("apple")
