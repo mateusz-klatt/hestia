@@ -550,6 +550,7 @@ describe("ReceiptsView", () => {
     await act(async () => {
       root.unmount();
       root = createRoot(host);
+      await Promise.resolve();
     });
     await renderReceipts(clients);
     expect(selectByName("status").value).toBe("");
@@ -569,6 +570,7 @@ describe("ReceiptsView", () => {
     await act(async () => {
       root.unmount();
       root = createRoot(host);
+      await Promise.resolve();
     });
     await renderReceipts(clients);
     expect(selectByName("status").value).toBe("draft");
@@ -580,6 +582,7 @@ describe("ReceiptsView", () => {
     await act(async () => {
       root.unmount();
       root = createRoot(host);
+      await Promise.resolve();
     });
     await renderReceipts(clients);
     expect(selectByName("status").value).toBe("needs_action");
@@ -3174,6 +3177,7 @@ describe("ReceiptsView", () => {
       simulatedScrollY = 100;
       await act(async () => {
         refresh.resolve({ ok: true, data: { receipts: [earlier, next], next_cursor: null } });
+        await refresh.promise;
       });
       await settle();
 
