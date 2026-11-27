@@ -232,7 +232,7 @@ describe("renderGlobals", () => {
     }, NOW);
     expect(v.crib.textContent).toBe("21.3°");
     expect(v.cribHumidity.textContent).toBe(" · 48%");
-    expect(`${v.crib.textContent ?? ""}${v.cribHumidity.textContent ?? ""}`).toBe("21.3° · 48%");
+    expect(`${v.crib.textContent}${v.cribHumidity.textContent}`).toBe("21.3° · 48%");
     expect(v.cribHumidity.hidden).toBe(false);
     expect(v.cribHumidity.title).toBe("Crib humidity: 48%");
     expect(v.cribHumidity.getAttribute("aria-label")).toBe("Crib humidity: 48%");
@@ -244,7 +244,7 @@ describe("renderGlobals", () => {
       crib_temp: 21.3, crib_humidity: 0, crib_temp_ts: "2026-06-22T08:03:00Z", crib_battery_ok: false,
       outdoor_temp: null, outdoor_humidity: null, outdoor_temp_ts: null, outdoor_battery_ok: null,
     }, NOW);
-    expect(`${v.crib.textContent ?? ""}${v.cribHumidity.textContent ?? ""}`).toBe("21.3° · 0%");
+    expect(`${v.crib.textContent}${v.cribHumidity.textContent}`).toBe("21.3° · 0%");
     expect(v.cribHumidity.hidden).toBe(false);
     expect(v.cribMeta.textContent).toContain("🪫");
     expect(v.cribMeta.classList.contains("warn")).toBe(true);
@@ -254,7 +254,7 @@ describe("renderGlobals", () => {
       crib_temp: 21.3, crib_humidity: null, crib_temp_ts: "2026-06-22T08:03:00Z", crib_battery_ok: null,
       outdoor_temp: null, outdoor_humidity: null, outdoor_temp_ts: null, outdoor_battery_ok: null,
     }, NOW);
-    expect(`${v.crib.textContent ?? ""}${v.cribHumidity.textContent ?? ""}`).toBe("21.3°");
+    expect(`${v.crib.textContent}${v.cribHumidity.textContent}`).toBe("21.3°");
     expect(v.cribHumidity.hidden).toBe(true);
     expect(v.cribHumidity.title).toBe("");
     expect(v.cribHumidity.getAttribute("aria-label")).toBeNull();
