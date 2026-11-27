@@ -3587,6 +3587,22 @@ class BudgetReceiptGroupUnlinkResult(BaseModel):
     evidence: BudgetReceiptSummary | None
 
 
+class BudgetReceiptAttachEvidenceRequest(BaseModel):
+    model_config = _STRICT
+    receipt_id: BudgetReceiptId
+    expected_version: BudgetVersion
+    target_receipt_id: BudgetReceiptId
+    target_expected_version: BudgetVersion
+
+
+class BudgetReceiptEvidenceTarget(BaseModel):
+    model_config = _READ
+    receipt_id: BudgetReceiptId
+    version: BudgetVersion
+    raw_shop_name: str | None
+    receipt_date: str
+
+
 class BudgetReceiptDetailResult(BaseModel):
     model_config = _READ
     receipt: BudgetReceiptDetail
@@ -3598,6 +3614,12 @@ class BudgetReceiptDetailResult(BaseModel):
         list[BudgetReceiptGroupCandidate] | None, Field(default=None, json_schema_extra=_OMIT),
     ] = None
     no_bank_data: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    evidence_target: Annotated[
+        BudgetReceiptEvidenceTarget | None, Field(
+            default=None, json_schema_extra=_OMIT,
+            description="Unique eligible confirmed target. Omitted before contract 0.69.0 or when ineligible.",
+        ),
+    ] = None
 
 
 class BudgetReceiptGroupDetailResult(BaseModel):
@@ -3749,6 +3771,7 @@ _RECEIPT_MODELS = (
     BudgetReceiptParseResult, BudgetReceiptGroupTransactionCandidate, BudgetReceiptGroupCandidate,
     BudgetReceiptGroupCandidatesResult, BudgetReceiptDetailResult, BudgetReceiptGroupDetailResult,
     BudgetReceiptGroupLinkResult, BudgetReceiptGroupUnlinkResult, BudgetReceiptConfirmResult,
+    BudgetReceiptAttachEvidenceRequest, BudgetReceiptEvidenceTarget,
     BudgetReceiptListResult, BudgetReceiptDeleteResult,
     BudgetReceiptManualLinkRequest, BudgetReceiptTransactionSearchRequest,
     BudgetReceiptTransactionSearchItem, BudgetReceiptTransactionSearchResult,
@@ -4214,6 +4237,7 @@ _PATH_ROLES = {
     ("POST", "/api/budget/receipts/group/candidates"): "admin",
     ("POST", "/api/budget/receipts/group/link"): "admin",
     ("POST", "/api/budget/receipts/group/unlink"): "admin",
+    ("POST", "/api/budget/receipts/attach-evidence"): "admin",
     ("GET", "/api/budget/receipts/image"): "admin",
     ("POST", "/api/budget/receipts/delete"): "admin",
     ("POST", "/api/budget/receipts/device-token/pair-code"): "admin",
@@ -5122,6 +5146,13 @@ def _receipt_paths():
          "Stale expected_version (budget_receipt_conflict). A missing SQLite users backend also returns 409 "
          "(budget_requires_sqlite_users).",
          "JSON body exceeds 16384 bytes."),
+        ("attach-evidence", "attachBudgetReceiptEvidence", "BudgetReceiptAttachEvidenceRequest",
+         "BudgetReceiptConfirmResult", "Attach an imported receipt as evidence for a confirmed bank-linked receipt.",
+         "Ledger owner in a browser session with budget.receipts.edit and budget.receipts.match. "
+         "Requires contract version 0.69.0 or later.",
+         "Stale receipt version (budget_receipt_conflict), changed or ambiguous target (budget_receipt_stale_source), "
+         "or missing SQLite users backend (budget_requires_sqlite_users).",
+         "JSON body exceeds 16384 bytes."),
     )
     paths = {}
     for name, operation, request, response, summary, access, conflict, too_large in writes:
@@ -5133,6 +5164,8 @@ def _receipt_paths():
         responses["415"] = _receipt_error("Content-Type must be application/json.")
         if name.startswith("group/"):
             responses["404"] = _receipt_error("Unknown, disabled or foreign resource, or contract version below 0.59.0.")
+        elif name == "attach-evidence":
+            responses["404"] = _receipt_error("Receipts disabled or contract version below 0.69.0.")
         paths[prefix + name] = {"post": {
             "operationId": operation, "summary": summary,
             "description": (
@@ -5152,6 +5185,10 @@ def _receipt_paths():
         if name.startswith("group/"):
             paths[prefix + name]["post"]["parameters"] = [
                 {**contract_version, "required": True, "description": "Receipt groups are available from 0.59.0."}
+            ]
+        elif name == "attach-evidence":
+            paths[prefix + name]["post"]["parameters"] = [
+                {**contract_version, "required": True, "description": "Evidence attachment is available from 0.69.0."}
             ]
         elif name != "delete":
             paths[prefix + name]["post"]["parameters"] = [contract_version]

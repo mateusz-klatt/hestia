@@ -169,7 +169,7 @@ describe("receipts api", () => {
     const detail = sent(fetchMock, 1);
     expect(detail.url.pathname).toMatch(/\/api\/budget\/receipts\/detail$/);
     expect(Object.fromEntries(detail.url.searchParams)).toEqual({ receipt_id: "rec-42" });
-    expect(new Headers(detail.init.headers).get(CONTRACT_HEADER)).toBe("0.61.0");
+    expect(new Headers(detail.init.headers).get(CONTRACT_HEADER)).toBe("0.69.0");
     expect(new Headers(detail.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
     expect(detail.init.credentials).toBe("same-origin");
 
@@ -227,11 +227,29 @@ describe("receipts api", () => {
     expect(retry.init.signal).toBe(first.init.signal);
     expect(retry.init.credentials).toBe("same-origin");
     expect(retry.init.cache).toBe("no-store");
-    expect(new Headers(first.init.headers).get(CONTRACT_HEADER)).toBe("0.61.0");
+    expect(new Headers(first.init.headers).get(CONTRACT_HEADER)).toBe(path === "detail" ? "0.69.0" : "0.61.0");
     const headers = new Headers(first.init.headers);
-    headers.set(CONTRACT_HEADER, "0.60.0");
+    headers.set(CONTRACT_HEADER, path === "detail" ? "0.61.0" : "0.60.0");
     expect(Object.fromEntries(new Headers(retry.init.headers))).toEqual(Object.fromEntries(headers));
     expect(new Headers(retry.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
+  });
+
+  it("posts evidence attachment once with both receipt versions and the expected actor", async () => {
+    const fetchMock = respond(409, { error: "budget_receipt_stale_source" });
+    const gate = createBudgetApi("owner");
+    await gate.capabilities();
+    const request = {
+      receipt_id: "evidence", expected_version: 3, target_receipt_id: "target", target_expected_version: 7,
+    };
+    expect(await createReceiptsApi(gate).attachReceiptEvidence?.(request))
+      .toEqual({ ok: false, status: 409, error: "budget_receipt_stale_source" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const { url, init } = sent(fetchMock, 1);
+    expect(url.pathname).toBe("/api/budget/receipts/attach-evidence");
+    expect(init.method).toBe("POST");
+    expect(new Headers(init.headers).get(CONTRACT_HEADER)).toBe("0.69.0");
+    expect(new Headers(init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
+    expect(JSON.parse(init.body as string)).toEqual(request);
   });
 
   it("falls back through 0.60.0 and 0.59.0 when talking to a 0.57.0 server", async () => {

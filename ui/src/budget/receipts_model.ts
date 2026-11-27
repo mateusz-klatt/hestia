@@ -10,6 +10,8 @@ type Schemas = components["schemas"];
 
 export type ReceiptSummary = Schemas["BudgetReceiptSummary"];
 export type ReceiptDetail = Schemas["BudgetReceiptDetail"];
+export type ReceiptEvidenceTarget = Schemas["BudgetReceiptEvidenceTarget"];
+export type ReceiptAttachEvidenceRequest = Schemas["BudgetReceiptAttachEvidenceRequest"];
 export type ReceiptLine = Schemas["BudgetReceiptLine"];
 export type ReceiptLineInput = Schemas["BudgetReceiptLineInput"];
 export type ReceiptCandidate = Schemas["BudgetReceiptCandidate"];
@@ -408,7 +410,7 @@ export function receiptAccountLabel(
 
 // ---- Per-status link actions, confirm validation & exact decimal arithmetic ----
 
-export type ReceiptActionKind = "confirm" | "delete" | "group_link" | "group_unlink";
+export type ReceiptActionKind = "confirm" | "delete" | "group_link" | "group_unlink" | "attach_evidence";
 
 export interface ReceiptSettledEvent {
   receiptId: string;

@@ -297,7 +297,7 @@ class BudgetOpenApiTests(unittest.TestCase):
                 self.assertTrue(methods["get"]["parameters"][0]["required"])
         self.assertEqual(set(receipts), {"/api/budget/receipts/" + name for name in
                          ("parse-text", "confirm", "list", "search", "transaction-search", "detail", "group/detail",
-                          "group/candidates", "group/link", "group/unlink", "image", "delete",
+                          "group/candidates", "group/link", "group/unlink", "image", "delete", "attach-evidence",
                           "device-token/pair-code", "device-token/pair-code-cancel", "device-token/login",
                           "device-token/redeem", "device-token/list",
                           "device-token/revoke", "gmail-status", "gmail-grant", "gmail-sync", "gmail-revoke")})
@@ -783,6 +783,7 @@ class BudgetOpenApiTests(unittest.TestCase):
                               "BudgetReceiptManualLinkRequest", "BudgetReceiptTransactionSearchRequest",
                               "BudgetReceiptDeleteRequest", "BudgetReceiptGroupCandidatesRequest",
                               "BudgetReceiptGroupMemberInput", "BudgetReceiptGroupLinkRequest",
+                              "BudgetReceiptAttachEvidenceRequest",
                               "BudgetReceiptGroupUnlinkRequest", "BudgetReceiptDeviceBrowserRequest",
                               "BudgetReceiptDeviceCancelRequest", "BudgetReceiptDeviceLoginRequest",
                               "BudgetReceiptDeviceRedeemRequest", "BudgetReceiptDeviceRevokeRequest", "BudgetReceiptGmailGrantRequest",

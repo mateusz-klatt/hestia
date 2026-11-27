@@ -60,6 +60,18 @@ class OpenApiArtifactTests(unittest.TestCase):
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
         self.assertEqual(document["info"]["version"], "0.67.0")
+        # Unwind the evidence attachment surface to the previous contract.
+        attach = document["paths"].pop("/api/budget/receipts/attach-evidence")["post"]
+        self.assertEqual(attach["x-required-permission"], "legacy_receipts")
+        header, = attach["parameters"]
+        self.assertEqual((header["name"], header["in"], header["required"]),
+                         ("X-Hestia-Contract-Version", "header", True))
+        detail = schemas["BudgetReceiptDetailResult"]
+        self.assertNotIn("evidence_target", detail["required"])
+        self.assertNotIn("default", detail["properties"].pop("evidence_target"))
+        schemas.pop("BudgetReceiptAttachEvidenceRequest")
+        schemas.pop("BudgetReceiptEvidenceTarget")
+
         # 0.67.0 additive manual receipt transaction picker.
         picker = document["paths"].pop("/api/budget/receipts/transaction-search")["post"]
         self.assertEqual(picker["x-required-permission"], "budget.receipts.match")
@@ -1055,7 +1067,7 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetReceiptLineInput", "BudgetReceiptLinkRequest", "BudgetReceiptListRequest",
         "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",
         "BudgetReceiptManualLinkRequest", "BudgetReceiptTransactionSearchRequest",
-        "BudgetReceiptGroupCandidatesRequest", "BudgetReceiptGroupMemberInput",
+        "BudgetReceiptGroupCandidatesRequest", "BudgetReceiptGroupMemberInput", "BudgetReceiptAttachEvidenceRequest",
         "BudgetReceiptGroupLinkRequest", "BudgetReceiptGroupUnlinkRequest",
         "BudgetReceiptDeviceBrowserRequest", "BudgetReceiptDeviceRedeemRequest",
         "BudgetReceiptDeviceRevokeRequest", "BudgetReceiptDeviceCancelRequest", "BudgetReceiptDeviceLoginRequest",

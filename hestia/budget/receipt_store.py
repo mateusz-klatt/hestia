@@ -33,16 +33,17 @@ from .analytics_core import _parts, AnalyticsError, canonical_money, compare_mon
 from .device_token import DeviceTokenError, _issued_mask, _legacy_bearer_allowed, write_device_audit
 from .gmail_config import normalize_card_accounts
 from .gmail_payment import _payee_key, bank_payee_texts, bank_ref_tokens, canonical_gateway
-from .gmail_store import (GATEWAY_REF_DOMAIN, _payment_payee_key, digest, receipt_ref_hmacs,
+from .gmail_store import (GATEWAY_REF_DOMAIN, PAYMENT_PAYEE_DOMAIN, _payment_order_key, _payment_payee_key,
+                          digest, receipt_ref_hmacs,
                           retain_imports, tombstone_receipt)
 from .receipt_group_solver import MAX_GROUP_POOL, MAX_GROUP_PROPOSALS, find_receipt_groups
-from .receipt_parser import (GATEWAY_PHRASE_TOKENS, _IBAN_COUNTRY_SPECS, _IBAN_MAX, _IBAN_MIN,
+from .receipt_parser import (GATEWAY_PHRASE_TOKENS, GATEWAY_TOKENS, _IBAN_COUNTRY_SPECS, _IBAN_MAX, _IBAN_MIN,
                              _REMOVED, _STOP_TOKENS,
                              CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES, ReceiptError,
                              _iban_checksum, chain_for, contains_gateway_marker, merchant_score_groups,
                              merchant_tokens, merchant_word_tokens, normalize_shop_name, parse_receipt,
                              redact_digit_field, valid_nip, validate_confirm, validate_confirm_line_totals)
-from .receipt_reconcile import (audit_payload, entry_reference_digest, evidence_json,
+from .receipt_reconcile import (_payload_party_name, audit_payload, entry_reference_digest, evidence_json,
                                 erase_receipt_audit, group_audit_payload, group_link_evidence, link_evidence,
                                 resolved_party_names, transaction_party_names, write_audit, write_group_audit)
 from .views import BudgetHTTPStore
@@ -729,6 +730,12 @@ def _fee_adjusted_total(total_amount, fee_amount):
 
 
 _BANK_GATEWAY_PHRASE_WORDS = frozenset(word for phrase in GATEWAY_PHRASE_TOKENS for word in phrase)
+_EVIDENCE_PLATFORMS = (
+    ("allegro",), ("bolt", "food"), ("deliveroo",), ("doordash",), ("glovo",),
+    ("just", "eat"), ("pyszne",), ("uber", "eats"), ("ubereats",), ("wolt",),
+)
+_EVIDENCE_PROVIDER_WORDS = _BANK_GATEWAY_PHRASE_WORDS | {word for name in _EVIDENCE_PLATFORMS for word in name}
+_ATTACH_EVIDENCE = "attach_evidence"
 _SECONDARY_BANK_FILLER_TOKENS = frozenset({
     "numer", "tytul", "tytulem", "data", "dnia", "kwota", "odbiorca", "nadawca",
     "identyfikator", "szczegoly", "rzecz", "reference", "transaction", "transakcji",
@@ -810,6 +817,49 @@ def _enabled_account_filters(owner, *, require_enabled_connection):
     if require_enabled_connection:
         filters.append(Connection.enabled.is_(True))
     return filters
+
+
+def _payment_descriptors(value):
+    words = merchant_word_tokens(value)
+    names = set(GATEWAY_TOKENS.intersection(words))
+    for phrase in (*GATEWAY_PHRASE_TOKENS, *_EVIDENCE_PLATFORMS):
+        if any(words[index:index + len(phrase)] == phrase for index in range(len(words) - len(phrase) + 1)):
+            names.add(" ".join(phrase))
+    return {canonical_gateway(name) or name.replace(" ", "") for name in names}
+
+
+def _related_evidence(source, target, payload, source_order, target_order, source_payee, target_payee, secret):
+    if (source_order and source_order == target_order) or (
+        source.invoice_number and target.invoice_number
+        and source.invoice_number.casefold() == target.invoice_number.casefold()
+    ):
+        return True
+    # A shared provider name is not evidence of a shared underlying merchant.
+    source_tokens = merchant_tokens(source.raw_shop_name, source.raw_nip) - _EVIDENCE_PROVIDER_WORDS
+    target_tokens = merchant_tokens(target.raw_shop_name, target.raw_nip) - _EVIDENCE_PROVIDER_WORDS
+    if source_tokens & target_tokens:
+        return True
+
+    remittance = payload.get("remittance_information")
+    bank_text = "\n".join(part for part in (
+        *(remittance if isinstance(remittance, list) else ()),
+        _payload_party_name(payload, "creditor"),
+    ) if isinstance(part, str))
+    bank_words = frozenset(merchant_word_tokens(bank_payee_texts(bank_text, set())[0]))
+    for descriptor, merchant, merchant_words, payee, payment_is_linked in (
+        (source, target, target_tokens, source_payee, False),
+        (target, source, source_tokens, target_payee, True),
+    ):
+        providers = _payment_descriptors(descriptor.raw_shop_name) | _payment_descriptors(descriptor.gateway)
+        if not providers or not merchant_words:
+            continue
+        if payee and secret is not None and payee == digest(
+            secret, PAYMENT_PAYEE_DOMAIN, _payee_key(merchant.raw_shop_name or ""),
+        ):
+            return True
+        if (payment_is_linked or providers & _payment_descriptors(bank_text)) and merchant_words <= bank_words:
+            return True
+    return False
 
 
 class BudgetReceiptStore(BudgetHTTPStore):
@@ -1832,7 +1882,91 @@ class BudgetReceiptStore(BudgetHTTPStore):
             Line.raw_name_key.like("%" + _like_escape(needle) + "%", escape="\\"),
         ).limit(1)) is not None
 
-    def detail(self, owner, receipt_id, *, include_display_shop_name=False):
+    def _evidence_target(self, session, owner, source):
+        if (source.status != "imported" or source.receipt_kind != "purchase"
+                or not _group_common_eligible(source, allow_imported=True)
+                or _receipt_in_group(session, owner, source.id)):
+            return None
+        scoped, _ = self._scope_accounts(session, owner, source)
+        day = date.fromisoformat(source.receipt_date)
+        first = _shift_clamped(day, -_SUGGESTION_WINDOW_DAYS).isoformat()
+        last = _shift_clamped(day, _SUGGESTION_WINDOW_DAYS).isoformat()
+        amount = canonical_money(source.total_amount)
+        source_order, target_order, source_payee, target_payee = (aliased(AppMeta) for _ in range(4))
+        tx_account = func.coalesce(Receipt.linked_account_id, ReceiptLinkGroup.account_id)
+        tx_reference = func.coalesce(Receipt.linked_entry_ref, ReceiptLinkGroup.entry_reference)
+        # CASE also guards json_extract on older or malformed transaction payloads.
+        bank = case((func.json_valid(Transaction.payload_json), Transaction.payload_json))
+        targets = (
+            select(Receipt, Transaction.payload_json, source_order.value, target_order.value,
+                   source_payee.value, target_payee.value)
+            .select_from(Receipt)
+            .outerjoin(ReceiptLinkMember, and_(ReceiptLinkMember.receipt_id == Receipt.id,
+                                               ReceiptLinkMember.owner == Receipt.owner))
+            .outerjoin(ReceiptLinkGroup, and_(ReceiptLinkGroup.id == ReceiptLinkMember.group_id,
+                                              ReceiptLinkGroup.owner == Receipt.owner,
+                                              ReceiptLinkGroup.status == "confirmed"))
+            .join(Transaction, and_(Transaction.account_id == tx_account,
+                                    Transaction.entry_reference == tx_reference))
+            .outerjoin(source_order, source_order.key == _payment_order_key(source.id))
+            .outerjoin(target_order, target_order.key == _payment_order_key(Receipt.id))
+            .outerjoin(source_payee, source_payee.key == _payment_payee_key(source.id))
+            .outerjoin(target_payee, target_payee.key == _payment_payee_key(Receipt.id))
+            .where(
+                Receipt.owner == owner, Receipt.id != source.id, Receipt.status == "confirmed",
+                Receipt.evidence_for_receipt_id.is_(None), Receipt.receipt_kind == "purchase",
+                Receipt.currency == source.currency, Receipt.receipt_date.between(first, last),
+                Transaction.account_id.in_(scoped), Transaction.uncertain.is_(False),
+                ~exists().where(Leg.account_id == Transaction.account_id,
+                                Leg.entry_reference == Transaction.entry_reference),
+                func.json_extract(bank, "$.status") == "BOOK",
+                func.json_extract(bank, "$.credit_debit_indicator") == "DBIT",
+                func.json_extract(bank, "$.currency") == source.currency,
+                or_(*(func.json_extract(bank, "$." + field).between(first, last) for field in _BANK_DATE_FIELDS)),
+            )
+        )
+        match = None
+        for target, raw_payload, source_order_ref, target_order_ref, source_payee_ref, target_payee_ref in session.execute(targets):
+            try:
+                payload = _json(raw_payload)
+            except (ValueError, RecursionError):
+                continue
+            bank_amount = _positive_money(payload.get("amount"))
+            if bank_amount is None or amount not in (bank_amount, _positive_money(target.total_amount)):
+                continue
+            if not _related_evidence(source, target, payload, source_order_ref, target_order_ref,
+                                     source_payee_ref, target_payee_ref, self._ref_hmac_secret):
+                continue
+            if match is not None:
+                return None
+            match = target
+        return match
+
+    def attach_evidence(self, owner, values):
+        with self.transaction() as session:
+            owner = self._owner(session, owner, "budget.receipts.edit")
+            if self._device_id is not None or self._session_actor != owner or not self._match_allowed:
+                raise DeviceTokenError(403, "budget_forbidden")
+            source = session.scalar(select(Receipt).where(Receipt.id == values["receipt_id"], Receipt.owner == owner))
+            if source is None or source.version != values["expected_version"]:
+                raise ReceiptError("budget_receipt_conflict", 409)
+            target = self._evidence_target(session, owner, source)
+            if (target is None or target.id != values["target_receipt_id"]
+                    or target.version != values["target_expected_version"]):
+                raise ReceiptError("budget_receipt_stale_source", 409)
+            now = self._now()
+            before = audit_payload(source, _ATTACH_EVIDENCE)
+            source.evidence_for_receipt_id = target.id
+            source.status = "confirmed"
+            source.payment_method = source.payment_method or "unknown"
+            source.import_expires_at = None
+            source.version, source.updated_at = source.version + 1, now
+            write_audit(session, owner, source, _ATTACH_EVIDENCE, before,
+                        audit_payload(source, _ATTACH_EVIDENCE, self._actor), now)
+            session.flush()
+            return {"ok": True, "receipt": self._detail(session, source)}
+
+    def detail(self, owner, receipt_id, *, include_display_shop_name=False, include_evidence_target=False):
         with self.transaction() as session:
             owner = self._owner(session, owner, "budget.receipts.view")
             now = self._now()
@@ -1862,6 +1996,13 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 result["no_bank_data"] = False if candidates else self._no_bank_data(session, owner, preview)
             if want_group:
                 result["group_candidates"] = self._group_candidates(session, owner, row)["proposals"]
+            if (include_evidence_target and not candidates and self._device_id is None
+                    and self._session_actor == owner and "budget.receipts.edit" in self._permissions
+                    and (target := self._evidence_target(session, owner, row)) is not None):
+                result["evidence_target"] = {
+                    "receipt_id": target.id, "version": target.version,
+                    "raw_shop_name": target.raw_shop_name, "receipt_date": target.receipt_date,
+                }
             return result
 
     def _group_payload(self, session, group, members, evidence, *, include_ok=False):

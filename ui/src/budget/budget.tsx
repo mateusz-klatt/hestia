@@ -434,6 +434,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     const receiptGroupCandidates = effectiveReceiptsApi.receiptGroupCandidates?.bind(effectiveReceiptsApi);
     const linkReceiptGroup = effectiveReceiptsApi.linkReceiptGroup?.bind(effectiveReceiptsApi);
     const unlinkReceiptGroup = effectiveReceiptsApi.unlinkReceiptGroup?.bind(effectiveReceiptsApi);
+    const attachReceiptEvidence = effectiveReceiptsApi.attachReceiptEvidence?.bind(effectiveReceiptsApi);
     return {
       receiptsList: (request) => runWithGate(() => effectiveReceiptsApi.receiptsList(request), false, true),
       receiptsSearch: (request) => runWithGate(() => effectiveReceiptsApi.receiptsSearch(request), false, true),
@@ -441,6 +442,10 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       ...(searchReceiptTransactions === undefined ? {} : {
         searchReceiptTransactions: (request: Parameters<typeof searchReceiptTransactions>[0]) =>
           runWithGate(() => searchReceiptTransactions(request), false),
+      }),
+      ...(attachReceiptEvidence === undefined ? {} : {
+        attachReceiptEvidence: (request: Parameters<typeof attachReceiptEvidence>[0]) =>
+          runWithGate(() => attachReceiptEvidence(request), true, false),
       }),
       ...(fetchReceiptLinkGroupDetail === undefined ? {} : {
         fetchReceiptLinkGroupDetail: (groupId: string) => runWithGate(() => fetchReceiptLinkGroupDetail(groupId), false, false),

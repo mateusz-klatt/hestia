@@ -204,6 +204,7 @@ _PATH_USERS = "/api/users"
 _PATH_RECEIPT_GROUP_DETAIL = "/api/budget/receipts/group/detail"
 _PATH_RECEIPT_GROUP_LINK = "/api/budget/receipts/group/link"
 _PATH_RECEIPT_GROUP_UNLINK = "/api/budget/receipts/group/unlink"
+_PATH_RECEIPT_ATTACH_EVIDENCE = "/api/budget/receipts/attach-evidence"
 _PATH_USER_GRANTS = "/api/users/grants"
 _PATH_WHOLE_HOME = "/api/whole-home"
 _AUTH_API_PREFIX = "/api/auth/"
@@ -277,6 +278,7 @@ _ROUTE_MIN_ROLE = {
     ("POST", device_token.GROUP_CANDIDATES_PATH): _ADMIN,
     ("POST", _PATH_RECEIPT_GROUP_LINK): _ADMIN,
     ("POST", _PATH_RECEIPT_GROUP_UNLINK): _ADMIN,
+    ("POST", _PATH_RECEIPT_ATTACH_EVIDENCE): _ADMIN,
     ("GET", "/api/budget/receipts/image"): _ADMIN,
     ("POST", "/api/budget/receipts/delete"): _ADMIN,
     ("POST", device_token.PAIR_PATH): _ADMIN,
@@ -361,6 +363,7 @@ _RECEIPT_DATA_ROUTES = frozenset({
     ("POST", device_token.GROUP_CANDIDATES_PATH),
     ("POST", _PATH_RECEIPT_GROUP_LINK),
     ("POST", _PATH_RECEIPT_GROUP_UNLINK),
+    ("POST", _PATH_RECEIPT_ATTACH_EVIDENCE),
     ("GET", device_token.IMAGE_PATH),
     ("POST", device_token.DELETE_PATH),
 })
