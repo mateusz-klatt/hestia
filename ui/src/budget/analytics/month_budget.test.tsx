@@ -196,8 +196,8 @@ describe("MonthBudgetView", () => {
     await loadLocale("en");
     expect(tPlural("budget.monthBudget.staleAccounts", 1)).toBe("1 stale account");
     expect(tPlural("budget.monthBudget.staleAccounts", 2)).toBe("2 stale accounts");
-    expect(tPlural("budget.monthBudget.pendingTransfers", 1)).toContain("1 unverified transfer or classification candidate still affects");
-    expect(tPlural("budget.monthBudget.pendingTransfers", 2)).toContain("2 unverified transfer or classification candidates still affect");
+    expect(tPlural("budget.monthBudget.pendingTransfers", 1)).toContain("1 entry with uncertain classification is included");
+    expect(tPlural("budget.monthBudget.pendingTransfers", 2)).toContain("2 entries with uncertain classification are included");
     expect(tPlural("budget.monthBudget.purchaseDateFallback", 1)).toBe("1 debit used posting date because purchase date was absent.");
     expect(tPlural("budget.monthBudget.purchaseDateFallback", 3)).toBe("3 debits used posting date because purchase date was absent.");
     expect(tPlural("budget.monthBudget.historyMonths", 6)).toBe("6 months");
@@ -208,9 +208,9 @@ describe("MonthBudgetView", () => {
     expect(tPlural("budget.monthBudget.staleAccounts", 5)).toBe("5 nieaktualnych kont");
     expect(tPlural("budget.monthBudget.staleAccounts", 12)).toBe("12 nieaktualnych kont");
     expect(tPlural("budget.monthBudget.staleAccounts", 22)).toBe("22 nieaktualne konta");
-    expect(tPlural("budget.monthBudget.pendingTransfers", 1)).toContain("1 niepotwierdzony wpis lub przelew nadal wpływa");
-    expect(tPlural("budget.monthBudget.pendingTransfers", 2)).toContain("2 niepotwierdzone wpisy lub przelewy nadal wpływają");
-    expect(tPlural("budget.monthBudget.pendingTransfers", 5)).toContain("5 niepotwierdzonych wpisów lub przelewów nadal wpływa");
+    expect(tPlural("budget.monthBudget.pendingTransfers", 1)).toContain("1 pozycję o niepewnej klasyfikacji");
+    expect(tPlural("budget.monthBudget.pendingTransfers", 2)).toContain("2 pozycje o niepewnej klasyfikacji");
+    expect(tPlural("budget.monthBudget.pendingTransfers", 5)).toContain("5 pozycji o niepewnej klasyfikacji");
     expect(tPlural("budget.monthBudget.purchaseDateFallback", 1)).toContain("1 wydatku");
     expect(tPlural("budget.monthBudget.purchaseDateFallback", 2)).toContain("2 wydatków");
     expect(tPlural("budget.monthBudget.historyMonths", 6)).toBe("6 miesięcy");
@@ -550,7 +550,7 @@ describe("MonthBudgetView", () => {
 
     expect(host.textContent).toContain("Data may be out of date · 2 stale accounts");
     expect(host.textContent).toContain("1 debit used posting date because purchase date was absent.");
-    expect(host.textContent).toContain("Provisional totals: 2 unverified transfer or classification candidates still affect totals.");
+    expect(host.textContent).toContain("Provisional totals. 2 entries with uncertain classification are included.");
     expect(host.textContent).toContain("Own-transfer detection reached its scan limit");
     expect(host.textContent).toContain("Budget received");
     expect(host.textContent).toContain("5,000.00 PLN");

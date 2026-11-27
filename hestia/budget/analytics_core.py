@@ -11,7 +11,7 @@ import unicodedata
 MAX_ROWS = 100_000
 # Bump whenever rule matching or effective classification semantics change so stale
 # previews, cursors and cached projections invalidate across deploys.
-CLASSIFICATION_VERSION = 2
+CLASSIFICATION_VERSION = 4
 KINDS = frozenset({"auto", "expense", "income", "refund", "excluded"})
 _FIELDS = frozenset({"description", "counterparty_name", "counterparty_account", "mcc"})
 _MONEY = re.compile(r"-?[0-9]+(?:\.[0-9]+)?\Z", re.ASCII)
@@ -376,9 +376,126 @@ def _value(row, key):
     return row.get(key) if isinstance(row, dict) else getattr(row, key)
 
 
-def default_effective_kind(payload):
+_POLISH_CARD_REPAYMENT_MAP = str.maketrans({"ł": "l", "Ł": "L"})
+_BANK_REPAYMENT_NEGATIVE = re.compile(
+    r"\b(?:"
+    r"oplat\w*|prowizj\w*|odsetk\w*|ubezpieczeni\w*|skladk\w*|zakup\w*|"
+    r"platnosc\w*\s+kart\w*|transakcj\w*\s+kart\w*|"
+    r"wyplat\w*|zwrot\w*|anulowan\w*|korekt\w*|storn\w*|pozyczk\w*|"
+    r"refund\w*|purchase\w*|withdrawal\w*|revers(?:al|e)\w*|cashback|"
+    r"fees?|interest|insurance|commission\w*|"
+    r"kart\w*\s+(?:miejsk\w*|podarunkow\w*)|debetow\w*|prepaid|gift|debit"
+    r")\b",
+    re.ASCII,
+)
+_BANK_REPAYMENT_POSITIVE = re.compile(
+    r"(?:"
+    r"\b(?:auto\s+)?(?:automatyczn\w+\s+)?splat(?:a|y|e)\s+"
+    r"(?:(?:automatyczn\w+|minimaln\w+|min|calkowit\w+|czesciow\w+|zadluzenia|rach(?:unku)?|limitu|na)\s+){0,4}"
+    r"(?:kart(?:y|e|a)|karcie)\s+(?:kred(?:yt\w*)?|visa|mastercard)\b"
+    r"|"
+    r"\b(?:(?:(?:auto|automatyczn\w+)\s+splat(?:a|y|e)|autosplat(?:a|y|e))\s+"
+    r"(?:zadluzenia\s+)?(?:na\s+)?(?:kart(?:y|e|a)|karcie)"
+    r"|splat(?:a|y|e)\s+zadluzenia\s+(?:na\s+)?(?:kart(?:y|e|a)|karcie))\b"
+    r"|"
+    r"\b(?:credit\s+card\s+repayment|repayment\s+(?:of\s+)?(?:the\s+)?credit\s+card)\b"
+    r")",
+    re.ASCII,
+)
+
+
+def _normalize_card_repayment_text(value):
+    if not isinstance(value, str) or not value:
+        return ""
+    ascii_folded = unicodedata.normalize("NFKC", value).translate(_POLISH_CARD_REPAYMENT_MAP)
+    stripped = "".join(
+        ch if ch.isalnum() else " "
+        for ch in unicodedata.normalize("NFD", ascii_folded)
+        if unicodedata.category(ch) not in ("Mn", "Mc", "Me")
+    )
+    return " ".join(stripped.split()).casefold()
+
+
+def is_bank_card_repayment(payload, metadata=None):
+    """Return true when a booked debit carries narrow bank evidence of an internal card repayment."""
+    if not isinstance(payload, dict) or payload.get("credit_debit_indicator") != "DBIT":
+        return False
+    if payload.get("status") not in (None, "BOOK"):
+        return False
+    amount = payload.get("amount")
+    if amount is not None:
+        try:
+            if compare_money(amount, "0") <= 0:
+                return False
+        except AnalyticsError:
+            return False
+    metadata = {} if metadata is None else metadata
+    if metadata.get("mcc"):
+        return False
+    remit = payload.get("remittance_information") or ()
+    remit_text = " ".join(remit) if isinstance(remit, (list, tuple)) else str(remit)
+    candidates = [
+        text for text in (
+            _normalize_card_repayment_text(remit_text),
+            _normalize_card_repayment_text(metadata.get("creditor_name")),
+        )
+        if text
+    ]
+    if not candidates or any(_BANK_REPAYMENT_NEGATIVE.search(text) for text in candidates):
+        return False
+    return any(_BANK_REPAYMENT_POSITIVE.search(text) for text in candidates)
+
+
+def identity_pair_set(values):
+    """Return a frozenset of ``(scheme, identification)`` pairs from identity entries."""
+    return frozenset((item["scheme"], item["identification"]) for item in values)
+
+
+def bank_card_transfer_allowed(
+    account_id,
+    metadata,
+    *,
+    selected_accounts,
+    account_identities,
+    selected_card_accounts,
+    deselected_card_accounts=frozenset(),
+):
+    """Return true when a bank-evidenced card repayment debit targets an unambiguous selected card.
+
+    Requires at least one other selected credit-card account in scope. When structured
+    ``creditor_accounts`` metadata is present, it must match an owned identity of one of those
+    other selected credit cards (and not any deselected owned account), avoiding unknown external
+    creditors outside the owner's portfolio. When ``creditor_accounts`` is absent, requires an
+    unambiguous single other selected credit card and no deselected credit card accounts.
+    """
+    other_selected = frozenset(selected_accounts) - {account_id}
+    other_selected_cards = frozenset(selected_card_accounts) & other_selected
+    if not other_selected_cards:
+        return False
+    other_deselected_cards = frozenset(deselected_card_accounts) - frozenset(selected_accounts) - {account_id}
+    creditor_accounts = None if metadata is None else metadata.get("creditor_accounts")
+    if not creditor_accounts:
+        return len(other_selected_cards) == 1 and not other_deselected_cards
+    creditor_pairs = identity_pair_set(creditor_accounts)
+    selected_card_pairs = frozenset().union(
+        *(account_identities.get(card_id, frozenset()) for card_id in other_selected_cards)
+    )
+    if not (creditor_pairs & selected_card_pairs):
+        return False
+    deselected_owned = frozenset().union(
+        *(pairs for other_id, pairs in account_identities.items()
+          if other_id != account_id and other_id not in selected_accounts)
+    )
+    return not bool(creditor_pairs & deselected_owned)
+
+
+def default_effective_kind(payload, metadata=None, *, allow_bank_transfer=False):
     """Default effective kind when no manual annotation or matching rule sets one."""
-    return "expense" if payload.get("credit_debit_indicator") == "DBIT" else "unclassified_credit"
+    if payload.get("credit_debit_indicator") != "DBIT":
+        return "unclassified_credit"
+    if allow_bank_transfer and is_bank_card_repayment(payload, metadata):
+        return "transfer"
+    return "expense"
 
 
 def _resolved_kind(kind, payload, *, for_rule=False, expense_fallback=False):
@@ -475,7 +592,7 @@ def _match_pass(compiled, payload, texts, *, expense_fallback=False):
     return None, None
 
 
-def match_rule(compiled, payload, texts):
+def match_rule(compiled, payload, texts, *, default_kind=None):
     """First matching enabled rule and its effective kind.
 
     For ``CRDT`` rows, primary rules (``income``, ``refund``, ``auto``, ``excluded``) run in list order
@@ -485,7 +602,7 @@ def match_rule(compiled, payload, texts):
     if rule is None and payload.get("credit_debit_indicator") == "CRDT":
         rule, effective_kind = _match_pass(compiled, payload, texts, expense_fallback=True)
     if rule is None:
-        return None, default_effective_kind(payload)
+        return None, default_effective_kind(payload) if default_kind is None else default_kind
     return rule, effective_kind
 
 

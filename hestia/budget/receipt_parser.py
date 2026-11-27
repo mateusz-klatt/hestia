@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
 import re
 import unicodedata
 
@@ -58,6 +59,14 @@ _ITEM_GROSS_TAIL = re.compile(
     rf"(?P<gross>{_NUMBER})\s*(?:PLN\s*)?(?P<ptu>[A-G])?\Z",
     re.IGNORECASE | re.ASCII,
 )
+# OCR sometimes reads the piece count 1 as I or the multiplication sign as =.
+# Only consider these alternatives when both complete, two-decimal prices remain.
+_OCR_ITEM_PRICE = r"[0-9]{1,9}[.,][0-9]{2}"
+_OCR_ITEM_TAIL = re.compile(
+    r"(?:I\s*szt\s*[x×*=]|(?P<quantity>[1-9][0-9]{0,8})\s*szt\s*=)\s*"
+    rf"(?P<unit_price>{_OCR_ITEM_PRICE})\s+(?P<gross>{_OCR_ITEM_PRICE})\s*(?:PLN\s*)?(?P<ptu>[A-G])?\Z",
+    re.IGNORECASE | re.ASCII,
+)
 _NAMED_UNIT_TAIL = re.compile(
     rf"(?P<quantity>{_NUMBER})\s*(?P<unit>{_UNITS})"
     rf"(?:\s*[x×*]\s*(?P<unit_price>{_NUMBER})\s*(?:=\s*)?)?"
@@ -74,11 +83,35 @@ _CALCULATION = re.compile(
     rf"(?P<unit_price>{_NUMBER})\s*(?:=\s*)?(?P<gross>{_NUMBER})\s*(?:PLN\s*)?(?P<ptu>[A-G])?$",
     re.IGNORECASE | re.ASCII,
 )
-_DISCOUNT = re.compile(rf"^\s*(?:RABAT|OPUST)\b[^0-9+-]*(?P<amount>{_NUMBER})", re.IGNORECASE | re.ASCII)
+_DISCOUNT_PREFIX = re.compile(r"^\s*(?:RABAT|OPUST)\b", re.IGNORECASE | re.ASCII)
+_DISCOUNT_CURRENCY = r"(?:(?:PLN|Z[Łł])\s*)?"
+# The product name may contain a size or part number. Only the price at the
+# end of the line, optionally followed by the currency or PTU code, is a discount.
+_DISCOUNT_AMOUNT = re.compile(
+    rf"(?<![^\s:])(?P<amount>{_NUMBER})\s*{_DISCOUNT_CURRENCY}(?:[A-G])?\Z",
+    re.IGNORECASE | re.ASCII,
+)
+_SPLIT_DISCOUNT_AMOUNT = re.compile(
+    rf"(?P<amount>-{_OCR_ITEM_PRICE})\s*{_DISCOUNT_CURRENCY}(?P<ptu>[A-G])\Z", re.IGNORECASE | re.ASCII,
+)
+_RECEIPT_METADATA = re.compile(r"nr\s+(?:wydr(?:uku)?|kasy|paragonu|transakcji|terminala)\b", re.IGNORECASE | re.ASCII)
+_PRINT_SERIAL = re.compile(r"\s*nr\s+wydr\.?\s+[0-9]{6}/[0-9]{4}\s*\Z", re.IGNORECASE | re.ASCII)
+_DECIMAL_QUANTITY = re.compile(r"[0-9]+[.,][0-9]+\Z", re.ASCII)
+_UNNAMED_ITEM = "Pozycja bez nazwy"
+_REFUND_WORD = re.compile(r"\bzwrot(?:u|owi|em|y|ow|om|ami|ach)?\b")
+_MASTERCARD_PAYMENT = re.compile(r"^[ \t]*platnosc(?:[ \t]+|[ \t]*:[ \t]*)mastercard\b", re.MULTILINE)
 _UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z", re.ASCII)
 _CURRENCY = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.ASCII)
-_SHORT_AMOUNT = r"[+-]?[0-9]{1,9}(?:[.,][0-9]{1,4})?"
+_ARITHMETIC_AMOUNT = r"[0-9]{1,9}(?:[.,][0-9]{1,4})?"
+_SHORT_AMOUNT = rf"[+-]?{_ARITHMETIC_AMOUNT}"
+_BOUNDED_ARITHMETIC_AMOUNT = re.compile(_ARITHMETIC_AMOUNT, re.ASCII)
+_FISCAL_CALCULATION = re.compile(
+    rf"(?P<quantity>{_ARITHMETIC_AMOUNT})\s*(?P<unit>{_UNITS})\s*[x×*]\s*"
+    rf"(?P<unit_price>{_ARITHMETIC_AMOUNT})(?:\s*=\s*|\s+)(?P<gross>{_ARITHMETIC_AMOUNT})"
+    r"\s*(?:PLN\s*)?(?P<ptu>[A-G])\Z",
+    re.IGNORECASE | re.ASCII,
+)
 _CURRENCY_AMOUNT = re.compile(
     rf"(?<![A-Z0-9])(?:PLN|EUR|USD|GBP|CHF)\s*{_SHORT_AMOUNT}(?![0-9])"
     rf"|(?<![0-9]){_SHORT_AMOUNT}\s*(?:PLN|EUR|USD|GBP|CHF)(?![A-Z0-9])",
@@ -528,8 +561,16 @@ def _mask_structured(line):
 
 def _secret_lines(text):
     bad = set()
-    masked = "\n".join(_mask_structured(line) for line in text.split("\n"))
-    _mark_digit_runs(masked, bad)
+    lines = text.split("\n")
+    masked = [_mask_structured(line) for line in lines]
+    for index in range(1, len(lines)):
+        if _PRINT_SERIAL.fullmatch(lines[index - 1]):
+            calculation = _verified_bare_calculation(lines[index].strip())
+            if calculation is not None and _DECIMAL_QUANTITY.fullmatch(calculation["quantity"]):
+                # The serial remains redacted. Start a separate digit run on the corroborated sale row.
+                bad.add(index - 1)
+                masked[index] = "x" + masked[index]
+    _mark_digit_runs("\n".join(masked), bad)
     _mark_ibans(text, bad)
     return bad
 
@@ -798,17 +839,20 @@ def _iso_date(year, month, day):
         return None
 
 
-def _shop_name(lines):
-    for raw in lines[:12]:
+def _shop_header(lines):
+    before_fiscal_header = True
+    for index, raw in enumerate(lines[:12]):
         value = raw.strip()
         key = fold_text(value)
-        if (not value or len(value) > MAX_SHOP_NAME_LEN or _CONTROL.search(value)
+        if "fiskalny" in key:
+            before_fiscal_header = False
+        if (not value or len(value) > MAX_SHOP_NAME_LEN or _CONTROL.search(value) or _RECEIPT_METADATA.match(value)
                 or any(marker in key for marker in ("paragon", "nip", "fiskalny", "nr karty", "aid"))):
             continue
         if _DATE_ISO.search(value) or _DATE_PL.search(value) or not re.search(r"[A-Za-zĄ-ż]", value):
             continue
-        return redact_digit_field(value)
-    return None
+        return redact_digit_field(value), index if before_fiscal_header else None
+    return None, None
 
 
 def _line_kind(name, gross):
@@ -874,16 +918,89 @@ def _named_unit_match(value):
 
 
 def _item_match(value):
-    return _tail_match(value, (_ITEM_QTY_TAIL, _ITEM_GROSS_TAIL))
+    match = _tail_match(value, (_ITEM_QTY_TAIL, _ITEM_GROSS_TAIL))
+    if match is not None and match["quantity"] is not None:
+        return match
+    ocr = _tail_match(value, (_OCR_ITEM_TAIL,))
+    if ocr is None:
+        return match
+    quantity = ocr["quantity"] or "1"
+    unit_cents = int(ocr["unit_price"].replace(",", "").replace(".", ""))
+    gross_cents = int(ocr["gross"].replace(",", "").replace(".", ""))
+    if int(quantity) * unit_cents != gross_cents:
+        return match
+    return _FieldMatch({
+        "name": ocr["name"], "quantity": quantity, "unit": "szt",
+        "unit_price": ocr["unit_price"], "gross": ocr["gross"], "ptu": ocr["ptu"],
+    })
 
 
-def _parse_lines(lines):
-    result, pending = [], None
-    for raw in lines:
-        value = " ".join(raw.split())
-        if not value:
+def _reconciled_gross(match):
+    if match is None:
+        return None
+    amounts = (match["quantity"], match["unit_price"], match["gross"])
+    if not all(value and _BOUNDED_ARITHMETIC_AMOUNT.fullmatch(value) for value in amounts):
+        return None
+    quantity, unit_price, gross = (Decimal(value.replace(",", ".")) for value in amounts)
+    if min(quantity, unit_price, gross) <= 0:
+        return None
+    rounded = (quantity * unit_price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return gross if rounded == gross else None
+
+
+def _verified_bare_calculation(value):
+    match = _FISCAL_CALCULATION.fullmatch(value)
+    return match if _reconciled_gross(match) is not None else None
+
+
+def _can_split_discount_item(item, gross, following):
+    discount = _SPLIT_DISCOUNT_AMOUNT.fullmatch(following)
+    if discount is None or item["ptu"] is None or item["ptu"].upper() != discount["ptu"].upper():
+        return False
+    name = item["name"]
+    if _DISCOUNT_PREFIX.match(name) or _line_kind(name, format(gross, "f")) != "item":
+        return False
+    amount = Decimal(discount["amount"].replace(",", ".")).copy_abs()
+    return 0 < amount <= gross
+
+
+def _item_rows(lines):
+    rows = iter(" ".join(raw.split()) for raw in lines)
+    value = next(rows, None)
+    while value is not None:
+        following = next(rows, None)
+        prefix = _DISCOUNT_PREFIX.match(value)
+        if prefix is not None and not any(
+            marker in fold_text(value) for marker in ("kupon", "bon ", "rabat cal", "rabat na ")
+        ):
+            name_and_price = value[prefix.end():].strip()
+            if _FISCAL_CALCULATION.fullmatch(name_and_price) or _OCR_ITEM_TAIL.fullmatch(name_and_price):
+                name_and_price = f"{_UNNAMED_ITEM} {name_and_price}"
+            item = _named_unit_match(name_and_price) or _item_match(name_and_price)
+            has_arithmetic_tail = (item is not None and item["quantity"] is not None
+                                   and item["unit_price"] is not None and not item["gross"].startswith("-"))
+            if has_arithmetic_tail or _tail_match(name_and_price, (_OCR_ITEM_TAIL,)) is not None:
+                gross = _reconciled_gross(item)
+                if gross is not None and following is not None and _can_split_discount_item(item, gross, following):
+                    yield name_and_price
+                    yield "OPUST " + following
+                    following = next(rows, None)
+                else:
+                    # A product's gross amount cannot stand in for a discount.
+                    yield ""
+                value = following
+                continue
+        yield value
+        value = following
+
+
+def _parse_lines(lines, shop_header_index):
+    result, pending, pending_index = [], None, -2
+    for index, value in enumerate(_item_rows(lines)):
+        if not value or value == _REMOVED or _RECEIPT_METADATA.match(value):
             continue
-        discount = _DISCOUNT.match(value)
+        discount_prefix = _DISCOUNT_PREFIX.match(value)
+        discount = _DISCOUNT_AMOUNT.search(value[discount_prefix.end():]) if discount_prefix else None
         basket = any(marker in fold_text(value) for marker in ("kupon", "bon ", "rabat cal", "rabat na "))
         if discount and not basket and result and result[-1]["line_kind"] == "item":
             amount = _decimal(discount["amount"].replace("+", ""))
@@ -902,26 +1019,31 @@ def _parse_lines(lines):
         elif match is not None:
             name = (match["name"] or "").strip() or pending or match["unit"]
         else:
-            match = _item_match(value)
-            name = None
+            match = _verified_bare_calculation(value)
             if match is not None:
-                name = match["name"]
+                adjacent_product = pending_index == index - 1 and pending_index != shop_header_index
+                name = pending if adjacent_product else _UNNAMED_ITEM
             else:
-                calculation = _CALCULATION.fullmatch(value)
-                if calculation is not None and pending:
-                    match, name = calculation, pending
+                match = _item_match(value)
+                name = None
+                if match is not None:
+                    name = match["name"]
+                else:
+                    calculation = _CALCULATION.fullmatch(value)
+                    if calculation is not None and pending:
+                        match, name = calculation, pending
         if match is None or name is None:
             key = fold_text(value)
             if (re.search(r"[A-Za-zĄ-ż]", value) and len(value) <= MAX_LINE_NAME_LEN
                     and not any(marker in key for marker in (
                         "suma", "sprzedaz", "ptu", "karta", "gotowka", "blik", "paragon", "nip", "zwrot",
                     ))):
-                pending = value
+                pending, pending_index = value, index
             continue
         if match["ptu"] is None and match["quantity"] is None:
             key = fold_text(name)
             if "kaucja" not in key and not any(token in key for token in ("kupon", "bon ", "rabat cal", "rabat na ")):
-                pending = value
+                pending, pending_index = value, index
                 continue
         if len(result) >= MAX_RECEIPT_LINES:
             raise ReceiptError()
@@ -942,7 +1064,7 @@ def parse_receipt(text):
         if candidate and valid_nip(candidate):
             nip = candidate
             break
-    shop_name = _shop_name(lines)
+    shop_name, shop_header_index = _shop_header(lines)
     receipt_date = None
     receipt_time = None
     total = None
@@ -966,15 +1088,15 @@ def parse_receipt(text):
             if amounts:
                 total = _decimal(amounts[-1])
     key = fold_text(text)
-    has_card = "karta" in key or "platnicza" in key or "paypass" in key
+    has_card = "karta" in key or "platnicza" in key or "paypass" in key or _MASTERCARD_PAYMENT.search(key) is not None
     has_cash = "gotowka" in key
     payment = "mixed" if has_card and has_cash else "blik" if "blik" in key else "card" if has_card else "cash" if has_cash else "unknown"
-    parsed_lines = _parse_lines(lines)
+    parsed_lines = _parse_lines(lines, shop_header_index)
     math_delta = None if total is None else _bounded_sum((
         _bounded_sum(line["net_line_total"] for line in parsed_lines), negate_money(total)))
     return {
         "raw_shop_name": shop_name, "raw_nip": nip, "chain_key": chain_for(shop_name, nip),
-        "receipt_kind": "refund" if "zwrot" in key else "purchase", "receipt_date": receipt_date,
+        "receipt_kind": "refund" if _REFUND_WORD.search(key) else "purchase", "receipt_date": receipt_date,
         "receipt_time": receipt_time, "total_amount": total, "currency": "PLN" if total is not None else None,
         "payment_method": payment, "lines": parsed_lines,
         "math_delta": math_delta,
