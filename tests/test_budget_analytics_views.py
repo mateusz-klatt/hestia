@@ -848,6 +848,52 @@ class ForecastProjectionTests(ProjectionCase):
                     "destination_kind": "owner_inbox", "enabled": True, "expected_version": 0}
         return self.store.save_mortgage_schedule("owner", **(defaults | overrides))
 
+    def test_policy_renewal_retains_all_evidence_and_forecasts_only_the_latest_premium(self):
+        for month in range(5, 11):
+            amount, title = ("145.58", "Składka") if month <= 7 else ("143.40", "Odnowienie ubezpieczenia")
+            self.add_transaction("a", f"premium-{month}", amount=amount, booking_date=f"2026-{month:02d}-10",
+                                 remittance_information=[f"{title} 812345678"])
+
+        recurring = self.store.recurring("owner")
+        api_contract.BudgetAnalyticsRecurring.model_validate(recurring)
+        self.assertEqual(recurring["total_hints"], 1)
+        (hint,) = recurring["hints"]
+        self.assertEqual((hint["amount"], hint["occurrence_count"], hint["first_date"], hint["last_date"]),
+                         ("143.4", 6, "2026-05-10", "2026-10-10"))
+        self.assertEqual([item["entry_reference"] for item in hint["evidence"]],
+                         [f"premium-{month}" for month in range(5, 11)])
+        ledger = self.store.transactions("owner", "2026")["transactions"]
+        self.assertEqual({row["entry_reference"]: row["amount"] for row in ledger},
+                         {f"premium-{month}": "145.58" if month <= 7 else "143.40" for month in range(5, 11)})
+
+        projected = self.store.forecast("owner", months="2")
+        api_contract.BudgetAnalyticsForecast.model_validate(projected)
+        self.assertEqual([[(item["amount"], item["expected_date"]) for item in month["items"]]
+                          for month in projected["months"]],
+                         [[("143.4", "2026-11-10")], [("143.4", "2026-12-10")]])
+        self.assertEqual(projected["totals"],
+                         [{"currency": "PLN", "total": "286.8", "scheduled_total": "0", "estimated_total": "286.8"}])
+
+    def test_foreign_one_off_with_policy_reference_preserves_the_amount_and_lapse(self):
+        self.now = datetime(2026, 10, 22, tzinfo=timezone.utc).timestamp()
+        for month in range(7, 10):
+            self.add_transaction("a", f"premium-{month}", amount="145.58", booking_date=f"2026-{month:02d}-10",
+                                 remittance_information=["Synthetic insurance POL-123456"])
+        self.add_transaction("a", "foreign", amount="143.40", booking_date="2026-10-10",
+                             remittance_information=["One-off reimbursement POL-123456"])
+
+        projected = self.store.forecast("owner", months="1")
+        self.assertEqual([(item["label"], item["amount"], item["expected_date"])
+                          for item in projected["months"][0]["items"]],
+                         [("Synthetic insurance POL-123456", "145.58", "2026-10-10")])
+
+        self.now = datetime(2026, 11, 22, tzinfo=timezone.utc).timestamp()
+        self.add_transaction("a", "fresh", amount="5", booking_date="2026-11-20",
+                             remittance_information=["Unrelated purchase"])
+        projected = self.store.forecast("owner", months="1")
+        self.assertEqual(projected["months"][0]["items"], [])
+        self.assertEqual(projected["summary"]["lapsed_recurring_count"], 1)
+
     def test_forecast_reuses_untruncated_projection_and_reads_one_sqlite_snapshot(self):
         self.add_hint("Synthetic plan A")
         self.add_hint("Synthetic plan B")
