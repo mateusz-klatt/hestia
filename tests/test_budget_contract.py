@@ -273,7 +273,7 @@ class BudgetOpenApiTests(unittest.TestCase):
                             "translation-import", "annotation", "rule-preview",
                             "rule-save", "rule-batch-preview", "rule-batch-save",
                             "transfer-decision", "spending-limit-save", "mortgage-save", "mortgage-payment-set",
-                            "inbox-mark"}
+                            "inbox-mark", "quarantine-dismiss", "quarantine-dismiss-batch"}
         self.assertEqual(set(analytics), {"/api/budget/analytics/" + name for name in analytics_reads | analytics_writes})
         for path, methods in analytics.items():
             method = "get" if path.removeprefix("/api/budget/analytics/") in analytics_reads else "post"
@@ -772,6 +772,7 @@ class BudgetOpenApiTests(unittest.TestCase):
                               "BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgagePaymentSetRequest",
                               "BudgetAnalyticsInboxKeyRequest", "BudgetAnalyticsInboxMarkRequest",
                               "BudgetAnalyticsTransactionsByKeysRequest",
+                              "BudgetAnalyticsQuarantineBatchRequest",
                               "BudgetCategoryTranslationSetRequest", "BudgetCategoryTranslationDeleteRequest",
                               "BudgetLabelTranslationSetRequest", "BudgetLabelTranslationDeleteRequest",
                               "BudgetCategoryTranslationImportEntry", "BudgetLabelTranslationImportEntry",
@@ -813,8 +814,10 @@ class BudgetOpenApiTests(unittest.TestCase):
         q_item_props = schemas["BudgetAnalyticsQuarantineItem"]["properties"]
         self.assertEqual(
             set(q_item_props),
-            {"bucket", "account_id", "selected", "entry_reference", "date", "status", "reason", "source", "observed_at"},
+            {"bucket", "account_id", "selected", "entry_reference", "date", "status", "reason", "source",
+             "observed_at", "import_key", "unresolved_count"},
         )
+        self.assertTrue({"import_key", "unresolved_count"}.isdisjoint(schemas["BudgetAnalyticsQuarantineItem"]["required"]))
         for forbidden in ("amount", "currency", "remittance_information", "description", "creditor_name",
                           "debtor_name", "credit_debit_indicator", "transaction_id", "identification_hash"):
             self.assertNotIn(forbidden, q_item_props)

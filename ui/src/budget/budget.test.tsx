@@ -98,6 +98,8 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     saveRule: vi.fn<BudgetApi["saveRule"]>(),
     recurring: vi.fn<BudgetApi["recurring"]>(() => ok(recurringOf([]))),
     quarantine: vi.fn<BudgetApi["quarantine"]>(() => ok(quarantineOf([]))),
+    dismissQuarantineItem: vi.fn<BudgetApi["dismissQuarantineItem"]>(),
+    dismissQuarantineBatch: vi.fn<BudgetApi["dismissQuarantineBatch"]>(),
     spendingLimits: vi.fn<BudgetApi["spendingLimits"]>((period) => ok(spendingLimitsOf(period))),
     saveSpendingLimit: vi.fn<BudgetApi["saveSpendingLimit"]>(),
     mortgages: vi.fn<BudgetApi["mortgages"]>(() => ok(mortgagesOf())),
@@ -1757,7 +1759,10 @@ describe("receipts tab & capability gate", () => {
     expect(host.querySelector(".budget-views")).toBeNull();
     expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Receipts and documents")).toBe(true);
     await click(button("Receipts and documents"));
-    expect(rApi.receiptsList).toHaveBeenCalledWith({ limit: 50 });
+    expect(rApi.receiptsList).toHaveBeenCalledWith({
+      limit: 50,
+      statuses: ["imported", "needs_review", "draft"],
+    });
     expect(host.textContent).toContain("Tab Integration Market");
 
     // 2. receipts=false (or stored_reads=false) hides Receipts even when analytics=true.

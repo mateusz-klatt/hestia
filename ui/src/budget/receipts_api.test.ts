@@ -66,6 +66,32 @@ describe("receipts api", () => {
     });
   });
 
+  it("lists multiple receipt statuses at 0.65.0 without retrying at an unsupported contract version", async () => {
+    const payload = { receipts: [], next_cursor: "next-page" };
+    const fetchMock = respond(200, payload);
+    const gate = createBudgetApi("owner");
+    await gate.capabilities();
+    const client = createReceiptsApi(gate);
+
+    expect(await client.receiptsList({ statuses: ["imported", "needs_review", "draft"], limit: 50 }))
+      .toEqual({ ok: true, data: payload });
+    const { url, init } = sent(fetchMock, 1);
+    expect(url.pathname).toBe("/api/budget/receipts/list");
+    expect(init.method).toBe("POST");
+    expect(new Headers(init.headers).get(CONTRACT_HEADER)).toBe("0.65.0");
+    expect(new Headers(init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
+    expect(JSON.parse(init.body as string)).toEqual({
+      statuses: ["imported", "needs_review", "draft"], limit: 50,
+    });
+
+    fetchMock.mockImplementationOnce(() => Promise.resolve(
+      new Response(JSON.stringify({ error: { code: VERSION_ERROR } }), { status: 400 }),
+    ));
+    expect(await client.receiptsList({ statuses: ["imported", "draft"], cursor: "next-page" }))
+      .toMatchObject({ ok: false, status: 400, error: VERSION_ERROR });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("searches receipts via POST JSON rather than query strings", async () => {
     const fetchMock = respond(200, { receipts: [], next_cursor: "cursor-2" });
     const gate = createBudgetApi("owner");

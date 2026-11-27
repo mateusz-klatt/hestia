@@ -641,6 +641,13 @@ replacing the current API quarantine. Any prior API observation or API conflict
 decision takes precedence over every offline file, even a newer file. An offline
 import cannot clear uncertainty established by the API.
 
+When the same account and reference match the API amount, currency,
+credit/debit indicator, booking date and value date, differences confined to
+description or remittance text do not create quarantine entries. The CLI report
+counts exact and text-only matches in `duplicates_of_api`, a subset of
+`preserved_api`. Reference conflicts and uncertain API rows still enter the
+offline quarantine.
+
 Among offline-only observations, strictly newer source timestamps may update a
 record; older files cannot overwrite it or introduce a newer uncertainty flag.
 Equal-time conflicting records remain uncertain. A durable uncertain placeholder
@@ -667,11 +674,16 @@ errors, consent validity, quota reservations or backoff. Status reports offline
 batch/transaction/quarantine counts separately and prints no financial payloads,
 account hashes, bank references or filenames.
 
-Original files remain with the operator; import does not remove them. Protect and
-retain/delete them according to the operator's storage policy. Imported SQLite
-history and quarantine persist until explicitly erased by the operator; this
-module has no automatic financial retention/erasure job. Protect the database,
-WAL files and backups too; none of this storage is encrypted by the module.
+The owner can dismiss an offline quarantine item or all unresolved items from an
+import in Kwarantanna. The 0.63.0 API removes the selected unresolved rows and
+audits the dismissal. The original batch report remains available for provenance
+and the same file can be re-imported without recreating the dismissed entries.
+
+Original files remain with the operator. Protect and retain/delete them according
+to the operator's storage policy. Imported SQLite history persists until
+explicitly erased by the operator. This module has no automatic financial
+retention/erasure job. Protect the database, WAL files and backups too. None
+of this storage is encrypted by the module.
 
 Migration 0007 preserves existing records as API observations and adds provenance
 and offline batch/quarantine storage. It does not import any file or enable bank

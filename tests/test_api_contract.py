@@ -60,6 +60,7 @@ class OpenApiArtifactTests(unittest.TestCase):
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
         self.assertEqual(document["info"]["version"], "0.66.0")
+        # 0.66.0 additive Gmail parse failure reasons.
         status = document["paths"]["/api/budget/receipts/gmail-status"]["get"]
         gmail_header, = status["parameters"]
         self.assertIn("0.66.0", gmail_header["description"])
@@ -70,10 +71,19 @@ class OpenApiArtifactTests(unittest.TestCase):
         reasons = schemas["BudgetReceiptGmailStatus"]["properties"]["parse_failed_reasons"]["propertyNames"]["enum"]
         reasons.remove("worker_crash")
         reasons.remove("discovery_pdf_too_large")
+        document["info"]["version"] = "0.65.0"
+        canonical_0_65 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_65).hexdigest(),
+                         "cf7c389c9b7e16cf0c14e9c3289b96e9b8d10afe6f8e90fb6471353e30e0dab6")
+
+        # 0.65.0 additive multi-status receipt list filter.
+        schemas["BudgetReceiptListRequest"]["properties"].pop("statuses")
         document["info"]["version"] = "0.64.0"
         canonical_0_64 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.assertEqual(hashlib.sha256(canonical_0_64).hexdigest(),
-                         "b2c98c2b1c780c0d6f2b8085d8d3b64eab23f7ac93eeef1fb03a3b1113b1ee98")
+                         "21dc7aa11934bd0a8c2e26c1730b10acbca7e050d9ff40240e5aac6eb8ba0517")
+
+        # 0.64.0 additive mortgage references and forecast matching audit.
         analytics = "/api/budget/analytics/"
         candidates = document["paths"].pop(analytics + "mortgage-reference-candidates")["get"]
         self.assertEqual(candidates["x-required-permission"], "budget.view")
@@ -90,10 +100,25 @@ class OpenApiArtifactTests(unittest.TestCase):
         for schema in ("BudgetAnalyticsMortgageMatchReference", "BudgetAnalyticsMortgageReferenceCandidate",
                        "BudgetAnalyticsMortgageReferenceCandidates"):
             schemas.pop(schema)
+        document["info"]["version"] = "0.63.0"
+        canonical_0_63 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_63).hexdigest(),
+                         "bad13c2c6189d7ed404ba6955cdeed4d6f1af7ab3b04daba23e383effbb39f77")
+
+        # 0.63.0 additive quarantine dismissals and per-batch dismissal metadata.
+        quarantine_path = analytics + "quarantine"
+        document["paths"][quarantine_path]["get"]["parameters"].pop()
+        for suffix in ("-dismiss", "-dismiss-batch"):
+            document["paths"].pop(quarantine_path + suffix)
+        for suffix in ("BatchRequest", "ImportKey", "Dismissal", "DismissResult"):
+            schemas.pop("BudgetAnalyticsQuarantine" + suffix)
+        for field in ("import_key", "unresolved_count"):
+            schemas["BudgetAnalyticsQuarantineItem"]["properties"].pop(field)
         document["info"]["version"] = "0.62.0"
         canonical_0_62 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.assertEqual(hashlib.sha256(canonical_0_62).hexdigest(),
                          "c4c7ed9797ccee23330bcb69d89862c230d3a33dfabac6f2bb4b4b490ad966bc")
+
         # 0.62.0 additive crib_humidity and crib_battery_ok on Globals / GlobalsPatch with contract negotiation.
         disco_get = document["paths"]["/api/discovery"]["get"]
         disco_header, = disco_get.pop("parameters")
@@ -1008,6 +1033,7 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetAnalyticsSpendingLimitSaveRequest", "BudgetAnalyticsMortgageSaveRequest",
         "BudgetAnalyticsMortgagePaymentSetRequest", "BudgetAnalyticsInboxKeyRequest",
         "BudgetAnalyticsInboxMarkRequest", "BudgetAnalyticsTransactionsByKeysRequest",
+        "BudgetAnalyticsQuarantineBatchRequest",
         "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest",
         "BudgetReceiptLineInput", "BudgetReceiptLinkRequest", "BudgetReceiptListRequest",
         "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",

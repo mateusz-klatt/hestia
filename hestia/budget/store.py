@@ -21,7 +21,7 @@ from ..db import AppMeta, BudgetComponent as Component
 from . import analytics_core as core
 from .account_metadata import BudgetMetadataError, apply_account_metadata
 from .bank_metadata import apply_bank_metadata
-from .client import safe_http_status, safe_provider_error
+from .client import _reject_constant, _unique_error_fields, safe_http_status, safe_provider_error
 from .analytics_reconcile import reconcile_transfers
 from .receipt_reconcile import reconcile_receipt_links
 
@@ -39,6 +39,8 @@ ATTENTION = frozenset({"authorization", "invalid_session", "expired_session", "s
 _SELECTION_CHANGED = "Bank account selection changed during acquisition"
 _INVALID_WINDOW = "Invalid snapshot date window"
 _ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", re.ASCII)
+_IMPORT_PROSE_FIELDS = frozenset({"description", "remittance_information"})
+_IMPORT_OUTCOMES = ("inserted", "updated", "preserved_api", "duplicates_of_api", "stale", "unresolved", "unchanged")
 
 
 class BudgetStoreError(ValueError):
@@ -161,6 +163,19 @@ def set_diagnostic(row, diagnostic=None):
 
 def _ledger_reference(tx):
     return tx["entry_reference"] if (tx["status"] == "BOOK" and (tx["booking_date"] or tx["value_date"])) else None
+
+
+def _matches_api_transaction(payload_json, tx):
+    """Compare normalized fields within the same local account and entry reference."""
+    try:
+        stored = json.loads(payload_json, object_pairs_hook=_unique_error_fields, parse_constant=_reject_constant)
+    except (ValueError, RecursionError):
+        return False
+    if not isinstance(stored, dict):
+        return False
+    # Amount, currency, direction and each date must agree. Only known prose can differ.
+    return ({key: value for key, value in stored.items() if key not in _IMPORT_PROSE_FIELDS}
+            == {key: value for key, value in tx.items() if key not in _IMPORT_PROSE_FIELDS})
 
 
 def _iso_date(value):
@@ -731,8 +746,7 @@ class BudgetStore:
                 if batch.account_id != account.id:
                     raise BudgetStoreError("Offline import identity mismatch")
                 report = {**json.loads(batch.report_json), "duplicate": True}
-                for field in ("inserted", "updated", "preserved_api", "stale", "unresolved", "unchanged"):
-                    report[field] = 0
+                report.update(dict.fromkeys(_IMPORT_OUTCOMES, 0))
                 bank = apply_bank_metadata(session, account.id, getattr(snapshot, "bank_metadata", None),
                                            source="offline_import", observed_at=snapshot.fetched_at)
                 if bank is not None:
@@ -747,8 +761,7 @@ class BudgetStore:
                                                                          else _json(snapshot.balances)), report_json="{}")
             session.add(batch)
             session.flush()
-            report = {"batch_id": batch.id, "duplicate": False, "inserted": 0, "updated": 0,
-                      "preserved_api": 0, "stale": 0, "unresolved": 0, "unchanged": 0}
+            report = {"batch_id": batch.id, "duplicate": False, **dict.fromkeys(_IMPORT_OUTCOMES, 0)}
             references = Counter(filter(None, map(_ledger_reference, snapshot.transactions)))
             for tx in snapshot.transactions:
                 ref = _ledger_reference(tx)
@@ -756,6 +769,8 @@ class BudgetStore:
                 action, reason = self._offline_transaction(session, account.id, tx, conflict, snapshot.fetched_at)
                 if action is not None:
                     report[action] += 1
+                if action == "preserved_api" and reason is None:
+                    report["duplicates_of_api"] += 1
                 if reason is not None:
                     session.add(ImportUnresolved(batch_id=batch.id, ordinal=report["unresolved"],
                                                  reason=reason, payload_json=_json(tx)))
@@ -813,8 +828,9 @@ class BudgetStore:
             return None, "non_canonical"
         existing = session.get(Transaction, (account_id, ref))
         if existing is not None and (existing.source == "api" or existing.api_observed_at is not None):
-            reason = "api_preserved" if conflict or existing.uncertain or existing.payload_json != _json(tx) else None
-            return "preserved_api", reason
+            if conflict or existing.uncertain or not _matches_api_transaction(existing.payload_json, tx):
+                return "preserved_api", "api_preserved"
+            return "preserved_api", None
         if existing is not None and fetched_at < existing.observed_at:
             return "stale", "stale_conflict" if conflict else None
         if conflict:

@@ -2247,6 +2247,8 @@ SPOUSE_ROUTE_STATUS = {
     ("POST", "/api/budget/analytics/label-translation-delete"): 403,
     ("POST", "/api/budget/analytics/translation-import"): 403,
     ("POST", "/api/budget/analytics/inbox-mark"): 403,
+    ("POST", "/api/budget/analytics/quarantine-dismiss"): 403,
+    ("POST", "/api/budget/analytics/quarantine-dismiss-batch"): 403,
     ("POST", "/api/budget/analytics/mortgage-payment-set"): 403,
     ("POST", "/api/budget/analytics/mortgage-save"): 403,
     ("POST", "/api/budget/analytics/rule-batch-preview"): 403,
