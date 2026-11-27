@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -185,6 +185,19 @@ class CardPurchaseTests(AnalyticsCase):
         self.ledger("play", lines=["Card purchase", "GOOGLE *PLAY"], amount="9.99")
         self.assertIsNone(self.match(google))
 
+    def test_google_issuer_variants_do_not_match_an_unrelated_youtube_debit(self):
+        self.ledger("youtube", lines=["Card purchase", "GOOGLE*YouTube"], amount="9.99")
+        for issuer in ("Google Poland", "Google Poland Sp. z o.o.", "Google Pay", "Google One"):
+            with self.subTest(issuer=issuer):
+                self.assertIsNone(self.match(replace(DOCUMENT, issuer=issuer, amount="9.99")))
+
+    def test_google_one_requires_the_same_billing_product_and_no_other_google_debit(self):
+        document = replace(DOCUMENT, issuer="Google One", amount="9.99")
+        self.ledger("one", lines=["Card purchase", "GOOGLE*Google One"], amount="9.99")
+        self.assertEqual(self.match(document).entry_reference, "one")
+        self.ledger("youtube", lines=["Card purchase", "GOOGLE*YouTube"], amount="14.99")
+        self.assertIsNone(self.match(document))
+
     def test_card_suffix_limits_eligible_accounts_and_overrides_no_bank_suffix(self):
         document = replace(DOCUMENT, card_last4="0123")
         self.ledger("unknown-suffix", lines=["Card purchase Arvid Books"])
@@ -307,6 +320,21 @@ class CardPurchaseTests(AnalyticsCase):
             replace(invoice, issue_date="bad"),
         ):
             self.assertIsNone(self.match(doc))
+
+    def test_due_date_extends_card_match_window_by_at_most_45_days(self):
+        issue_date = date.fromisoformat(DOCUMENT.issue_date)
+        for days, amount, expected in ((40, "10", "day-40"), (45, "11", "day-45"),
+                                        (46, "12", None), (90, "13", None)):
+            with self.subTest(days=days):
+                due_date = issue_date + timedelta(days=days)
+                self.ledger(f"day-{days}", amount=amount, value_date=None,
+                            booking_date=(due_date + timedelta(days=4)).isoformat())
+                match = self.match(replace(DOCUMENT, due_date=due_date.isoformat(), amount=amount))
+                self.assertEqual(None if match is None else match.entry_reference, expected)
+
+        self.ledger("near-issue", booking_date=issue_date.isoformat())
+        document = replace(DOCUMENT, due_date=(issue_date + timedelta(days=90)).isoformat())
+        self.assertEqual(self.match(document).entry_reference, "near-issue")
 
     def test_malformed_rows_and_unlabelled_fx_do_not_match(self):
         base = self.ledger("bad1")

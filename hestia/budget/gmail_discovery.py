@@ -7,7 +7,7 @@ from itertools import chain, islice
 
 from .gmail_document import ImportedDocument, extract_document
 from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
-from .gmail_payment import _body_marker, _subject_rejected, confirms_order_cancellation, purchase_payment_scope
+from .gmail_payment import _CURRENCY, _body_marker, _subject_rejected, confirms_order_cancellation, purchase_payment_scope
 from .gmail_trust import mime_parts
 from .gmail_worker import WorkerRejected
 from .receipt_parser import fold_text
@@ -33,6 +33,11 @@ _REVERSAL_HEADING = re.compile(
     r"zwrot|refund|return|korekta|anulowanie|anulowan[aeoy]|cancell?ed|returned|(?:order )?cancell?ation)"
     r"(?=\s*[:#–-]|\s+\d|\s*[.!]?$))\b"
 )
+_REFUND_AMOUNT = re.compile(
+    r"^(?:zwrot(?: srodkow| platnosci| pieniedzy)? w kwocie|refund (?:of|amount))\b"
+    rf" *[:=]? *(?:(?:{_CURRENCY}|zl) *)?[-−]? *[0-9]",
+    re.IGNORECASE,
+)
 _REVERSAL_STATUS = re.compile(
     r"\b(?:(?:zamowienie|platnosc|transakcja) (?:zostal[ao] )?anulowan[aeo]|"
     r"(?:order|payment|transaction) (?:(?:has been|was|is now) )?cancell?ed|"
@@ -49,7 +54,7 @@ _CONDITIONAL = re.compile(r"^(?:if\b|jesli\b|jezeli\b|w przypadku\b)")
 
 def _body_reversal(line):
     line = " ".join(fold_text(line).split()).lstrip("-*• ")
-    return bool(_REVERSAL_HEADING.match(line)
+    return bool(_REVERSAL_HEADING.match(line) or _REFUND_AMOUNT.match(line)
                 or (not _CONDITIONAL.match(line) and _REVERSAL_STATUS.search(line)))
 
 

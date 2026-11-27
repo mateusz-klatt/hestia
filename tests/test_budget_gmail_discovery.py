@@ -150,11 +150,21 @@ class GmailDocumentDiscoveryTests(TestCase):
                     self.assertEqual((result.outcome, result.card_required, result.invoice),
                                      ("skipped_non_receipt", False, None))
 
+    def test_amount_bearing_refund_notice_in_body_cannot_create_a_purchase(self):
+        for notice in ("Zwrot w kwocie 43,20 PLN", "Zwrot środków w kwocie 43,20 PLN",
+                       "Refund of 43.20 PLN", "Refund amount: PLN 43.20"):
+            with self.subTest(notice=notice):
+                result = self.process(_email(UNLISTED, DOCUMENT + "\n" + notice))
+                self.assertEqual((result.outcome, result.card_required, result.invoice),
+                                 ("skipped_non_receipt", False, None))
+
     def test_purchase_with_optional_cancellation_or_return_instructions_is_discovered(self):
         footer = ("\nMożesz anulować zamówienie i otrzymać zwrot środków.\n"
                   "Jeśli zamówienie zostało anulowane, sprawdź status w swoim koncie.\n"
                   "Cancellation policy: You can cancel your order within 24 hours.\n"
-                  "Return policy: You can return unopened items within 14 days.\n")
+                  "Return policy: You can return unopened items within 14 days.\n"
+                  "You can request a refund of 7.50 PLN if the order is canceled.\n"
+                  "Jeśli zwrot w kwocie 7,50 PLN jest potrzebny, skontaktuj się z nami.\n")
         result = self.process(_email(UNLISTED, DOCUMENT + footer))
         self.assertEqual((result.outcome, result.card_required, result.invoice.amount), ("imported", True, "7.5"))
 

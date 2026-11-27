@@ -12,6 +12,7 @@ from .config import BudgetConfigError
 from .gmail_config import load_card_accounts
 from .gmail_payment import _card_suffixes
 from .receipt_parser import (
+    _distinctive_shop_words,
     contains_gateway_marker,
     fold_text,
     merchant_score_groups,
@@ -36,11 +37,12 @@ _ORIGINAL_AMOUNT = re.compile(
     re.ASCII | re.IGNORECASE,
 )
 _DATE_KEYS = ("transaction_date", "booking_date", "value_date")
+_MAX_DUE_DATE_DAYS = 45
 
 # A Google debit can create ambiguity even if its descriptor cannot prove a purchase.
 _GOOGLE_DEBIT = re.compile(r"^google\b")
 _GOOGLE_BILLING = re.compile(
-    r"google(?:\s*\*\s*|\s+)(?:google\s*)?(?:storage|one|"
+    r"google(?:\s*\*\s*|\s+)(?:google\s*)?(?P<product>storage|one|"
     r"workspace|play(?: store)?|youtube(?: premium| music| videos| tv)?|cloud(?:_[a-z0-9-]+)?)"
     r"(?:\s+g\.co/helppay#?)?(?:\s+[a-z]{2})?"
 )
@@ -80,6 +82,14 @@ def _bank_descriptor(line):
     return _CARD_PURCHASE.sub("", fold_text(line).strip()).lstrip(" :-")
 
 
+def _google_billing_matches(issuer, descriptor):
+    billing = _GOOGLE_BILLING.fullmatch(descriptor)
+    # Only known billing entities corroborate a product they do not name.
+    return billing is not None and (
+        issuer in _GOOGLE_ISSUERS or issuer == ("google", *billing["product"].split())
+    )
+
+
 def _merchant_matches(invoice, lines, creditor):
     name = invoice.issuer
     if contains_gateway_marker(name):
@@ -117,7 +127,7 @@ def _payment_matches(invoice, transaction, account_kind, lines, mapped_accounts)
 
 
 def _card_row(session, owner, invoice, transaction, account_kind, amount, receipt_date, start, end,
-              mapped_accounts, google):
+              mapped_accounts, google_issuer):
     payload = _json(transaction.payload_json)
     fingerprint = financial_fingerprint(payload)
     if canonical_money(payload["amount"]) == "0" or not any(
@@ -134,15 +144,15 @@ def _card_row(session, owner, invoice, transaction, account_kind, amount, receip
     if metadata and metadata.owner == owner and metadata.ledger_fingerprint == fingerprint:
         data = _json(metadata.payload_json)
     amount_matches = isinstance(data, dict) and _card_amount_matches(payload, invoice.currency, amount, lines, data)
-    if not google and not amount_matches:
+    if google_issuer is None and not amount_matches:
         return None
     creditor, debtor = resolved_party_names(session, owner, transaction.account_id, transaction.entry_reference,
                                            payload, fingerprint)
-    if google:
+    if google_issuer is not None:
         descriptors = [_bank_descriptor(line) for line in filter(None, (creditor, *lines))]
         if not any(_GOOGLE_DEBIT.match(line) for line in descriptors):
             return None
-        if not amount_matches or not any(_GOOGLE_BILLING.fullmatch(line) for line in descriptors):
+        if not amount_matches or not any(_google_billing_matches(google_issuer, line) for line in descriptors):
             # An uncorroborated Google debit still prevents a unique match in this window.
             return _UNCORROBORATED_GOOGLE_DEBIT
     elif not _merchant_matches(invoice, lines, creditor):
@@ -174,10 +184,13 @@ def match_card_purchase(session, owner, invoice, *, received_date=None, include_
         mapped_accounts = load_card_accounts().get(last4) if last4 is not None else None
     except BudgetConfigError:
         return None
-    google = merchant_word_tokens(invoice.issuer) in _GOOGLE_ISSUERS
+    issuer = merchant_word_tokens(invoice.issuer)
+    google_issuer = issuer if issuer in _GOOGLE_ISSUERS or _distinctive_shop_words(invoice.issuer) == {"google"} else None
     target = date.fromisoformat(receipt_date)
     due = _bound_date(invoice.due_date)
-    last = max(target, date.fromisoformat(due)) if due else target
+    last = date.fromisoformat(due) if due else target
+    if not 0 <= (last - target).days <= _MAX_DUE_DATE_DAYS:
+        last = target
     start, end = _shift_clamped(target, -4).isoformat(), _shift_clamped(last, 4).isoformat()
     raw = BudgetTransaction.payload_json
     valid_json = case((func.json_valid(raw), raw), else_="{}")
@@ -190,7 +203,7 @@ def match_card_purchase(session, owner, invoice, *, received_date=None, include_
     ):
         try:
             candidate = _card_row(session, owner, invoice, transaction, account_kind, amount, receipt_date, start,
-                                  end, mapped_accounts, google)
+                                  end, mapped_accounts, google_issuer)
         except (AnalyticsError, KeyError, ValueError, TypeError, RecursionError):
             continue
         if candidate is not None:
