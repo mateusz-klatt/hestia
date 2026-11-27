@@ -510,6 +510,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Isti dan",
   "budget.receipts.candidateDays": "{days} d razlike",
   "budget.receipts.candidateMerchantMatch": "Trgovac odgovara",
+  "budget.receipts.roundingNote": "zaokruživanje {amount}",
   "budget.receipts.cashNoLinkNote": "Gotovinska i mješovita plaćanja ne mogu ostati povezana s bankovnom transakcijom.",
   "budget.receipts.addSummaryLine": "Dodaj zbirnu stavku",
   "budget.receipts.addLine": "Dodaj stavku",

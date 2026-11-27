@@ -511,6 +511,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Hari yang sama",
   "budget.receipts.candidateDays": "beza {days} h",
   "budget.receipts.candidateMerchantMatch": "Peniaga sepadan",
+  "budget.receipts.roundingNote": "pembundaran {amount}",
   "budget.receipts.cashNoLinkNote": "Bayaran tunai dan bayaran campuran tidak boleh kekal dipautkan pada catatan bank.",
   "budget.receipts.addSummaryLine": "Tambah baris ringkasan",
   "budget.receipts.addLine": "Tambah baris",

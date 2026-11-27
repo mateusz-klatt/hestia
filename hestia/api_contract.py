@@ -131,7 +131,8 @@ from .budget.loan_references import MAX_MATCH_REFERENCES
 #         Globals and GlobalsPatch, negotiated via X-Hestia-Contract-Version (and contract_version query on SSE).
 # 0.64.0: opt-in mortgage payment references and forecast matching audit (migration 0036).
 # 0.65.0: optional multi-status filter on receipt lists (zero migration).
-CONTRACT_VERSION = "0.65.0"
+# 0.68.0: late invoice-ID matches and unambiguous card round-up matches on receipts.
+CONTRACT_VERSION = "0.68.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -3353,6 +3354,9 @@ class BudgetReceiptPaymentEvidence(BaseModel):
 class BudgetReceiptDetail(BudgetReceiptSummary):
     lines: list[BudgetReceiptLine]
     payment_evidence: list[BudgetReceiptPaymentEvidence] = []
+    rounding_delta: Annotated[str | None, Field(
+        default=None, json_schema_extra=_OMIT, description="Confirmed card round-up in receipt currency, from 0.68.0.",
+    )] = None
 
 
 class BudgetReceiptCandidate(BaseModel):
@@ -3366,9 +3370,15 @@ class BudgetReceiptCandidate(BaseModel):
     booking_date: str | None
     value_date: str | None
     merchant_token_hit: bool
-    match_strength: Literal["id", "nip", "distinctive", "generic", "none"]
+    match_strength: Literal["id", "nip", "distinctive", "generic", "none", "medium", "strong"]
     date_distance: int
     candidate_token: Annotated[str, Field(min_length=1, max_length=4096)]
+    match_rule: Annotated[Literal["rounded_up"] | None, Field(
+        default=None, json_schema_extra=_OMIT, description="Card round-up candidate, from 0.68.0.",
+    )] = None
+    rounding_delta: Annotated[str | None, Field(
+        default=None, json_schema_extra=_OMIT, description="Bank amount minus receipt total, from 0.68.0.",
+    )] = None
 
 
 class BudgetReceiptParseResult(BaseModel):

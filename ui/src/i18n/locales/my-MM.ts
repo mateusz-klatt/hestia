@@ -511,6 +511,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "တူညီသော နေ့",
   "budget.receipts.candidateDays": "{days} ရက် ကွာဟချက်",
   "budget.receipts.candidateMerchantMatch": "ဆိုင်အမည် ကိုက်ညီသည်",
+  "budget.receipts.roundingNote": "ပမာဏပတ်လည်ယူခြင်း {amount}",
   "budget.receipts.cashNoLinkNote": "ငွေသားနှင့် ရောနှောပေးချေမှုများကို ဘဏ်စာရင်းနှင့် ဆက်လက်ချိတ်ဆက်မထားနိုင်ပါ။",
   "budget.receipts.addSummaryLine": "အနှစ်ချုပ် စာကြောင်း ထည့်ရန်",
   "budget.receipts.addLine": "စာကြောင်း ထည့်ရန်",

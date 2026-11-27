@@ -511,6 +511,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "E njëjta ditë",
   "budget.receipts.candidateDays": "{days} d diferencë",
   "budget.receipts.candidateMerchantMatch": "Tregtari përputhet",
+  "budget.receipts.roundingNote": "rrumbullakim {amount}",
   "budget.receipts.cashNoLinkNote": "Pagesat me para në dorë dhe të përziera nuk mund të mbeten të lidhura me bankën.",
   "budget.receipts.addSummaryLine": "Shto rresht përmbledhës",
   "budget.receipts.addLine": "Shto artikull",

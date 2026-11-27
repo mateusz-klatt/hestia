@@ -511,6 +511,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "उसी दिन",
   "budget.receipts.candidateDays": "{days} दि का अंतर",
   "budget.receipts.candidateMerchantMatch": "व्यापारी मेल खाता है",
+  "budget.receipts.roundingNote": "पूर्णांकन {amount}",
   "budget.receipts.cashNoLinkNote": "नकद और मिश्रित भुगतान बैंक प्रविष्टि से लिंक नहीं रह सकते।",
   "budget.receipts.addSummaryLine": "सारांश पंक्ति जोड़ें",
   "budget.receipts.addLine": "मद जोड़ें",

@@ -509,6 +509,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Zelfde dag",
   "budget.receipts.candidateDays": "{days} d verschil",
   "budget.receipts.candidateMerchantMatch": "Verkoper komt overeen",
+  "budget.receipts.roundingNote": "afronding {amount}",
   "budget.receipts.cashNoLinkNote": "Contante en gemengde betalingen kunnen niet gekoppeld blijven aan een bankboeking.",
   "budget.receipts.addSummaryLine": "Totaalregel toevoegen",
   "budget.receipts.addLine": "Regel toevoegen",

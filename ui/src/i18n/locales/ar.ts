@@ -510,6 +510,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "نفس اليوم",
   "budget.receipts.candidateDays": "فارق {days} ي",
   "budget.receipts.candidateMerchantMatch": "التاجر متطابق",
+  "budget.receipts.roundingNote": "تقريب {amount}",
   "budget.receipts.cashNoLinkNote": "لا يمكن أن تظل المدفوعات النقدية أو المختلطة مرتبطة بقيد بنكي.",
   "budget.receipts.addSummaryLine": "إضافة بند ملخص",
   "budget.receipts.addLine": "إضافة بند",

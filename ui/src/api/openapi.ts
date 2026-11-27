@@ -6148,12 +6148,22 @@ export interface components {
             /** Entry Reference */
             entry_reference: string;
             /**
+             * Match Rule
+             * @description Card round-up candidate, from 0.68.0.
+             */
+            match_rule?: "rounded_up" | null;
+            /**
              * Match Strength
              * @enum {string}
              */
-            match_strength: "id" | "nip" | "distinctive" | "generic" | "none";
+            match_strength: "id" | "nip" | "distinctive" | "generic" | "none" | "medium" | "strong";
             /** Merchant Token Hit */
             merchant_token_hit: boolean;
+            /**
+             * Rounding Delta
+             * @description Bank amount minus receipt total, from 0.68.0.
+             */
+            rounding_delta?: string | null;
             /** Transaction Date */
             transaction_date: string | null;
             /** Value Date */
@@ -6360,6 +6370,11 @@ export interface components {
             receipt_kind: "purchase" | "refund";
             /** Receipt Time */
             receipt_time: string | null;
+            /**
+             * Rounding Delta
+             * @description Confirmed card round-up in receipt currency, from 0.68.0.
+             */
+            rounding_delta?: string | null;
             /** Shop Id */
             shop_id: string | null;
             /**

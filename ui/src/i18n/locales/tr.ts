@@ -510,6 +510,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Aynı gün",
   "budget.receipts.candidateDays": "{days} g fark",
   "budget.receipts.candidateMerchantMatch": "Satıcı eşleşiyor",
+  "budget.receipts.roundingNote": "yuvarlama {amount}",
   "budget.receipts.cashNoLinkNote": "Nakit ve karma ödemeler bir banka kaydına bağlı kalamaz.",
   "budget.receipts.addSummaryLine": "Özet satırı ekle",
   "budget.receipts.addLine": "Satır ekle",

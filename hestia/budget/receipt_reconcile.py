@@ -314,6 +314,13 @@ def _reconcile_one_to_one(session, owner, now):
         if current == row.linked_fingerprint:
             if row.linked_evidence in expected_evidence:
                 continue
+            from .receipt_match_rules import stored_rounding_delta
+
+            delta = stored_rounding_delta(row.linked_evidence)
+            if delta is not None and any(
+                row.linked_evidence == evidence_json({**evidence, "rounding_delta": delta}) for evidence in evidences
+            ):
+                continue
             if any(row.linked_evidence == evidence_json({**evidence, "gmail_card": True}) for evidence in evidences):
                 from .gmail_card_match import still_matches_card
                 if still_matches_card(session, row):

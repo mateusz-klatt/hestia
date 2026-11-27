@@ -511,6 +511,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "An lá céanna",
   "budget.receipts.candidateDays": "difríocht {days} l",
   "budget.receipts.candidateMerchantMatch": "Ceannaí comhoiriúnach",
+  "budget.receipts.roundingNote": "slánú {amount}",
   "budget.receipts.cashNoLinkNote": "Ní féidir le híocaíochtaí airgid thirim ná measctha fanacht nasctha le hiontráil bhainc.",
   "budget.receipts.addSummaryLine": "Cuir líne achoimre leis",
   "budget.receipts.addLine": "Cuir líne leis",

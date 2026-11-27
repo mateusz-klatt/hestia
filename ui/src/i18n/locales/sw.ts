@@ -510,6 +510,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Siku hiyo hiyo",
   "budget.receipts.candidateDays": "tofauti ya siku {days}",
   "budget.receipts.candidateMerchantMatch": "Muuzaji analingana",
+  "budget.receipts.roundingNote": "uzungushaji {amount}",
   "budget.receipts.cashNoLinkNote": "Malipo ya taslimu na mchanganyiko hayawezi kubaki yameunganishwa na ingizo la benki.",
   "budget.receipts.addSummaryLine": "Ongeza mstari wa muhtasari",
   "budget.receipts.addLine": "Ongeza mstari",

@@ -510,6 +510,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Aceeași zi",
   "budget.receipts.candidateDays": "{days} z diferență",
   "budget.receipts.candidateMerchantMatch": "Comerciant potrivit",
+  "budget.receipts.roundingNote": "rotunjire {amount}",
   "budget.receipts.cashNoLinkNote": "Plățile în numerar și mixte nu pot rămâne asociate unei tranzacții bancare.",
   "budget.receipts.addSummaryLine": "Adaugă poziție rezumat",
   "budget.receipts.addLine": "Adaugă poziție",

@@ -510,6 +510,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Sama päivä",
   "budget.receipts.candidateDays": "{days} pv ero",
   "budget.receipts.candidateMerchantMatch": "Kauppias täsmää",
+  "budget.receipts.roundingNote": "pyöristys {amount}",
   "budget.receipts.cashNoLinkNote": "Käteis- ja yhdistelmämaksut eivät voi pysyä linkitettyinä pankkitapahtumaan.",
   "budget.receipts.addSummaryLine": "Lisää yhteenvetorivi",
   "budget.receipts.addLine": "Lisää rivi",

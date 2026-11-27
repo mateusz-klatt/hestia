@@ -41,6 +41,7 @@ _MANY_TO_ONE_VERSION = (0, 59, 0)
 _LINK_INDICATORS_VERSION = (0, 60, 0)
 _DISPLAY_SHOP_NAME_VERSION = (0, 61, 0)
 _MULTI_STATUS_VERSION = (0, 65, 0)
+_RECEIPT_MATCH_RULES_VERSION = (0, 68, 0)
 _CURRENT_VERSION = tuple(int(part) for part in api_contract.CONTRACT_VERSION.split("."))
 _RECEIPT_RESULT_KEY = {"parse-text": "draft", "confirm": "receipt", "list": "receipts",
                        "search": "receipts", "detail": "receipt"}
@@ -58,7 +59,7 @@ def enabled():
 _RETENTION_SECRET = b"hestia/budget/receipts/retention/v1"
 
 
-def _store(secret, device_id=None, actor=None):
+def _store(secret, device_id=None, actor=None, *, extended_matching=False):
     engine, sessions = init_db()
     with sessions() as session:
         store_sql.auth_session_phase(session)
@@ -69,6 +70,7 @@ def _store(secret, device_id=None, actor=None):
         sessions, clock=time.time, cursor_secret=secret, device_id=device_id, actor=actor,
         ref_hmac_secret=gmail_config.load_ref_hmac_secret(session_secret=secret),
         card_accounts=gmail_config.load_card_accounts(),
+        extended_matching=extended_matching,
     )
 
 
@@ -94,8 +96,8 @@ def _receipt_id(request, *, field="receipt_id"):
 
 
 def _run(owner, operation, values, secret, device_id, actor=None, *,
-         include_linked_transaction=False, include_display_shop_name=False):
-    store = _store(secret, device_id, actor)
+         include_linked_transaction=False, include_display_shop_name=False, extended_matching=False):
+    store = _store(secret, device_id, actor, extended_matching=extended_matching or operation == "confirm")
     if operation == "parse-text":
         return store.parse_text(owner, values["text"], source_kind=values["source_kind"])
     if operation in ("list", "search"):
@@ -134,6 +136,8 @@ def _receipt_contract(request, operation):
 
 
 def _response(operation, result, version):
+    if version < _RECEIPT_MATCH_RULES_VERSION and operation == "confirm":
+        result["receipt"].pop("rounding_delta", None)
     if version < _DISPLAY_SHOP_NAME_VERSION and operation in _RECEIPT_RESULT_KEY:
         key = _RECEIPT_RESULT_KEY[operation]
         receipts = result[key] if key == "receipts" else (result[key],)
@@ -201,6 +205,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
                     lambda: _run_read(
                         owner, operation, identifier, secret, device_id, actor,
                         include_display_shop_name=version >= _DISPLAY_SHOP_NAME_VERSION,
+                        extended_matching=version >= _RECEIPT_MATCH_RULES_VERSION,
                     ),
                 )
                 return _response(operation, result, version)
@@ -235,6 +240,10 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
                         include_display_shop_name=version >= _DISPLAY_SHOP_NAME_VERSION,
                     ),
                 )
+            elif operation == "parse-text" and version >= _RECEIPT_MATCH_RULES_VERSION:
+                result = await api._settled_thread(lambda: _run(
+                    owner, operation, values, secret, device_id, actor, extended_matching=True,
+                ))
             else:
                 result = await api._settled_thread(lambda: _run(owner, operation, values, secret, device_id, actor))
             return _response(operation, result, version)
@@ -406,8 +415,9 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
     app.router.add_post(device_token.LOGIN_PATH, login)
 
 
-def _run_read(owner, operation, identifier, secret, device_id=None, actor=None, *, include_display_shop_name=False):
-    store = _store(secret, device_id, actor)
+def _run_read(owner, operation, identifier, secret, device_id=None, actor=None, *,
+              include_display_shop_name=False, extended_matching=False):
+    store = _store(secret, device_id, actor, extended_matching=extended_matching)
     if operation == "detail":
         return store.detail(owner, identifier, include_display_shop_name=include_display_shop_name)
     if operation == "group/detail":

@@ -510,6 +510,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Ta pati diena",
   "budget.receipts.candidateDays": "{days} d. skirtumas",
   "budget.receipts.candidateMerchantMatch": "Prekybininkas sutampa",
+  "budget.receipts.roundingNote": "apvalinimas {amount}",
   "budget.receipts.cashNoLinkNote": "Mokėjimai grynaisiais ir mišrūs mokėjimai negali likti susieti su banko operacija.",
   "budget.receipts.addSummaryLine": "Pridėti suvestinės eilutę",
   "budget.receipts.addLine": "Pridėti eilutę",

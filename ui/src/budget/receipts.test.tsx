@@ -1912,6 +1912,29 @@ describe("ReceiptsView", () => {
     await click(button("Close", dCash));
   });
 
+  it.each(["medium", "strong"] as const)("shows a %s card round-up in the match and confirm rows", async (strength) => {
+    const candidate = receiptCandidate({
+      amount: "43",
+      date_distance: strength === "medium" ? 1 : 0,
+      booking_date: strength === "medium" ? "2026-11-15" : "2026-11-14",
+      match_strength: strength,
+      match_rule: "rounded_up",
+      rounding_delta: "0.5",
+    });
+    const detail = receiptDetail({ status: "imported" });
+    const clients = fakeClients([detail]);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => ok({ receipt: detail, candidates: [candidate] }));
+
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailButton(0, "Szczegóły"));
+
+    const drawer = dialog();
+    const radio = linkRadio("candidate:0", drawer);
+    expect(drawer.querySelector(".budget-receipt-suggested")?.textContent).toContain("zaokrąglenie +0,50 zł");
+    expect(radio.closest("label")?.textContent).toContain("zaokrąglenie +0,50 zł");
+    expect(radio.checked).toBe(strength === "strong");
+  });
+
   it("preselects the bank candidate and confirms a partially read receipt on one click", async () => {
     const detail = receiptDetail({
       status: "draft",

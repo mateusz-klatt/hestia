@@ -510,6 +510,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Tajā pašā dienā",
   "budget.receipts.candidateDays": "{days} d. nobīde",
   "budget.receipts.candidateMerchantMatch": "Tirgotājs sakrīt",
+  "budget.receipts.roundingNote": "noapaļošana {amount}",
   "budget.receipts.cashNoLinkNote": "Skaidras naudas un jaukti maksājumi nevar palikt sasaistīti ar bankas darījumu.",
   "budget.receipts.addSummaryLine": "Pievienot kopsavilkuma rindu",
   "budget.receipts.addLine": "Pievienot rindu",

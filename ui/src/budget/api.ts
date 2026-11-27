@@ -38,6 +38,7 @@ const LINK_INDICATORS_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.60.0" }
 const RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.61.0" } as const;
 const MORTGAGE_REFERENCES_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.64.0" } as const;
 const RECEIPT_MULTI_STATUS_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.65.0" } as const;
+const RECEIPT_MATCH_RULE_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.68.0" } as const;
 
 export interface ReceiptDevice {
   token_id: string;
@@ -194,17 +195,19 @@ export function createBudgetApi(expectedActor: string | null = null) {
     return runGated<T>(target, init, mutation, request);
   }
 
-  function readReceipts<T>(target: URL, body?: object): Promise<BudgetResult<T>> {
+  function readReceipts<T>(target: URL, body?: object, includeMatchRules = false): Promise<BudgetResult<T>> {
+    const contractHeaders = includeMatchRules ? RECEIPT_MATCH_RULE_CONTRACT_HEADERS : RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS;
     const init: RequestInit = body === undefined
-      ? { headers: RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS }
+      ? { headers: contractHeaders }
       : {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS },
+        headers: { "Content-Type": "application/json", ...contractHeaders },
         body: JSON.stringify(body),
       };
     return runGated<T>(target, init, false, async (finalTarget, finalInit) => {
       let result = await request<T>(finalTarget, finalInit);
       for (const fallback of [
+        ...(includeMatchRules ? [RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER]] : []),
         LINK_INDICATORS_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER],
         RECEIPT_GROUP_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER],
         RECEIPT_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER],
@@ -388,7 +391,7 @@ export function createBudgetApi(expectedActor: string | null = null) {
     readReceipts<ReceiptListResult>(url("receipts/search"), body),
   /** Reads one owned receipt, its line items, and needs_review link candidates when available. */
   receiptDetail: (receiptId: string) =>
-    readReceipts<ReceiptDetailResult>(url("receipts/detail", { receipt_id: receiptId })),
+    readReceipts<ReceiptDetailResult>(url("receipts/detail", { receipt_id: receiptId }), undefined, true),
   /** Reads the stored members and evidence of an owned receipt group. */
   fetchReceiptLinkGroupDetail: (groupId: string) =>
     call<ReceiptGroupDetailResult>(url("receipts/group/detail", { group_id: groupId }),

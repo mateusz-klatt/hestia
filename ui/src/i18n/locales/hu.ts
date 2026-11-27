@@ -510,6 +510,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Aznap",
   "budget.receipts.candidateDays": "{days} nap eltérés",
   "budget.receipts.candidateMerchantMatch": "Kereskedő egyezik",
+  "budget.receipts.roundingNote": "kerekítés {amount}",
   "budget.receipts.cashNoLinkNote": "A készpénzes és vegyes fizetések nem maradhatnak banki tételhez kapcsolva.",
   "budget.receipts.addSummaryLine": "Összegző sor hozzáadása",
   "budget.receipts.addLine": "Tétel hozzáadása",

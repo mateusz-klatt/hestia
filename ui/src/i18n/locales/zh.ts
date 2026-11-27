@@ -511,6 +511,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "同一天",
   "budget.receipts.candidateDays": "相差{days}天",
   "budget.receipts.candidateMerchantMatch": "商户匹配",
+  "budget.receipts.roundingNote": "向上取整 {amount}",
   "budget.receipts.cashNoLinkNote": "现金和混合支付方式无法保持与银行记录的关联。",
   "budget.receipts.addSummaryLine": "添加汇总行",
   "budget.receipts.addLine": "添加明细",

@@ -510,6 +510,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "В тот же день",
   "budget.receipts.candidateDays": "разница {days} д",
   "budget.receipts.candidateMerchantMatch": "Продавец совпадает",
+  "budget.receipts.roundingNote": "округление {amount}",
   "budget.receipts.cashNoLinkNote": "Наличные и смешанные оплаты не могут оставаться связанными с банковской операцией.",
   "budget.receipts.addSummaryLine": "Добавить сводную позицию",
   "budget.receipts.addLine": "Добавить позицию",

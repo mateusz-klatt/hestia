@@ -511,6 +511,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "同日",
   "budget.receipts.candidateDays": "{days}日差",
   "budget.receipts.candidateMerchantMatch": "店舗一致",
+  "budget.receipts.roundingNote": "切り上げ {amount}",
   "budget.receipts.cashNoLinkNote": "現金払いおよび併用払いは銀行取引と紐付けたままにできません。",
   "budget.receipts.addSummaryLine": "まとめ行を追加",
   "budget.receipts.addLine": "明細を追加",

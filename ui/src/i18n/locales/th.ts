@@ -511,6 +511,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "วันเดียวกัน",
   "budget.receipts.candidateDays": "ต่างกัน {days} วัน",
   "budget.receipts.candidateMerchantMatch": "ร้านค้าตรงกัน",
+  "budget.receipts.roundingNote": "การปัดเศษ {amount}",
   "budget.receipts.cashNoLinkNote": "การชำระด้วยเงินสดและการชำระแบบผสมไม่สามารถคงการเชื่อมโยงกับรายการธนาคารได้",
   "budget.receipts.addSummaryLine": "เพิ่มรายการสรุป",
   "budget.receipts.addLine": "เพิ่มรายการ",

@@ -145,7 +145,7 @@ describe("receipts api", () => {
     const detail = sent(fetchMock, 1);
     expect(detail.url.pathname).toMatch(/\/api\/budget\/receipts\/detail$/);
     expect(Object.fromEntries(detail.url.searchParams)).toEqual({ receipt_id: "rec-42" });
-    expect(new Headers(detail.init.headers).get(CONTRACT_HEADER)).toBe("0.61.0");
+    expect(new Headers(detail.init.headers).get(CONTRACT_HEADER)).toBe("0.68.0");
     expect(new Headers(detail.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
     expect(detail.init.credentials).toBe("same-origin");
 
@@ -203,9 +203,9 @@ describe("receipts api", () => {
     expect(retry.init.signal).toBe(first.init.signal);
     expect(retry.init.credentials).toBe("same-origin");
     expect(retry.init.cache).toBe("no-store");
-    expect(new Headers(first.init.headers).get(CONTRACT_HEADER)).toBe("0.61.0");
+    expect(new Headers(first.init.headers).get(CONTRACT_HEADER)).toBe(path === "detail" ? "0.68.0" : "0.61.0");
     const headers = new Headers(first.init.headers);
-    headers.set(CONTRACT_HEADER, "0.60.0");
+    headers.set(CONTRACT_HEADER, path === "detail" ? "0.61.0" : "0.60.0");
     expect(Object.fromEntries(new Headers(retry.init.headers))).toEqual(Object.fromEntries(headers));
     expect(new Headers(retry.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
   });

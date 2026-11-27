@@ -510,6 +510,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Той самий день",
   "budget.receipts.candidateDays": "різниця {days} д",
   "budget.receipts.candidateMerchantMatch": "Продавець збігається",
+  "budget.receipts.roundingNote": "округлення {amount}",
   "budget.receipts.cashNoLinkNote": "Готівкові та змішані оплати не можуть залишатися пов’язаними з банківською транзакцією.",
   "budget.receipts.addSummaryLine": "Додати підсумкову позицію",
   "budget.receipts.addLine": "Додати позицію",

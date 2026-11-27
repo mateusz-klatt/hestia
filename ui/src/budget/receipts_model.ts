@@ -509,6 +509,7 @@ export function candidateEvidenceDigest(candidate: ReceiptCandidate): string {
     candidate.merchant_token_hit ? "1" : "0",
     candidate.match_strength,
     String(candidate.date_distance),
+    candidate.rounding_delta ?? "",
     candidateEvidenceFingerprint(candidate) ?? "",
   ].join("\0");
 }
@@ -685,13 +686,12 @@ export function availableLinkOptions(
 }
 
 export function isStrongMatchStrength(strength: ReceiptCandidate["match_strength"]): boolean {
-  return strength === "id" || strength === "nip" || strength === "distinctive";
+  return strength === "id" || strength === "nip" || strength === "distinctive" || strength === "strong";
 }
 
 /**
  * Preselects the single candidate only when the receipt is unlinked (`imported` / `draft` / `needs_review`
- * with no stored link), payment allows linking, there is exactly one candidate, and `match_strength` is
- * `"nip"` or `"distinctive"`.
+ * with no stored link), payment allows linking, and there is exactly one strong candidate.
  */
 export function preselectedCandidate(
   detail: Pick<ReceiptDetail, "status" | "linked" | "linked_account_id" | "linked_entry_ref" | "link_group">,
