@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Staðfesti…",
   "budget.receipts.confirmSuccess": "Kvittun staðfest og vistuð.",
   "budget.receipts.conflict": "Þessu skjali var breytt annars staðar. Endurhladdu og reyndu aftur.",
+  "budget.receipts.conflictDraftNotice": "Skjalið breyttist á meðan.",
+  "budget.receipts.loadLatestVersion": "Hlaða nýjustu útgáfu",
   "budget.receipts.txAlreadyLinked": "Valin bankafærsla er þegar tengd öðru skjali.",
   "budget.receipts.staleSource": "Tengitóki frambjóðanda gildir ekki lengur (færsla eða söluaðili/NIP breyttist). Upplýsingar endurhlaðnar — skoðaðu tengingu og staðfestu aftur.",
   "budget.receipts.totalMismatch": "Summa lína verður að jafnast á við heildarupphæð.",

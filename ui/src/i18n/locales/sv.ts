@@ -518,6 +518,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Bekräftar…",
   "budget.receipts.confirmSuccess": "Kvittot har bekräftats och sparats.",
   "budget.receipts.conflict": "Dokumentet ändrades på annat håll. Läs in igen och försök igen.",
+  "budget.receipts.conflictDraftNotice": "Dokumentet ändrades under tiden.",
+  "budget.receipts.loadLatestVersion": "Läs in senaste versionen",
   "budget.receipts.txAlreadyLinked": "Den valda banktransaktionen är redan kopplad till ett annat dokument.",
   "budget.receipts.staleSource": "Kandidattoken är inte längre giltig (bokföring eller handlare/NIP har ändrats). Detaljer har lästs in igen — kontrollera kopplingen och bekräfta på nytt.",
   "budget.receipts.totalMismatch": "Summan av raderna måste vara lika med totalbeloppet.",

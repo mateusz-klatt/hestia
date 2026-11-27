@@ -3488,13 +3488,19 @@ describe("ReceiptsView", () => {
     expect(detailCalls).toBe(1);
     expect(inputByName("raw_shop_name", dialog()).value).toBe("Newer Unsaved V3 Draft");
 
-    // Submitting the newer draft uses version 2; if the server bumped concurrently, 409 reloads fresh server v3.
+    // Submitting the newer draft uses version 2; on 409 conflict, draft MUST stay intact with an inline
+    // conflict message and explicit reload button, discarding the draft ONLY on clicking Load latest version.
     await click(button("Confirm receipt", dialog()));
     expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
       receipt_id: "draft-v",
       expected_version: 2,
       raw_shop_name: "Newer Unsaved V3 Draft",
     }));
+    expect(detailCalls).toBe(1);
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("This document changed in the meantime.");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Newer Unsaved V3 Draft");
+
+    await click(button("Load latest version", dialog()));
     expect(detailCalls).toBe(2);
     expect(dialog().textContent).toContain("Version 3");
     expect(inputByName("raw_shop_name", dialog()).value).toBe("Server Concurrent V3");
@@ -3607,5 +3613,155 @@ describe("ReceiptsView", () => {
     expect(dialog().textContent).toContain("Receipt Gamma Survivor");
     expect(dialog().textContent).not.toContain("Receipt Beta");
     expect(host.textContent).toContain("Receipt group linked.");
+  });
+
+  it("cancels async page-boundary Next navigation if the draft becomes dirty while the next page loads", async () => {
+    const r1 = receiptSummary({ receipt_id: "nav-dirty-1", status: "needs_review", raw_shop_name: "Boundary Receipt One", total_amount: "12.50", version: 1 });
+    const r2 = receiptSummary({ receipt_id: "nav-dirty-2", status: "needs_review", raw_shop_name: "Page Two Receipt", total_amount: "12.50", version: 1 });
+    const pendingPage2 = deferred<ReceiptListResult>();
+
+    const clients = fakeClients([r1]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      if (req?.cursor === "boundary-cursor-2") return pendingPage2.promise;
+      return ok<ReceiptListResult>({ receipts: [r1], next_cursor: "boundary-cursor-2" });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = id === "nav-dirty-2" ? r2 : r1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail(match), candidates: [] });
+    });
+
+    await renderReceipts(clients);
+    await click(openDetailById("nav-dirty-1"));
+    expect(dialog().textContent).toContain("Boundary Receipt One");
+    expect(button("Next", dialog()).disabled).toBe(false);
+
+    // Click Next at the page boundary -> starts async page 2 load.
+    await act(async () => {
+      button("Next", dialog()).click();
+      await Promise.resolve();
+    });
+
+    // While page 2 is still in flight, edit the current receipt so its draft becomes dirty.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Edited During Page Load");
+
+    // Resolve page 2 -> list loads r2, but navigation MUST cancel at commit time and keep r1's dirty draft.
+    await act(async () => {
+      pendingPage2.resolve({ ok: true, data: { receipts: [r2], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(2);
+    expect(dialog().textContent).toContain("Boundary Receipt One");
+    expect(dialog().textContent).not.toContain("Page Two Receipt");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Edited During Page Load");
+  });
+
+  it("keeps the dirty draft on 409 save conflict with Polish conflict message and reloads only when Wczytaj aktualną wersję is clicked", async () => {
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const v1 = receiptSummary({ receipt_id: "pl-409", status: "needs_review", raw_shop_name: "Sklep Pierwotny", total_amount: "12.50", version: 1 });
+    const v2Server = { ...v1, raw_shop_name: "Sklep Z Serwera V2", version: 2 };
+
+    let detailCalls = 0;
+    const clients = fakeClients([v1]);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => {
+      detailCalls += 1;
+      if (detailCalls === 1) return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...v1, lines: singleLine }), candidates: [] });
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...v2Server, lines: singleLine }), candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => fail(409, "budget_receipt_conflict"));
+
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailById("pl-409", "Szczegóły"));
+    await typeInto(inputByName("raw_shop_name", dialog()), "Moja Edycja Szkicu");
+
+    await click(button("Zatwierdź dokument", dialog()));
+
+    // 409 MUST keep user's draft untouched and never auto-reload detail.
+    expect(detailCalls).toBe(1);
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Moja Edycja Szkicu");
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("Dokument zmienił się w międzyczasie");
+    const reloadBtn = button("Wczytaj aktualną wersję", dialog());
+    expect(reloadBtn.disabled).toBe(false);
+
+    // Explicit click discards draft and loads the latest server version.
+    await click(reloadBtn);
+    expect(detailCalls).toBe(2);
+    expect(dialog().textContent).toContain("Wersja 2");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Sklep Z Serwera V2");
+    expect(dialog().querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("processes a dirty request that joins after pass publish and before coalescer clears in-flight state", async () => {
+    const store = createPendingReceiptStore();
+    const initialRow = receiptSummary({ receipt_id: "interleave-1", raw_shop_name: "Initial Row", version: 1 });
+    const pass1Row = receiptSummary({ receipt_id: "interleave-1", raw_shop_name: "Pass One Stale Row", version: 2 });
+    const pass2Row = receiptSummary({ receipt_id: "interleave-1", raw_shop_name: "Pass Two Fresh Row", version: 3 });
+
+    const t1 = store.tryAcquire("interleave-1", "confirm");
+    const t2 = store.tryAcquire("interleave-2", "confirm");
+    if (t1 === null || t2 === null) throw new Error("expected locks");
+
+    const pass1Deferred = deferred<ReceiptListResult>();
+    let listCalls = 0;
+    const clients = fakeClients([initialRow]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation(() => {
+      listCalls += 1;
+      if (listCalls === 1) return ok<ReceiptListResult>({ receipts: [initialRow], next_cursor: null });
+      if (listCalls === 2) return pass1Deferred.promise;
+      return ok<ReceiptListResult>({ receipts: [pass2Row], next_cursor: null });
+    });
+
+    const onAccessLoss = vi.fn(() => false);
+    await act(async () => {
+      root.render(
+        <ReceiptsView
+          receiptsApi={clients.rApi}
+          pendingStore={store}
+          actorKey="owner-interleave"
+          accounts={accounts}
+          connections={[connection]}
+          locale="en"
+          revision={0}
+          onAccessLoss={onAccessLoss}
+        />,
+      );
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listCalls).toBe(1);
+
+    // Release lock 1 -> starts refresh pass #1 (listCalls becomes 2, awaiting pass1Deferred).
+    await act(async () => {
+      store.release("interleave-1", t1, "confirmed");
+      await Promise.resolve();
+    });
+    expect(listCalls).toBe(2);
+
+    // Interleave: resolve pass #1 (microtask 1 runs runPass publish & return, queueing microtask 3 for outer loop),
+    // while microtask 2 releases lock 2 right AFTER pass #1 published and BEFORE outer loop resumes to clear activeRefreshRef.
+    await act(async () => {
+      pass1Deferred.resolve({ ok: true, data: { receipts: [pass1Row], next_cursor: null } });
+      void Promise.resolve().then(() => {
+        store.release("interleave-2", t2, "confirmed");
+      });
+      await Promise.resolve();
+    });
+    await settle();
+
+    // Outer loop MUST observe dirty === true synchronously before clearing inFlight and run pass #2.
+    expect(listCalls).toBe(3);
+    expect(host.textContent).toContain("Pass Two Fresh Row");
+    expect(host.textContent).not.toContain("Pass One Stale Row");
+
+    // Once pass #2 finishes and clears inFlight in the same synchronous tick, a subsequent settlement starts a brand-new run.
+    const t3 = store.tryAcquire("interleave-3", "confirm");
+    if (t3 === null) throw new Error("expected lock 3");
+    await act(async () => {
+      store.release("interleave-3", t3, "confirmed");
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listCalls).toBe(4);
   });
 });

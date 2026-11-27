@@ -518,6 +518,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Confirmando…",
   "budget.receipts.confirmSuccess": "Recibo confirmado e salvo.",
   "budget.receipts.conflict": "Este documento foi modificado em outro lugar. Recarregue e tente novamente.",
+  "budget.receipts.conflictDraftNotice": "Este documento mudou entretanto.",
+  "budget.receipts.loadLatestVersion": "Carregar versão atual",
   "budget.receipts.txAlreadyLinked": "A transação selecionada já está vinculada a outro documento.",
   "budget.receipts.staleSource": "O token de candidato expirou ou ficou inválido (lançamento ou comerciante/NIP alterado). Detalhes recarregados — revise o vínculo e confirme novamente.",
   "budget.receipts.totalMismatch": "A soma dos itens deve ser igual ao total do documento.",

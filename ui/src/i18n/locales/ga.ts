@@ -520,6 +520,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Á dheimhniú…",
   "budget.receipts.confirmSuccess": "Admháil deimhnithe agus sábháilte.",
   "budget.receipts.conflict": "Athraíodh an doiciméad áit éigin eile. Athlódáil agus bain triail eile as.",
+  "budget.receipts.conflictDraftNotice": "Athraíodh an doiciméad idir an dá linn.",
+  "budget.receipts.loadLatestVersion": "Lódáil an leagan is déanaí",
   "budget.receipts.txAlreadyLinked": "Tá an t-idirbheart bainc roghnaithe nasctha cheana féin le doiciméad eile.",
   "budget.receipts.staleSource": "Níl comhartha an iarrthóra bailí a thuilleadh (athraíodh an mórleabhar nó an ceannaí/NIP). Sonraí athlódáilte — athbhreithnigh an nasc agus deimhnigh arís.",
   "budget.receipts.totalMismatch": "Caithfidh suim na línte a bheith cothrom leis an iomlán.",

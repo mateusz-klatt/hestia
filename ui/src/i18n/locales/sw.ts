@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Inathibitisha…",
   "budget.receipts.confirmSuccess": "Risiti imethibitishwa na kuhifadhiwa.",
   "budget.receipts.conflict": "Waraka huu ulibadilishwa mahali pengine. Pakia upya na jaribu tena.",
+  "budget.receipts.conflictDraftNotice": "Waraka huu umebadilika wakati huohuo.",
+  "budget.receipts.loadLatestVersion": "Pakia toleo la hivi karibuni",
   "budget.receipts.txAlreadyLinked": "Muamala wa benki uliochaguliwa tayari umeunganishwa na waraka mwingine.",
   "budget.receipts.staleSource": "Tokeni ya kiungo cha mgombea si halali tena (daftari au muuzaji/NIP imebadilika). Maelezo yamepakiwa upya — kagua kiungo na uthibitishe tena.",
   "budget.receipts.totalMismatch": "Jumla ya mistari lazima ilingane na jumla ya waraka.",

@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Vahvistetaan…",
   "budget.receipts.confirmSuccess": "Kuitti vahvistettu ja tallennettu.",
   "budget.receipts.conflict": "Tositetta on muokattu muualla. Päivitä ja yritä uudelleen.",
+  "budget.receipts.conflictDraftNotice": "Tosite on muuttunut sillä välin.",
+  "budget.receipts.loadLatestVersion": "Lataa uusin versio",
   "budget.receipts.txAlreadyLinked": "Valittu pankkitapahtuma on jo linkitetty toiseen tositteeseen.",
   "budget.receipts.staleSource": "Ehdokaslinkin tunnus ei ole enää voimassa (kirjanpito tai kauppias/NIP muuttui). Tiedot ladattu uudelleen — tarkista linkitys ja vahvista.",
   "budget.receipts.totalMismatch": "Rivien summan on oltava yhtä suuri kuin kokonaissumma.",

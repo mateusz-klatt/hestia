@@ -523,6 +523,8 @@ const pl: Partial<Messages> = {
   "budget.receipts.confirming": "Zatwierdzanie…",
   "budget.receipts.confirmSuccess": "Dokument został zatwierdzony i zapisany.",
   "budget.receipts.conflict": "Dokument został zmieniony w międzyczasie. Odśwież dane i spróbuj ponownie.",
+  "budget.receipts.conflictDraftNotice": "Dokument zmienił się w międzyczasie.",
+  "budget.receipts.loadLatestVersion": "Wczytaj aktualną wersję",
   "budget.receipts.txAlreadyLinked": "Wybrana transakcja bankowa jest już powiązana z innym dokumentem.",
   "budget.receipts.staleSource": "Token powiązania jest nieaktualny (zmiana w księdze lub zmiana sprzedawcy/NIP). Odświeżono szczegóły — wybierz powiązanie ponownie.",
   "budget.receipts.totalMismatch": "Suma pozycji musi być równa kwocie całkowitej.",

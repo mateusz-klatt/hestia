@@ -518,6 +518,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Wird bestätigt…",
   "budget.receipts.confirmSuccess": "Beleg bestätigt und gespeichert.",
   "budget.receipts.conflict": "Dieses Dokument wurde anderweitig geändert. Neu laden und erneut versuchen.",
+  "budget.receipts.conflictDraftNotice": "Das Dokument wurde zwischenzeitlich geändert.",
+  "budget.receipts.loadLatestVersion": "Aktuelle Version laden",
   "budget.receipts.txAlreadyLinked": "Der gewählte Bankumsatz ist bereits mit einem anderen Dokument verknüpft.",
   "budget.receipts.staleSource": "Das Verknüpfungs-Token ist veraltet (Buchung geändert oder Händler/NIP bearbeitet). Details neu geladen — Verknüpfung prüfen und erneut bestätigen.",
   "budget.receipts.totalMismatch": "Die Summe der Positionen muss dem Gesamtbetrag entsprechen.",

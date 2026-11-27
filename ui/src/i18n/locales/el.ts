@@ -520,6 +520,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Επιβεβαίωση…",
   "budget.receipts.confirmSuccess": "Η απόδειξη επιβεβαιώθηκε και αποθηκεύτηκε.",
   "budget.receipts.conflict": "Το έγγραφο τροποποιήθηκε αλλού. Ανανεώστε και δοκιμάστε ξανά.",
+  "budget.receipts.conflictDraftNotice": "Το έγγραφο άλλαξε στο μεταξύ.",
+  "budget.receipts.loadLatestVersion": "Φόρτωση τρέχουσας έκδοσης",
   "budget.receipts.txAlreadyLinked": "Η επιλεγμένη τραπεζική συναλλαγή είναι ήδη συνδεδεμένη με άλλο έγγραφο.",
   "budget.receipts.staleSource": "Το token υποψηφίου δεν ισχύει πλέον (ενημέρωση κινήσεων ή αλλαγή εμπόρου/NIP). Τα στοιχεία ανανεώθηκαν — ελέγξτε τη σύνδεση και επιβεβαιώστε ξανά.",
   "budget.receipts.totalMismatch": "Το άθροισμα των γραμμών πρέπει να ισούται με το σύνολο.",

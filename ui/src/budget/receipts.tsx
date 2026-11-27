@@ -801,8 +801,12 @@ export function ReceiptsView({
 
     const run = async (): Promise<RefreshOutcome> => {
       const isRefreshDirty = (): boolean => state.dirty;
-      const runPass = async (): Promise<RefreshOutcome | null> => {
-        const token = state.generation;
+      const clearActiveRefresh = (): void => {
+        if (activeRefreshRef.current === state) {
+          activeRefreshRef.current = null;
+        }
+      };
+      const runPass = async (token: number): Promise<RefreshOutcome> => {
         loadMorePromiseRef.current = null;
         navGenerationRef.current += 1;
         staleCursorReloadedRef.current = false;
@@ -882,9 +886,7 @@ export function ReceiptsView({
         }
 
         if (isRefreshDirty()) {
-          state.dirty = false;
-          state.generation = ++listGeneration.current;
-          return null;
+          return { kind: "loaded", rows: collected, nextCursor: finalNextCursor };
         }
 
         if (passFailed) {
@@ -935,15 +937,23 @@ export function ReceiptsView({
       };
 
       try {
-        let outcome = await runPass();
-        while (outcome === null) {
-          outcome = await runPass();
+        let keepRunning = true;
+        let lastOutcome: RefreshOutcome = { kind: "stale_or_aborted" };
+        let token = state.generation;
+        while (keepRunning) {
+          state.dirty = false;
+          state.generation = token;
+          lastOutcome = await runPass(token);
+          if (lastOutcome.kind === "stale_or_aborted" || !isMounted() || !isRefreshDirty()) {
+            clearActiveRefresh();
+            keepRunning = false;
+          } else {
+            token = ++listGeneration.current;
+          }
         }
-        return outcome;
+        return lastOutcome;
       } finally {
-        if (activeRefreshRef.current === state) {
-          activeRefreshRef.current = null;
-        }
+        clearActiveRefresh();
       }
     };
 
@@ -1327,7 +1337,7 @@ export function ReceiptsView({
       const latestKnown = latestDetailVersionRef.current;
       if (
         latestKnown !== null
-        && latestKnown.receiptId === receipt.receipt_id
+        && (latestKnown.receiptId === targetId || latestKnown.receiptId === receipt.receipt_id)
         && receipt.version < latestKnown.version
       ) {
         return;
@@ -1413,11 +1423,19 @@ export function ReceiptsView({
 
     const startListGen = listGeneration.current;
     const startNavGen = ++navGenerationRef.current;
+    const startSession = drawerSessionRef.current;
+    const canCommitAsyncNav = (): boolean => (
+      isMounted()
+      && listGeneration.current === startListGen
+      && navGenerationRef.current === startNavGen
+      && openReceiptIdRef.current === currentId
+      && drawerSessionRef.current === startSession
+      && !isDraftDirtyFor(currentId)
+    );
     let nextCursor: string | null = curList.nextCursor;
     while (nextCursor !== null) {
       const outcome = await fetchNextPage();
-      if (!isMounted() || listGeneration.current !== startListGen
-        || navGenerationRef.current !== startNavGen || openReceiptIdRef.current !== currentId) {
+      if (!canCommitAsyncNav()) {
         return;
       }
       if (outcome.kind !== "loaded") return;
@@ -1425,11 +1443,12 @@ export function ReceiptsView({
       const nextShown = filterReceiptRows(outcome.rows, filterRef.current, searchModeRef.current);
       const nextTarget = findAdjacentReceiptId(nextShown, currentId, "next");
       if (nextTarget !== null) {
+        if (!canCommitAsyncNav()) return;
         openReceipt(nextTarget);
         return;
       }
     }
-  }, [store, isMounted, openReceipt, fetchNextPage]);
+  }, [store, isMounted, isDraftDirtyFor, openReceipt, fetchNextPage]);
 
   const handleConfirmed = useCallback(async (
     updated: ReceiptDetail,
@@ -2234,6 +2253,13 @@ export function ReceiptsView({
               });
             }}
             onConflictOrStale={(receiptId) => {
+              if (isDraftDirtyFor(receiptId)) return;
+              recordLinkChoiceTouched(receiptId, { kind: "empty" });
+              const floorToken = ++detailGeneration.current;
+              receiptFloorGenRef.current.set(receiptId, floorToken);
+              setDetailRefresh((current) => current + 1);
+            }}
+            onReloadLatestVersion={(receiptId) => {
               if (dirtyDraftReceiptIdRef.current === receiptId) {
                 dirtyDraftReceiptIdRef.current = null;
               }
@@ -2275,7 +2301,9 @@ export function ReceiptsView({
               void quietRefetchLoadedRange();
               if (trigger?.isConnected === true) trigger.focus({ preventScroll: true });
             }}
-            onMutationError={() => { void quietRefetchLoadedRange(); }}
+            onMutationError={() => {
+              void quietRefetchLoadedRange({ deferReconcileForId: openReceiptIdRef.current });
+            }}
           />
         );
       })()}
@@ -2374,6 +2402,7 @@ interface DrawerProps {
   onConfirmed: (receipt: ReceiptDetail, previous: Pick<ReceiptDetail, "status" | "version">) => void;
   onGroupUnlinked: (receiptId: string) => void;
   onConflictOrStale: (receiptId: string) => void;
+  onReloadLatestVersion: (receiptId: string) => void;
   onNotFound: (receiptId: string) => void;
   onDeleted: (receiptId: string, dissolvedGroup?: boolean) => void;
   onMutationError: () => void;
@@ -2611,6 +2640,7 @@ function ReceiptDetailDrawer({
   onConfirmed,
   onGroupUnlinked,
   onConflictOrStale,
+  onReloadLatestVersion,
   onNotFound,
   onDeleted,
   onMutationError,
@@ -2618,6 +2648,7 @@ function ReceiptDetailDrawer({
   const [confirmDraft, setConfirmDraft] = useState<ReceiptConfirmDraft | null>(null);
   const confirmDraftRef = useRef<ReceiptConfirmDraft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [conflictReloadPending, setConflictReloadPending] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [confirmingDissolve, setConfirmingDissolve] = useState(false);
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
@@ -2660,6 +2691,7 @@ function ReceiptDetailDrawer({
       } else {
         setActionError(null);
       }
+      setConflictReloadPending(false);
       setConfirmingDelete(false);
       setConfirmingDissolve(false);
     } else if (detailState.kind === "ready") {
@@ -2674,6 +2706,7 @@ function ReceiptDetailDrawer({
       } else {
         setActionError(null);
       }
+      setConflictReloadPending(false);
       setConfirmingDelete(false);
       setConfirmingDissolve(false);
     } else if (detailState.kind === "loading") {
@@ -2681,6 +2714,7 @@ function ReceiptDetailDrawer({
       confirmDraftRef.current = null;
       setConfirmDraft(null);
       if (!keepActionErrorRef.current) setActionError(null);
+      setConflictReloadPending(false);
       setConfirmingDelete(false);
       setConfirmingDissolve(false);
     } else {
@@ -2690,6 +2724,7 @@ function ReceiptDetailDrawer({
       confirmDraftRef.current = null;
       setConfirmDraft(null);
       setActionError(null);
+      setConflictReloadPending(false);
       setConfirmingDelete(false);
       setConfirmingDissolve(false);
     }
@@ -2757,6 +2792,7 @@ function ReceiptDetailDrawer({
     if (lockToken === null) return;
     keepActionErrorRef.current = false;
     setActionError(null);
+    setConflictReloadPending(false);
     let outcome: ReceiptSettledEvent["outcome"] = "error";
     let handledInMountedDrawer = false;
     let lockReleased = false;
@@ -2777,11 +2813,23 @@ function ReceiptDetailDrawer({
           onNotFound(detail.receipt_id);
           return;
         }
-        setActionError(confirmErrorText(result.error));
         if (isConflictOrStaleError(result)) {
-          keepActionErrorRef.current = true;
-          onConflictOrStale(detail.receipt_id);
+          const cleanStaleTokenOnly =
+            result.error === "budget_receipt_stale_source" && !isReceiptDraftDirty(detail, draft);
+          if (cleanStaleTokenOnly) {
+            setActionError(confirmErrorText(result.error));
+            keepActionErrorRef.current = true;
+            onConflictOrStale(detail.receipt_id);
+          } else {
+            setActionError(
+              result.error === "budget_receipt_tx_already_linked"
+                ? t("budget.receipts.txAlreadyLinked")
+                : t("budget.receipts.conflictDraftNotice"),
+            );
+            setConflictReloadPending(true);
+          }
         } else {
+          setActionError(confirmErrorText(result.error));
           // Reload list even on network/unknown errors in case the write committed server-side.
           onMutationError();
         }
@@ -2800,6 +2848,7 @@ function ReceiptDetailDrawer({
     if (lockToken === null) return;
     keepActionErrorRef.current = false;
     setActionError(null);
+    setConflictReloadPending(false);
     let outcome: ReceiptSettledEvent["outcome"] = "error";
     let handledInMountedDrawer = false;
     let lockReleased = false;
@@ -2820,15 +2869,23 @@ function ReceiptDetailDrawer({
           onNotFound(detail.receipt_id);
           return;
         }
-        setActionError(result.error === "budget_receipt_in_group"
-          ? t("budget.receipts.inGroupConflict")
-          : isConflictOrStaleError(result)
-            ? t("budget.receipts.conflict")
-            : t("budget.receipts.deleteError"));
         if (isConflictOrStaleError(result)) {
-          keepActionErrorRef.current = true;
-          onConflictOrStale(detail.receipt_id);
+          const hasDirtyDraft = confirmDraftRef.current !== null && isReceiptDraftDirty(detail, confirmDraftRef.current);
+          if (hasDirtyDraft) {
+            setConfirmingDelete(false);
+            setActionError(t("budget.receipts.conflictDraftNotice"));
+            setConflictReloadPending(true);
+          } else {
+            setActionError(result.error === "budget_receipt_in_group"
+              ? t("budget.receipts.inGroupConflict")
+              : t("budget.receipts.conflict"));
+            keepActionErrorRef.current = true;
+            onConflictOrStale(detail.receipt_id);
+          }
         } else {
+          setActionError(result.error === "budget_receipt_in_group"
+            ? t("budget.receipts.inGroupConflict")
+            : t("budget.receipts.deleteError"));
           // Reload list even on network/unknown errors in case the delete committed server-side.
           onMutationError();
         }
@@ -3809,7 +3866,24 @@ function ReceiptDetailDrawer({
                     }) : null}
                   </fieldset>
 
-                  {actionError === null ? null : <p className="budget-notice" role="alert">{actionError}</p>}
+                  {actionError === null ? null : conflictReloadPending ? (
+                    <div className="budget-notice budget-entries-action" role="alert">
+                      <span>{actionError}</span>
+                      <button
+                        type="button"
+                        disabled={actionBusy !== null}
+                        onClick={() => {
+                          setConflictReloadPending(false);
+                          setActionError(null);
+                          onReloadLatestVersion(detail.receipt_id);
+                        }}
+                      >
+                        {t("budget.receipts.loadLatestVersion")}
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="budget-notice" role="alert">{actionError}</p>
+                  )}
 
                   <div className="budget-actions">
                     <button

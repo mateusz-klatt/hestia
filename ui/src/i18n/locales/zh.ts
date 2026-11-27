@@ -520,6 +520,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "正在确认…",
   "budget.receipts.confirmSuccess": "收据已确认并保存。",
   "budget.receipts.conflict": "该凭证已在别处修改，请重新加载后再试。",
+  "budget.receipts.conflictDraftNotice": "该凭证在此期间已发生更改。",
+  "budget.receipts.loadLatestVersion": "加载最新版本",
   "budget.receipts.txAlreadyLinked": "所选银行交易已关联到其他凭证。",
   "budget.receipts.staleSource": "关联候选项令牌已失效（账本已更新或修改了商户/NIP）。详情已重新加载——请检查关联选项并再次确认。",
   "budget.receipts.totalMismatch": "明细之和必须等于凭证总额。",

@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "جارٍ التأكيد…",
   "budget.receipts.confirmSuccess": "تم تأكيد الإيصال وحفظه.",
   "budget.receipts.conflict": "تم تعديل هذا المستند في مكان آخر. أعد التحميل وحاول مجددًا.",
+  "budget.receipts.conflictDraftNotice": "تغيّر هذا المستند في الأثناء.",
+  "budget.receipts.loadLatestVersion": "تحميل أحدث إصدار",
   "budget.receipts.txAlreadyLinked": "المعاملة البنكية المحددة مرتبطة بالفعل بمستند آخر.",
   "budget.receipts.staleSource": "رمز المرشح لم يعد صالحًا (تحدّث السجل أو تغيّر التاجر/NIP). أُعيد تحميل التفاصيل — راجع الربط وأكّد مجددًا.",
   "budget.receipts.totalMismatch": "يجب أن يساوي مجموع البنود الإجمالي.",

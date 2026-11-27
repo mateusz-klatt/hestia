@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Potvrdzovanie…",
   "budget.receipts.confirmSuccess": "Doklad bol potvrdený a uložený.",
   "budget.receipts.conflict": "Dokument bol medzitým upravený. Obnovte údaje a skúste to znova.",
+  "budget.receipts.conflictDraftNotice": "Dokument sa medzitým zmenil.",
+  "budget.receipts.loadLatestVersion": "Načítať aktuálnu verziu",
   "budget.receipts.txAlreadyLinked": "Vybraná banková transakcia je už prepojená s iným dokumentom.",
   "budget.receipts.staleSource": "Token kandidáta už neplatí (zmena v denníku alebo obchodníka/NIP). Podrobnosti znova načítané — skontrolujte väzbu a potvrďte znova.",
   "budget.receipts.totalMismatch": "Súčet položiek sa musí rovnať celkovej sume.",

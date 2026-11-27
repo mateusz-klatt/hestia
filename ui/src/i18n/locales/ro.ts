@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Se confirmă…",
   "budget.receipts.confirmSuccess": "Bon confirmat și salvat.",
   "budget.receipts.conflict": "Documentul a fost modificat în altă parte. Reîncărcați și încercați din nou.",
+  "budget.receipts.conflictDraftNotice": "Documentul s-a modificat între timp.",
+  "budget.receipts.loadLatestVersion": "Încarcă versiunea actuală",
   "budget.receipts.txAlreadyLinked": "Tranzacția bancară selectată este deja asociată altui document.",
   "budget.receipts.staleSource": "Tokenul candidatului nu mai este valabil (registru sau comerciant/NIP modificat). Detaliile au fost reîncărcate — verificați asocierea și confirmați din nou.",
   "budget.receipts.totalMismatch": "Suma pozițiilor trebuie să fie egală cu totalul documentului.",

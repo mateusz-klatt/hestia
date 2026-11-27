@@ -520,6 +520,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Duke konfirmuar…",
   "budget.receipts.confirmSuccess": "Dëftesa u konfirmua dhe u ruajt.",
   "budget.receipts.conflict": "Dokumenti u ndryshua diku tjetër. Ringarkoni dhe provoni përsëri.",
+  "budget.receipts.conflictDraftNotice": "Dokumenti ndryshoi ndërkohë.",
+  "budget.receipts.loadLatestVersion": "Ngarko versionin më të fundit",
   "budget.receipts.txAlreadyLinked": "Transaksioni i zgjedhur bankar është tashmë i lidhur me një dokument tjetër.",
   "budget.receipts.staleSource": "Tokeni i kandidatit nuk vlen më (libri ose tregtari/NIP ndryshoi). Detajet u ringarkuan — rishikoni lidhjen dhe konfirmoni përsëri.",
   "budget.receipts.totalMismatch": "Shuma e rreshtave duhet të jetë e barabartë me totalin e dokumentit.",

@@ -520,6 +520,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "확정 중…",
   "budget.receipts.confirmSuccess": "영수증이 확정되어 저장되었습니다.",
   "budget.receipts.conflict": "이 문서가 다른 곳에서 변경되었습니다. 새로고침 후 다시 시도하세요.",
+  "budget.receipts.conflictDraftNotice": "그사이 이 문서가 변경되었습니다.",
+  "budget.receipts.loadLatestVersion": "최신 버전 불러오기",
   "budget.receipts.txAlreadyLinked": "선택한 은행 거래는 이미 다른 문서에 연결되어 있습니다.",
   "budget.receipts.staleSource": "후보 연결 토큰이 더 이상 유효하지 않습니다(원장 변경 또는 가맹점/NIP 수정). 상세 정보를 다시 불러왔으니 연결을 확인한 뒤 다시 확정하세요.",
   "budget.receipts.totalMismatch": "항목 합계가 문서 총액과 같아야 합니다.",

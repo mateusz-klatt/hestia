@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "در حال تأیید…",
   "budget.receipts.confirmSuccess": "رسید تأیید و ذخیره شد.",
   "budget.receipts.conflict": "این سند در جای دیگری تغییر کرده است. بازآوری کنید و دوباره تلاش نمایید.",
+  "budget.receipts.conflictDraftNotice": "این سند در این میان تغییر کرده است.",
+  "budget.receipts.loadLatestVersion": "بارگذاری آخرین نسخه",
   "budget.receipts.txAlreadyLinked": "تراکنش بانکی انتخاب‌شده از قبل به سند دیگری متصل است.",
   "budget.receipts.staleSource": "توکن گزینه اتصال دیگر معتبر نیست (دفتر کل یا نام فروشنده/NIP تغییر کرده است). جزئیات بازخوانی شد — اتصال را بررسی و دوباره تأیید کنید.",
   "budget.receipts.totalMismatch": "مجموع ردیف‌ها باید برابر با جمع کل باشد.",

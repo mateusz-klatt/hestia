@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "正在確認…",
   "budget.receipts.confirmSuccess": "收據已確認並儲存。",
   "budget.receipts.conflict": "此憑證已在別處變更，請重新載入後再試。",
+  "budget.receipts.conflictDraftNotice": "此憑證在此期間已變更。",
+  "budget.receipts.loadLatestVersion": "載入最新版本",
   "budget.receipts.txAlreadyLinked": "所選銀行交易已連結至其他憑證。",
   "budget.receipts.staleSource": "關聯候選權杖已失效（帳本已更新或已變更商家/NIP）。明細已重新載入——請檢查關聯選項並再次確認。",
   "budget.receipts.totalMismatch": "明細加總必須等於憑證總額。",

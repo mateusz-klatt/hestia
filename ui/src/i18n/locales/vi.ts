@@ -520,6 +520,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Đang xác nhận…",
   "budget.receipts.confirmSuccess": "Biên lai đã được xác nhận và lưu.",
   "budget.receipts.conflict": "Chứng từ này đã bị thay đổi ở nơi khác. Hãy tải lại và thử lại.",
+  "budget.receipts.conflictDraftNotice": "Chứng từ này đã thay đổi trong lúc đó.",
+  "budget.receipts.loadLatestVersion": "Tải phiên bản mới nhất",
   "budget.receipts.txAlreadyLinked": "Giao dịch ngân hàng đã chọn hiện đang liên kết với chứng từ khác.",
   "budget.receipts.staleSource": "Mã ứng viên liên kết không còn hợp lệ (sổ cái hoặc cửa hàng/NIP đã đổi). Đã tải lại chi tiết — vui lòng xem lại liên kết và xác nhận lại.",
   "budget.receipts.totalMismatch": "Tổng các dòng phải bằng tổng số tiền của chứng từ.",

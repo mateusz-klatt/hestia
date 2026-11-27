@@ -520,6 +520,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "पुष्टि हो रही है…",
   "budget.receipts.confirmSuccess": "रसीद की पुष्टि हो गई और सहेजी गई।",
   "budget.receipts.conflict": "यह दस्तावेज़ कहीं और बदला गया था। रीलोड करें और फिर कोशिश करें।",
+  "budget.receipts.conflictDraftNotice": "इस बीच यह दस्तावेज़ बदल गया है।",
+  "budget.receipts.loadLatestVersion": "नवीनतम संस्करण लोड करें",
   "budget.receipts.txAlreadyLinked": "चयनित बैंक लेन-देन पहले से किसी अन्य दस्तावेज़ से लिंक है।",
   "budget.receipts.staleSource": "उम्मीदवार लिंक टोकन अब मान्य नहीं है (खाता बही बदली या व्यापारी/NIP बदला गया)। विवरण फिर लोड हुए — लिंक जाँचकर पुनः पुष्टि करें।",
   "budget.receipts.totalMismatch": "पंक्तियों का योग दस्तावेज़ के कुल के बराबर होना चाहिए।",

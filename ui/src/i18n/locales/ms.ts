@@ -520,6 +520,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Mengesahkan…",
   "budget.receipts.confirmSuccess": "Resit disahkan dan disimpan.",
   "budget.receipts.conflict": "Dokumen ini telah diubah di tempat lain. Muat semula dan cuba lagi.",
+  "budget.receipts.conflictDraftNotice": "Dokumen ini telah berubah sementara itu.",
+  "budget.receipts.loadLatestVersion": "Muatkan versi terkini",
   "budget.receipts.txAlreadyLinked": "Transaksi bank yang dipilih sudah dipautkan ke dokumen lain.",
   "budget.receipts.staleSource": "Token calon pautan tidak lagi sah (lejar berubah atau peniaga/NIP disunting). Butiran dimuat semula — semak pautan dan sahkan semula.",
   "budget.receipts.totalMismatch": "Jumlah semua baris mesti sama dengan jumlah dokumen.",

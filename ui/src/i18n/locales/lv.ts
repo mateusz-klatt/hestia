@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Apstiprina…",
   "budget.receipts.confirmSuccess": "Čeks apstiprināts un saglabāts.",
   "budget.receipts.conflict": "Dokuments tika mainīts citur. Pārlādējiet un mēģiniet vēlreiz.",
+  "budget.receipts.conflictDraftNotice": "Dokuments pa to laiku mainījās.",
+  "budget.receipts.loadLatestVersion": "Ielādēt jaunāko versiju",
   "budget.receipts.txAlreadyLinked": "Izvēlētais bankas darījums jau ir sasaistīts ar citu dokumentu.",
   "budget.receipts.staleSource": "Kandidāta sasaistes marķieris vairs nav derīgs (mainījās virsgrāmata vai tirgotājs/NIP). Dati atkārtoti ielādēti — pārbaudiet sasaisti un apstipriniet vēlreiz.",
   "budget.receipts.totalMismatch": "Rindu summai jāatbilst kopsummai.",

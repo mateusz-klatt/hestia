@@ -520,6 +520,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "নিশ্চিত করা হচ্ছে…",
   "budget.receipts.confirmSuccess": "রসিদ নিশ্চিত ও সংরক্ষিত হয়েছে।",
   "budget.receipts.conflict": "এই নথি অন্য কোথাও পরিবর্তিত হয়েছে। পুনরায় লোড করে চেষ্টা করুন।",
+  "budget.receipts.conflictDraftNotice": "ইতিমধ্যে এই নথিটি পরিবর্তিত হয়েছে।",
+  "budget.receipts.loadLatestVersion": "সর্বশেষ সংস্করণ লোড করুন",
   "budget.receipts.txAlreadyLinked": "নির্বাচিত ব্যাংক লেনদেন ইতিমধ্যেই অন্য নথির সাথে যুক্ত।",
   "budget.receipts.staleSource": "প্রার্থী লিংক টোকেন আর বৈধ নয় (খতিয়ান বদলেছে বা ব্যবসায়ী/NIP পরিবর্তিত হয়েছে)। বিবরণ পুনরায় লোড হয়েছে — লিংক নির্বাচন দেখে আবার নিশ্চিত করুন।",
   "budget.receipts.totalMismatch": "সারিগুলোর যোগফল নথির মোটের সমান হতে হবে।",

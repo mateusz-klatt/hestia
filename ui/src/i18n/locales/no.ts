@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Bekrefter…",
   "budget.receipts.confirmSuccess": "Kvittering bekreftet og lagret.",
   "budget.receipts.conflict": "Dokumentet ble endret et annet sted. Last inn på nytt og prøv igjen.",
+  "budget.receipts.conflictDraftNotice": "Dokumentet har endret seg i mellomtiden.",
+  "budget.receipts.loadLatestVersion": "Last inn siste versjon",
   "budget.receipts.txAlreadyLinked": "Den valgte bankposteringen er allerede koblet til et annet dokument.",
   "budget.receipts.staleSource": "Kandidattokenet er ikke lenger gyldig (postering eller forhandler/NIP endret). Detaljer lastet på nytt — kontroller koblingen og bekreft igjen.",
   "budget.receipts.totalMismatch": "Summen av linjene må være lik totalbeløpet.",

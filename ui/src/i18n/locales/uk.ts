@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Підтвердження…",
   "budget.receipts.confirmSuccess": "Чек підтверджено та збережено.",
   "budget.receipts.conflict": "Документ було змінено в іншому місці. Оновіть дані й спробуйте ще раз.",
+  "budget.receipts.conflictDraftNotice": "Документ тим часом змінився.",
+  "budget.receipts.loadLatestVersion": "Завантажити актуальну версію",
   "budget.receipts.txAlreadyLinked": "Вибрана банківська транзакція вже пов’язана з іншим документом.",
   "budget.receipts.staleSource": "Токен кандидата зв’язку більше не дійсний (змінився реєстр або продавець/NIP). Деталі перезавантажено — перевірте зв’язок і підтвердіть знову.",
   "budget.receipts.totalMismatch": "Сума позицій має дорівнювати загальній сумі документа.",

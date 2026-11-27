@@ -520,6 +520,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "確定中…",
   "budget.receipts.confirmSuccess": "レシートを確定して保存しました。",
   "budget.receipts.conflict": "この書類は別の場所で変更されました。再読み込みしてやり直してください。",
+  "budget.receipts.conflictDraftNotice": "この書類はその間に変更されました。",
+  "budget.receipts.loadLatestVersion": "最新バージョンを読み込む",
   "budget.receipts.txAlreadyLinked": "選択した銀行取引はすでに別の書類と紐付けられています。",
   "budget.receipts.staleSource": "候補リンクのトークンが無効になりました（元帳更新または店舗名・NIPの変更）。詳細を再読み込みしましたので紐付けを確認して再確定してください。",
   "budget.receipts.totalMismatch": "明細の合計は書類の合計金額と一致する必要があります。",

@@ -520,6 +520,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Kinukumpirma…",
   "budget.receipts.confirmSuccess": "Nakumpirma at na-save ang resibo.",
   "budget.receipts.conflict": "Binago ang dokumentong ito sa ibang lugar. I-reload at subukan ulit.",
+  "budget.receipts.conflictDraftNotice": "Nagbago ang dokumentong ito pansamantala.",
+  "budget.receipts.loadLatestVersion": "I-load ang pinakabagong bersyon",
   "budget.receipts.txAlreadyLinked": "Ang napiling transaksyon sa bangko ay naka-link na sa ibang dokumento.",
   "budget.receipts.staleSource": "Hindi na wasto ang token ng kandidato (nagbago ang ledger o tindahan/NIP). Na-reload ang detalye — suriin ang link at kumpirmahin ulit.",
   "budget.receipts.totalMismatch": "Ang kabuuan ng mga linya ay dapat katumbas ng kabuuang halaga.",

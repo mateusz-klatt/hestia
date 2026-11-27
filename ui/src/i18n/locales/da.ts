@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Bekræfter…",
   "budget.receipts.confirmSuccess": "Kvittering bekræftet og gemt.",
   "budget.receipts.conflict": "Dokumentet blev ændret et andet sted. Genindlæs og prøv igen.",
+  "budget.receipts.conflictDraftNotice": "Dokumentet har ændret sig i mellemtiden.",
+  "budget.receipts.loadLatestVersion": "Indlæs seneste version",
   "budget.receipts.txAlreadyLinked": "Den valgte bankpostering er allerede koblet til et andet dokument.",
   "budget.receipts.staleSource": "Kandidattoken er ikke længere gyldig (postering ændret eller forhandler/NIP rettet). Detaljer genindlæst — vælg kobling og bekræft igen.",
   "budget.receipts.totalMismatch": "Summen af linjer skal svare til totalbeløbet.",

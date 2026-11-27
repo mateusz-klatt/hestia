@@ -541,6 +541,8 @@ const en = {
   "budget.receipts.confirming": "Confirming…",
   "budget.receipts.confirmSuccess": "Receipt confirmed and saved.",
   "budget.receipts.conflict": "This document was modified elsewhere. Reload and try again.",
+  "budget.receipts.conflictDraftNotice": "This document changed in the meantime.",
+  "budget.receipts.loadLatestVersion": "Load latest version",
   "budget.receipts.txAlreadyLinked": "The selected bank transaction is already linked to another document.",
   "budget.receipts.staleSource": "The candidate link token is no longer valid (ledger updated or merchant/NIP edited). Details reloaded — review link choices and confirm again.",
   "budget.receipts.totalMismatch": "The sum of line items must equal the document total.",

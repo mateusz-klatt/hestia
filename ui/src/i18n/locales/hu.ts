@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Jóváhagyás…",
   "budget.receipts.confirmSuccess": "A nyugta jóváhagyva és elmentve.",
   "budget.receipts.conflict": "A dokumentum időközben módosult. Töltse be újra, majd próbálja meg ismét.",
+  "budget.receipts.conflictDraftNotice": "A dokumentum időközben megváltozott.",
+  "budget.receipts.loadLatestVersion": "Legfrissebb verzió betöltése",
   "budget.receipts.txAlreadyLinked": "A kiválasztott banki tranzakció már egy másik dokumentumhoz kapcsolódik.",
   "budget.receipts.staleSource": "A jelölt hivatkozási token már érvénytelen (főkönyv vagy kereskedő/NIP módosult). Részletek újratöltve — ellenőrizze a kapcsolatot és hagyja jóvá újra.",
   "budget.receipts.totalMismatch": "A tételek összegének meg kell egyeznie a végösszeggel.",

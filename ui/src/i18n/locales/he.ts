@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "מאשר…",
   "budget.receipts.confirmSuccess": "הקבלה אושרה ונשמרה.",
   "budget.receipts.conflict": "מסמך זה שונה במקום אחר. טענו מחדש ונסו שוב.",
+  "budget.receipts.conflictDraftNotice": "המסמך השתנה בינתיים.",
+  "budget.receipts.loadLatestVersion": "טעינת הגרסה העדכנית",
   "budget.receipts.txAlreadyLinked": "תנועת הבנק שנבחרה כבר מקושרת למסמך אחר.",
   "budget.receipts.staleSource": "אסימון המועמד פג או אינו תקף עוד (היומן התעדכן או העסק/NIP שונו). הפרטים נטענו מחדש — בדקו את הקישור ואשרו שוב.",
   "budget.receipts.totalMismatch": "סכום השורות חייב להיות שווה לסכום הכולל.",

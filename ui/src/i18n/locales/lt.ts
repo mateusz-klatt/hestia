@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Tvirtinama…",
   "budget.receipts.confirmSuccess": "Kvitas patvirtintas ir išsaugotas.",
   "budget.receipts.conflict": "Dokumentas buvo pakeistas kitur. Įkelkite iš naujo ir bandykite dar kartą.",
+  "budget.receipts.conflictDraftNotice": "Dokumentas per tą laiką pasikeitė.",
+  "budget.receipts.loadLatestVersion": "Įkelti naujausią versiją",
   "budget.receipts.txAlreadyLinked": "Pasirinkta banko operacija jau susieta su kitu dokumentu.",
   "budget.receipts.staleSource": "Kandidato susiejimo raktas nebegalioja (pasikeitė žurnalas arba prekybininkas/NIP). Duomenys įkelti iš naujo — patikrinkite susiejimą ir patvirtinkite dar kartą.",
   "budget.receipts.totalMismatch": "Eilučių suma turi būti lygi bendrai sumai.",

@@ -518,6 +518,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Confirmation…",
   "budget.receipts.confirmSuccess": "Reçu confirmé et enregistré.",
   "budget.receipts.conflict": "Ce document a été modifié ailleurs. Rechargez et réessayez.",
+  "budget.receipts.conflictDraftNotice": "Ce document a été modifié entre-temps.",
+  "budget.receipts.loadLatestVersion": "Charger la version actuelle",
   "budget.receipts.txAlreadyLinked": "L’opération bancaire sélectionnée est déjà liée à un autre document.",
   "budget.receipts.staleSource": "Le jeton du candidat n’est plus valide (écriture modifiée ou commerçant/NIP édité). Détails rechargés — vérifiez le lien et reconfirmez.",
   "budget.receipts.totalMismatch": "La somme des lignes doit être égale au total du document.",

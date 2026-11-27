@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Onaylanıyor…",
   "budget.receipts.confirmSuccess": "Makbuz onaylandı ve kaydedildi.",
   "budget.receipts.conflict": "Bu belge başka bir yerde değiştirildi. Yenileyip tekrar deneyin.",
+  "budget.receipts.conflictDraftNotice": "Bu belge bu arada değişti.",
+  "budget.receipts.loadLatestVersion": "Güncel sürümü yükle",
   "budget.receipts.txAlreadyLinked": "Seçilen banka işlemi zaten başka bir belgeye bağlı.",
   "budget.receipts.staleSource": "Aday bağlantı belirteci artık geçerli değil (defter veya satıcı/NIP değişti). Ayrıntılar yeniden yüklendi — bağlantıyı inceleyip tekrar onaylayın.",
   "budget.receipts.totalMismatch": "Satırların toplamı belge toplamına eşit olmalıdır.",

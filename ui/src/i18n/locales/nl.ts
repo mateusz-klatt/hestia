@@ -518,6 +518,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Bevestigen…",
   "budget.receipts.confirmSuccess": "Bon bevestigd en opgeslagen.",
   "budget.receipts.conflict": "Dit document is elders gewijzigd. Laad opnieuw en probeer het nog eens.",
+  "budget.receipts.conflictDraftNotice": "Dit document is intussen gewijzigd.",
+  "budget.receipts.loadLatestVersion": "Nieuwste versie laden",
   "budget.receipts.txAlreadyLinked": "De gekozen banktransactie is al gekoppeld aan een ander document.",
   "budget.receipts.staleSource": "Het kandidaattoken is verlopen of ongeldig (grootboek of verkoper/NIP gewijzigd). Details opnieuw geladen — controleer de koppeling en bevestig opnieuw.",
   "budget.receipts.totalMismatch": "De som van de regels moet gelijk zijn aan het totaalbedrag.",

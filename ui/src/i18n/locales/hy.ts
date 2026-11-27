@@ -520,6 +520,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Հաստատվում է…",
   "budget.receipts.confirmSuccess": "Անդորրագիրը հաստատվեց և պահվեց։",
   "budget.receipts.conflict": "Փաստաթուղթը փոխվել է այլ տեղում։ Թարմացրեք և փորձեք կրկին։",
+  "budget.receipts.conflictDraftNotice": "Այս ընթացքում փաստաթուղթը փոխվել է։",
+  "budget.receipts.loadLatestVersion": "Բեռնել վերջին տարբերակը",
   "budget.receipts.txAlreadyLinked": "Ընտրված բանկային գործարքն արդեն կապված է մեկ այլ փաստաթղթի հետ։",
   "budget.receipts.staleSource": "Թեկնածուի կապի թոքենն այլևս վավեր չէ (մատյանը կամ վաճառողը/NIP-ը փոխվել է)։ Մանրամասները վերբեռնվել են — ստուգեք կապը և կրկին հաստատեք։",
   "budget.receipts.totalMismatch": "Տողերի գումարը պետք է հավասար լինի ընդհանուր գումարին։",

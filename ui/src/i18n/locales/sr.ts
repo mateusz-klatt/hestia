@@ -519,6 +519,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "Потврђивање…",
   "budget.receipts.confirmSuccess": "Рачун је потврђен и сачуван.",
   "budget.receipts.conflict": "Документ је у међувремену измењен. Поново учитајте и покушајте.",
+  "budget.receipts.conflictDraftNotice": "Документ се у међувремену променио.",
+  "budget.receipts.loadLatestVersion": "Учитај најновију верзију",
   "budget.receipts.txAlreadyLinked": "Изабрана банковна трансакција је већ повезана са другим документом.",
   "budget.receipts.staleSource": "Токен кандидата више не важи (књига или трговац/NIP су измењени). Детаљи су поново учитани — проверите везу и потврдите поново.",
   "budget.receipts.totalMismatch": "Збир ставки мора бити једнак укупном износу.",

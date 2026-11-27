@@ -520,6 +520,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "กำลังยืนยัน…",
   "budget.receipts.confirmSuccess": "ยืนยันและบันทึกใบเสร็จแล้ว",
   "budget.receipts.conflict": "เอกสารนี้ถูกแก้ไขจากที่อื่น โหลดใหม่แล้วลองอีกครั้ง",
+  "budget.receipts.conflictDraftNotice": "เอกสารนี้มีการเปลี่ยนแปลงในระหว่างนี้",
+  "budget.receipts.loadLatestVersion": "โหลดเวอร์ชันล่าสุด",
   "budget.receipts.txAlreadyLinked": "รายการธนาคารที่เลือกเชื่อมโยงกับเอกสารอื่นอยู่แล้ว",
   "budget.receipts.staleSource": "โทเค็นตัวเลือกการเชื่อมโยงใช้ไม่ได้แล้ว (รายการเดินบัญชีหรือร้านค้า/NIP เปลี่ยนแปลง) โหลดรายละเอียดใหม่แล้ว — โปรดตรวจสอบและยืนยันอีกครั้ง",
   "budget.receipts.totalMismatch": "ผลรวมของรายการต้องเท่ากับยอดรวมเอกสาร",

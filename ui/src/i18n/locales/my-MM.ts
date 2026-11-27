@@ -520,6 +520,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.confirming": "အတည်ပြုနေသည်…",
   "budget.receipts.confirmSuccess": "ပြေစာကို အတည်ပြုပြီး သိမ်းဆည်းပြီးပါပြီ။",
   "budget.receipts.conflict": "ဤစာရွက်စာတမ်းကို အခြားနေရာတွင် ပြောင်းလဲထားပါသည်။ ပြန်တင်၍ ထပ်စမ်းကြည့်ပါ။",
+  "budget.receipts.conflictDraftNotice": "ဤစာရွက်စာတမ်းသည် ကြားထဲတွင် ပြောင်းလဲသွားပါသည်။",
+  "budget.receipts.loadLatestVersion": "နောက်ဆုံးဗားရှင်းကို တင်ရန်",
   "budget.receipts.txAlreadyLinked": "ရွေးချယ်ထားသော ဘဏ်လွှဲငွေသည် အခြားစာရွက်စာတမ်းနှင့် ချိတ်ဆက်ပြီးသားဖြစ်သည်။",
   "budget.receipts.staleSource": "ချိတ်ဆက်မှု ရွေးချယ်တိုကင် သက်တမ်းကုန်သွားပြီ (စာရင်း သို့မဟုတ် ဆိုင်/NIP ပြောင်းလဲထားသည်)။ အသေးစိတ်ကို ပြန်တင်ပြီး ချိတ်ဆက်မှုကို စစ်ဆေးကာ ထပ်မံအတည်ပြုပါ။",
   "budget.receipts.totalMismatch": "စာကြောင်းများ၏ ပေါင်းလဒ်သည် စုစုပေါင်းပမာဏနှင့် တူညီရမည်။",
