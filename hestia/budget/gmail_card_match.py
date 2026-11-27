@@ -2,6 +2,7 @@
 import re
 from dataclasses import dataclass
 from datetime import date
+from enum import Enum, auto
 
 from sqlalchemy import case, func, or_
 
@@ -48,7 +49,6 @@ _GOOGLE_BILLING = re.compile(
 )
 _GOOGLE_ISSUERS = {("google",), ("google", "commerce"), ("google", "ireland"), ("google", "llc"),
                    ("google", "payment"), ("google", "payments"), ("google", "poland")}
-_UNCORROBORATED_GOOGLE_DEBIT = object()
 _BILLING_DESCRIPTORS = {
     ("apple", "distribution", "international"): re.compile(r"apple\.com/bill(?:\s+cork)?(?:\s+[a-z]{2})?"),
 }
@@ -61,6 +61,29 @@ class CardPurchase:
     fingerprint: str
     evidence: dict
     receipt_date: str
+
+
+class _CardCandidateBlock(Enum):
+    OCCUPIED = auto()
+    UNCORROBORATED_GOOGLE_DEBIT = auto()
+
+
+@dataclass(frozen=True, repr=False)
+class CardCandidate:
+    transaction_key: tuple[str, str]
+    result: CardPurchase | _CardCandidateBlock
+
+    @property
+    def available_purchase(self) -> CardPurchase | None:
+        return self.result if isinstance(self.result, CardPurchase) else None
+
+    @property
+    def is_corroborated(self) -> bool:
+        return self.result is not _CardCandidateBlock.UNCORROBORATED_GOOGLE_DEBIT
+
+    @property
+    def is_occupied(self) -> bool:
+        return self.result is _CardCandidateBlock.OCCUPIED
 
 
 def _card_amount_matches(payload, currency, amount, lines, metadata):
@@ -154,7 +177,7 @@ def _card_row(session, owner, invoice, transaction, account_kind, amount, receip
             return None
         if not amount_matches or not any(_google_billing_matches(google_issuer, line) for line in descriptors):
             # An uncorroborated Google debit still prevents a unique match in this window.
-            return _UNCORROBORATED_GOOGLE_DEBIT
+            return _CardCandidateBlock.UNCORROBORATED_GOOGLE_DEBIT
     elif not _merchant_matches(invoice, lines, creditor):
         return None
     evidence = link_evidence(owner, transaction.account_id, transaction.entry_reference, payload,
@@ -163,27 +186,27 @@ def _card_row(session, owner, invoice, transaction, account_kind, amount, receip
     return CardPurchase(transaction.account_id, transaction.entry_reference, fingerprint, evidence, receipt_date)
 
 
-def match_card_purchase(session, owner, invoice, *, received_date=None, include_receipt_id=None):
-    """Caller holds the write transaction that will claim the match; other links stay reserved."""
+def card_purchase_candidates(session, owner, invoice, *, received_date=None, include_receipt_id=None):
+    """Enumerate plausible debits, including reservations and uncorroborated Google debits."""
     if isinstance(received_date, date):
         received_date = received_date.isoformat()
     receipt_date = _bound_date(invoice.issue_date or received_date)
     if (not receipt_date or getattr(invoice, "document_kind", "invoice") not in ("invoice", "receipt")
             or getattr(invoice, "payment_method", None) in ("cash", "mixed")):
-        return None
+        return []
     if include_receipt_id is not None and _receipt_in_group(session, owner, include_receipt_id):
-        return None
+        return []
     try:
         amount = canonical_money(invoice.amount)
     except AnalyticsError:
-        return None
+        return []
     if amount == "0" or amount.startswith("-"):
-        return None
+        return []
     last4 = getattr(invoice, "card_last4", None)
     try:
         mapped_accounts = load_card_accounts().get(last4) if last4 is not None else None
     except BudgetConfigError:
-        return None
+        return []
     issuer = merchant_word_tokens(invoice.issuer)
     google_issuer = issuer if issuer in _GOOGLE_ISSUERS or _distinctive_shop_words(invoice.issuer) == {"google"} else None
     target = date.fromisoformat(receipt_date)
@@ -197,7 +220,7 @@ def match_card_purchase(session, owner, invoice, *, received_date=None, include_
     filters = (func.json_extract(valid_json, "$.status") == "BOOK",
                func.json_extract(valid_json, "$.credit_debit_indicator") == "DBIT",
                or_(*(func.json_extract(valid_json, "$." + key).between(start, end) for key in _DATE_KEYS)))
-    result = None
+    candidates = []
     for transaction, account_kind, occupied in BudgetReceiptStore._candidate_rows(
         session, owner, include_receipt_id=include_receipt_id, card_filters=filters
     ):
@@ -207,10 +230,18 @@ def match_card_purchase(session, owner, invoice, *, received_date=None, include_
         except (AnalyticsError, KeyError, ValueError, TypeError, RecursionError):
             continue
         if candidate is not None:
-            if occupied or result is not None:
-                return None
-            result = candidate
-    return None if result is _UNCORROBORATED_GOOGLE_DEBIT else result
+            if occupied and candidate is not _CardCandidateBlock.UNCORROBORATED_GOOGLE_DEBIT:
+                candidate = _CardCandidateBlock.OCCUPIED
+            candidates.append(CardCandidate((transaction.account_id, transaction.entry_reference), candidate))
+    return candidates
+
+
+def match_card_purchase(session, owner, invoice, *, received_date=None, include_receipt_id=None):
+    """Return a purchase only when its sole plausible debit is available."""
+    candidates = card_purchase_candidates(
+        session, owner, invoice, received_date=received_date, include_receipt_id=include_receipt_id,
+    )
+    return candidates[0].available_purchase if len(candidates) == 1 else None
 
 
 def still_matches_card(session, row):

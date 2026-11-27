@@ -266,10 +266,12 @@ def _fingerprint(row):
         return None
 
 
-def _latch_receipt_source_changed(session, owner, row, now, *, linked=None):
+def _latch_receipt_source_changed(session, owner, row, now, *, linked=None, unlink=False, actor=None):
     before = audit_payload(row, "source_changed")
     row.status, row.version, row.updated_at = "needs_review", row.version + 1, now
-    after = audit_payload(row, "source_changed")
+    if unlink:
+        row.linked_account_id = row.linked_entry_ref = row.linked_fingerprint = row.linked_evidence = None
+    after = audit_payload(row, "source_changed", actor)
     if linked is not None:
         before["linked"] = after["linked"] = linked
     write_audit(session, owner, row, "source_changed", before, after, now)
