@@ -211,11 +211,12 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
             if not enabled():
                 raise api._Rejected(404, "budget_receipts_disabled")
             actor = request.get(device_token.ACTOR_REQUEST_KEY, owner) if device_id is not None else owner
-            include_linked_tx = version >= _LINK_INDICATORS_VERSION
-            result = await api._settled_thread(
-                lambda: _run(owner, operation, values, secret, device_id, actor,
-                             include_linked_transaction=include_linked_tx),
-            )
+            if operation in ("list", "search") and version >= _LINK_INDICATORS_VERSION:
+                result = await api._settled_thread(
+                    lambda: _run(owner, operation, values, secret, device_id, actor, include_linked_transaction=True),
+                )
+            else:
+                result = await api._settled_thread(lambda: _run(owner, operation, values, secret, device_id, actor))
             return _response(operation, result, version)
         except (ReceiptError, device_token.DeviceTokenError) as exc:
             return api._error(exc.status, exc.code)

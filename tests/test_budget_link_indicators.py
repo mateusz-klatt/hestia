@@ -371,13 +371,15 @@ class LinkIndicatorsStoreTests(AnalyticsCase):
             self.assertNotIn(forbidden, joined_logs)
 
     def test_explain_query_plan_uses_indexes_on_both_sides(self):
-        captured = {"tx": None, "rcpt": None}
+        captured = {"tx": None, "rcpt_page": None, "rcpt_tx": None}
 
         def listener(_conn, _cursor, statement, params, *_args):
             if "LEFT OUTER JOIN budget_receipts" in statement:
                 captured["tx"] = (statement, params)
             elif "LEFT OUTER JOIN budget_transactions" in statement:
-                captured["rcpt"] = (statement, params)
+                captured["rcpt_tx"] = (statement, params)
+            elif "FROM budget_receipts" in statement and "LIMIT ?" in statement:
+                captured["rcpt_page"] = (statement, params)
 
         event.listen(self.engine, "before_cursor_execute", listener)
         try:
@@ -387,20 +389,102 @@ class LinkIndicatorsStoreTests(AnalyticsCase):
             event.remove(self.engine, "before_cursor_execute", listener)
 
         self.assertIsNotNone(captured["tx"])
-        self.assertIsNotNone(captured["rcpt"])
+        self.assertIsNotNone(captured["rcpt_page"])
+        self.assertIsNotNone(captured["rcpt_tx"])
         with self.engine.connect() as conn:
             tx_plan = conn.exec_driver_sql("EXPLAIN QUERY PLAN " + captured["tx"][0], captured["tx"][1]).fetchall()
-            rcpt_plan = conn.exec_driver_sql("EXPLAIN QUERY PLAN " + captured["rcpt"][0], captured["rcpt"][1]).fetchall()
+            page_plan = conn.exec_driver_sql("EXPLAIN QUERY PLAN " + captured["rcpt_page"][0], captured["rcpt_page"][1]).fetchall()
+            rcpt_plan = conn.exec_driver_sql("EXPLAIN QUERY PLAN " + captured["rcpt_tx"][0], captured["rcpt_tx"][1]).fetchall()
         tx_details = "\n".join(row[3] for row in tx_plan)
+        page_details = "\n".join(row[3] for row in page_plan)
         rcpt_details = "\n".join(row[3] for row in rcpt_plan)
         self.assertIn("uq_budget_receipts_tx_link (linked_account_id=? AND linked_entry_ref=?)", tx_details)
         self.assertNotIn("ix_budget_receipts_owner_date", tx_details)
         self.assertIn("ix_budget_receipt_link_members_group", tx_details)
         self.assertNotIn("SCAN budget_", tx_details)
-        self.assertIn("ix_budget_receipts_owner_date", rcpt_details)
+        self.assertIn("ix_budget_receipts_owner_date", page_details)
+        self.assertNotIn("SCAN budget_", page_details)
         self.assertIn("uq_budget_receipt_link_groups_evidence", rcpt_details)
         self.assertIn("sqlite_autoindex_budget_transactions_1", rcpt_details)
         self.assertNotIn("SCAN budget_", rcpt_details)
+
+    def test_receipts_list_applies_cursor_and_limit_in_sql_and_loads_tx_only_for_page(self):
+        draft_a = "30000000-0000-4000-8000-0000000000d1"
+        draft_b = "30000000-0000-4000-8000-0000000000d2"
+        with self.sessions.begin() as session:
+            session.get(db.BudgetTransaction, (self.accounts["a"], "tx-domain")).payload_json = "{corrupt-off-page"
+            session.add_all((
+                db.BudgetReceipt(
+                    id=draft_a, owner="owner", raw_shop_name="Draft A",
+                    receipt_date=None, total_amount="5.00", currency="PLN", payment_method="card",
+                    status="draft", source_kind="paste", version=1,
+                    created_at=self.now, updated_at=self.now,
+                ),
+                db.BudgetReceipt(
+                    id=draft_b, owner="owner", raw_shop_name="Draft B",
+                    receipt_date=None, total_amount="6.00", currency="PLN", payment_method="card",
+                    status="draft", source_kind="paste", version=1,
+                    created_at=self.now, updated_at=self.now,
+                ),
+            ))
+
+        recorded = []
+
+        def on_sql(_conn, _cursor, statement, params, *_args):
+            if "budget_receipts" in statement:
+                recorded.append((statement, params))
+
+        event.listen(self.engine, "before_cursor_execute", on_sql)
+        self.addCleanup(event.remove, self.engine, "before_cursor_execute", on_sql)
+
+        # Page 1 (limit=1 -> _R_UNLINKED, 2026-11-12): LIMIT in SQL, tx query only for 1 id, off-page corrupt JSON untouched.
+        with self.assertNoLogs("hestia.budget.receipt_store", level="WARNING"):
+            p1 = self.receipts.list("owner", {"limit": 1}, include_linked_transaction=True)
+        self.assertEqual([r["receipt_id"] for r in p1["receipts"]], [_R_UNLINKED])
+        self.assertIsNotNone(p1["next_cursor"])
+        page_sql = [item for item in recorded if "ORDER BY budget_receipts.receipt_date DESC" in item[0]]
+        tx_sql = [item for item in recorded if "LEFT OUTER JOIN budget_transactions" in item[0]]
+        self.assertEqual(len(page_sql), 1)
+        self.assertIn("LIMIT ?", page_sql[0][0])
+        self.assertNotIn("budget_transactions", page_sql[0][0])
+        self.assertEqual(len(tx_sql), 1)
+        self.assertEqual(list(tx_sql[0][1]), ["owner", _R_UNLINKED])
+
+        # Page 2 (cursor on dated row -> _R_GRP_1, 2026-11-11): cursor applied in SQL, still zero warnings for off-page corrupt row.
+        recorded.clear()
+        with self.assertNoLogs("hestia.budget.receipt_store", level="WARNING"):
+            p2 = self.receipts.list("owner", {"limit": 1, "cursor": p1["next_cursor"]}, include_linked_transaction=True)
+        self.assertEqual([r["receipt_id"] for r in p2["receipts"]], [_R_GRP_1])
+        self.assertEqual(p2["receipts"][0]["linked_transaction"]["booking_date"], "2026-11-11")
+        page_sql2 = [item for item in recorded if "ORDER BY budget_receipts.receipt_date DESC" in item[0]]
+        tx_sql2 = [item for item in recorded if "LEFT OUTER JOIN budget_transactions" in item[0]]
+        self.assertIn("LIMIT ?", page_sql2[0][0])
+        self.assertIn("budget_receipts.receipt_date < ?", page_sql2[0][0])
+        self.assertEqual(list(tx_sql2[0][1]), ["owner", _R_GRP_1])
+
+        # Search with limit=1 also loads linked_transaction only for the single page receipt.
+        recorded.clear()
+        with self.assertNoLogs("hestia.budget.receipt_store", level="WARNING"):
+            sp1 = self.receipts.search("owner", {"query": "Apple", "limit": 1}, include_linked_transaction=True)
+        self.assertEqual([r["receipt_id"] for r in sp1["receipts"]], [_R_GRP_1])
+        self.assertIsNotNone(sp1["next_cursor"])
+        search_tx_sql = [item for item in recorded if "LEFT OUTER JOIN budget_transactions" in item[0]]
+        self.assertEqual(len(search_tx_sql), 1)
+        self.assertEqual(list(search_tx_sql[0][1]), ["owner", _R_GRP_1])
+
+        # Walk all pages with limit=1 (including NULL-date cursor transition draft_a -> draft_b) and verify exact full order.
+        expected_ids = [r["receipt_id"] for r in self.receipts.list("owner", {"limit": 50})["receipts"]]
+        walked = []
+        cursor = None
+        while True:
+            req = {"limit": 1} if cursor is None else {"limit": 1, "cursor": cursor}
+            page = self.receipts.list("owner", req, include_linked_transaction=True)
+            walked.extend(r["receipt_id"] for r in page["receipts"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
+        self.assertEqual(walked, expected_ids)
+        self.assertEqual(walked[-2:], [draft_a, draft_b])
 
     def test_capability_device_token_and_flag_gating_in_stores(self):
         store_sql.activate_catalog_compat(path=self.path)
@@ -779,3 +863,27 @@ class LinkIndicatorsHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("budget_receipt_linked_tx_json_invalid", joined_logs)
         self.assertNotIn("{corrupt-json", joined_logs)
         self.assertNotIn(_SECRET_CREDITOR, joined_logs)
+
+    async def test_parse_text_keeps_positional_run_signature_for_stale_token_recheck(self):
+        pair = await self.client.post(receipt_api.PREFIX + "/device-token/pair-code", json={},
+                                      headers=self.headers(origin=True))
+        self.assertEqual(pair.status, 200, await pair.text())
+        redeem = await self.client.post(device_token.REDEEM_PATH,
+                                        json={"code": (await pair.json())["code"], "device_name": "Phone"})
+        self.assertEqual(redeem.status, 200, await redeem.text())
+        device = await redeem.json()
+        orig_run = receipt_api._run
+
+        def revoke_before_run(*args):
+            with self.sessions.begin() as session:
+                session.get(db.BudgetReceiptDeviceToken, device["token_id"]).revoked_at = 1.0
+            return orig_run(*args)
+
+        with mock.patch.object(receipt_api, "_run", side_effect=revoke_before_run):
+            resp = await self.client.post(
+                device_token.PARSE_PATH,
+                json={"text": "Biedronka\n2026-11-10\nChleb 5,00\nSUMA PLN 5,00"},
+                headers={"Authorization": "Bearer " + device["token"]},
+            )
+        self.assertEqual(resp.status, 401, await resp.text())
+        self.assertEqual((await resp.json())["error"], "device_token_revoked")

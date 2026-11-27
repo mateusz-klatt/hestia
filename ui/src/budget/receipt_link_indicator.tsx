@@ -10,9 +10,12 @@ export function LinkedTransactionIndicator({ transaction, locale }: {
   locale: string;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const inlineText = transaction.booking_date === null || transaction.booking_date === ""
+  const bookingDate = transaction.booking_date !== null && transaction.booking_date !== ""
+    ? transaction.booking_date
+    : null;
+  const inlineText = bookingDate === null
     ? transaction.account_label
-    : `${transaction.account_label} · ${transaction.booking_date}`;
+    : `${transaction.account_label} · ${bookingDate}`;
   const amountText = transaction.amount !== null && transaction.currency !== null
     ? formatAmount(transaction.amount, transaction.currency, locale)
     : null;
@@ -28,7 +31,11 @@ export function LinkedTransactionIndicator({ transaction, locale }: {
       onClick={() => { setExpanded((current) => !current); }}
     >
       <span className="budget-link-icon" aria-hidden="true">🏦</span>
-      <span className="budget-link-detail">{expanded ? details : inlineText}</span>
+      <span className="budget-link-detail">
+        <span className="budget-link-primary">{transaction.account_label}</span>
+        {bookingDate === null ? null : <span className="budget-link-meta">{" · "}{bookingDate}</span>}
+        {expanded && amountText !== null ? <span className="budget-link-meta">{" · "}{amountText}</span> : null}
+      </span>
     </button>
   );
 }

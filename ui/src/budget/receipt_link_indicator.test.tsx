@@ -8,6 +8,11 @@ import { ReceiptsView } from "./receipts";
 import type { ReceiptsApi } from "./receipts_api";
 import type { ReceiptSummary } from "./receipts_model";
 
+const fsModule = "node:fs";
+const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as {
+  readFileSync: (path: string, encoding: "utf8") => string;
+};
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 function ok<T>(data: T) {
@@ -116,6 +121,48 @@ describe("LinkedTransactionIndicator and ReceiptsView bank link indicators", () 
       await Promise.resolve();
     });
     expect(badge?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("wraps expanded details at full width at <=480px so date and amount stay visible with long account labels", async () => {
+    const longLabel = "Very Long Synthetic Cooperative Bank · Premium Multi-Currency Account ••1234";
+    await act(async () => {
+      root.render(
+        <LinkedTransactionIndicator
+          transaction={{
+            account_label: longLabel,
+            booking_date: "2026-11-10",
+            amount: "42.50",
+            currency: "PLN",
+          }}
+          locale="en"
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    const badge = host.querySelector<HTMLButtonElement>("button.budget-receipt-tx-link");
+    expect(badge).not.toBeNull();
+    expect(badge?.querySelector(".budget-link-primary")?.textContent).toBe(longLabel);
+    expect([...badge?.querySelectorAll(".budget-link-meta") ?? []].map((el) => el.textContent.trim()))
+      .toEqual(["· 2026-11-10"]);
+
+    await act(async () => {
+      badge?.click();
+      await Promise.resolve();
+    });
+    expect(badge?.getAttribute("aria-expanded")).toBe("true");
+    expect(badge?.querySelector(".budget-link-primary")?.textContent).toBe(longLabel);
+    expect([...badge?.querySelectorAll(".budget-link-meta") ?? []].map((el) => el.textContent.trim()))
+      .toEqual(["· 2026-11-10", "· 42.50 PLN"]);
+
+    const css = readFileSync("src/budget/budget.css", "utf8");
+    expect(css).toMatch(/\.budget-link-primary\s*\{[^}]*text-overflow:\s*ellipsis;/);
+    expect(css).toMatch(/\.budget-link-meta\s*\{[^}]*flex:\s*0 0 auto;[^}]*white-space:\s*nowrap;/);
+    expect(css).not.toMatch(/\.budget-link-meta\s*\{[^}]*text-overflow:\s*ellipsis/);
+    const narrowStart = css.indexOf("@media (max-width: 480px)");
+    const narrowBlock = css.slice(narrowStart, css.indexOf(".budget-one-off", narrowStart));
+    expect(narrowBlock).toMatch(/\.budget-link-indicator\[aria-expanded="true"\]\s*\{[^}]*flex-basis:\s*100%;[^}]*width:\s*100%;[^}]*white-space:\s*normal;/);
+    expect(narrowBlock).toMatch(/\.budget-link-indicator\[aria-expanded="true"\]\s+\.budget-link-detail\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;[^}]*max-width:\s*none;/);
   });
 
   it("renders inline bank link indicator on linked receipts in Paragony i dowody and omits it when unlinked", async () => {

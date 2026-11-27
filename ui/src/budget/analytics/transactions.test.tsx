@@ -1543,7 +1543,8 @@ describe("manual own-transfer pairing", () => {
     // Tapping the indicator button expands details inline (for touch viewports) without opening the row drawer.
     await click(firstBadge as HTMLButtonElement);
     expect(firstBadge?.getAttribute("aria-expanded")).toBe("true");
-    expect(firstBadge?.querySelector(".budget-link-detail")?.textContent).toContain("42.50 PLN");
+    expect(firstBadge?.querySelector(".budget-link-primary")?.textContent).toBe("Biedronka");
+    expect(firstBadge?.querySelector(".budget-link-meta")?.textContent).toContain("42.50 PLN");
     expect(host.querySelector(".budget-entry-drawer")).toBeNull();
     await click(firstBadge as HTMLButtonElement);
     expect(firstBadge?.getAttribute("aria-expanded")).toBe("false");

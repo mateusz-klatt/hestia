@@ -757,7 +757,10 @@ function TransactionReceiptLink({ receipt, locale }: {
       onClick={() => { setExpanded((current) => !current); }}
     >
       <span className="budget-link-icon" aria-hidden="true">🧾</span>
-      <span className="budget-link-detail">{expanded ? details : shopText}</span>
+      <span className="budget-link-detail">
+        <span className="budget-link-primary">{shopText}</span>
+        {expanded && amountText !== null ? <span className="budget-link-meta">{" · "}{amountText}</span> : null}
+      </span>
     </button>
   );
 }
