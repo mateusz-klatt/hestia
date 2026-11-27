@@ -631,6 +631,7 @@ class BudgetMortgageSchedule(Base):
     remind_days_before: Mapped[int]
     destination_kind: Mapped[str]
     enabled: Mapped[bool]
+    match_references: Mapped[list[dict[str, str]] | None] = mapped_column(JSON(none_as_null=True))
     version: Mapped[int]
     created_at: Mapped[float]
     updated_at: Mapped[float]

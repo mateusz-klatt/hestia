@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from datetime import date, datetime, timezone
+from hashlib import sha256
 import json
 import os
 import random
@@ -38,6 +39,10 @@ def _observed_hints(days, *, label=None, description="", amount="100"):
                               "f" * 64, counterparty_name=label, description=description)
                for index, day in enumerate(days)]
     return detect_recurring_charges("test-owner", entries, {"source"})
+
+
+def _match_reference(token):
+    return {"hash": sha256(token.encode("ascii")).hexdigest(), "last4": token[-4:]}
 
 
 def _forecast(**overrides):
@@ -380,6 +385,107 @@ class BudgetForecastTests(unittest.TestCase):
         self.assertEqual([row["schedule_id"] for row in result["deduplications"]], ["a"])
         self.assertEqual([row["schedule_id"] for row in result["months"][0]["items"]], ["a", "b"])
 
+    def test_linked_variable_rate_history_uses_schedule_amount_each_month(self):
+        reference = "TESTLN1234"
+        schedule = _schedule("loan", start_date="2026-01-01", due_day=5, amount="200",
+                             match_references=[_match_reference(reference)])
+        history = []
+        for month, amount, delta in ((7, "200", "0"), (8, "199", "-1"), (9, "201", "1"),
+                                     (10, "199", "-1"), (11, "201", "1")):
+            history.append(RecurringEntry("test-owner", "source", f"txn-{month}", amount, "PLN", "DBIT", "expense",
+                                          f"2026-{month:02d}-05", "f" * 64, description=f"RATA KREDYTU NR {reference}"))
+            if len(history) < 3:
+                continue
+            with self.subTest(month=month):
+                hints = detect_recurring_charges("test-owner", history, {"source"})
+                result = _forecast(evaluation_date=f"2026-{month:02d}-07", schedules=[schedule], hints=hints, months=2)
+                self.assertEqual([(row["match_type"], row["amount"], row["amount_delta"]) for row in result["deduplications"]],
+                                 [("linked", amount, delta)])
+                self.assertEqual([[(item["source"], item["amount"]) for item in row["items"]] for row in result["months"]],
+                                 [[("mortgage", "200")], [("mortgage", "200")]])
+                self.assertNotIn(reference, json.dumps(result))
+                self.assertIn("1234", result["deduplications"][0]["recurring_label"])
+
+    def test_links_keep_same_day_loans_separate_and_also_cover_insurance(self):
+        first, second, insurance = "TESTLN1234", "TESTLN5678", "INSURANCE3456"
+        bank_insurance_reference = "İNSURANCE3456"
+        schedules = [
+            _schedule("loan-one", due_day=5, match_references=[_match_reference(first), _match_reference(insurance)]),
+            _schedule("loan-two", due_day=5, match_references=[_match_reference(second)]),
+            _schedule("unlinked", due_day=5),
+        ]
+        hints = [_hint(f"RATA KREDYTU NR {first}", last_date="2026-10-05", amount="99.5"),
+                 _hint(f"RATA KREDYTU NR {second}", last_date="2026-10-05", amount="100.5"),
+                 _hint(f"UBEZPIECZENIE NR {bank_insurance_reference}", last_date="2026-10-10", amount="25")]
+        result = _forecast(evaluation_date="2026-11-01", schedules=schedules, hints=hints, months=1)
+        self.assertEqual(result, _forecast(evaluation_date="2026-11-01", schedules=schedules[::-1], hints=hints[::-1], months=1))
+        self.assertEqual([(row["schedule_id"], row["match_type"], row["amount_delta"], row["day_distance"])
+                          for row in result["deduplications"]],
+                         [("loan-one", "linked", "-0.5", 0), ("loan-one", "linked", "-75", 5),
+                          ("loan-two", "linked", "0.5", 0)])
+        self.assertEqual(result["totals"], [
+            {"currency": "PLN", "total": "300", "scheduled_total": "300", "estimated_total": "0"},
+        ])
+        for reference in (first, second, bank_insurance_reference):
+            self.assertNotIn(reference, json.dumps(result, ensure_ascii=False))
+
+    def test_link_checks_reference_currency_and_due_window(self):
+        reference = "TESTLN1234"
+        label = f"RATA KREDYTU NR {reference}"
+        schedule = _schedule("linked", due_day=5, match_references=[_match_reference(reference)])
+        for hint in (_hint(label, last_date="2026-10-11"),
+                     _hint(label, last_date="2026-10-05", currency="EUR"),
+                     _hint(f"RATA KREDYTU NR {reference}5", last_date="2026-10-05"),
+                     _hint("unrelated monthly debit", last_date="2026-10-05")):
+            with self.subTest(label=hint.label, date=hint.last_date, currency=hint.currency):
+                result = _forecast(evaluation_date="2026-11-01", schedules=[schedule], hints=[hint], months=1)
+                self.assertEqual(result["deduplications"], [])
+                self.assertEqual({item["source"] for item in result["months"][0]["items"]}, {"mortgage", "recurring"})
+                self.assertNotIn(reference, json.dumps(result))
+
+    def test_inferred_matching_requires_loan_label_and_inclusive_amount_and_day_limits(self):
+        schedule = _schedule("unlinked", due_day=5)
+        cases = (
+            ("rAtA   KrEdYtU", "90", "2026-10-02", "-10"),
+            ("kredyt hipoteczny", "110", "2026-10-08", "10"),
+            ("POZ\u0307YCZKA", "99.5", "2026-10-05", "-0.5"),
+            ("Leasing", "100", "2026-10-05", "0"),
+            ("kredyt", "89.99999", "2026-10-05", None),
+            ("kredyt", "110.00001", "2026-10-05", None),
+            ("kredyt", "100", "2026-10-09", None),
+            ("przedkredyt kredytowy", "99.5", "2026-10-05", None),
+        )
+        for label, amount, observed, delta in cases:
+            with self.subTest(label=label, amount=amount, observed=observed):
+                hint = _hint(label, amount=amount, last_date=observed)
+                result = _forecast(evaluation_date="2026-11-01", schedules=[schedule], hints=[hint], months=1)
+                self.assertEqual([(row["match_type"], row["amount_delta"]) for row in result["deduplications"]],
+                                 [] if delta is None else [("inferred", delta)])
+                expected = {"mortgage", "recurring"} if delta is None else {"mortgage"}
+                self.assertEqual({item["source"] for item in result["months"][0]["items"]}, expected)
+
+    def test_ambiguous_inference_keeps_all_hints_visible(self):
+        first = _schedule("loan-one", due_day=5)
+        second = _schedule("loan-two", due_day=5, amount="105")
+        installment = _hint("RATA KREDYTU", last_date="2026-10-05")
+        leasing = _hint("LEASING", last_date="2026-10-06", amount="97")
+        for schedules, hints in (([first], [installment, leasing]), ([first, second], [installment])):
+            with self.subTest(schedules=len(schedules), hints=len(hints)):
+                result = _forecast(evaluation_date="2026-11-01", schedules=schedules, hints=hints, months=1)
+                self.assertEqual(result["deduplications"], [])
+                self.assertEqual([item["label"] for item in result["months"][0]["items"] if item["source"] == "recurring"],
+                                 [hint.label for hint in hints])
+
+    def test_conflicting_links_keep_hint_visible_and_do_not_fall_back_to_inference(self):
+        reference = "TESTLN1234"
+        schedules = [_schedule(name, due_day=5, match_references=[_match_reference(reference)])
+                     for name in ("loan-one", "loan-two")]
+        schedules.append(_schedule("unlinked", due_day=5))
+        hint = _hint(f"RATA KREDYTU NR {reference}", last_date="2026-10-05")
+        result = _forecast(evaluation_date="2026-11-01", schedules=schedules, hints=[hint], months=1)
+        self.assertEqual(result["deduplications"], [])
+        self.assertEqual(len(result["months"][0]["items"]), 4)
+
     def test_permutations_preserve_total_order_even_when_displayed_fields_tie(self):
         schedules = [_schedule("b"), _schedule("a"), _schedule("eur", currency="EUR")]
         hints = [_hint("duplicate"),
@@ -668,7 +774,7 @@ class CategoryBaselineTests(unittest.TestCase):
         result = _forecast(baselines=[_baseline(monthly_amounts=("10", "20"))], months=1)
         self.assertEqual(result["months"][0]["items"], [])
         self.assertEqual(result["deduplications"], [])
-        self.assertEqual(result["rule_version"], 1)
+        self.assertEqual(result["rule_version"], 2)
 
     def test_build_sorts_amounts_and_keeps_current_spend_apart(self):
         expenses = [

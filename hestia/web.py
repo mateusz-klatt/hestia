@@ -227,6 +227,7 @@ _ROUTE_MIN_ROLE = {
     ("GET", "/api/budget/analytics/recurring"): _ADMIN,
     ("GET", "/api/budget/analytics/spending-limits"): _ADMIN,
     ("GET", "/api/budget/analytics/mortgages"): _ADMIN,
+    ("GET", "/api/budget/analytics/mortgage-reference-candidates"): _ADMIN,
     ("GET", "/api/budget/analytics/inbox"): _ADMIN,
     ("GET", "/api/budget/analytics/quarantine"): _ADMIN,
     ("GET", "/api/budget/analytics/forecast"): _ADMIN,
