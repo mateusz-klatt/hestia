@@ -312,6 +312,10 @@ def _reconcile_one_to_one(session, owner, now):
         if current == row.linked_fingerprint:
             if row.linked_evidence in expected_evidence:
                 continue
+            if any(row.linked_evidence == evidence_json({**evidence, "gmail_card": True}) for evidence in evidences):
+                from .gmail_card_match import still_matches_card
+                if still_matches_card(session, row):
+                    continue
             upgraded = _match_legacy_evidence(row.linked_evidence, evidences)
             if upgraded is not None:
                 row.linked_evidence = upgraded

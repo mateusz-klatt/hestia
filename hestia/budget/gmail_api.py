@@ -71,7 +71,7 @@ class _Runtime:
         self.worker = ReceiptParserWorker()
 
     def _service(self, path, store, settings):
-        return GmailSync(settings, store, self.client, GmailMessageProcessor(settings, self.worker), path)
+        return GmailSync(settings, store, self.client, GmailMessageProcessor(settings, self.worker, discover_documents=True), path)
 
     def _status(self, store, owner, secret):
         state = store.status(owner)

@@ -575,6 +575,7 @@ Set `HESTIA_BUDGET_RECEIPTS_GMAIL_CONFIG` to a JSON file path and `HESTIA_BUDGET
   "sender_allowlist": ["billing@merchant.example"],
   "spouse_forward_senders": ["spouse@example.test"],
   "known_merchant_domains": ["merchant.example"],
+  "require_sender_authentication": false,
   "label_name": "Receipts"
 }
 ```
@@ -587,15 +588,15 @@ The environment variable named by `refresh_token_env` holds an absolute path to 
    ▼
 [Resumable Sync (flock, 25-msg commits, 100/run, quota paced, 429 Retry-After backoff)]
    ├─ Dedupe BEFORE fetch: HMAC(hmac_secret, gmail_message_id) ∈ budget_gmail_messages? → skip
-   ├─ Trust Gate: single From + Google MX Authentication-Results (dkim=pass & spf|dmarc=pass)
-   │    ├─ Direct: From ∈ sender_allowlist
-   │    └─ Forward: From ∈ exact spouse_forward_senders → unwrap rfc822/inline → verify merchant domain
+   ├─ Skip Gmail SPAM and TRASH; check the outer mailbox identity
+   │    ├─ Configured senders and forwards → existing document and payment parsers
+   │    └─ Additional purchase documents → match payment scope, merchant, amount, currency and date to a booked debit
    ├─ Sandboxed Worker (live input: production sidecar; dev/test subprocess: fixture files only; 5s kill deadline)
    │    ├─ HTML (≤1 MiB) → pure HTMLParser (no JS/CSS/remote fetch, stripped Cc/Cf/Cs) → ≤32 KiB text
    │    └─ PDF (≤5 MiB, ≤10p, %PDF-) → pypdf (≤4 MiB/stream, ≤8 MiB total, no JS) → ≤32 KiB text
    ▼
 [PAN Redactor + Email Scrubber + Receipt/Invoice/Confirmation Parser]  (zero bodies/addresses stored)
-   ├─ v1d-a: status='imported' (30d TTL, max 200), raw_ocr_text=NULL, provenance in budget_gmail_messages
+   ├─ v1d-a: status='imported' (30d TTL, max 200 in strict mode), raw_ocr_text=NULL, provenance in budget_gmail_messages
    ├─ v1d-b: Per-source matcher (BLIK ±2d | Gateway ±4d | Card ±4d / FX ±7d) + missing-proof view + P3 proof_status
    └─ v1d-c: Opaque BLIK/P24/PayU/Apple suggestions + category suggestion (any node in 0020 tree) → manual confirm
 ```
@@ -623,13 +624,22 @@ Having `HESTIA_GOOGLE_REFRESH_TOKEN` or `HESTIA_CALENDAR_CONFIG` configured for 
 - Normalize both `profile.get("emailAddress")` and `config.owner_mailbox` (require non-empty valid ASCII email without whitespace/control chars, `.strip().casefold()`) and compare via `hmac.compare_digest` (and verify `HMAC(hmac_secret, canonical_email) == state.mailbox_hmac` when active).
 - **On mismatch (or missing `emailAddress`):** Refuse all sync calls immediately, clear the RAM access token, latch `budget_gmail_state.attention = 'identity_mismatch'` and `last_error = 'mailbox_mismatch'` inside `BEGIN IMMEDIATE`, halt background polling, and return `403 budget_receipt_gmail_mailbox_mismatch`. **Never** store, log, or return either email address in SQLite, audit rows, logs, or HTTP responses.
 
-#### 3. Sender trust & spouse-forward unwrapping (`v1d-a`)
+#### 3. Sender policy and forwarded documents
 
-- **Fail-closed trust configuration:** At least one of non-empty `sender_allowlist` or non-empty `spouse_forward_senders` must be configured (`label_name` is an optional Gmail search narrow-down only, **never** a trust boundary — any labeled message failing sender trust is skipped as `outcome = 'skipped_untrusted_sender'`).
+By default (`require_sender_authentication: false`), the importer skips messages that Gmail labels as spam or trash. It searches the configured mailbox scope for known senders, receipt and invoice terms, and PDF attachments. The direct sender list can be empty. A single outer sender must be identifiable. A spouse can forward a document even when the original email has no authentication headers.
+
+For a newly discovered seller, Hestia extracts a purchase document from the body or attachment and looks for one booked debit for the same owner, merchant, amount and currency near the document date. It looks for a card purchase by default. A document that names the card's last four digits needs a debit on a mapped account from `HESTIA_BUDGET_CARD_ACCOUNTS` or matching card digits in the bank description. Conflicting bank digits disqualify a debit even on a mapped account. A document that names BLIK needs an explicitly identified BLIK purchase. A document from a generic Google billing entity requires a first-party product in the bank descriptor and only one eligible Google debit in the date window. When the card was billed in another currency, an explicit original amount in the bank record can establish the match.
+
+Two equivalent charges, an occupied charge or two different documents competing for the same charge require more evidence. Unmatched structured documents wait locally for up to 30 days. Subsequent syncs pick up late bookings, and matching an expense records a confirmed receipt linked to the existing bank transaction. Generic discovery skips cancellation, refund, return and correction notices, including credit notes. Configured importers can continue to record bills awaiting payment. Switching to the default policy schedules a backfill within the configured lookback and rechecks prior sender rejections, unrecognized documents and parse failures. Existing receipt links and deletion records are preserved during this scan.
+
+For merchant order confirmations, **Kwota do zapłaty** is the payment total when the order also lists **Wartość zamówienia** as the merchandise subtotal. Product rows, packing and deposit are itemized when the subtotal and amount due reconcile. If the table disagrees, the importer keeps the payment total and omits the itemization.
+
+Set `require_sender_authentication: true` to limit imports to the configured sender and forwarder rules and require the Gmail authentication results described below.
+
   - `sender_allowlist`: exact email addresses (`billing@openai.com`) or `@domain` suffixes (`@email.apple.com`, `@tm.openai.com`, `@allegro.pl`, `@payu.pl`, `@przelewy24.pl`, `@tpay.com`, `@autopay.pl`, `@inpost.pl`); config validation rejects broad public webmail wildcards (`@gmail.com`, `@icloud.com`, `@wp.pl`, `@onet.pl`, `@o2.pl`, `@interia.pl`, `@outlook.com`, `@yahoo.com`).
   - `spouse_forward_senders`: explicit exact email addresses of the spouse (`@domain` wildcards forbidden).
   - `known_merchant_domains`: legacy domain setting. Forward auto-import uses exact mailbox entries in `sender_allowlist`.
-- **Envelope & `Authentication-Results` verification:**
+- **Envelope and authentication rules in strict mode**
   1. Require exactly **one** `From` header containing exactly **one** `addr-spec` mailbox (`email.utils.getaddresses`), and reject messages where a `Sender:` header names a different domain than `From:` unless explicitly aligned.
   2. Trust only the **first (topmost) `Authentication-Results` field** and require its stripped/case-folded `authserv-id` to be exactly **`mx.google.com`**, **regardless of where any `Received` fields occur**. Gmail strips or renames incoming `Authentication-Results` fields claiming its own authserv-id, so a later field never overrides Gmail's topmost result; if the first field is absent or has another authserv-id, fail sender trust. Require `dkim=pass` and an aligned signing domain for that pass. If the AR result carries `header.d`, use it directly. If it does not, locate the corresponding actual `DKIM-Signature` field using **all** available correlation data: exact `header.i` ↔ the signature's **effective `i=`** (its explicit `i=`, or the RFC 6376 §3.5 default `"@" + d=` when `i=` is absent), a non-empty `header.b` prefix against the signature's whitespace-normalized `b=`, and/or exact selector `header.s` ↔ `s=`. The correlation must identify exactly **one** signature satisfying every supplied criterion; use that signature's real **`d=`** domain for alignment with the outer `From`. `header.i` is only a correlation key, never a substitute signing domain (RFC 6376 §3.5). No correlation data, no match, multiple matches, or an invalid/missing `d=` fails closed as `skipped_untrusted_sender`. Also require `spf=pass` or `dmarc=pass` aligned with the outer `From` domain. Alignment is exact equality. For an outer sender on `sender_allowlist` only, DKIM `d=` and SPF `smtp.mailfrom` also accept a From domain that ends with `.` plus that authenticated domain when the authenticated domain has at least two labels (`ktura.t-mobile.pl` aligns with `t-mobile.pl`; `evil-t-mobile.pl`, `t-mobile.pl.evil.com`, and a bare `d=pl` do not). `dmarc=pass` stays exact (`header.from` equals the From domain). Spouse forwarders and every other non-allowlisted sender stay exact.
   3. **Direct path (`trust_path = 'direct_allowlist'`):** Outer `From` matches `sender_allowlist` and passes step 2.
@@ -639,6 +649,8 @@ Having `HESTIA_GOOGLE_REFRESH_TOKEN` or `HESTIA_CALENDAR_CONFIG` configured for 
 ### 13.4 Quota, resumable sync, HMAC dedupe, and sandboxed worker
 
 #### 1. Gmail API quota handling, backoff, `historyId` cursor & resumable batches (`v1d-a`)
+
+Strict sender authentication pauses the scan when the owner has 200 unconfirmed imports. In the default relaxed mode the scan continues and keeps eligible documents from configured sources pending above that threshold. Documents from newly discovered senders enter the receipt list once a single booked purchase corroborates them. Both modes use the same Gmail API budgets and 30-day retention for pending imports.
 
 - **Transport & quota pacing (`hestia/budget/gmail_client.py`):** Reuses `HTTPTransport` (`_NoRedirect`, `30 s` timeout, `providers.py:46-70`) and the token refresh pattern (`providers.py:168-221`) against fixed constants (`TOKEN_URL = "https://oauth2.googleapis.com/token"`, `GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"`). Account explicit Gmail v1 quota units (`profile: 1`, `labels: 1`, `history.list: 2`, `messages.list: 5`, `messages.get: 5`), pace requests `>= 50 ms` apart (`<= 100 units/s` vs. `250 units/user/sec`), and cap each sync run at `MAX_SYNC_MESSAGES_PER_RUN = 100` and `MAX_QUOTA_UNITS_PER_RUN = 1000`.
 - **Rate-limit & auth backoff:** On `401`, wipe RAM token and refresh once (`providers.py:211-214`); on `invalid_grant` or `403 ACCESS_TOKEN_SCOPE_INSUFFICIENT`, wipe RAM token, latch `attention = 'authorization'`, and halt background polling. On `429` or `403` rate-limit reason (`rateLimitExceeded`, `userRateLimitExceeded`, `quotaExceeded`, `dailyLimitExceeded` per `providers.py:74-77`), parse `Retry-After` via `parse_retry_after(..., now=now)` (`hestia/budget/rate_limit.py:117`) and compute `backoff_until = max(retry_deadline or 0, now + min(21600, 60 * 2**(failures - 1)) + jitter)`. Latch `attention = 'quota'` and pause polling if `dailyLimitExceeded` or `suspended=True` (`> 7d`).

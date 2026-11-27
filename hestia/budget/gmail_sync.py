@@ -13,7 +13,7 @@ import re
 from types import MappingProxyType
 
 from .gmail_address import canonical_mailbox
-from .gmail_client import GmailCredentials, GmailError, RunLimit
+from .gmail_client import GmailCredentials, GmailError, RunLimit, has_spam_or_trash_label
 from .gmail_store import DAY, GMAIL_MESSAGE_DOMAIN, MAILBOX_DOMAIN, SCOPE_DOMAIN, _PHASE_RESET, digest
 from .gmail_trust import PaymentSender
 from .rate_limit import parse_retry_after
@@ -23,6 +23,12 @@ MAX_SYNC_MESSAGES_PER_RUN = 100
 MANUAL_COOLDOWN = 60
 _ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z", re.ASCII)
 _HISTORY_ID = re.compile(r"[0-9]{1,64}\Z", re.ASCII)
+# Bare terms search subject and body. Gmail braces combine them with sender rules as alternatives.
+_DOCUMENT_TERMS = (
+    "filename:pdf", "faktura", "fakturę", "faktury", "paragon", "e-paragon", "invoice", "receipt",
+    '"dokument rozliczeniowy"', '"potwierdzenie płatności"', '"potwierdzenie zamówienia"',
+    '"payment confirmation"', '"order confirmation"', '"thank you for your purchase"', 'subject:zamówienie',
+)
 
 
 @dataclass(frozen=True, repr=False)
@@ -42,6 +48,7 @@ class GmailSettings:
     payment_senders: tuple[PaymentSender, ...] = ()
     document_senders: tuple[PaymentSender, ...] = ()
     card_accounts: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
+    require_sender_authentication: bool = False
 
 
 def _history_id(value):
@@ -74,8 +81,10 @@ def _objects(data, key):
 def _history_messages(page):
     ids = set()
     for record in _objects(page, "history"):
-        for key in ("messagesAdded", "labelsAdded"):
+        for key in ("messagesAdded", "labelsAdded", "labelsRemoved"):
             for entry in _objects(record, key):
+                if key == "labelsRemoved" and not has_spam_or_trash_label(entry):
+                    continue
                 message = entry.get("message")
                 if not isinstance(message, dict):
                     raise GmailError("invalid_response")
@@ -88,7 +97,8 @@ def _terms(settings):
     senders.update(entry.sender for entry in settings.payment_senders)
     senders.update(entry.sender for entry in settings.document_senders)
     senders.add(settings.owner_mailbox)
-    return tuple(f'from:"{sender.removeprefix("@")}"' for sender in sorted(senders))
+    terms = tuple(f'from:"{sender.removeprefix("@")}"' for sender in sorted(senders))
+    return terms if settings.require_sender_authentication else terms + _DOCUMENT_TERMS
 
 
 def _query(settings, terms, cutoff=None):
@@ -134,6 +144,7 @@ class _Progress:
     restarted: bool = False
     terms: tuple = field(default_factory=tuple)
     label_id: str | None = None
+    retry_skipped_before: float | None = None
 
 
 class GmailSync:
@@ -189,6 +200,9 @@ class GmailSync:
         imported, skipped, drained = self.store.commit(
             owner, progress.generation, changes, pending,
             starting_recovery=starting_recovery, starting_incremental=starting_incremental,
+            settle_cards=not self.settings.require_sender_authentication and changes.get("sync_phase") == "idle",
+            enforce_pending_cap=self.settings.require_sender_authentication,
+            retry_skipped_before=progress.retry_skipped_before,
         )
         progress.imported += imported
         progress.skipped += skipped
@@ -239,13 +253,13 @@ class GmailSync:
         try:
             for message_id in dict.fromkeys(ids):
                 msg_hash = digest(self.settings.hmac_secret, GMAIL_MESSAGE_DOMAIN, message_id)
-                if self.store.known(owner, msg_hash):
+                if self.store.known(owner, msg_hash, retry_skipped_before=progress.retry_skipped_before):
                     continue
                 if progress.attempted >= MAX_SYNC_MESSAGES_PER_RUN:
                     raise RunLimit()
                 if seen is not None and seen >= self.settings.backfill_max_messages:
                     raise RunLimit()
-                if not pending and self.store.at_pending_cap(owner):
+                if self.settings.require_sender_authentication and not pending and self.store.at_pending_cap(owner):
                     raise RunLimit()
                 progress.run.require_message_budget()
                 progress.attempted += 1
@@ -315,8 +329,12 @@ class GmailSync:
                 continue
             next_token = _page_token(page, token)
             scoped = [_message_id(item.get("id")) for item in _objects(page, "messages")]
+            matches = [message_id for message_id in scoped if message_id in ids]
+            ids.difference_update(matches)
+            if not ids:
+                next_token = None
             changes = {"scope_scan_page_token": next_token} if next_token is not None else history_changes
-            self._drain(owner, progress, (item for item in scoped if item in ids), changes)
+            self._drain(owner, progress, matches, changes)
             if next_token is None:
                 return
             token = next_token
@@ -393,8 +411,10 @@ class GmailSync:
                     self.client.forget(owner)
                     raise GmailError("mailbox_mismatch", 403, attention="identity_mismatch")
                 profile_history = self._profile(run, state.mailbox_hmac)
-                self.store.retain(owner, generation)
+                self.store.retain(owner, generation, settle_cards=False if self.settings.require_sender_authentication else None)
                 progress.label_id = self._label(run)
+                progress.retry_skipped_before = self.store.prepare_sender_policy(
+                    owner, generation, self.settings.require_sender_authentication, self.settings.backfill_days)
                 state = self.store.state(owner)
                 force = bool(force_full_resync or state.force_full_resync)
                 while True:

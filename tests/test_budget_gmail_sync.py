@@ -27,7 +27,7 @@ MAILBOX = "invoices@example.test"
 NOW = 1_800_000_000.0
 CREDENTIALS = GmailCredentials("synthetic-oauth", "synthetic-secret", "synthetic-refresh")
 SETTINGS = GmailSettings(OWNER, MAILBOX, CREDENTIALS, b"synthetic-gmail-hmac", ("bills@vendor.test",),
-                         ("spouse@example.test",))
+                         ("spouse@example.test",), require_sender_authentication=True)
 INVOICE = SimpleNamespace(issuer="Respect Energy", nip="7791011327", invoice_number="FV/A-14/26",
                           amount="100.25", currency="PLN", issue_date="2026-11-02", due_date="2026-11-25")
 
@@ -148,14 +148,14 @@ class GmailTransportTests(TestCase):
         for sleep in self.clock.sleeps:
             self.assertAlmostEqual(sleep, 0.05)
         self.assertEqual(self.transport.requests("/history")[0], {
-            "startHistoryId": ["100"], "historyTypes": ["messageAdded", "labelAdded"], "maxResults": ["100"],
+            "startHistoryId": ["100"], "historyTypes": ["messageAdded", "labelAdded", "labelRemoved"], "maxResults": ["100"],
             "labelId": ["Label_7"],
         })
         self.assertEqual(self.transport.requests("/messages/mail-a")[0]["metadataHeaders"],
                          ["From", "Sender", "Authentication-Results", "DKIM-Signature"])
         self.assertEqual(self.transport.requests("/messages/mail-a")[0]["fields"],
-                         ["id,internalDate,sizeEstimate,payload(headers)"])
-        self.assertEqual(self.transport.requests("/messages/mail-a")[1], {"format": ["raw"], "fields": ["id,raw"]})
+                         ["id,internalDate,sizeEstimate,payload(headers),labelIds"])
+        self.assertEqual(self.transport.requests("/messages/mail-a")[1], {"format": ["raw"], "fields": ["id,raw,labelIds"]})
         self.client.run(OWNER, 1, CREDENTIALS, lambda: None).profile()
         self.assertEqual(len(self.transport.requests("token")), 1)
         self.clock.elapsed += 3600
@@ -661,6 +661,74 @@ class GmailSyncTests(TestCase):
         self.assertEqual(self.processor.processed, ["a", "b"])
         self.assertEqual(self.store.state(OWNER).history_id, "120")
         self.assertIsNone(self.store.state(OWNER).scope_scan_query_hmac)
+
+    def test_gmail_document_queries_include_body_and_pdf_in_a_configured_label(self):
+        self.service.settings = replace(SETTINGS, require_sender_authentication=False, label_name="Bills")
+        self.transport.labels = {"labels": [{"id": "Label_7", "name": "Bills"}]}
+        self.enable()
+        self.sync()
+        self.assertEqual(self.transport.requests("/history"), [])
+        self.tick()
+        self.transport.routes[("/history", None)] = response(history("new-card-invoice"))
+        self.transport.routes[("/messages", None)] = response(page("new-card-invoice", token="unneeded"))
+        self.sync()
+        queries = [params["q"][0] for params in self.transport.requests("/messages")]
+        self.assertEqual(len(queries), 2)
+        self.assertIn("after:", queries[0])
+        self.assertNotIn("after:", queries[1])
+        for query in queries:
+            self.assertIn('label:"Bills" {', query)
+            self.assertIn('from:"bills@vendor.test"', query)
+            for term in ('"dokument rozliczeniowy"', "filename:pdf", "faktura", "paragon", "invoice", "receipt"):
+                self.assertIn(term, query)
+        self.assertEqual(self.processor.processed, ["new-card-invoice"])
+
+    def test_relaxing_sender_authentication_retries_prior_misses_once(self):
+        self.enable()
+        self.sync()
+        def key(message_id):
+            return digest(SETTINGS.hmac_secret, GMAIL_MESSAGE_DOMAIN, message_id)
+
+        receipts = {"invoice": "skipped_untrusted_sender", "rejected": "skipped_untrusted_sender",
+                    "removed": "deleted", "other": "skipped_non_receipt", "failed": "parse_failed",
+                    "oversized": "skipped_oversized", "duplicate": "skipped_duplicate"}
+        self.store.commit(OWNER, 1, {}, tuple(PendingMessage(key(msg), NOW, "untrusted", outcome)
+                                              for msg, outcome in receipts.items()))
+        self.tick(15 * DAY)
+        self.service.settings = replace(SETTINGS, require_sender_authentication=False)
+        self.transport.routes[("/messages", None)] = response(page(*receipts))
+        original_process = self.processor.process
+
+        def parse(run, message_id, message_hmac):
+            self.processor.outcome = "skipped_untrusted_sender" if message_id == "rejected" else "imported"
+            return original_process(run, message_id, message_hmac)
+        with mock.patch.object(self.processor, "process", side_effect=parse):
+            with mock.patch.object(sync_module, "MAX_SYNC_MESSAGES_PER_RUN", 1):
+                self.assertTrue(self.sync()["has_more"])
+            self.tick()
+            self.assertFalse(self.sync()["has_more"])
+            self.assertEqual(self.processor.processed, ["invoice", "rejected", "other", "failed"])
+            queries = [entry["q"][0] for entry in self.transport.requests("/messages")]
+            cutoff = int(NOW + 15 * DAY - SETTINGS.backfill_days * DAY)
+            self.assertTrue(all(f"after:{cutoff}" in query for query in queries[-2:]))
+            self.transport.routes[("/history", None)] = response(history(*receipts))
+            self.tick()
+            self.sync()
+            self.assertEqual(self.processor.processed, ["invoice", "rejected", "other", "failed"])
+            self.assertNotIn("after:", self.transport.requests("/messages")[-1]["q"][0])
+
+        messages = {row.gmail_id_hmac: row.outcome for row in self.rows(db.BudgetGmailMessage)}
+        self.assertEqual(messages, {key(msg): "imported" if msg in ("invoice", "other", "failed") else outcome
+                                    for msg, outcome in receipts.items()})
+        self.assertEqual(len(self.rows(db.BudgetReceipt)), 3)
+        self.service.settings = SETTINGS
+        self.tick()
+        self.sync()
+        self.assertNotIn("filename:pdf", self.transport.requests("/messages")[-1]["q"][0])
+        self.service.settings = replace(SETTINGS, require_sender_authentication=False)
+        self.tick()
+        self.sync()
+        self.assertEqual(self.processor.processed, ["invoice", "rejected", "other", "failed", "rejected"])
 
     def test_payment_senders_are_searched_in_backfill_and_incremental_scope(self):
         self.service.settings = replace(SETTINGS, payment_senders=(

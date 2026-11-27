@@ -16,16 +16,17 @@ from zoneinfo import ZoneInfo
 
 from .gmail_address import canonical_mailbox
 from .gmail_apple import apple_document_number, inspect_apple_subscription_items
-from .gmail_client import GmailError
+from .gmail_client import GmailError, has_spam_or_trash_label
 from .gmail_document import ImportedDocument, extract_document
-from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
-from .gmail_payment import _payee_key, confirms_order_cancellation, inspect_payment
+from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, _normalized_invoice_lines, extract_invoice
+from .gmail_payment import _payee_key, confirms_order_cancellation, inspect_payment, purchase_payment_scope
+from .gmail_respect import settlement_items
 from .gmail_shop_items import inspect_shop_items
 from .gmail_store import (DOCUMENT_NUMBER_DOMAIN, DOCUMENT_RECEIPT_DOMAIN, GATEWAY_REF_DOMAIN, ORDER_REFERENCE_DOMAIN, PAYMENT_PAYEE_DOMAIN, PAYMENT_SENDER_DOMAIN,
                           RFC_MESSAGE_DOMAIN, PendingMessage, PendingPayment, digest, normalize_parse_failed_reason)
 from .gmail_trust import (_FORWARD_MARKERS, _INVALID_FORWARD, _forward_sender, _forwarded_original, _inline_forward,
                           _is_forward_marker, classify_sender, domain_matches, forward_sender_domain, inline_forward_body,
-                          mime_parts, payment_sender_for)
+                          mime_parts, payment_sender_for, sender_address)
 from .gmail_worker import MAX_HTML_BYTES, MAX_PDF_BYTES, PDFUnsupported, WorkerRejected, WorkerUnavailable
 
 
@@ -231,7 +232,9 @@ def _payment_receipt_date(message, pending):
 
 
 class GmailMessageProcessor:
-    def __init__(self, settings, worker):
+    def __init__(self, settings, worker, *, discover_documents=False):
+        self.require_auth = getattr(settings, "require_sender_authentication", True)
+        self.discover_documents = discover_documents and not self.require_auth
         self.settings = settings
         self.worker = worker
 
@@ -242,7 +245,8 @@ class GmailMessageProcessor:
         return classify_sender(headers, self.settings.sender_allowlist, self.settings.spouse_forward_senders,
                                getattr(self.settings, "owner_mailbox", None),
                                payment_senders=getattr(self.settings, "payment_senders", ()),
-                               document_senders=getattr(self.settings, "document_senders", ()))
+                               document_senders=getattr(self.settings, "document_senders", ()),
+                               require_authentication=self.require_auth)
 
     def _manual_forward(self, outer, inner, pending):
         attached = _has_rfc822_attachment(outer)
@@ -268,6 +272,22 @@ class GmailMessageProcessor:
                 return first
         return None
 
+    def _respect_items(self, message, invoice, kind, text):
+        if (invoice.issuer != "Respect Energy" or invoice.currency != "PLN"
+                or not invoice.invoice_number.isdecimal()):
+            return ()
+        if kind != "pdf":
+            # The trusted email summary can identify the invoice before its detailed PDF.
+            pdfs = (part for part in mime_parts(message) if _is_pdf_part(part))
+            attachment = next(pdfs, None)
+            if attachment is None or next(pdfs, None) is not None:
+                return ()
+            try:
+                text = self.worker.parse("pdf", _document_payload("pdf", attachment))
+            except (WorkerRejected, WorkerUnavailable):
+                return ()
+        return settlement_items(_normalized_invoice_lines(text), invoice.issuer, invoice.invoice_number, invoice.amount)
+
     def _invoice(self, message, pending):
         # This is the authenticated direct envelope or the original selected by the forward trust gate.
         sender_domain = forward_sender_domain(message) or ""
@@ -287,6 +307,8 @@ class GmailMessageProcessor:
             if invoice is not None and any(
                 domain_matches(sender_domain, domain) for domain in _ISSUER_SENDER_DOMAINS.get(invoice.issuer, ())
             ):
+                if items := self._respect_items(message, invoice, kind, text):
+                    invoice = replace(invoice, items=items)
                 return replace(pending, outcome="imported", invoice=invoice,
                                rfc_message_id_hmac=_rfc_message_hmac(message, self.settings.hmac_secret),
                                source_kind="attachment" if kind == "pdf" else "email",
@@ -330,9 +352,10 @@ class GmailMessageProcessor:
                 if forwarded and (manual or pattern is None or not pattern.fullmatch(invoice.invoice_number)):
                     continue
                 document = ImportedDocument(invoice.issuer, invoice.nip, invoice.invoice_number, invoice.amount,
-                                            invoice.currency, invoice.issue_date, invoice.due_date, "invoice", False, None)
+                                            invoice.currency, invoice.issue_date, invoice.due_date, "invoice", False, None,
+                                            self._respect_items(message, invoice, "pdf", text))
             else:
-                document = extract_document(text, merchant=sender.merchant)
+                document = extract_document(text, merchant=sender.merchant, pdf=True)
             if document is None:
                 continue
             if document.issue_date is None:
@@ -365,7 +388,8 @@ class GmailMessageProcessor:
                 preferred = document if use_document else selected
                 if use_document:
                     selected_template = invoice if document.issue_date is None else None
-                selected = replace(preferred, paid=selected.paid or document.paid,
+                selected = replace(preferred, items=selected.items if selected.items == document.items else (),
+                                   paid=selected.paid or document.paid,
                                    receipt_number=selected.receipt_number or document.receipt_number)
         if selected is None:
             return replace(failure, diagnostic_reason="pdf_no_text") if no_text else failure
@@ -373,12 +397,17 @@ class GmailMessageProcessor:
         if selected.issue_date is None and selected_template is not None and len(issue_dates) == 1:
             return replace(pending, outcome="imported", invoice=selected_template, source_kind="attachment",
                            rfc_message_id_hmac=_rfc_message_hmac(message, secret), parse_failed_reason=None)
-        number = selected.invoice_number.casefold()
-        provenance = {"number_hmac": digest(secret, DOCUMENT_NUMBER_DOMAIN, number),
+        return self._document_result(message, pending, selected, "attachment")
+
+    def _document_result(self, message, pending, selected, source_kind):
+        secret = self.settings.hmac_secret
+        number_hmac = (digest(secret, DOCUMENT_NUMBER_DOMAIN, selected.invoice_number.casefold())
+                       if selected.invoice_number else None)
+        provenance = {"number_hmac": number_hmac,
                       "seller_key": _payee_key(selected.issuer), "paid": selected.paid,
                       "receipt_number_hmac": (digest(secret, DOCUMENT_RECEIPT_DOMAIN, selected.receipt_number.casefold())
                                               if selected.receipt_number else None)}
-        return replace(pending, outcome="imported", invoice=selected, source_kind="attachment",
+        return replace(pending, outcome="imported", invoice=selected, source_kind=source_kind,
                        rfc_message_id_hmac=_rfc_message_hmac(message, secret),
                        document_provenance=provenance, parse_failed_reason=None)
 
@@ -425,9 +454,11 @@ class GmailMessageProcessor:
         reference = payment.order_reference
         apple_number = apple_document_number(text) if apple else None
         item_block = None
+        payment_method = None
         if not sender.gateway:
             inspect_items = inspect_apple_subscription_items if apple else inspect_shop_items
             item_block = inspect_items(text, payment.total_amount, payment.currency)
+            _, payment_method = purchase_payment_scope(text.splitlines())
         provenance = PendingPayment(
             replace(payment, order_reference=None), receipt_date,
             digest(secret, PAYMENT_SENDER_DOMAIN, sender.sender),
@@ -444,6 +475,7 @@ class GmailMessageProcessor:
             blik_ref_hmac=(digest(secret, GATEWAY_REF_DOMAIN, inspected.blik_ref)
                            if inspected.blik_ref is not None else None),
             card_last4=inspected.card_last4,
+            payment_method=payment_method,
             items=item_block or (), item_block_rejected=item_block == (),
             apple_document_hmac=digest(secret, DOCUMENT_NUMBER_DOMAIN, apple_number) if apple_number else None,
         )
@@ -512,12 +544,17 @@ class GmailMessageProcessor:
             return self._payment(message, pending, sender, inline_outer=inline_outer)
         return pending
 
-    def _parse(self, raw, pending):
+    def _parse(self, raw, pending, metadata_author):
+        from .gmail_discovery import discover_document
+
         message = BytesParser(policy=policy.default).parsebytes(raw)
-        if self._trust(message.raw_items()) != pending.trust_path:
+        if (sender_address(message.raw_items()) != metadata_author
+                or self._trust(message.raw_items()) != pending.trust_path):
             return replace(pending, trust_path="untrusted", outcome="skipped_untrusted_sender")
         if message.defects:
             return _parse_failed(pending, "message_defects")
+        if pending.trust_path == "untrusted":
+            return discover_document(self, message, pending) or pending
         payment_senders = getattr(self.settings, "payment_senders", ())
         document_senders = getattr(self.settings, "document_senders", ())
         if pending.trust_path in ("spouse_forward", "owner_forward"):
@@ -527,7 +564,10 @@ class GmailMessageProcessor:
                 nested_inline = self._nested_inline_original(message)
                 if nested_inline is not None:
                     return self._manual_forward(message, nested_inline, pending)
-                return replace(pending, outcome="skipped_non_receipt")
+            if inner in (None, _INVALID_FORWARD) and self.discover_documents and not _has_rfc822_attachment(message):
+                return discover_document(self, message, pending, attachments_only=True) or pending
+            if inner is _INVALID_FORWARD:
+                return pending
             if inner is None or _forward_sender(inner) is None:
                 return replace(pending, outcome="skipped_non_receipt")
             nested = _forwarded_original(inner, render_html)
@@ -565,6 +605,10 @@ class GmailMessageProcessor:
                 if imported.diagnostic_reason is not None:
                     return replace(self._manual_forward(message, inner, pending),
                                    diagnostic_reason=imported.diagnostic_reason)
+            if self.discover_documents:
+                discovered = discover_document(self, inner, pending, inline_outer=inline_outer)
+                if discovered is not None:
+                    return discovered
             if sender is None and document_failure.outcome != pending.outcome:
                 return document_failure
             return self._manual_forward(message, inner, pending)
@@ -572,8 +616,15 @@ class GmailMessageProcessor:
         if cancelled := self._cancelled_order(message, pending, sender):
             return cancelled
         document_sender = payment_sender_for(message.raw_items(), document_senders)
+        parsed = self._direct_document_or_payment(message, pending, sender, document_sender)
+        if self.discover_documents and parsed.outcome == "skipped_non_receipt" and parsed.failed_gateway is None:
+            return discover_document(self, message, pending) or parsed
+        return parsed
+
+    def _direct_document_or_payment(self, message, pending, sender, document_sender):
         if document_sender is not None:
-            issuer_sender = classify_sender(message.raw_items(), self.settings.sender_allowlist, ()) == "direct_allowlist"
+            issuer_sender = classify_sender(message.raw_items(), self.settings.sender_allowlist, (),
+                                            require_authentication=self.require_auth) == "direct_allowlist"
             imported = self._document(message, pending, document_sender, allow_undated_template=issuer_sender)
             if imported.outcome == "imported" or imported.parse_failed_reason == "multiple_documents":
                 return imported
@@ -598,16 +649,23 @@ class GmailMessageProcessor:
                 return None
             raise
         internal_date, size = _metadata(meta, message_id)
+        if has_spam_or_trash_label(meta):
+            return None
         pending = PendingMessage(gmail_hmac, internal_date, "untrusted", "skipped_non_receipt")
         if size > MAX_MESSAGE_BYTES:
             return replace(pending, outcome="skipped_oversized")
-        trust_path = self._trust(_metadata_headers(meta))
-        if trust_path == "untrusted":
+        headers = _metadata_headers(meta)
+        author = sender_address(headers)
+        trust_path = self._trust(headers)
+        if trust_path == "untrusted" and not (self.discover_documents and author):
             return replace(pending, outcome="skipped_untrusted_sender")
         pending = replace(pending, trust_path=trust_path)
         try:
-            raw = _raw_bytes(run.message(message_id, raw=True), message_id)
-            result = self._parse(raw, pending)
+            response = run.message(message_id, raw=True)
+            if has_spam_or_trash_label(response):
+                return None
+            raw = _raw_bytes(response, message_id)
+            result = self._parse(raw, pending, author)
         except GmailError as error:
             if error.http_status == 404:
                 return replace(pending, outcome="deleted")
