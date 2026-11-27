@@ -131,7 +131,7 @@ class ReceiptIdMatchingTests(AnalyticsCase):
         receipt_date: str = "2026-11-15",
         card_last4: str | None = None,
         shop_name: str = "SKLEP PRZYKŁADOWY",
-        payment_method: str = "card",
+        payment_method: str | None = "card",
         status: str = "imported",
     ) -> None:
         gw_hmac = digest(_REF_SECRET, GATEWAY_REF_DOMAIN, raw_ref) if raw_ref is not None else None
@@ -621,6 +621,78 @@ class ReceiptIdMatchingTests(AnalyticsCase):
         )
         prim_detail = self.receipts.detail("owner", rid_prim)
         self.assertEqual(prim_detail["candidates"][0]["match_strength"], "id")
+
+    def test_imported_null_method_payment_confirmation_matches_card_debit(self):
+        with self.sessions.begin() as session:
+            session.get(db.BudgetAccount, self.accounts["a"]).kind = "credit_card"
+            session.get(db.BudgetAccount, self.accounts["d"]).enabled = False
+        for account in ("a", "d", "foreign"):
+            self.add_transaction(account, "test-card-debit", amount="32.45", booking_date="2026-11-15",
+                                 value_date=None, remittance_information=["PRZYKLADOWY SKLEP"])
+        self.add_transaction("b", "test-unrelated-debit", amount="10.00", booking_date="2026-11-12",
+                             value_date=None)
+
+        cases = (
+            ("2026-11-15", None, None, 0),
+            ("2026-11-13", "0000", None, 2),
+            ("2026-11-17", None, None, 2),
+            ("2026-11-15", "2177", None, 0),  # Maps to another enabled account.
+            ("2026-11-15", "8888", None, 0),  # Maps to an account that no longer exists.
+            ("2026-11-15", None, "cash", None),
+            ("2026-11-15", None, "mixed", None),
+        )
+        for index, (day, last4, method, distance) in enumerate(cases):
+            with self.subTest(day=day, last4=last4, method=method):
+                identifier = f"10000000-0000-4000-8001-{index:012d}"
+                self._insert_receipt(receipt_id=identifier, total_amount="32.45", receipt_date=day,
+                                     card_last4=last4, payment_method=method)
+                detail = self.receipts.detail("owner", identifier)
+                self.assertEqual(detail["receipt"]["payment_method"], method)
+                self.assertFalse(detail["no_bank_data"])
+                if distance is None:
+                    self.assertEqual(detail["candidates"], [])
+                else:
+                    self.assertEqual(len(detail["candidates"]), 1)
+                    candidate = detail["candidates"][0]
+                    self.assertEqual(candidate["account_id"], self.accounts["a"])
+                    self.assertEqual(candidate["entry_reference"], reference_digest("test-card-debit"))
+                    self.assertEqual(candidate["date_distance"], distance)
+                    self.assertEqual(candidate["match_strength"], "distinctive")
+
+    def test_imported_null_method_payment_confirmation_keeps_weak_exact_matches(self):
+        self.add_transaction("a", "test-weak-debit", amount="18.75", booking_date="2026-11-15",
+                             value_date=None, remittance_information=["PAYU PLATNOSC"])
+        for index, gateway in enumerate((None, "PayU")):
+            with self.subTest(gateway=gateway):
+                identifier = f"10000000-0000-4000-8002-{index:012d}"
+                self._insert_receipt(receipt_id=identifier, total_amount="18.75", payment_method=None,
+                                     gateway=gateway)
+                candidates = self.receipts.detail("owner", identifier)["candidates"]
+                self.assertEqual([(item["entry_reference"], item["match_strength"]) for item in candidates],
+                                 [(reference_digest("test-weak-debit"), "none")])
+
+    def test_imported_null_method_id_candidate_can_confirm_and_is_reserved(self):
+        reference = "P24-T5C-123-456"
+        self.add_transaction("a", "test-referenced-debit", amount="28.90", booking_date="2026-11-15",
+                             value_date=None, remittance_information=[reference])
+        identifier = "10000000-0000-4000-8001-000000000010"
+        self._insert_receipt(receipt_id=identifier, total_amount="28.9", payment_method=None,
+                             gateway="Przelewy24", raw_ref=reference, card_last4="8888")
+        detail = self.receipts.detail("owner", identifier)
+        self.assertEqual(len(detail["candidates"]), 1)
+        candidate = detail["candidates"][0]
+        self.assertEqual(candidate["match_strength"], "id")
+        link = {key: candidate[key] for key in ("account_id", "entry_reference", "candidate_token")}
+        confirmed = self.receipts.confirm("owner", {
+            "receipt_id": identifier, "expected_version": 1, "receipt_kind": "purchase",
+            "receipt_date": "2026-11-15", "receipt_time": None, "total_amount": "28.90",
+            "currency": "PLN", "payment_method": "unknown", "link": link,
+        })
+        self.assertTrue(confirmed["receipt"]["linked"])
+
+        other = "10000000-0000-4000-8001-000000000011"
+        self._insert_receipt(receipt_id=other, total_amount="28.9", payment_method=None)
+        self.assertEqual(self.receipts.detail("owner", other)["candidates"], [])
 
     def test_card_last4_filter_unmapped_fallback_and_no_bank_data(self):
         # Add transactions starting 2026-08-01 on account "a", while account "b" (card 2177) has 2026-09-15.

@@ -1084,9 +1084,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 card_filtered = True
         return scoped, card_filtered
 
-    def _scope_accounts(self, session, owner, row, *, require_enabled_connection=False) -> tuple[set[str], bool]:
+    def _scope_accounts(self, session, owner, row, *, for_group=False) -> tuple[set[str], bool]:
+        # A suffix alone cannot restrict manual 1:1 matching when the payment method is missing.
+        rows = (row,) if for_group or row.payment_method is not None else ()
         return self._scope_accounts_for_rows(
-            session, owner, (row,), require_enabled_connection=require_enabled_connection,
+            session, owner, rows, require_enabled_connection=for_group,
         )
 
     @staticmethod
@@ -1097,12 +1099,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
             or getattr(row, "evidence_for_receipt_id", None) is not None
         )
 
-    def _no_bank_data(self, session, owner, row, *, require_enabled_connection=False) -> bool:
+    def _no_bank_data(self, session, owner, row, *, for_group=False) -> bool:
         if not self._is_matchable(row):
             return False
-        scope_accounts, card_filtered = self._scope_accounts(
-            session, owner, row, require_enabled_connection=require_enabled_connection,
-        )
+        scope_accounts, card_filtered = self._scope_accounts(session, owner, row, for_group=for_group)
         if not scope_accounts:
             return False
         raw_payloads = session.scalars(select(Transaction.payload_json).where(
@@ -1871,7 +1871,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 "anchor_receipt_id": anchor.id, "transactions": [], "proposals": [],
                 "eligible_receipts": [], "eligible_evidence": [],
             }
-        scope_accounts, _ = self._scope_accounts(session, owner, anchor, require_enabled_connection=True)
+        scope_accounts, _ = self._scope_accounts(session, owner, anchor, for_group=True)
         if not scope_accounts:
             return {
                 "anchor_receipt_id": anchor.id, "transactions": [], "proposals": [],
@@ -1909,11 +1909,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
             for ev_row in evidence_pool_all
         }
         ev_scopes = {
-            ev_row.id: self._scope_accounts(session, owner, ev_row, require_enabled_connection=True)[0]
+            ev_row.id: self._scope_accounts(session, owner, ev_row, for_group=True)[0]
             for ev_row in evidence_pool_all
         }
         peer_scopes = {
-            peer.id: self._scope_accounts(session, owner, peer, require_enabled_connection=True)[0]
+            peer.id: self._scope_accounts(session, owner, peer, for_group=True)[0]
             for peer in peer_pool_all
         }
         ranked_txs = []
@@ -2152,9 +2152,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             if result["transactions"]:
                 result["no_bank_data"] = False
             elif _group_member_eligible(row, allow_imported=True) and not _receipt_in_group(session, owner, row.id):
-                result["no_bank_data"] = self._no_bank_data(
-                    session, owner, _receipt_preview(row), require_enabled_connection=True,
-                )
+                result["no_bank_data"] = self._no_bank_data(session, owner, _receipt_preview(row), for_group=True)
             else:
                 result["no_bank_data"] = False
             return result
