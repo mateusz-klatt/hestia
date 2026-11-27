@@ -227,7 +227,7 @@ NR KARTY ****5555
                          ("Pozycja bez nazwy", "7.19", "l", "5.32", "38.25", "B"))
         self.assertEqual((liquid["gross_line_total"], liquid["discount_amount"]), ("24.8", "0"))
         self.assertEqual((first_drink["raw_name"], second_drink["raw_name"]),
-                         ("Pozycja bez nazwy", "WODA 200ml, szt"))
+                         ("Pozycja bez nazwy", "WODA 200ml"))
         for drink in (first_drink, second_drink):
             self.assertEqual((drink["quantity"], drink["raw_unit"], drink["gross_line_total"],
                               drink["discount_amount"], drink["net_line_total"]),

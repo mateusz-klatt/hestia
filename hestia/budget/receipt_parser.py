@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
+from itertools import groupby
 import re
 import unicodedata
 
@@ -205,6 +206,7 @@ _DISCOUNT_AMOUNT = re.compile(
 _SPLIT_DISCOUNT_AMOUNT = re.compile(
     rf"(?P<amount>-{_OCR_ITEM_PRICE})\s*{_DISCOUNT_CURRENCY}(?P<ptu>[A-G])\Z", re.IGNORECASE | re.ASCII,
 )
+_ITEM_UNIT_SUFFIX = re.compile(r"\s*,\s*szt?\s*\Z", re.IGNORECASE)
 _RECEIPT_METADATA = re.compile(r"nr\s+(?:wydr(?:uku)?|kasy|paragonu|transakcji|terminala)\b", re.IGNORECASE | re.ASCII)
 _PRINT_SERIAL = re.compile(r"\s*nr\s+wydr\.?\s+[0-9]{6}/[0-9]{4}\s*\Z", re.IGNORECASE | re.ASCII)
 _DECIMAL_QUANTITY = re.compile(r"[0-9]+[.,][0-9]+\Z", re.ASCII)
@@ -217,6 +219,23 @@ _TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.A
 _ARITHMETIC_AMOUNT = r"[0-9]{1,9}(?:[.,][0-9]{1,4})?"
 _SHORT_AMOUNT = rf"[+-]?{_ARITHMETIC_AMOUNT}"
 _BOUNDED_ARITHMETIC_AMOUNT = re.compile(_ARITHMETIC_AMOUNT, re.ASCII)
+_COLUMN_CALCULATION = re.compile(
+    rf"(?P<quantity>{_SHORT_AMOUNT})\s*(?:{_UNITS})?\s*[x×*]\s*"
+    rf"(?P<unit_price>{_SHORT_AMOUNT})(?:\s*=\s*|\s+)(?P<gross>{_SHORT_AMOUNT})\s*(?:PLN\s*)?[A-G]?\Z",
+    re.IGNORECASE | re.ASCII,
+)
+_COLUMN_SUBTOTAL = re.compile(
+    rf"\s*SUMA(?:\s+PLN)?(?:\s*:\s*|\s+)(?P<amount>-?{_ARITHMETIC_AMOUNT})\s*\Z", re.IGNORECASE,
+)
+_COLUMN_NAME_BOUNDARY = re.compile(
+    r"^(?:suma|sprzedaz|ptu|karta|gotowka|blik|platnosc|paragon|nip|zwrot|opakowania|do zaplaty)\b"
+)
+_SPLIT_DEPOSIT_SECTION = re.compile(
+    r"^ *OPAKOWANIA ZWROTNE WYDANIA *\n *(?P<name>(?:DRS +)?KAUCJA\b[^\n]*)\n"
+    r" *(?P<calculation>[^\n]+)\n"
+    rf" *OPAKOWANIA ZWROTNE SUMA +(?P<subtotal>{_ARITHMETIC_AMOUNT}) *$",
+    re.IGNORECASE | re.MULTILINE,
+)
 _FISCAL_CALCULATION = re.compile(
     rf"(?P<quantity>{_ARITHMETIC_AMOUNT})\s*(?P<unit>{_UNITS})\s*[x×*]\s*"
     rf"(?P<unit_price>{_ARITHMETIC_AMOUNT})(?:\s*=\s*|\s+)(?P<gross>{_ARITHMETIC_AMOUNT})"
@@ -1007,10 +1026,10 @@ def _line_kind(name, gross):
 
 
 def _make_line(name, match, line_no):
-    original = " ".join(name.strip().split())
+    original = " ".join(name.split())
     gross = _decimal(match["gross"])
     kind = _line_kind(original, gross)
-    raw_name = redact_digit_field(original)
+    raw_name = redact_digit_field(_ITEM_UNIT_SUFFIX.sub("", original))
     raw_name_key = fold_text(raw_name)
     if (not raw_name or len(raw_name) > MAX_LINE_NAME_LEN or not raw_name_key
             or len(raw_name_key) > MAX_LINE_NAME_LEN or _CONTROL.search(raw_name)):
@@ -1194,6 +1213,98 @@ def _parse_lines(lines, shop_header_index):
     return result
 
 
+def _column_amount(value):
+    return bool(_COLUMN_CALCULATION.fullmatch(value) or _SPLIT_DISCOUNT_AMOUNT.fullmatch(value))
+
+
+def _orphan_name(value):
+    if (len(value) > MAX_LINE_NAME_LEN or value.startswith(_REMOVED) or _RECEIPT_METADATA.match(value)
+            or _COLUMN_NAME_BOUNDARY.match(fold_text(value)) or not re.search(r"[^\W\d_]", value)
+            or _DATE_ISO.search(value) or _DATE_PL.search(value) or _TIME.search(value)
+            or _ITEM_GROSS_TAIL.fullmatch(value) or _BARE_UNIT.fullmatch(value)):
+        return False
+    if _DISCOUNT_PREFIX.match(value) and _DISCOUNT_AMOUNT.search(value):
+        return False
+    match = _named_unit_match(value) or _item_match(value)
+    # A plain trailing integer can be part of a label, for example a pump number.
+    return match is None or (match["quantity"] is None and match["ptu"] is None and match["gross"].isdigit()
+                             and value.endswith(" " + match["gross"]) and "kaucja" not in fold_text(value))
+
+
+def _pair_column_rows(names, amounts):
+    if len(names) != len(amounts):
+        return None
+    prices, discounts = [], []
+    for amount in amounts:
+        (discounts if _SPLIT_DISCOUNT_AMOUNT.fullmatch(amount) else prices).append(amount)
+    is_discount = [bool(_DISCOUNT_PREFIX.match(name)) for name in names]
+    if sum(is_discount) != len(discounts):
+        return None
+    by_kind = {True: iter(discounts), False: iter(prices)}
+    return [f"{name} {next(by_kind[discount])}" for name, discount in zip(names, is_discount, strict=True)]
+
+
+def _restore_item_columns(lines, shop_header_index):
+    rows = [" ".join(raw.split()) for raw in lines]
+    restored = None
+    end = 0
+    for is_amount, block in groupby(rows, key=_column_amount):
+        amounts = list(block)
+        start, end = end, end + len(amounts)
+        if not is_amount:
+            continue
+        name_start = start
+        while name_start > 0 and name_start - 1 != shop_header_index and _orphan_name(rows[name_start - 1]):
+            name_start -= 1
+        names = rows[name_start:start]
+        if not names:
+            continue
+        if len(names) == len(amounts) == 1 and _verified_bare_calculation(amounts[0]) is not None:
+            # The legacy parser already associates this adjacent label and calculation.
+            continue
+        joined = _pair_column_rows(names, amounts)
+        if joined is None:
+            return None
+        if restored is None:
+            restored = list(lines)
+        # Preserve the positions of the surrounding rows for the legacy parser.
+        restored[name_start:end] = joined + [""] * len(amounts)
+    return restored
+
+
+def _join_split_deposit(section):
+    """Join an adjacent deposit row inside a returnable-packaging section."""
+    calculation = _COLUMN_CALCULATION.fullmatch(" ".join(section["calculation"].split()))
+    subtotal = Decimal(section["subtotal"].replace(",", "."))
+    if _reconciled_gross(calculation) != subtotal:
+        return section[0]
+    return section[0].replace(f"{section['name']}\n", f"{section['name'].rstrip()} ", 1)
+
+
+def _parse_column_split(lines, shop_header_index):
+    for index, row in enumerate(lines):
+        subtotal = _COLUMN_SUBTOTAL.fullmatch(row)
+        if subtotal is not None:
+            break
+    else:
+        return None
+    restored = _restore_item_columns(lines[:index], shop_header_index)
+    if restored is None:
+        return None
+    try:
+        subtotal_amount = _decimal(subtotal["amount"])
+        items = _parse_lines(restored, shop_header_index)
+        net = _bounded_sum(line["net_line_total"] for line in items)
+        if abs(Decimal(net) - Decimal(subtotal_amount)) > Decimal("0.01"):
+            return None
+        tail = _SPLIT_DEPOSIT_SECTION.sub(_join_split_deposit, "\n".join(lines[index:]))
+        restored.extend(tail.split("\n"))
+        parsed = _parse_lines(restored, shop_header_index)
+    except ReceiptError:
+        return None
+    return restored, parsed, subtotal_amount
+
+
 def parse_receipt(text):
     text = redact_pan(text)
     # Drop a line before every parsing expression. A 32 KiB line must not reach one.
@@ -1233,7 +1344,13 @@ def parse_receipt(text):
     has_card = "karta" in key or "platnicza" in key or "paypass" in key or _MASTERCARD_PAYMENT.search(key) is not None
     has_cash = "gotowka" in key
     payment = "mixed" if has_card and has_cash else "blik" if "blik" in key else "card" if has_card else "cash" if has_cash else "unknown"
-    parsed_lines = _parse_lines(lines, shop_header_index)
+    column_split = _parse_column_split(lines, shop_header_index)
+    if column_split is None:
+        parsed_lines = _parse_lines(lines, shop_header_index)
+    else:
+        restored, parsed_lines, subtotal = column_split
+        shop_name, _ = _shop_header(restored)
+        total = total or subtotal
     math_delta = None if total is None else _bounded_sum((
         _bounded_sum(line["net_line_total"] for line in parsed_lines), negate_money(total)))
     return {
