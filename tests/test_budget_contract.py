@@ -346,6 +346,11 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("16384", receipts["/api/budget/receipts/list"]["post"]["responses"]["413"]["description"])
         self.assertEqual(document["info"]["version"], contract.CONTRACT_VERSION)
         receipt_schemas = document["components"]["schemas"]
+        for receipt_schema in ("BudgetReceiptSummary", "BudgetReceiptDetail"):
+            schema = receipt_schemas[receipt_schema]
+            self.assertIn("0.61.0", schema["properties"]["display_shop_name"]["description"])
+            self.assertNotIn("display_shop_name", schema["required"])
+            self.assertNotIn("default", schema["properties"]["display_shop_name"])
         self.assertEqual(receipt_schemas["BudgetReceiptDeviceRedeemResult"]["properties"]["expires_at"]["format"],
                          "date-time")
         parse_schema = receipt_schemas["BudgetReceiptParseTextRequest"]

@@ -125,7 +125,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 #         appointment_slot & appointment_attention items on BudgetAnalyticsInbox.
 # 0.59.0: group-linked receipt summaries and owner-private receipt group detail.
 # 0.60.0: additive receipt link summary on analytics transactions and linked_transaction summary on receipt lists.
-CONTRACT_VERSION = "0.60.0"
+# 0.61.0: additive OCR issuer display name on receipt list, search and detail.
+CONTRACT_VERSION = "0.61.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -3238,6 +3239,10 @@ class BudgetReceiptSummary(BaseModel):
     shop_id: str | None
     chain_key: str | None
     raw_shop_name: str | None
+    display_shop_name: Annotated[str | None, Field(
+        description="Canonical OCR issuer name when available. Emitted on list, search and detail from 0.61.0.",
+        json_schema_extra=_OMIT,
+    )] = None
     raw_nip: str | None
     receipt_kind: Literal["purchase", "refund"]
     receipt_date: str | None

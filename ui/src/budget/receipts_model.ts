@@ -1516,17 +1516,18 @@ export function normalizeMerchantGroupName(name: string): string {
   return name.normalize("NFC").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+export function receiptShopName(receipt: Pick<ReceiptSummary, "display_shop_name" | "raw_shop_name">): string | null {
+  return receipt.display_shop_name ?? receipt.raw_shop_name;
+}
+
 /** Groups by trimmed NIP when present (avoiding merging distinct sellers with identical names), else normalized merchant name or sender domain. */
 export function receiptMerchantGroupIdentity(
-  receipt: Pick<ReceiptSummary, "raw_shop_name" | "raw_nip" | "forwarded_sender_domain">,
+  receipt: Pick<ReceiptSummary, "display_shop_name" | "raw_shop_name" | "raw_nip" | "forwarded_sender_domain">,
   formatWithNip: (merchant: string | null, nip: string) => string = (merchant, nip) =>
     (merchant === null ? `NIP ${nip}` : `${merchant} (NIP ${nip})`),
 ): MerchantBulkIdentity | null {
-  const shop = receipt.raw_shop_name !== null
-    && !isRedactedValue(receipt.raw_shop_name)
-    && receipt.raw_shop_name.trim() !== ""
-    ? receipt.raw_shop_name.trim()
-    : null;
+  const name = receiptShopName(receipt)?.trim() ?? "";
+  const shop = name !== "" && !isRedactedValue(name) ? name : null;
   const domain = receipt.forwarded_sender_domain !== null && receipt.forwarded_sender_domain.trim() !== ""
     ? receipt.forwarded_sender_domain.trim()
     : null;
@@ -1547,7 +1548,7 @@ export function receiptMerchantGroupIdentity(
 
 /** Safe display merchant label (including NIP when present); never surfaces privacy redaction sentinels. */
 export function receiptMerchantGroupKey(
-  receipt: Pick<ReceiptSummary, "raw_shop_name" | "raw_nip" | "forwarded_sender_domain">,
+  receipt: Pick<ReceiptSummary, "display_shop_name" | "raw_shop_name" | "raw_nip" | "forwarded_sender_domain">,
   formatWithNip?: (merchant: string | null, nip: string) => string,
 ): string | null {
   return receiptMerchantGroupIdentity(receipt, formatWithNip)?.label ?? null;
