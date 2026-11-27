@@ -704,10 +704,14 @@ def _merge_ical(original: bytes, generated: bytes, *, floating_time_zone: str | 
 class CalDAVProvider:
     """Authenticated writable iCloud/CalDAV collection, never a public ICS feed.
 
-    Full, unbounded VEVENT REPORTs deliberately avoid depending on optional
-    server sync-token extensions. ETags detect changes; the engine persists
-    successful inventories and deletion tombstones. A partial REPORT is rejected.
+    When the verified collection's DAV:sync-token matches the versioned
+    checkpoint for this calendar and floating-time policy, pull skips the
+    REPORT and returns a complete empty delta. Otherwise it falls back to a
+    full, unbounded VEVENT REPORT; ETags detect changes and partial REPORTs
+    are rejected.
     """
+
+    CURSOR_PREFIX = "hestia-caldav:1:"
 
     def __init__(self, calendar_id: str, *, username: str, password: str,
                  url: str = "https://caldav.icloud.com", floating_time_zone: str | None = None, transport=None):
@@ -827,10 +831,37 @@ class CalDAVProvider:
         if info is None or not info.writable:
             raise ProviderError("CalDAV calendar does not grant complete read/write permission", status=403)
         token = properties.get(f"{{{DAV}}}sync-token")
-        return token.text if token is not None else None
+        value = token.text.strip() if token is not None and token.text else ""
+        return value or None
+
+    def _checkpoint(self, token: str | None) -> str | None:
+        if not token:
+            return None
+        return self.CURSOR_PREFIX + json.dumps(
+            {"calendar_id": self.calendar_id,
+             "floating_time_zone": self.floating_time_zone,
+             "token": token},
+            sort_keys=True, separators=(",", ":"),
+        )
+
+    def _saved_token(self, cursor: str | None) -> str | None:
+        if not cursor or not cursor.startswith(self.CURSOR_PREFIX):
+            return None
+        try:
+            data = json.loads(cursor[len(self.CURSOR_PREFIX):])
+        except ValueError:
+            return None
+        if (not isinstance(data, dict)
+                or data.get("calendar_id") != self.calendar_id
+                or data.get("floating_time_zone") != self.floating_time_zone):
+            return None
+        token = data.get("token")
+        return token if isinstance(token, str) and token else None
 
     def pull(self, cursor: str | None) -> Snapshot:
         before = self._check_calendar()
+        if before and before == self._saved_token(cursor):
+            return Snapshot([], self._checkpoint(before), complete=True, full=False)
         body = (f'<c:calendar-query xmlns:d="DAV:" xmlns:c="{CAL}">'
                 '<d:prop><d:getetag/><c:calendar-data/></d:prop>'
                 '<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"/>'
@@ -856,7 +887,7 @@ class CalDAVProvider:
         after = self._check_calendar()
         if before != after:
             raise ProviderError("CalDAV calendar changed during inventory; retry required", retryable=True)
-        return Snapshot(records, after, complete=True, full=True)
+        return Snapshot(records, self._checkpoint(after), complete=True, full=True)
 
     def _get(self, remote_id: str) -> tuple[RemoteEvent, bytes]:
         response = self._request("GET", self._resource(remote_id), headers={"Accept": "text/calendar"})

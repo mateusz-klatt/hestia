@@ -71,7 +71,7 @@ def sync_lock(path):
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def run_once(config, *, path=None):
+def run_once(config, *, path=None, providers=None):
     from ..db import db_path, init_db
     from .engine import SyncEngine
     from .store import SyncStore
@@ -81,7 +81,7 @@ def run_once(config, *, path=None):
         _, sessions = init_db(target)
         store = SyncStore(sessions)
         store.configure(config.store_groups())
-        return SyncEngine(store, make_providers(config)).run_once()
+        return SyncEngine(store, make_providers(config) if providers is None else providers).run_once()
 
 
 async def _settled_thread(operation):
@@ -110,9 +110,17 @@ async def poll_calendars() -> None:
         if config is None:
             return
         log.info("Calendar synchronization enabled for %d explicit groups", len(config.groups))
+        providers = None
+
+        def _round():
+            nonlocal providers
+            if providers is None:
+                providers = make_providers(config)
+            return run_once(config, providers=providers)
+
         while True:
             try:
-                await _settled_thread(lambda: run_once(config))
+                await _settled_thread(_round)
             except SyncBusyError:
                 log.info("Calendar synchronization round skipped: another worker is active")
             except ConfigError as exc:

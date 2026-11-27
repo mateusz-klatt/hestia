@@ -53,7 +53,9 @@ class SyncEngine:
             for endpoint in self.store.endpoints():
                 endpoint_id = endpoint["id"]
                 try:
-                    snapshot = self.providers[endpoint_id].pull(endpoint["cursor"])
+                    cursor = (None if endpoint["needs_reobservation"] and endpoint["provider"] == "caldav"
+                              else endpoint["cursor"])
+                    snapshot = self.providers[endpoint_id].pull(cursor)
                     validate_snapshot(snapshot)
                     snapshots[endpoint_id] = snapshot
                 except Exception as exc:

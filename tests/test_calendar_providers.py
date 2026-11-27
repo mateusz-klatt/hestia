@@ -283,7 +283,7 @@ class CalDAVReadTests(unittest.TestCase):
         provider, transport = dav(dav_acl(), multistatus(dav_item(), item), dav_acl())
         result = provider.pull("old-token")
         self.assertTrue(result.full and result.complete)
-        self.assertEqual(result.cursor, "one")
+        self.assertEqual(result.cursor, provider._checkpoint("one"))
         self.assertEqual([e.deleted for e in result.events], [False, True])
         self.assertEqual(transport.calls[1][0], "REPORT")
         self.assertNotIn(b"time-range", transport.calls[1][2]["body"])
@@ -822,7 +822,7 @@ class CalDAVDefaultPortIdentityTests(unittest.TestCase):
         for selected, alias in ((explicit, CALENDAR), (CALENDAR, explicit)):
             with self.subTest(selected=selected):
                 provider, transport = dav(dav_acl(href=alias), multistatus(dav_item(href=alias + "one.ics")), dav_acl(href=alias),
-                                          dav_acl(href=selected), multistatus(dav_item(href=selected + "one.ics")), dav_acl(href=selected),
+                                          dav_acl(href=selected, token="two"), multistatus(dav_item(href=selected + "one.ics")), dav_acl(href=selected, token="two"),
                                           calendar_id=selected)
                 first = provider.pull(None)
                 second = provider.pull(first.cursor)
