@@ -2261,6 +2261,7 @@ SPOUSE_ROUTE_STATUS = {
     ("POST", "/api/budget/receipts/confirm"): 403,
     ("POST", "/api/budget/receipts/list"): 403,
     ("POST", "/api/budget/receipts/search"): 403,
+    ("POST", "/api/budget/receipts/transaction-search"): 403,
     ("GET", "/api/budget/receipts/detail"): 403,
     ("GET", "/api/budget/receipts/group/detail"): 403,
     ("POST", "/api/budget/receipts/group/candidates"): 403,

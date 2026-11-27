@@ -59,7 +59,24 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.66.0")
+        self.assertEqual(document["info"]["version"], "0.67.0")
+        # 0.67.0 additive manual receipt transaction picker.
+        picker = document["paths"].pop("/api/budget/receipts/transaction-search")["post"]
+        self.assertEqual(picker["x-required-permission"], "budget.receipts.match")
+        self.assertTrue(picker["parameters"][0]["required"])
+        schemas["BudgetCapabilities"]["properties"].pop("receipt_transaction_search")
+        schemas["BudgetReceiptConfirmRequest"]["properties"]["link"]["anyOf"].remove(
+            {"$ref": "#/components/schemas/BudgetReceiptManualLinkRequest"}
+        )
+        schemas["BudgetReceiptConfirmRequest"]["properties"]["link"].pop("title")
+        for schema in ("BudgetReceiptManualLinkRequest", "BudgetReceiptTransactionSearchRequest",
+                       "BudgetReceiptTransactionSearchItem", "BudgetReceiptTransactionSearchResult"):
+            schemas.pop(schema)
+        document["info"]["version"] = "0.66.0"
+        canonical_0_66 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_66).hexdigest(),
+                         "5026f79eb6a390f9aa7a1483c1868da0a678ff6feda03ed41247b86b2897cdbd")
+
         # 0.66.0 additive Gmail parse failure reasons.
         status = document["paths"]["/api/budget/receipts/gmail-status"]["get"]
         gmail_header, = status["parameters"]
@@ -1037,6 +1054,7 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest",
         "BudgetReceiptLineInput", "BudgetReceiptLinkRequest", "BudgetReceiptListRequest",
         "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",
+        "BudgetReceiptManualLinkRequest", "BudgetReceiptTransactionSearchRequest",
         "BudgetReceiptGroupCandidatesRequest", "BudgetReceiptGroupMemberInput",
         "BudgetReceiptGroupLinkRequest", "BudgetReceiptGroupUnlinkRequest",
         "BudgetReceiptDeviceBrowserRequest", "BudgetReceiptDeviceRedeemRequest",

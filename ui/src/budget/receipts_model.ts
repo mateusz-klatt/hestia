@@ -16,6 +16,9 @@ export type ReceiptCandidate = Schemas["BudgetReceiptCandidate"];
 export type ReceiptLinkRequest = Schemas["BudgetReceiptLinkRequest"];
 export type ReceiptConfirmRequest = Schemas["BudgetReceiptConfirmRequest"];
 export type ReceiptConfirmResult = Schemas["BudgetReceiptConfirmResult"];
+export type ReceiptTransactionSearchRequest = Schemas["BudgetReceiptTransactionSearchRequest"];
+export type ReceiptTransactionSearchResult = Schemas["BudgetReceiptTransactionSearchResult"];
+export type ReceiptTransactionSearchItem = Schemas["BudgetReceiptTransactionSearchItem"];
 export type ReceiptDetailResult = Omit<Schemas["BudgetReceiptDetailResult"], "group_candidates"> & {
   group_candidates?: ReceiptGroupCandidate[] | null;
 };
@@ -482,10 +485,11 @@ export interface ReceiptConfirmDraft {
   currency: string;
   paymentMethod: ReceiptPaymentMethod;
   lines: ReceiptLineInput[];
-  /** "" (explicit choice required on linked receipt without keep token) | "keep" | "unlink" | "candidate:<index>" */
+  /** "" (explicit choice required) | "keep" | "unlink" | "manual" | "candidate:<index>" */
   linkChoice: string;
   selectedCandidate: SelectedCandidateBinding | null;
   keepBinding: KeepCandidateBinding | null;
+  manualTransaction?: ReceiptTransactionSearchItem;
   readonly candidateSetKey: string;
 }
 
@@ -622,6 +626,17 @@ export interface ReceiptLinkOptions {
   canPickCandidates: boolean;
   mustUnlinkToConfirm: boolean;
   currentCandidate: ReceiptCandidate | null;
+}
+
+export function canPickManualTransaction(
+  detail: Pick<ReceiptDetail, "currency" | "evidence_for_receipt_id" | "link_group">,
+  draft: Pick<ReceiptConfirmDraft, "currency" | "receiptKind" | "paymentMethod">,
+): boolean {
+  const currency = draft.currency.trim().toUpperCase();
+  return !isReceiptGrouped(detail) && detail.evidence_for_receipt_id === null
+    && draft.receiptKind === "purchase" && /^[A-Z]{3}$/.test(currency)
+    && (detail.currency === null || currency === detail.currency)
+    && draft.paymentMethod !== "cash" && draft.paymentMethod !== "mixed";
 }
 
 export function findCurrentLinkedCandidate(
@@ -973,6 +988,7 @@ function canonicalDraftSnapshot(draft: ReceiptConfirmDraft): string {
       net_line_total: line.net_line_total,
     })),
     linkChoice: draft.linkChoice,
+    manualTransactionId: draft.linkChoice === "manual" ? draft.manualTransaction?.id ?? null : null,
     selectedCandidate: draft.selectedCandidate === null
       ? null
       : {
@@ -1032,6 +1048,7 @@ export function reconcileLinkChoice(
   candidates: readonly ReceiptCandidate[],
 ): string {
   if (prevChoice === "unlink") return "unlink";
+  if (prevChoice === "manual") return canPickManualTransaction(detail, nextDraft) ? "manual" : "";
   const changed = hasMatchingFieldsChanged(detail, nextDraft);
   const nextOptions = availableLinkOptions(detail, candidates, nextDraft.paymentMethod, changed);
   if (prevChoice === "keep") {
@@ -1430,10 +1447,15 @@ export function buildConfirmRequest(
 
   const fieldsChanged = hasMatchingFieldsChanged(detail, draft);
   const options = availableLinkOptions(detail, candidates, draft.paymentMethod, fieldsChanged);
-  let link: ReceiptLinkRequest | null;
+  let link: ReceiptConfirmRequest["link"];
 
   if (draft.linkChoice === "unlink") {
     link = null;
+  } else if (draft.linkChoice === "manual") {
+    if (draft.manualTransaction?.currency !== currency || !canPickManualTransaction(detail, draft)) {
+      return { ok: false, errorKey: "budget.receipts.invalidForm" };
+    }
+    link = { transaction_id: draft.manualTransaction.id };
   } else if (draft.linkChoice === "keep") {
     if (!options.paymentAllowsLink || options.matchingFieldsChanged || detail.status === "confirmed") {
       return { ok: false, errorKey: "budget.receipts.invalidForm" };

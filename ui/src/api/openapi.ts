@@ -1884,6 +1884,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/receipts/transaction-search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Find booked outflows in the owned receipt's currency for manual linking.
+         * @description Browser owner and budget.receipts.match required. Searches stored transactions only. Percentage filters also consider the receipt total plus any positive gateway fee. Results sort by absolute amount difference, then by distance from the receipt date (most recent first without a receipt date). Confirm with link.transaction_id to link a result.
+         */
+        post: operations["searchBudgetReceiptTransactions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/refresh": {
         parameters: {
             query?: never;
@@ -4970,6 +4990,8 @@ export interface components {
             background_selection: boolean;
             /** Consent */
             consent: boolean;
+            /** Receipt Transaction Search */
+            receipt_transaction_search?: boolean;
             /** Refresh */
             refresh: boolean;
             /** Stored Reads */
@@ -6243,7 +6265,8 @@ export interface components {
              * @description Omit or send null to keep stored lines unchanged and re-validate totals against them.
              */
             lines?: components["schemas"]["BudgetReceiptLineInput"][] | null;
-            link: components["schemas"]["BudgetReceiptLinkRequest"] | null;
+            /** Link */
+            link: components["schemas"]["BudgetReceiptLinkRequest"] | components["schemas"]["BudgetReceiptManualLinkRequest"] | null;
             /**
              * Payment Method
              * @enum {string}
@@ -6979,6 +7002,14 @@ export interface components {
             /** Receipts */
             receipts: components["schemas"]["BudgetReceiptSummary"][];
         };
+        /** BudgetReceiptManualLinkRequest */
+        BudgetReceiptManualLinkRequest: {
+            /**
+             * Transaction Id
+             * @description Receipt-scoped identifier from transaction-search. Requires contract 0.67.0.
+             */
+            transaction_id: string;
+        };
         /** BudgetReceiptParseResult */
         BudgetReceiptParseResult: {
             /** Candidates */
@@ -7164,6 +7195,93 @@ export interface components {
             updated_at: number;
             /** Version */
             version: number;
+        };
+        /** BudgetReceiptTransactionSearchItem */
+        BudgetReceiptTransactionSearchItem: {
+            /** Account Label */
+            account_label: string;
+            /** Amount */
+            amount: string;
+            /**
+             * Amount Delta
+             * @description Signed transaction amount minus the receipt total, if known.
+             */
+            amount_delta: string | null;
+            /** Counterparty */
+            counterparty: string | null;
+            /** Currency */
+            currency: string;
+            /** Date */
+            date: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Includes Fee
+             * @description The transaction is closer to the receipt total plus the gateway fee.
+             */
+            includes_fee: boolean;
+            /** Title */
+            title: string | null;
+        };
+        /** BudgetReceiptTransactionSearchRequest */
+        BudgetReceiptTransactionSearchRequest: {
+            /** Account Id */
+            account_id?: string | null;
+            /**
+             * Amount Max
+             * @description Custom maximum. Any custom amount bound replaces the percentage range.
+             */
+            amount_max?: string | null;
+            /**
+             * Amount Min
+             * @description Custom minimum. Any custom amount bound replaces the percentage range.
+             */
+            amount_min?: string | null;
+            /**
+             * Currency
+             * @description Draft currency for a receipt with no stored currency. Defaults to PLN for those receipts.
+             */
+            currency?: string | null;
+            /** Cursor */
+            cursor?: string | null;
+            /**
+             * Date From
+             * @description Omit or send null for 30 days before the receipt date, or 90 days before today (UTC) when undated.
+             */
+            date_from?: string | null;
+            /**
+             * Date To
+             * @description Omit or send null for 60 days after the receipt date, or today (UTC) when undated.
+             */
+            date_to?: string | null;
+            /** Limit */
+            limit?: number;
+            /** Query */
+            query?: string | null;
+            /**
+             * Receipt Date
+             * @description Draft receipt date for the default date range and date-distance ranking. Defaults to the stored receipt date.
+             */
+            receipt_date?: string | null;
+            /** Receipt Id */
+            receipt_id: string;
+            /**
+             * Total Amount
+             * @description Draft receipt total for the percentage filter and amount differences. Defaults to the stored receipt total.
+             */
+            total_amount?: string | null;
+            /**
+             * Wide
+             * @description Use ±20% of the total and allow any merchant. Defaults to ±5% and matches distinctive merchant tokens when available.
+             */
+            wide?: boolean;
+        };
+        /** BudgetReceiptTransactionSearchResult */
+        BudgetReceiptTransactionSearchResult: {
+            /** Items */
+            items: components["schemas"]["BudgetReceiptTransactionSearchItem"][];
+            /** Next Cursor */
+            next_cursor: string | null;
         };
         /** BudgetRefreshAccepted */
         BudgetRefreshAccepted: {
@@ -17669,6 +17787,123 @@ export interface operations {
                 };
             };
             /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description SQLite users backend is required (budget_requires_sqlite_users). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 16384 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    searchBudgetReceiptTransactions: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Available from 0.67.0. */
+                "X-Hestia-Contract-Version": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptTransactionSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptTransactionSearchResult"];
+                };
+            };
+            /** @description Invalid filters or cursor. The effective date span must be between 0 and 400 days. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Unknown, disabled or foreign receipt, or contract version below 0.67.0. */
             404: {
                 headers: {
                     [name: string]: unknown;
