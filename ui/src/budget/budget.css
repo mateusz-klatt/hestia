@@ -1064,6 +1064,7 @@
 .budget-receipt-line-edit label {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  align-content: end;
   gap: .25rem;
   font-size: .85rem;
   font-weight: 500;
@@ -1090,7 +1091,8 @@
   grid-column: 1 / -1;
 }
 .budget-receipt-line-edit .budget-receipt-line-label {
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   line-height: 1.25;
 }
 .budget-receipt-line-edit input {

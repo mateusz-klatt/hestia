@@ -4431,6 +4431,7 @@ describe("ReceiptsView", () => {
     expect(css).not.toMatch(/\.budget-receipt-edit-line\b/);
     expect(css).toMatch(/\.budget-receipt-line-edit\s+\.budget-receipt-line-field-name\s*\{[^}]*grid-column:\s*1\s*\/\s*-1;/);
     expect(css).toMatch(/\.budget-receipt-line-edit\s*\{[^}]*align-items:\s*end;/);
+    expect(css).toMatch(/\.budget-receipt-line-edit\s+\.budget-receipt-line-label\s*\{[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/);
 
     const lineEditStart = css.indexOf(".budget-receipt-line-edit");
     expect(lineEditStart).toBeGreaterThan(-1);
@@ -4474,7 +4475,7 @@ describe("ReceiptsView", () => {
           const labelText = label.querySelector<HTMLElement>(".budget-receipt-line-label");
           expect(labelText).not.toBeNull();
           if (labelText !== null) {
-            expect(getComputedStyle(labelText).whiteSpace).toBe("nowrap");
+            expect(getComputedStyle(labelText).whiteSpace).toBe("normal");
           }
         }
         for (const input of row.querySelectorAll<HTMLInputElement>("input")) {
