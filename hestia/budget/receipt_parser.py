@@ -1247,14 +1247,16 @@ def _pair_column_rows(names, amounts):
 def _restore_item_columns(lines, shop_header_index):
     rows = [" ".join(raw.split()) for raw in lines]
     restored = None
-    end = 0
+    end = names_boundary = 0
     for is_amount, block in groupby(rows, key=_column_amount):
         amounts = list(block)
         start, end = end, end + len(amounts)
         if not is_amount:
+            names_boundary = start
             continue
         name_start = start
-        while name_start > 0 and name_start - 1 != shop_header_index and _orphan_name(rows[name_start - 1]):
+        while (name_start > names_boundary and name_start - 1 != shop_header_index
+               and _orphan_name(rows[name_start - 1])):
             name_start -= 1
         names = rows[name_start:start]
         if not names:

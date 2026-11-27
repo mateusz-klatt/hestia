@@ -119,6 +119,14 @@ Płatność Mastercard-C 106,00
         self.assertEqual([line["raw_name"] for line in parsed["lines"]], ["KAWA", "HERBATA"])
         self.assertEqual((parsed["total_amount"], parsed["math_delta"]), ("7", "-2"))
 
+    def test_previous_calculation_run_cannot_become_name_rows(self):
+        parsed = parse_receipt(
+            f"{_HEADER}KAWA\nHERBATA\n1szt * 2 2\n1szt * 3 3\n"
+            "SOK\nMLEKO\n1szt * 4 4\n1szt * 5 5\nSUMA PLN 14,00"
+        )
+        self.assertEqual([line["raw_name"] for line in parsed["lines"]], ["KAWA", "HERBATA", "SOK", "MLEKO"])
+        self.assertEqual(parsed["math_delta"], "0")
+
     def test_mismatched_column_counts_keep_legacy_parse(self):
         for columns, subtotal, expected_names, expected_delta in (
             ("KAWA\nHERBATA\n1szt * 5,00 5,00 A", "5,00", ["HERBATA"], "0"),
