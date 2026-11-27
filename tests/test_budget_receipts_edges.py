@@ -158,6 +158,21 @@ class ParserEdgeTests(unittest.TestCase):
                 self.assertIsNone(parse_receipt(text)["raw_nip"])
                 self.assertEqual(parse_receipt(f"{text}\n\nNIP: 1010101016")["raw_nip"], "1010101016")
 
+    def test_receipt_body_after_section_heading_releases_the_seller_footer_nip(self):
+        text = ("Odbiorca:\nKlient\nPARAGON FISKALNY\nTOWAR 1 x 1,00 1,00 A\n"
+                "SUMA PLN 1,00\nNIP: 1010101016")
+        self.assertEqual(parse_receipt(text)["raw_nip"], "1010101016")
+
+    def test_nip_is_still_buyer_data_directly_below_a_section_heading(self):
+        for following in ("NIP: 1020101012", "\nNIP1020101012", "PODSUMOWANIE\n\nNIP: 1020101012"):
+            with self.subTest(following=following):
+                text = f"Nabywca:\nPARAGON FISKALNY\n{following}"
+                self.assertIsNone(parse_receipt(text)["raw_nip"])
+
+    def test_qualified_buyer_heading_starts_a_new_block_after_section_heading(self):
+        text = "Nabywca:\nPARAGON FISKALNY\nNIP nabywcy:\n\nKlient Testowy\nNIP: 1020101012"
+        self.assertIsNone(parse_receipt(text)["raw_nip"])
+
     def test_explicit_boundaries_end_a_buyer_block_before_its_nip(self):
         for boundary in ("-------", "Sprzedawca:"):
             with self.subTest(boundary=boundary):
