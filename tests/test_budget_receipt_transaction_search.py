@@ -361,7 +361,7 @@ class ReceiptTransactionSearchHTTPTests(IsolatedAsyncioTestCase):
         for version in (None, "0.66.0"):
             response = await self._post("transaction-search", body, version=version)
             self.assertEqual((response.status, (await response.json())["error"]), (404, "budget_receipt_not_found"))
-        for version in ("0.68.0", "garbage"):
+        for version in ("0.69.0", "garbage"):
             response = await self._post("transaction-search", body, version=version)
             self.assertEqual((response.status, (await response.json())["error"]),
                              (400, "budget_receipt_contract_version_invalid"))
@@ -378,6 +378,9 @@ class ReceiptTransactionSearchHTTPTests(IsolatedAsyncioTestCase):
         api_fixture.BudgetAPITests.assert_private_headers(self, response)
         result = api_contract.BudgetReceiptTransactionSearchResult.model_validate(await response.json())
         self.assertEqual([item.title for item in result.items], ["Alice private description"])
+        current = await self._post("transaction-search", body, version="0.68.0")
+        self.assertEqual(current.status, 200, await current.text())
+        self.assertEqual(await current.json(), result.model_dump())
         result = await self.get("connections")
         self.assertTrue((await result.json())["capabilities"]["receipt_transaction_search"])
         with mock.patch.dict(os.environ, {receipt_api.FLAG: "0"}):

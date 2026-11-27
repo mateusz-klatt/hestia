@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Sami dagur",
   "budget.receipts.candidateDays": "{days} d munur",
   "budget.receipts.candidateMerchantMatch": "Söluaðili passar",
+  "budget.receipts.roundingNote": "námundun {amount}",
   "budget.receipts.cashNoLinkNote": "Reiðufé og blandaðar greiðslur geta ekki verið tengdar bankafærslu.",
   "budget.receipts.addSummaryLine": "Bæta við samantektarlínu",
   "budget.receipts.addLine": "Bæta við línu",

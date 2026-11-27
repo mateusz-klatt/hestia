@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Parehong araw",
   "budget.receipts.candidateDays": "{days} a na pagitan",
   "budget.receipts.candidateMerchantMatch": "Tugma ang tindahan",
+  "budget.receipts.roundingNote": "pag-round up {amount}",
   "budget.receipts.cashNoLinkNote": "Ang cash at pinagsamang bayad ay hindi maaaring manatiling naka-link sa bangko.",
   "budget.receipts.addSummaryLine": "Magdagdag ng buod na linya",
   "budget.receipts.addLine": "Magdagdag ng linya",

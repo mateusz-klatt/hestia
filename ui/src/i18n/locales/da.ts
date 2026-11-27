@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Samme dag",
   "budget.receipts.candidateDays": "{days} d afvigelse",
   "budget.receipts.candidateMerchantMatch": "Forhandler matcher",
+  "budget.receipts.roundingNote": "afrunding {amount}",
   "budget.receipts.cashNoLinkNote": "Kontantbetalinger og blandede betalinger kan ikke forblive koblet til en bankpostering.",
   "budget.receipts.addSummaryLine": "Tilføj samlelinje",
   "budget.receipts.addLine": "Tilføj linje",

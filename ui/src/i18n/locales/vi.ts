@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Cùng ngày",
   "budget.receipts.candidateDays": "lệch {days} ngày",
   "budget.receipts.candidateMerchantMatch": "Khớp cửa hàng",
+  "budget.receipts.roundingNote": "làm tròn {amount}",
   "budget.receipts.cashNoLinkNote": "Thanh toán tiền mặt và thanh toán kết hợp không thể giữ liên kết với giao dịch ngân hàng.",
   "budget.receipts.addSummaryLine": "Thêm dòng tóm tắt",
   "budget.receipts.addLine": "Thêm dòng",

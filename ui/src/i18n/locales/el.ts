@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Ίδια ημέρα",
   "budget.receipts.candidateDays": "{days} ημ. διαφορά",
   "budget.receipts.candidateMerchantMatch": "Αντιστοιχία εμπόρου",
+  "budget.receipts.roundingNote": "στρογγυλοποίηση {amount}",
   "budget.receipts.cashNoLinkNote": "Οι πληρωμές με μετρητά και οι μεικτές πληρωμές δεν μπορούν να παραμείνουν συνδεδεμένες με τραπεζική κίνηση.",
   "budget.receipts.addSummaryLine": "Προσθήκη συγκεντρωτικής γραμμής",
   "budget.receipts.addLine": "Προσθήκη γραμμής",

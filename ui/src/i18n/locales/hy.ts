@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Նույն օրը",
   "budget.receipts.candidateDays": "{days} օր տարբերություն",
   "budget.receipts.candidateMerchantMatch": "Վաճառողը համընկնում է",
+  "budget.receipts.roundingNote": "կլորացում {amount}",
   "budget.receipts.cashNoLinkNote": "Կանխիկ և խառը վճարումները չեն կարող մնալ կապված բանկային գրառման հետ։",
   "budget.receipts.addSummaryLine": "Ավելացնել ամփոփիչ տող",
   "budget.receipts.addLine": "Ավելացնել տող",

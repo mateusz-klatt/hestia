@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "같은 날",
   "budget.receipts.candidateDays": "{days}일 차이",
   "budget.receipts.candidateMerchantMatch": "가맹점 일치",
+  "budget.receipts.roundingNote": "올림 {amount}",
   "budget.receipts.cashNoLinkNote": "현금 및 혼합 결제는 은행 거래에 연결된 상태를 유지할 수 없습니다.",
   "budget.receipts.addSummaryLine": "요약 행 추가",
   "budget.receipts.addLine": "항목 추가",

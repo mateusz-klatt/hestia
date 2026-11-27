@@ -11316,13 +11316,29 @@
             "title": "Entry Reference",
             "type": "string"
           },
+          "match_rule": {
+            "anyOf": [
+              {
+                "const": "rounded_up",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Card round-up candidate, from 0.68.0.",
+            "title": "Match Rule"
+          },
           "match_strength": {
             "enum": [
               "id",
               "nip",
               "distinctive",
               "generic",
-              "none"
+              "none",
+              "medium",
+              "strong",
+              "weak"
             ],
             "title": "Match Strength",
             "type": "string"
@@ -11330,6 +11346,18 @@
           "merchant_token_hit": {
             "title": "Merchant Token Hit",
             "type": "boolean"
+          },
+          "rounding_delta": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Bank amount minus receipt total, from 0.68.0.",
+            "title": "Rounding Delta"
           },
           "transaction_date": {
             "anyOf": [
@@ -11949,6 +11977,18 @@
               }
             ],
             "title": "Receipt Time"
+          },
+          "rounding_delta": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Confirmed card round-up in receipt currency, from 0.68.0.",
+            "title": "Rounding Delta"
           },
           "shop_id": {
             "anyOf": [
@@ -18707,7 +18747,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.67.0"
+    "version": "0.68.0"
   },
   "openapi": "3.1.0",
   "paths": {

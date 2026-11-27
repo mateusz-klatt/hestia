@@ -512,6 +512,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Stesso giorno",
   "budget.receipts.candidateDays": "{days} g di scarto",
   "budget.receipts.candidateMerchantMatch": "Esercente compatibile",
+  "budget.receipts.roundingNote": "arrotondamento {amount}",
   "budget.receipts.cashNoLinkNote": "I pagamenti in contanti e misti non possono restare collegati a un movimento bancario.",
   "budget.receipts.addSummaryLine": "Aggiungi riga riepilogativa",
   "budget.receipts.addLine": "Aggiungi riga",

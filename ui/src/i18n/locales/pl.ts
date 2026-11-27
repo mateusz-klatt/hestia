@@ -517,6 +517,7 @@ const pl: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Ten sam dzień",
   "budget.receipts.candidateDays": "różnica {days} d",
   "budget.receipts.candidateMerchantMatch": "Zgodny sprzedawca",
+  "budget.receipts.roundingNote": "zaokrąglenie {amount}",
   "budget.receipts.cashNoLinkNote": "Płatności gotówkowe i mieszane nie mogą być powiązane z transakcją bankową.",
   "budget.receipts.addSummaryLine": "Dodaj pozycję zbiorczą",
   "budget.receipts.addLine": "Dodaj pozycję",

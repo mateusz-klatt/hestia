@@ -512,6 +512,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Gleicher Tag",
   "budget.receipts.candidateDays": "{days} T. Abstand",
   "budget.receipts.candidateMerchantMatch": "Händler passt",
+  "budget.receipts.roundingNote": "Aufrundung {amount}",
   "budget.receipts.cashNoLinkNote": "Barzahlungen und gemischte Zahlungen können nicht mit einem Bankumsatz verknüpft bleiben.",
   "budget.receipts.addSummaryLine": "Summenzeile hinzufügen",
   "budget.receipts.addLine": "Position hinzufügen",

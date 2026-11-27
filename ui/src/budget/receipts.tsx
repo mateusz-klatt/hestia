@@ -240,6 +240,13 @@ function receiptTotalDisplay(receipt: Pick<ReceiptSummary, "total_amount" | "cur
   return formatAmount(receipt.total_amount, receipt.currency, locale);
 }
 
+function roundingNote(delta: string | null | undefined, currency: string | null, locale: string): string | null {
+  if (delta == null || currency === null) return null;
+  const symbol = new Intl.NumberFormat(locale, { style: "currency", currency })
+    .formatToParts(0).find((part) => part.type === "currency")?.value ?? currency;
+  return t("budget.receipts.roundingNote", { amount: `+${formatAmount(delta, symbol, locale)}` });
+}
+
 function gatewayChips(receipt: Pick<ReceiptSummary, "gateway_status" | "has_document" | "payee_host">) {
   return (
     <>
@@ -3559,7 +3566,16 @@ function ReceiptDetailDrawer({
           const suggestedCandidate = activeDraft === null || suggestionDismissed || !linkOptions.canPickCandidates
             ? null
             : strongSingleCandidate;
-          const bannerCandidate = activeDraft?.linkChoice === "candidate:0" ? suggestedCandidate : null;
+          const roundedSuggestion = activeDraft !== null && activeDraft.linkChoice !== "unlink"
+            && !detail.linked && linkOptions.canPickCandidates
+            ? candidates.find((candidate) => candidate.match_rule === "rounded_up"
+              && (candidate.match_strength !== "strong" || !suggestionDismissed))
+            : undefined;
+          const bannerCandidate = roundedSuggestion
+            ?? (activeDraft?.linkChoice === "candidate:0" ? suggestedCandidate : null);
+          const linkedRoundingNote = roundingNote(
+            currentCandidate?.rounding_delta ?? detail.rounding_delta, detail.currency, locale,
+          );
           const canGroupWrites = api.receiptGroupCandidates !== undefined && api.linkReceiptGroup !== undefined;
           const canGroupReceipt = group == null && canGroupWrites && isGroupMemberEligible(detail);
           const groupProposal = canGroupReceipt && linkOptions.paymentAllowsLink && strongSingleCandidate === null
@@ -3621,11 +3637,14 @@ function ReceiptDetailDrawer({
                   locale,
                   candidate.credit_debit_indicator,
                 );
-                const strengthBadge = candidate.match_strength === "id"
-                  ? t("budget.receipts.matchBadgeId")
-                  : candidate.match_strength === "nip"
-                    ? t("budget.receipts.matchBadgeNip")
-                    : t("budget.receipts.matchBadgeMerchant");
+                const strengthBadge = candidate.match_strength === "weak"
+                  ? null
+                  : candidate.match_strength === "id"
+                    ? t("budget.receipts.matchBadgeId")
+                    : candidate.match_strength === "nip"
+                      ? t("budget.receipts.matchBadgeNip")
+                      : t("budget.receipts.matchBadgeMerchant");
+                const candidateRoundingNote = roundingNote(candidate.rounding_delta, candidate.currency, locale);
                 return (
                   <section
                     className="budget-notice budget-receipt-suggested"
@@ -3633,58 +3652,63 @@ function ReceiptDetailDrawer({
                   >
                     <div className="budget-receipt-suggested-head">
                       <strong>{t("budget.receipts.suggestedMatchHeading")}</strong>
-                      <span
-                        className="budget-chip budget-receipt-match-badge"
-                        data-match-strength={candidate.match_strength}
-                      >
-                        {strengthBadge}
-                      </span>
+                      {strengthBadge === null ? null : (
+                        <span
+                          className="budget-chip budget-receipt-match-badge"
+                          data-match-strength={candidate.match_strength}
+                        >
+                          {strengthBadge}
+                        </span>
+                      )}
                     </div>
                     <div className="budget-entry-main">
                       <span className="budget-muted">{dateText}</span>
                       <span className="budget-entry-text">
                         {accountText}
                         {` (${daysText})`}
+                        {candidateRoundingNote === null ? "" : ` · ${candidateRoundingNote}`}
                       </span>
                       <strong className={candidate.credit_debit_indicator === "DBIT" ? "is-debit" : "is-credit"}>
                         {amountText}
                       </strong>
                     </div>
-                    <div className="budget-actions">
-                      <button
-                        type="button"
-                        className="budget-link"
-                        disabled={actionBusy !== null}
-                        onClick={() => {
-                          onLinkChoiceTouched(detail.receipt_id, { kind: "empty" });
-                          setSuggestionDismissed(true);
-                          const currentDraft = confirmDraftRef.current;
-                          if (currentDraft !== null) {
-                            commitDraft(detail, candidates, { ...currentDraft, linkChoice: "", selectedCandidate: null, keepBinding: null });
-                          }
-                          linkChoicesRef.current?.focus();
-                          const target: { scrollIntoView?: (options?: ScrollIntoViewOptions) => void } | null =
-                            linkChoicesRef.current;
-                          target?.scrollIntoView?.({ block: "nearest" });
-                        }}
-                      >
-                        {t("budget.receipts.suggestedMatchChange")}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={actionBusy !== null}
-                        onClick={() => {
-                          onLinkChoiceTouched(detail.receipt_id, { kind: "unlink" });
-                          setSuggestionDismissed(true);
-                          const currentDraft = confirmDraftRef.current;
-                          if (currentDraft !== null) {
-                            commitDraft(detail, candidates, { ...currentDraft, linkChoice: "unlink", selectedCandidate: null, keepBinding: null });
-                          }
-                        }}
-                      >
-                        {t("budget.receipts.suggestedMatchUnlink")}
-                      </button>
-                    </div>
+                    {strengthBadge !== null && candidate.match_strength !== "medium" && activeDraft?.linkChoice === "candidate:0" ? (
+                      <div className="budget-actions">
+                        <button
+                          type="button"
+                          className="budget-link"
+                          disabled={actionBusy !== null}
+                          onClick={() => {
+                            onLinkChoiceTouched(detail.receipt_id, { kind: "empty" });
+                            setSuggestionDismissed(true);
+                            const currentDraft = confirmDraftRef.current;
+                            if (currentDraft !== null) {
+                              commitDraft(detail, candidates, { ...currentDraft, linkChoice: "", selectedCandidate: null, keepBinding: null });
+                            }
+                            linkChoicesRef.current?.focus();
+                            const target: { scrollIntoView?: (options?: ScrollIntoViewOptions) => void } | null =
+                              linkChoicesRef.current;
+                            target?.scrollIntoView?.({ block: "nearest" });
+                          }}
+                        >
+                          {t("budget.receipts.suggestedMatchChange")}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={actionBusy !== null}
+                          onClick={() => {
+                            onLinkChoiceTouched(detail.receipt_id, { kind: "unlink" });
+                            setSuggestionDismissed(true);
+                            const currentDraft = confirmDraftRef.current;
+                            if (currentDraft !== null) {
+                              commitDraft(detail, candidates, { ...currentDraft, linkChoice: "unlink", selectedCandidate: null, keepBinding: null });
+                            }
+                          }}
+                        >
+                          {t("budget.receipts.suggestedMatchUnlink")}
+                        </button>
+                      </div>
+                    ) : null}
                   </section>
                 );
               })(bannerCandidate)}
@@ -3916,6 +3940,7 @@ function ReceiptDetailDrawer({
                         <strong>{receiptTotalDisplay(detail, locale)}</strong>
                       </div>
                     )}
+                    {linkedRoundingNote === null ? null : <p className="budget-muted">{linkedRoundingNote}</p>}
                   </div>
                 ) : (
                   <>
@@ -4221,6 +4246,7 @@ function ReceiptDetailDrawer({
 
                   <fieldset ref={linkChoicesRef} tabIndex={-1} className="budget-receipt-link-choices">
                     <legend>{t("budget.receipts.linkChoiceHeading")}</legend>
+                    {linkedRoundingNote === null ? null : <p className="budget-muted">{linkedRoundingNote}</p>}
                     {!linkOptions.paymentAllowsLink ? (
                       <p className="budget-muted">{t("budget.receipts.cashNoLinkNote")}</p>
                     ) : null}
@@ -4303,6 +4329,7 @@ function ReceiptDetailDrawer({
                       const daysText = candidate.date_distance === 0
                         ? t("budget.receipts.candidateSameDay")
                         : t("budget.receipts.candidateDays", { days: candidate.date_distance });
+                      const candidateRoundingNote = roundingNote(candidate.rounding_delta, candidate.currency, locale);
                       return (
                         <label key={choiceValue} className="budget-toggle budget-receipt-candidate">
                           <input
@@ -4323,6 +4350,7 @@ function ReceiptDetailDrawer({
                             {accountText} · {dateText} · {amountText}
                             {` (${daysText})`}
                             {candidate.merchant_token_hit ? ` · ${t("budget.receipts.candidateMerchantMatch")}` : ""}
+                            {candidateRoundingNote === null ? "" : ` · ${candidateRoundingNote}`}
                           </span>
                         </label>
                       );

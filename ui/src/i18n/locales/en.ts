@@ -535,6 +535,7 @@ const en = {
   "budget.receipts.candidateSameDay": "Same day",
   "budget.receipts.candidateDays": "{days} d offset",
   "budget.receipts.candidateMerchantMatch": "Merchant match",
+  "budget.receipts.roundingNote": "rounding {amount}",
   "budget.receipts.cashNoLinkNote": "Cash and mixed payments cannot stay linked to a bank entry.",
   "budget.receipts.addSummaryLine": "Add summary line",
   "budget.receipts.addLine": "Add item",

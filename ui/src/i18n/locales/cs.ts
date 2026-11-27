@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "Stejný den",
   "budget.receipts.candidateDays": "odstup {days} d",
   "budget.receipts.candidateMerchantMatch": "Obchodník souhlasí",
+  "budget.receipts.roundingNote": "zaokrouhlení {amount}",
   "budget.receipts.cashNoLinkNote": "Hotovostní a kombinované platby nemohou zůstat propojeny s bankovní transakcí.",
   "budget.receipts.addSummaryLine": "Přidat souhrnnou položku",
   "budget.receipts.addLine": "Přidat položku",

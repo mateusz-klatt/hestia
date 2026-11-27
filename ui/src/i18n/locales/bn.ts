@@ -514,6 +514,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "একই দিন",
   "budget.receipts.candidateDays": "{days} দিনের ব্যবধান",
   "budget.receipts.candidateMerchantMatch": "ব্যবসায়ী মিলেছে",
+  "budget.receipts.roundingNote": "রাউন্ডিং {amount}",
   "budget.receipts.cashNoLinkNote": "নগদ ও মিশ্র পেমেন্ট ব্যাংক এন্ট্রির সাথে যুক্ত থাকতে পারে না।",
   "budget.receipts.addSummaryLine": "সারাংশ সারি যোগ করুন",
   "budget.receipts.addLine": "সারি যোগ করুন",

@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "同一天",
   "budget.receipts.candidateDays": "相差{days}天",
   "budget.receipts.candidateMerchantMatch": "商家相符",
+  "budget.receipts.roundingNote": "無條件進位 {amount}",
   "budget.receipts.cashNoLinkNote": "現金與混合付款方式無法維持與銀行紀錄的連結。",
   "budget.receipts.addSummaryLine": "新增彙總列",
   "budget.receipts.addLine": "新增明細",

@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "همان روز",
   "budget.receipts.candidateDays": "{days} روز فاصله",
   "budget.receipts.candidateMerchantMatch": "تطابق فروشنده",
+  "budget.receipts.roundingNote": "گرد کردن {amount}",
   "budget.receipts.cashNoLinkNote": "پرداخت‌های نقدی و ترکیبی نمی‌توانند به تراکنش بانکی متصل بمانند.",
   "budget.receipts.addSummaryLine": "افزودن ردیف خلاصه",
   "budget.receipts.addLine": "افزودن ردیف",

@@ -28,7 +28,8 @@ from ..db import (AppMeta, BudgetAccount as Account, BudgetAccountDisplay as Acc
                   BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line,
                   BudgetReceiptLinkGroup as ReceiptLinkGroup, BudgetReceiptLinkMember as ReceiptLinkMember,
                   BudgetShop as Shop,
-                  BudgetTransaction as Transaction, BudgetTransferLeg as Leg)
+                  BudgetTransaction as Transaction, BudgetTransactionMetadata as TransactionMetadata,
+                  BudgetTransferLeg as Leg)
 from .analytics_core import _parts, AnalyticsError, canonical_money, compare_money, financial_fingerprint, negate_money, sum_money
 from .device_token import DeviceTokenError, _issued_mask, _legacy_bearer_allowed, write_device_audit
 from .gmail_config import normalize_card_accounts
@@ -36,6 +37,8 @@ from .gmail_payment import _payee_key, bank_payee_texts, bank_ref_tokens, canoni
 from .gmail_store import (GATEWAY_REF_DOMAIN, _payment_payee_key, digest, receipt_ref_hmacs,
                           retain_imports, tombstone_receipt)
 from .receipt_group_solver import MAX_GROUP_POOL, MAX_GROUP_PROPOSALS, find_receipt_groups
+from .receipt_match_rules import (MIN_DOCUMENT_ID_LENGTH, invoice_number_pattern, remittance_has_invoice_number,
+                                  rounded_up_candidates, rounding_delta, stored_rounding_delta)
 from .receipt_parser import (GATEWAY_PHRASE_TOKENS, _IBAN_COUNTRY_SPECS, _IBAN_MAX, _IBAN_MIN,
                              _REMOVED, _STOP_TOKENS,
                              CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES, ReceiptError,
@@ -44,7 +47,8 @@ from .receipt_parser import (GATEWAY_PHRASE_TOKENS, _IBAN_COUNTRY_SPECS, _IBAN_M
                              redact_digit_field, valid_nip, validate_confirm, validate_confirm_line_totals)
 from .receipt_reconcile import (audit_payload, entry_reference_digest, evidence_json,
                                 erase_receipt_audit, group_audit_payload, group_link_evidence, link_evidence,
-                                resolved_party_names, transaction_party_names, write_audit, write_group_audit)
+                                resolved_party_names, resolved_party_names_from_metadata, transaction_party_names,
+                                write_audit, write_group_audit)
 from .views import BudgetHTTPStore
 
 MAX_DRAFTS = 20
@@ -125,17 +129,38 @@ def _shift_clamped(day, days):
     return date.min if (day - date.min).days < -days else day + timedelta(days=days)
 
 
-def _date_distance(payload, receipt_date, *, document_kind=None, due_date=None):
-    if not _valid_date(receipt_date):
-        return None
-    target = date.fromisoformat(receipt_date)
+def _match_date_bounds(target, *, document_kind=None, due_date=None, invoice_id=False):
     if document_kind == "invoice":
         due = date.fromisoformat(due_date) if _valid_date(due_date) else target
-        start = _shift_clamped(target, -1)
-        end = _shift_clamped(max(due, target), 14)
+        start = _shift_clamped(target, -3 if invoice_id else -1)
+        end = _shift_clamped(due, 120) if invoice_id else _shift_clamped(max(due, target), 14)
     else:
         start = _shift_clamped(target, -4)
         end = _shift_clamped(target, 4)
+    return start, end
+
+
+def _transaction_date_filter(ranges):
+    raw = Transaction.payload_json
+    valid_json = case((func.json_valid(raw), raw), else_="{}")
+    bank_dates = [func.json_extract(valid_json, "$." + key) for key in _BANK_DATE_FIELDS]
+    return or_(*(column.between(start.isoformat(), end.isoformat())
+                 for start, end in ranges for column in bank_dates))
+
+
+def _with_transaction_metadata(query, owner):
+    return query.outerjoin(TransactionMetadata, and_(
+        TransactionMetadata.account_id == Transaction.account_id,
+        TransactionMetadata.entry_reference == Transaction.entry_reference,
+        TransactionMetadata.owner == owner,
+    )).add_columns(TransactionMetadata)
+
+
+def _date_distance(payload, receipt_date, *, document_kind=None, due_date=None, invoice_id=False):
+    if not _valid_date(receipt_date):
+        return None
+    target = date.fromisoformat(receipt_date)
+    start, end = _match_date_bounds(target, document_kind=document_kind, due_date=due_date, invoice_id=invoice_id)
     distances = [abs((tx_date - target).days)
                  for value in map(payload.get, _BANK_DATE_FIELDS)
                  if _valid_date(value) and start <= (tx_date := date.fromisoformat(value)) <= end]
@@ -472,6 +497,7 @@ def _receipt_preview(row):
         payment_method=row.payment_method, receipt_kind=row.receipt_kind,
         raw_shop_name=row.raw_shop_name, raw_nip=row.raw_nip,
         document_kind=row.document_kind, due_date=row.due_date, id=row.id,
+        invoice_number=row.invoice_number,
         forwarded_sender_domain=row.forwarded_sender_domain,
         gateway=row.gateway, gateway_ref_hmac=row.gateway_ref_hmac,
         blik_ref_hmac=row.blik_ref_hmac, card_last4=row.card_last4,
@@ -814,13 +840,14 @@ def _enabled_account_filters(owner, *, require_enabled_connection):
 
 class BudgetReceiptStore(BudgetHTTPStore):
     def __init__(self, sessions, *, clock, cursor_secret, device_id=None, actor=None,
-                 ref_hmac_secret=None, card_accounts=None):
+                 ref_hmac_secret=None, card_accounts=None, extended_matching=True):
         super().__init__(sessions, clock=clock, cursor_secret=cursor_secret)
         self._device_id = device_id
         self._session_actor = actor
         self._actor = f"device:{device_id}" if device_id is not None else None
         self._match_allowed = False
         self._tx_summary_allowed = False
+        self._extended_matching = extended_matching
         self._ref_hmac_secret = ref_hmac_secret
         self._card_accounts = (
             normalize_card_accounts(card_accounts, allow_tuples=True) if card_accounts is not None else {}
@@ -965,8 +992,13 @@ class BudgetReceiptStore(BudgetHTTPStore):
             "total_amount": item.total_amount, "fee_amount": item.fee_amount, "receipt_date": item.receipt_date,
         } for item in evidence]
         group_link = _group_links_for_receipts(session, row.owner, [row.id]).get(row.id)
-        return {**self._summary(session, row, group_link=group_link), "lines": [_line_dict(line) for line in lines],
-                "payment_evidence": payment_evidence}
+        detail = {**self._summary(session, row, group_link=group_link), "lines": [_line_dict(line) for line in lines],
+                  "payment_evidence": payment_evidence}
+        if self._extended_matching and self._match_allowed and row.status == "confirmed":
+            delta = stored_rounding_delta(row.linked_evidence)
+            if delta is not None:
+                detail["rounding_delta"] = delta
+        return detail
 
     def _purge(self, session, owner, now):
         conditions = [Receipt.status == "draft",
@@ -1043,6 +1075,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
             )
             session.add(row)
             session.flush()
+            if self._match_allowed and candidates and candidates[0].get("match_rule") == "rounded_up":
+                # A concurrent parse may have inserted a competing receipt since the read snapshot.
+                candidates = self._candidates(session, owner, row, parsed)
+                no_bank_data = False if candidates else self._no_bank_data(session, owner, row)
             for values in parsed["lines"]:
                 session.add(Line(receipt_id=identifier, owner=owner, **{
                     key: value for key, value in values.items() if key != "line_no"
@@ -1068,7 +1104,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             receipt_date=parsed["receipt_date"], payment_method=parsed["payment_method"],
             receipt_kind=parsed["receipt_kind"], raw_shop_name=parsed["raw_shop_name"],
             raw_nip=parsed["raw_nip"], document_kind=parsed.get("document_kind"),
-            due_date=parsed.get("due_date"),
+            due_date=parsed.get("due_date"), invoice_number=parsed.get("invoice_number"),
         )
         with self._read(owner, permission=None) as session:
             self._owner(session, owner, "budget.receipts.add", require_same_target=True)
@@ -1124,7 +1160,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             return card_filtered
         return row.receipt_date < earliest
 
-    def _unique_id_matches(self, session, owner, row, *, require_enabled_connection=False) -> set[tuple[str, str]]:
+    def _unique_id_matches(self, session, owner, row, *, require_enabled_connection=False,
+                           invoice_window=False) -> set[tuple[str, str]]:
         targets = _receipt_ref_targets(session, row)
         if self._ref_hmac_secret is None or not targets or not _valid_date(getattr(row, "receipt_date", None)):
             return set()
@@ -1132,28 +1169,31 @@ class BudgetReceiptStore(BudgetHTTPStore):
             Leg.account_id == Transaction.account_id, Leg.entry_reference == Transaction.entry_reference,
             Leg.account_id == Account.id, Account.owner == owner,
         )
+        doc_kind = getattr(row, "document_kind", None)
+        due = getattr(row, "due_date", None)
+        date_bounds = _match_date_bounds(
+            date.fromisoformat(row.receipt_date), document_kind=doc_kind, due_date=due, invoice_id=invoice_window,
+        )
         # Receipt-linked and grouped transactions still count when testing ID uniqueness.
-        tx_rows = session.scalars(select(Transaction).join(Account).join(Connection).where(
+        query = select(Transaction).join(Account).join(Connection).where(
             *_enabled_account_filters(owner, require_enabled_connection=require_enabled_connection),
-            Transaction.uncertain.is_(False), ~transfer_leg,
-        )).all()
+            Transaction.uncertain.is_(False), ~transfer_leg, _transaction_date_filter((date_bounds,)),
+        )
         matches_by_target: dict[tuple[str, str, bool], set[tuple[str, str]]] = {target: set() for target in targets}
         tx_context: dict[tuple[str, str], tuple[str, list[str]]] = {}
         matched_sec_tokens: dict[tuple[str, str], set[str]] = {}
-        doc_kind = getattr(row, "document_kind", None)
-        due = getattr(row, "due_date", None)
         counterparty_is_debtor = getattr(row, "receipt_kind", None) == "refund"
-        for tx in tx_rows:
+        for tx, metadata in session.execute(_with_transaction_metadata(query, owner)):
             try:
                 payload = _json(tx.payload_json)
                 if not isinstance(payload, dict) or payload.get("status") != "BOOK":
                     continue
-                if _date_distance(payload, row.receipt_date, document_kind=doc_kind, due_date=due) is None:
+                if _date_distance(
+                    payload, row.receipt_date, document_kind=doc_kind, due_date=due, invoice_id=invoice_window,
+                ) is None:
                     continue
                 fingerprint = financial_fingerprint(payload)
-                creditor, debtor = resolved_party_names(
-                    session, owner, tx.account_id, tx.entry_reference, payload, fingerprint,
-                )
+                creditor, debtor = resolved_party_names_from_metadata(owner, payload, fingerprint, metadata)
             except (AnalyticsError, ValueError, TypeError, KeyError, RecursionError):
                 continue
             remittance = payload.get("remittance_information")
@@ -1164,6 +1204,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             counterparty = debtor if counterparty_is_debtor else creditor
             for channel, target_hmac, is_secondary in targets:
                 for tok in bank_ref_tokens(combined_text, channel):
+                    if invoice_window and sum(char.isalnum() for char in tok) < MIN_DOCUMENT_ID_LENGTH:
+                        continue
                     if hmac.compare_digest(digest(self._ref_hmac_secret, GATEWAY_REF_DOMAIN, tok), target_hmac):
                         matches_by_target[(channel, target_hmac, is_secondary)].add(tx_key)
                         if is_secondary:
@@ -1182,7 +1224,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
         return unique_primary
 
     @staticmethod
-    def _candidate_rows(session, owner, *, include_receipt_id=None, require_enabled_connection=False, card_filters=()):
+    def _candidate_rows(session, owner, *, include_receipt_id=None, require_enabled_connection=False,
+                        card_filters=(), filters=(), with_metadata=False):
         # Confirmed and needs_review rows reserve a transaction. Re-issuing for one
         # needs_review receipt must still see that receipt's own reservation.
         held = [
@@ -1202,14 +1245,39 @@ class BudgetReceiptStore(BudgetHTTPStore):
         # Automatic card matching checks whether the only plausible transaction is free.
         # An already occupied debit must still count when two purchases look identical.
         columns = (Transaction, Account.kind, occupied) if card_filters else (Transaction, _ROW_ID)
-        filters = card_filters or (~occupied,)
-        return session.execute(select(*columns).join_from(Transaction, Account).join(Connection).where(
+        query = select(*columns).join_from(Transaction, Account).join(Connection).where(
             *_enabled_account_filters(owner, require_enabled_connection=require_enabled_connection),
-            Transaction.uncertain.is_(False), ~transfer_leg, *filters,
-        )).all()
+            Transaction.uncertain.is_(False), ~transfer_leg, *(card_filters or (~occupied,)), *filters,
+        )
+        if with_metadata:
+            query = _with_transaction_metadata(query, owner)
+        return session.execute(query).all()
 
-    def _sole_debit_for_another_receipt(self, session, owner, row, total, debit_key, exact_debits):
-        payload = exact_debits[debit_key]
+    def _nearby_exact_debits(self, session, owner, row, total, debit_key, bank_dates, include_receipt_id):
+        # A peer can be two days from any date on the chosen debit, with another two days to its own debit.
+        days = 2 * _SUGGESTION_WINDOW_DAYS
+        ranges = [(_shift_clamped(day, -days), _shift_clamped(day, days)) for day in bank_dates]
+        linked_key = (getattr(row, "linked_account_id", None), getattr(row, "linked_entry_ref", None))
+        exact_debits = {}
+        for tx, _ in self._candidate_rows(
+            session, owner, include_receipt_id=include_receipt_id, filters=(_transaction_date_filter(ranges),),
+        ):
+            tx_key = (tx.account_id, tx.entry_reference)
+            if tx_key in (debit_key, linked_key):
+                continue
+            try:
+                payload = _json(tx.payload_json)
+                if (payload.get("status") != "BOOK" or payload.get("currency") != row.currency
+                        or payload.get("credit_debit_indicator") != "DBIT"
+                        or canonical_money(payload.get("amount")) != total):
+                    continue
+                financial_fingerprint(payload)
+            except (AnalyticsError, ValueError, TypeError, RecursionError):
+                continue
+            exact_debits[tx_key] = payload
+        return exact_debits
+
+    def _sole_debit_for_another_receipt(self, session, owner, row, total, debit_key, payload, include_receipt_id):
         bank_dates = [date.fromisoformat(day) for day in map(payload.get, _BANK_DATE_FIELDS) if _valid_date(day)]
         date_ranges = [
             Receipt.receipt_date.between(
@@ -1226,6 +1294,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             or_(*date_ranges),
         ))
         account_id, _ = debit_key
+        exact_debits = None
         for peer in peers:
             if _positive_money(peer.total_amount) != total:
                 continue
@@ -1236,8 +1305,12 @@ class BudgetReceiptStore(BudgetHTTPStore):
             if account_id not in scope:
                 continue
             # Another debit may be in this receipt's window or account scope only.
+            if exact_debits is None:
+                exact_debits = self._nearby_exact_debits(
+                    session, owner, row, total, debit_key, bank_dates, include_receipt_id,
+                )
             for other_key, other_payload in exact_debits.items():
-                if other_key == debit_key or other_key[0] not in scope:
+                if other_key[0] not in scope:
                     continue
                 other_distance = _receipt_bank_distance(other_payload, peer)
                 if other_distance is not None and other_distance <= _SUGGESTION_WINDOW_DAYS:
@@ -1247,7 +1320,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         return False
 
     def _candidates(self, session, owner, row, parsed, *, include_receipt_id=None):
-        if (row.total_amount is None or row.currency is None or row.receipt_date is None
+        if (row.total_amount is None or row.currency is None or not _valid_date(row.receipt_date)
                 or row.payment_method in ("cash", "mixed")
                 or getattr(row, "evidence_for_receipt_id", None) is not None):
             return []
@@ -1263,6 +1336,16 @@ class BudgetReceiptStore(BudgetHTTPStore):
         if not scope_accounts:
             return []
         unique_id_txs = self._unique_id_matches(session, owner, row)
+        doc_kind = getattr(row, "document_kind", None)
+        due = getattr(row, "due_date", None)
+        invoice_matching = self._extended_matching and doc_kind == "invoice"
+        invoice_pattern = invoice_number_pattern(getattr(row, "invoice_number", None)) if invoice_matching else None
+        late_id_txs = set()
+        target = date.fromisoformat(row.receipt_date)
+        bounds = [_match_date_bounds(target, document_kind=doc_kind, due_date=due)]
+        if invoice_pattern is not None:
+            late_id_txs = self._unique_id_matches(session, owner, row, invoice_window=True)
+            bounds.append(_match_date_bounds(target, document_kind=doc_kind, due_date=due, invoice_id=True))
         direction = "CRDT" if row.receipt_kind == "refund" else "DBIT"
         shop_name = normalize_shop_name(row.raw_shop_name)
         chain = chain_for(row.raw_shop_name, row.raw_nip)
@@ -1270,10 +1353,13 @@ class BudgetReceiptStore(BudgetHTTPStore):
         receipt_is_gateway = _is_gateway_receipt(session, row)
         linked_key = (getattr(row, "linked_account_id", None), getattr(row, "linked_entry_ref", None))
         ranked = []
-        exact_debits = {}
         nearby_exact_count = 0
         weak_candidate = None
-        for transaction, tx_row_id in self._candidate_rows(session, owner, include_receipt_id=include_receipt_id):
+        for transaction, tx_row_id, metadata in self._candidate_rows(
+            session, owner, include_receipt_id=include_receipt_id,
+            filters=(Transaction.account_id.in_(scope_accounts), _transaction_date_filter(bounds)),
+            with_metadata=True,
+        ):
             tx_key = (transaction.account_id, transaction.entry_reference)
             id_hit = tx_key in unique_id_txs
             try:
@@ -1291,29 +1377,38 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 fingerprint = financial_fingerprint(payload)
             except AnalyticsError:
                 continue
-            if direction == "DBIT" and tx_amount == total and tx_key != linked_key:
-                # Peer receipts can have different account scopes and dates.
-                exact_debits[tx_key] = payload
-            if transaction.account_id not in scope_accounts:
-                continue
+            exact_debit = direction == "DBIT" and tx_amount == total and tx_key != linked_key
             distance = _receipt_bank_distance(payload, row)
-            if distance is None:
-                continue
-            if tx_key in exact_debits and distance <= _SUGGESTION_WINDOW_DAYS:
+            if exact_debit and distance is not None and distance <= _SUGGESTION_WINDOW_DAYS:
                 nearby_exact_count += 1
             try:
-                creditor, debtor = resolved_party_names(
-                    session, owner, transaction.account_id, transaction.entry_reference, payload, fingerprint)
+                invoice_id_hit = False
+                if tx_amount == total and (
+                    (invoice_pattern is not None and remittance_has_invoice_number(invoice_pattern, payload))
+                    or (distance is None and tx_key in late_id_txs)
+                ):
+                    wide_distance = _date_distance(
+                        payload, row.receipt_date, document_kind=doc_kind, due_date=due, invoice_id=True,
+                    )
+                    if wide_distance is not None:
+                        invoice_id_hit = True
+                        distance = wide_distance
+                if distance is None:
+                    continue
+                creditor, debtor = resolved_party_names_from_metadata(owner, payload, fingerprint, metadata)
                 evidence = link_evidence(
                     owner, transaction.account_id, transaction.entry_reference, payload,
                     shop_name, row.raw_nip, creditor, fingerprint, debtor=debtor)
-                token = self._candidate_token(evidence, transaction.account_id, tx_row_id, id_match=id_hit)
+                token = self._candidate_token(
+                    evidence, transaction.account_id, tx_row_id, id_match=id_hit and not invoice_id_hit,
+                    rule="invoice_id" if invoice_id_hit else None,
+                )
             except (AnalyticsError, ValueError, TypeError, RecursionError):
                 continue
             match = _merchant_tx_match(
                 payload, creditor, debtor, direction=direction, raw_nip=row.raw_nip,
                 chain=chain, groups=groups, generic_tokens=generic_tokens,
-                is_gateway=receipt_is_gateway, id_hit=id_hit,
+                is_gateway=receipt_is_gateway, id_hit=id_hit or invoice_id_hit,
             )
             hit, strength = match["hit"], match["strength"]
             nip_hit = match["nip_hit"]
@@ -1338,20 +1433,23 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 "candidate_token": token,
             }
             item = (
-                not is_current_link, not id_hit, not nip_hit, -distinctive_score, -generic_score, distance,
+                not is_current_link, not (id_hit or invoice_id_hit), not nip_hit, -distinctive_score, -generic_score, distance,
                 transaction.entry_reference, transaction.account_id, candidate,
             )
-            if tx_key in exact_debits and strength == "none" and not (merchant_evidence or gateway_evidence):
+            if exact_debit and strength == "none" and not (merchant_evidence or gateway_evidence):
                 if distance <= _SUGGESTION_WINDOW_DAYS:
-                    weak_candidate = (tx_key, item)
+                    weak_candidate = (tx_key, item, payload)
             else:
                 ranked.append(item)
         if weak_candidate is not None and nearby_exact_count == 1:
-            tx_key, item = weak_candidate
-            if not self._sole_debit_for_another_receipt(session, owner, row, total, tx_key, exact_debits):
+            tx_key, item, payload = weak_candidate
+            if not self._sole_debit_for_another_receipt(session, owner, row, total, tx_key, payload, include_receipt_id):
                 ranked.append(item)
         # Rank across all matching rows before slicing MAX_CANDIDATES so hits and current link survive the cap.
         ranked.sort(key=lambda item: item[:7])
+        # Ambiguous exact debits still take priority even when no suggestion is shown.
+        if not ranked and self._extended_matching and nearby_exact_count == 0:
+            return rounded_up_candidates(self, session, owner, row, total, scope_accounts)
         return [item[-1] for item in ranked[:MAX_CANDIDATES]]
 
     @staticmethod
@@ -1366,7 +1464,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             raise ReceiptError("budget_receipt_stale_source", 409)
         return account
 
-    def _verify_link(self, session, owner, cleaned, link, receipt_id, *, row=None, issued_as_id=False):
+    def _verify_link(self, session, owner, cleaned, link, receipt_id, *, row=None, issued_as_id=False, rule=None):
         self._owned_account(session, owner, link["account_id"])
         transaction = session.get(Transaction, (link["account_id"], link["entry_reference"]))
         if transaction is None:
@@ -1401,12 +1499,41 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 fee_adjusted = _fee_adjusted_total(row.total_amount, getattr(row, "fee_amount", None))
                 if tx_amount != cleaned["total_amount"] and (fee_adjusted is None or tx_amount != fee_adjusted):
                     raise ReceiptError()
+            elif rule == "rounded_up":
+                assert row is not None
+                if (canonical_money(row.total_amount) != cleaned["total_amount"]
+                        or any(cleaned[key] != getattr(row, key) for key in (
+                            "receipt_date", "receipt_kind", "currency",
+                        ))):
+                    raise ReceiptError("budget_receipt_stale_source", 409)
+                candidates = self._candidates(session, owner, row, {}, include_receipt_id=row.id)
+                if not any(
+                    candidate.get("match_rule") == rule and candidate["account_id"] == transaction.account_id
+                    and candidate["entry_reference"] == entry_reference_digest(transaction.entry_reference)
+                    for candidate in candidates
+                ):
+                    raise ReceiptError("budget_receipt_stale_source", 409)
+                return financial_fingerprint(payload)
             elif tx_amount != cleaned["total_amount"]:
                 raise ReceiptError()
+            if rule == "invoice_id":
+                assert row is not None
+                pattern = invoice_number_pattern(row.invoice_number)
+                scope_accounts, _ = self._scope_accounts(session, owner, row)
+                if (pattern is None or cleaned["receipt_date"] != row.receipt_date or row.document_kind != "invoice"
+                        or canonical_money(row.total_amount) != tx_amount or link["account_id"] not in scope_accounts
+                        or not (
+                            remittance_has_invoice_number(pattern, payload)
+                            or (link["account_id"], link["entry_reference"]) in self._unique_id_matches(
+                                session, owner, row, invoice_window=True,
+                            )
+                        )):
+                    raise ReceiptError("budget_receipt_stale_source", 409)
             distance = _date_distance(
                 payload, cleaned["receipt_date"],
                 document_kind=cleaned.get("document_kind"),
                 due_date=cleaned.get("due_date"),
+                invoice_id=rule == "invoice_id",
             )
             if distance is None:
                 raise ReceiptError()
@@ -1423,7 +1550,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         digest = hashlib.sha256(raw).digest()
         return hmac.new(self._evidence_key, digest, hashlib.sha256).digest()
 
-    def _candidate_token(self, evidence, account_id, row_id, *, id_match=False, group=False):
+    def _candidate_token(self, evidence, account_id, row_id, *, id_match=False, group=False, rule=None):
         """Seal the ledger row id. The client sees the digest, not the provider reference."""
         if not isinstance(account_id, str) or type(row_id) is not int or not 1 <= row_id <= _MAX_ROW_ID:
             raise AnalyticsError()
@@ -1432,6 +1559,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             raw_payload["id"] = True
         if group:
             raw_payload["g"] = True
+        if rule is not None:
+            raw_payload["rule"] = rule
         payload = json.dumps(raw_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
         nonce = os.urandom(12)
         blob = nonce + AESGCM(self._token_key).encrypt(nonce, payload, None)
@@ -1454,13 +1583,14 @@ class BudgetReceiptStore(BudgetHTTPStore):
             mac = bytes.fromhex(data["m"])
             id_flag = data.get("id")
             group_flag = data.get("g")
+            rule = data.get("rule")
         except (InvalidTag, ValueError, KeyError, TypeError):
             raise ReceiptError() from None
         if (not isinstance(account_id, str) or type(row_id) is not int or not 1 <= row_id <= _MAX_ROW_ID
                 or len(mac) != 32 or id_flag not in (None, True) or group_flag not in (None, True)
-                or bool(group_flag) is not expect_group):
+                or bool(group_flag) is not expect_group or rule not in (None, "invoice_id", "rounded_up")):
             raise ReceiptError()
-        return account_id, row_id, mac, bool(id_flag)
+        return account_id, row_id, mac, bool(id_flag), rule
 
     @staticmethod
     def _named_transaction(session, owner, account_id, row_id):
@@ -1471,7 +1601,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         ))
 
     def _resolve_bank_token_tx(self, session, owner, link, *, expect_group, shop_name=None, raw_nip=None):
-        account_id, row_id, mac, issued_as_id = self._open_candidate_token(
+        account_id, row_id, mac, issued_as_id, rule = self._open_candidate_token(
             link["candidate_token"], expect_group=expect_group,
         )
         if account_id != link["account_id"]:
@@ -1499,22 +1629,25 @@ class BudgetReceiptStore(BudgetHTTPStore):
             raise ReceiptError("budget_receipt_stale_source", 409) from None
         if not hmac.compare_digest(expected, mac):
             raise ReceiptError("budget_receipt_stale_source", 409)
-        return account_id, reference, transaction, payload, fingerprint, creditor, debtor, stored, issued_as_id
+        return account_id, reference, transaction, payload, fingerprint, creditor, debtor, stored, issued_as_id, rule
 
     def _confirmed_link(self, session, owner, cleaned, link, row):
-        _, reference, _tx, _payload, _fp, _cr, _db, stored, issued_as_id = self._resolve_bank_token_tx(
+        _, reference, _tx, payload, _fp, _cr, _db, stored, issued_as_id, rule = self._resolve_bank_token_tx(
             session, owner, link, expect_group=False,
             shop_name=normalize_shop_name(cleaned["raw_shop_name"]), raw_nip=cleaned["raw_nip"],
         )
         resolved = {**link, "entry_reference": reference}
         verified = self._verify_link(
-            session, owner, cleaned, resolved, row.id, row=row, issued_as_id=issued_as_id,
+            session, owner, cleaned, resolved, row.id, row=row, issued_as_id=issued_as_id, rule=rule,
         )
+        if rule == "rounded_up":
+            delta = rounding_delta(cleaned["total_amount"], canonical_money(payload["amount"]))
+            stored = evidence_json({**_json(stored), "rounding_delta": delta})
         link["entry_reference"] = reference
         return verified, stored
 
     def _open_group_bank_token(self, session, owner, link):
-        account_id, reference, transaction, payload, fingerprint, creditor, debtor, _stored, _id_flag = (
+        account_id, reference, transaction, payload, fingerprint, creditor, debtor, _stored, _id_flag, _rule = (
             self._resolve_bank_token_tx(session, owner, link, expect_group=True)
         )
         if transaction.uncertain or not isinstance(payload, dict) or payload.get("status") != "BOOK":

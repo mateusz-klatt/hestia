@@ -104,6 +104,10 @@ def transaction_party_names(session, owner, account_id, entry_reference, fingerp
     if fingerprint is None:
         return None, None
     metadata = session.get(Metadata, (account_id, entry_reference))
+    return _metadata_party_names(metadata, owner, fingerprint)
+
+
+def _metadata_party_names(metadata, owner, fingerprint):
     if metadata is None or metadata.owner != owner or metadata.ledger_fingerprint != fingerprint:
         return None, None
     try:
@@ -127,9 +131,18 @@ def _payload_party_name(payload, party_key):
 
 def resolved_party_names(session, owner, account_id, entry_reference, payload, fingerprint):
     """Normalized creditor and debtor names from fingerprint-verified metadata or transaction payload."""
-    meta_creditor, meta_debtor = transaction_party_names(
-        session, owner, account_id, entry_reference, fingerprint,
+    return _resolve_party_names(
+        payload, transaction_party_names(session, owner, account_id, entry_reference, fingerprint),
     )
+
+
+def resolved_party_names_from_metadata(owner, payload, fingerprint, metadata):
+    """Resolve party names from metadata already joined to a transaction."""
+    return _resolve_party_names(payload, _metadata_party_names(metadata, owner, fingerprint))
+
+
+def _resolve_party_names(payload, metadata_names):
+    meta_creditor, meta_debtor = metadata_names
     creditor = meta_creditor if meta_creditor is not None else _payload_party_name(payload, "creditor")
     debtor = meta_debtor if meta_debtor is not None else _payload_party_name(payload, "debtor")
     return creditor, debtor
@@ -313,6 +326,13 @@ def _reconcile_one_to_one(session, owner, now):
             expected_evidence = ()
         if current == row.linked_fingerprint:
             if row.linked_evidence in expected_evidence:
+                continue
+            from .receipt_match_rules import stored_rounding_delta
+
+            delta = stored_rounding_delta(row.linked_evidence)
+            if delta is not None and any(
+                row.linked_evidence == evidence_json({**evidence, "rounding_delta": delta}) for evidence in evidences
+            ):
                 continue
             if any(row.linked_evidence == evidence_json({**evidence, "gmail_card": True}) for evidence in evidences):
                 from .gmail_card_match import still_matches_card

@@ -513,6 +513,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.candidateSameDay": "באותו יום",
   "budget.receipts.candidateDays": "הפרש {days} ימים",
   "budget.receipts.candidateMerchantMatch": "התאמת בית עסק",
+  "budget.receipts.roundingNote": "עיגול {amount}",
   "budget.receipts.cashNoLinkNote": "תשלומים במזומן או בתשלום משולב אינם יכולים להישאר מקושרים לתנועת בנק.",
   "budget.receipts.addSummaryLine": "הוסף שורת סיכום",
   "budget.receipts.addLine": "הוסף שורה",
