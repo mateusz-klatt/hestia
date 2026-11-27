@@ -219,20 +219,27 @@ _TIME = re.compile(r"(?<![0-9])((?:[01][0-9]|2[0-3]):[0-5][0-9])(?![0-9])", re.A
 _ARITHMETIC_AMOUNT = r"[0-9]{1,9}(?:[.,][0-9]{1,4})?"
 _SHORT_AMOUNT = rf"[+-]?{_ARITHMETIC_AMOUNT}"
 _BOUNDED_ARITHMETIC_AMOUNT = re.compile(_ARITHMETIC_AMOUNT, re.ASCII)
+_COLUMN_TOLERANCE = Decimal("0.01")
 _COLUMN_CALCULATION = re.compile(
     rf"(?P<quantity>{_SHORT_AMOUNT})\s*(?:{_UNITS})?\s*[x×*]\s*"
-    rf"(?P<unit_price>{_SHORT_AMOUNT})(?:\s*=\s*|\s+)(?P<gross>{_SHORT_AMOUNT})\s*(?:PLN\s*)?[A-G]?\Z",
+    rf"(?P<unit_price>{_SHORT_AMOUNT})(?:\s*=\s*|\s+)(?P<gross>{_SHORT_AMOUNT})"
+    r"\s*(?:PLN\s*)?(?P<ptu>[A-G])?\Z",
     re.IGNORECASE | re.ASCII,
 )
 _COLUMN_SUBTOTAL = re.compile(
     rf"\s*SUMA(?:\s+PLN)?(?:\s*:\s*|\s+)(?P<amount>-?{_ARITHMETIC_AMOUNT})\s*\Z", re.IGNORECASE,
 )
 _COLUMN_NAME_BOUNDARY = re.compile(
-    r"^(?:suma|sprzedaz|ptu|karta|gotowka|blik|platnosc|paragon|nip|zwrot|opakowania|do zaplaty)\b"
+    r"^(?:suma|sprzedaz|ptu|karta|gotowka|blik|platnosc|paragon|zwrot|opakowania|do zaplaty"
+    r"|kasjer(?:ka)?|kasa|nr|ul|al|pl)\b"
+    r"|\b(?:ul|al|pl)\."
+    r"|\bnip(?:\b|(?=[0-9]))"
+    r"|(?<![0-9])(?:[0-9]{2}-[0-9]{3}|[0-9]{2}[/.-][0-9]{2}[/.-][0-9]{4}"
+    r"|[0-9]{4}[/.-][0-9]{2}[/.-][0-9]{2})(?![0-9])"
 )
 _SPLIT_DEPOSIT_SECTION = re.compile(
     r"^ *OPAKOWANIA ZWROTNE WYDANIA *\n *(?P<name>(?:DRS +)?KAUCJA\b[^\n]*)\n"
-    r" *(?P<calculation>[^\n]+)\n"
+    r" *(?P<calculation>[^ \n][^\n]*)\n"
     rf" *OPAKOWANIA ZWROTNE SUMA +(?P<subtotal>{_ARITHMETIC_AMOUNT}) *$",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -1096,7 +1103,7 @@ def _item_match(value):
     })
 
 
-def _reconciled_gross(match):
+def _reconciled_gross(match, *, tolerance=None):
     if match is None:
         return None
     amounts = (match["quantity"], match["unit_price"], match["gross"])
@@ -1105,7 +1112,10 @@ def _reconciled_gross(match):
     quantity, unit_price, gross = (Decimal(value.replace(",", ".")) for value in amounts)
     if min(quantity, unit_price, gross) <= 0:
         return None
-    rounded = (quantity * unit_price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    product = quantity * unit_price
+    if tolerance is not None:
+        return gross if abs(product - gross) <= tolerance else None
+    rounded = product.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return gross if rounded == gross else None
 
 
@@ -1218,9 +1228,9 @@ def _column_amount(value):
 
 
 def _orphan_name(value):
-    if (len(value) > MAX_LINE_NAME_LEN or value.startswith(_REMOVED) or _RECEIPT_METADATA.match(value)
-            or _COLUMN_NAME_BOUNDARY.match(fold_text(value)) or not re.search(r"[^\W\d_]", value)
-            or _DATE_ISO.search(value) or _DATE_PL.search(value) or _TIME.search(value)
+    if (len(value) > MAX_LINE_NAME_LEN or value.startswith(_REMOVED)
+            or _COLUMN_NAME_BOUNDARY.search(fold_text(value)) or not re.search(r"[^\W\d_]", value)
+            or _TIME.search(value)
             or _ITEM_GROSS_TAIL.fullmatch(value) or _BARE_UNIT.fullmatch(value)):
         return False
     if _DISCOUNT_PREFIX.match(value) and _DISCOUNT_AMOUNT.search(value):
@@ -1234,14 +1244,23 @@ def _orphan_name(value):
 def _pair_column_rows(names, amounts):
     if len(names) != len(amounts):
         return None
-    prices, discounts = [], []
-    for amount in amounts:
-        (discounts if _SPLIT_DISCOUNT_AMOUNT.fullmatch(amount) else prices).append(amount)
-    is_discount = [bool(_DISCOUNT_PREFIX.match(name)) for name in names]
-    if sum(is_discount) != len(discounts):
-        return None
-    by_kind = {True: iter(discounts), False: iter(prices)}
-    return [f"{name} {next(by_kind[discount])}" for name, discount in zip(names, is_discount, strict=True)]
+    joined = []
+    previous_item = previous_gross = None
+    for name, amount in zip(names, amounts, strict=True):
+        if _DISCOUNT_PREFIX.match(name):
+            if previous_item is None or not _can_split_discount_item(previous_item, previous_gross, amount):
+                return None
+            previous_item = None
+            # Replay the verified amount as a legacy item discount.
+            name = "OPUST"
+        else:
+            calculation = _COLUMN_CALCULATION.fullmatch(amount)
+            previous_gross = _reconciled_gross(calculation, tolerance=_COLUMN_TOLERANCE)
+            if previous_gross is None:
+                return None
+            previous_item = {"name": name, "ptu": calculation["ptu"]}
+        joined.append(f"{name} {amount}")
+    return joined
 
 
 def _restore_item_columns(lines, shop_header_index):
@@ -1260,9 +1279,6 @@ def _restore_item_columns(lines, shop_header_index):
             name_start -= 1
         names = rows[name_start:start]
         if not names:
-            continue
-        if len(names) == len(amounts) == 1 and _verified_bare_calculation(amounts[0]) is not None:
-            # The legacy parser already associates this adjacent label and calculation.
             continue
         joined = _pair_column_rows(names, amounts)
         if joined is None:
@@ -1283,21 +1299,30 @@ def _join_split_deposit(section):
     return section[0].replace(f"{section['name']}\n", f"{section['name'].rstrip()} ", 1)
 
 
-def _parse_column_split(lines, shop_header_index):
+def _reconciles_with_subtotal(items, subtotal):
+    net = _bounded_sum(line["net_line_total"] for line in items)
+    return abs(Decimal(net) - Decimal(subtotal)) <= _COLUMN_TOLERANCE
+
+
+def _column_split_fallback(lines, shop_header_index):
     for index, row in enumerate(lines):
         subtotal = _COLUMN_SUBTOTAL.fullmatch(row)
         if subtotal is not None:
             break
     else:
         return None
-    restored = _restore_item_columns(lines[:index], shop_header_index)
-    if restored is None:
-        return None
     try:
         subtotal_amount = _decimal(subtotal["amount"])
+        item_rows = lines[:index]
+        # SUMA excludes the packaging and payment lines that follow it.
+        if _reconciles_with_subtotal(_parse_lines(item_rows, shop_header_index), subtotal_amount):
+            return None
+        restored = _restore_item_columns(item_rows, shop_header_index)
+        if restored is None:
+            return None
         items = _parse_lines(restored, shop_header_index)
-        net = _bounded_sum(line["net_line_total"] for line in items)
-        if abs(Decimal(net) - Decimal(subtotal_amount)) > Decimal("0.01"):
+        if (any(compare_money(item["net_line_total"], "0") < 0 for item in items)
+                or not _reconciles_with_subtotal(items, subtotal_amount)):
             return None
         tail = _SPLIT_DEPOSIT_SECTION.sub(_join_split_deposit, "\n".join(lines[index:]))
         restored.extend(tail.split("\n"))
@@ -1346,10 +1371,9 @@ def parse_receipt(text):
     has_card = "karta" in key or "platnicza" in key or "paypass" in key or _MASTERCARD_PAYMENT.search(key) is not None
     has_cash = "gotowka" in key
     payment = "mixed" if has_card and has_cash else "blik" if "blik" in key else "card" if has_card else "cash" if has_cash else "unknown"
-    column_split = _parse_column_split(lines, shop_header_index)
-    if column_split is None:
-        parsed_lines = _parse_lines(lines, shop_header_index)
-    else:
+    parsed_lines = _parse_lines(lines, shop_header_index)
+    column_split = _column_split_fallback(lines, shop_header_index)
+    if column_split is not None:
         restored, parsed_lines, subtotal = column_split
         shop_name, _ = _shop_header(restored)
         total = total or subtotal
