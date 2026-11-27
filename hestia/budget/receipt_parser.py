@@ -259,6 +259,24 @@ _PTU_AMOUNT = re.compile(rf"(?<![0-9]){_SHORT_AMOUNT}%?(?![0-9])", re.ASCII)
 _NIP_LABEL = re.compile(r"\bNIP", re.IGNORECASE | re.ASCII)
 _NIP_SPACE = " \t\r\f\v"
 _NIP_BODY = set("0123456789 -")
+# OCR and Gmail share the buyer vocabulary. OCR also recognizes spaced headings.
+BUYER_PARTY_LABELS = r"dane nabywcy|nabywca|odbiorca|kupujący|billed to|bill to|sold to|customer"
+_OCR_BUYER_LABELS = BUYER_PARTY_LABELS.replace(" ", r"\s+")
+_SELLER_LABELS = r"sprzedawca|merchant|seller|from|faktura\s+wystawiona\s+przez"
+_NIP_PARTY = re.compile(
+    # Adjacent empty column headings introduce the seller's column first.
+    r"(?P<seller>^sprzedawca\s*:?\s+nabywca\s*:?$|^sprzedawca\b"
+    rf"|\b(?:{_SELLER_LABELS})\s*:|^(?:{_SELLER_LABELS})(?=$|\s+NIP\b))"
+    # A bare buyer heading ends at the line break or leads straight into a NIP.
+    r"|(?P<buyer>\bNIP\s+(?:nabywcy|odbiorcy)\b"
+    rf"|\b(?:{_OCR_BUYER_LABELS})\s*:|^(?:{_OCR_BUYER_LABELS})(?=\.?$|\s+NIP\b))",
+    re.IGNORECASE,
+)
+_NIP_SELLER_LABEL = re.compile(r"\bNIP\s+sprzedawcy\b", re.IGNORECASE)
+_NIP_SECTION_BREAK = re.compile(
+    r"^(?:[-–—=_*]{3,}$|(?:paragon|faktura|pozycje|podsumowanie)\b|suma(?=\s*(?:$|:)|\s+(?:pln|brutto)\b))",
+    re.IGNORECASE,
+)
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _ASCII_DROPPED = re.compile(r"[\x00-\x08\t\x0e-\x1f\x7f]")
 _LINE_BREAK = str.maketrans({
@@ -919,6 +937,34 @@ def _nip_candidate(line):
     return re.sub(r"[ -]", "", line[span[0]:span[1]])
 
 
+def _seller_nip(lines, normalized_lines):
+    """Find the first valid NIP outside a buyer block on the page."""
+    in_buyer_block = False
+    for line, original in zip(lines, normalized_lines, strict=True):
+        line = _NIP_SELLER_LABEL.sub("Sprzedawca: NIP", line.strip())
+        original = _NIP_SELLER_LABEL.sub("Sprzedawca: NIP", original.strip())
+        if not original or _NIP_SECTION_BREAK.match(original):
+            in_buyer_block = False
+        parties = list(_NIP_PARTY.finditer(line))
+        if line != original:
+            original_roles = [party.lastgroup for party in _NIP_PARTY.finditer(original)]
+            if original_roles != [party.lastgroup for party in parties]:
+                # Redaction can erase a party heading. Keep its effect on following
+                # lines and skip ambiguous NIPs on the partly redacted line.
+                for role in original_roles:
+                    in_buyer_block = role == "buyer"
+                continue
+        start = 0
+        for party in parties:
+            if not in_buyer_block and valid_nip(candidate := _nip_candidate(line[start:party.start()])):
+                return candidate
+            in_buyer_block = party.lastgroup == "buyer"
+            start = party.end()
+        if not in_buyer_block and valid_nip(candidate := _nip_candidate(line[start:])):
+            return candidate
+    return None
+
+
 def valid_nip(value):
     if not isinstance(value, str) or not re.fullmatch(r"[0-9]{10}", value, re.ASCII):
         return False
@@ -1358,17 +1404,14 @@ def _column_split_fallback(lines, shop_header_index):
 
 
 def parse_receipt(text):
-    text = redact_pan(text)
+    normalized = _receipt_text(text)
+    text = _redact_normalized(normalized)
     # Drop a line before every parsing expression. A 32 KiB line must not reach one.
     lines = ["" if len(line) > MAX_LINE_CHARS else line for line in text.split("\n")]
     if len(lines) > MAX_TEXT_LINES:
         raise ReceiptError()
-    nip = None
-    for line in lines:
-        candidate = _nip_candidate(line)
-        if candidate and valid_nip(candidate):
-            nip = candidate
-            break
+    normalized_lines = ["" if len(line) > MAX_LINE_CHARS else line for line in normalized.split("\n")]
+    nip = _seller_nip(lines, normalized_lines)
     shop_name, shop_header_index = _shop_header(lines)
     receipt_date = None
     receipt_time = None

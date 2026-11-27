@@ -196,7 +196,9 @@ def _confirm(session, owner, receipt, match, now):
     receipt.linked_fingerprint, receipt.linked_evidence = match.fingerprint, evidence_json(match.evidence)
     receipt.version += 1
     receipt.updated_at = now
-    write_audit(session, owner, receipt, "confirm", before, audit_payload(receipt, "confirm", _GMAIL_IMPORT_ACTOR), now)
+    after = audit_payload(receipt, "confirm", _GMAIL_IMPORT_ACTOR)
+    after["shop_name_confirmed"] = False
+    write_audit(session, owner, receipt, "confirm", before, after, now)
 
 
 def _existing_document(session, owner, invoice, provenance):
