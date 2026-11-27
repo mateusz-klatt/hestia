@@ -724,6 +724,7 @@ class CalDAVProvider:
         # iCloud rejects VEVENTs with neither DTEND nor DURATION, even though
         # RFC5545 permits an omitted end for a point/unknown-end event.
         self._explicit_end = host == "caldav.icloud.com" or host.endswith("-caldav.icloud.com")
+        self._account_hash = hashlib.sha256(username.encode("utf-8")).hexdigest()
         self._auth = "Basic " + base64.b64encode((username + ":" + password).encode()).decode()
         self._transport = transport or HTTPTransport()
 
@@ -783,7 +784,7 @@ class CalDAVProvider:
                             writable, None if writable else "CalDAV must grant read, create, edit and delete access to VEVENTs")
 
     _CALENDAR_PROPS = ('<d:resourcetype/><d:displayname/><d:current-user-privilege-set/>'
-                       '<c:supported-calendar-component-set/><d:sync-token/>')
+                       '<c:supported-calendar-component-set/><d:current-user-principal/><d:sync-token/>')
 
     def discover(self) -> list[CalendarInfo]:
         base, responses = self._propfind(self.url, "<d:current-user-principal/>")
@@ -813,7 +814,7 @@ class CalDAVProvider:
                     result[identifier] = info
         return list(result.values())
 
-    def _check_calendar(self) -> str | None:
+    def _check_collection(self) -> tuple[str | None, str | None]:
         if not self.calendar_id:
             raise ProviderError("Select an explicit CalDAV calendar collection")
         base, responses = self._propfind(self.calendar_id, self._CALENDAR_PROPS)
@@ -832,19 +833,29 @@ class CalDAVProvider:
             raise ProviderError("CalDAV calendar does not grant complete read/write permission", status=403)
         token = properties.get(f"{{{DAV}}}sync-token")
         value = token.text.strip() if token is not None and token.text else ""
-        return value or None
+        principal_prop = properties.get(f"{{{DAV}}}current-user-principal")
+        principal_href = (principal_prop.findtext("d:href", namespaces=NS) or "").strip() if principal_prop is not None else ""
+        principal = urljoin(self.calendar_id, principal_href) if principal_href else None
+        return value or None, principal
 
-    def _checkpoint(self, token: str | None) -> str | None:
+    def _check_calendar(self) -> str | None:
+        return self._check_collection()[0]
+
+    def _principal_digest(self, principal: str | None) -> str:
+        return hashlib.sha256(f"{self._account_hash}\0{principal or ''}".encode("utf-8")).hexdigest()
+
+    def _checkpoint(self, token: str | None, principal: str | None = None) -> str | None:
         if not token:
             return None
         return self.CURSOR_PREFIX + json.dumps(
             {"calendar_id": self.calendar_id,
              "floating_time_zone": self.floating_time_zone,
+             "principal": self._principal_digest(principal),
              "token": token},
             sort_keys=True, separators=(",", ":"),
         )
 
-    def _saved_token(self, cursor: str | None) -> str | None:
+    def _saved_token(self, cursor: str | None, principal: str | None = None) -> str | None:
         if not cursor or not cursor.startswith(self.CURSOR_PREFIX):
             return None
         try:
@@ -853,15 +864,16 @@ class CalDAVProvider:
             return None
         if (not isinstance(data, dict)
                 or data.get("calendar_id") != self.calendar_id
-                or data.get("floating_time_zone") != self.floating_time_zone):
+                or data.get("floating_time_zone") != self.floating_time_zone
+                or data.get("principal") != self._principal_digest(principal)):
             return None
         token = data.get("token")
         return token if isinstance(token, str) and token else None
 
     def pull(self, cursor: str | None) -> Snapshot:
-        before = self._check_calendar()
-        if before and before == self._saved_token(cursor):
-            return Snapshot([], self._checkpoint(before), complete=True, full=False)
+        before, before_principal = self._check_collection()
+        if before and before == self._saved_token(cursor, before_principal):
+            return Snapshot([], self._checkpoint(before, before_principal), complete=True, full=False)
         body = (f'<c:calendar-query xmlns:d="DAV:" xmlns:c="{CAL}">'
                 '<d:prop><d:getetag/><c:calendar-data/></d:prop>'
                 '<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"/>'
@@ -884,10 +896,10 @@ class CalDAVProvider:
                 raise ProviderError("CalDAV returned an incomplete event inventory", retryable=True)
             seen.add(remote_id)
             records.append(_ical_record(remote_id, data.text.encode(), etag.text, floating_time_zone=self.floating_time_zone))
-        after = self._check_calendar()
-        if before != after:
+        after, after_principal = self._check_collection()
+        if before != after or before_principal != after_principal:
             raise ProviderError("CalDAV calendar changed during inventory; retry required", retryable=True)
-        return Snapshot(records, self._checkpoint(after), complete=True, full=True)
+        return Snapshot(records, self._checkpoint(after, after_principal), complete=True, full=True)
 
     def _get(self, remote_id: str) -> tuple[RemoteEvent, bytes]:
         response = self._request("GET", self._resource(remote_id), headers={"Accept": "text/calendar"})

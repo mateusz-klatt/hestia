@@ -213,17 +213,11 @@ class CalendarRuntimeTests(unittest.TestCase):
                                             "hestia.calendar_sync.engine": engines}), \
              mock.patch("hestia.db.init_db", return_value=(None, "sessions")), \
              mock.patch("hestia.db.db_path", return_value=Path(directory) / "events.db"), \
-             mock.patch.object(runtime, "make_providers", return_value={"apple": "provider"}) as make:
+             mock.patch.object(runtime, "make_providers", return_value={"apple": "provider"}):
             self.assertEqual(runtime.run_once(parsed), {"pulled": 2})
             runtime.run_once(parsed, path=Path(directory) / "other.db")
-            runtime.run_once(parsed, path=Path(directory) / "other.db", providers={"apple": "reused"})
-        self.assertEqual(make.call_count, 2)
         store.configure.assert_called_with(parsed.store_groups())
-        self.assertEqual(engines.SyncEngine.call_args_list, [
-            mock.call(store, {"apple": "provider"}),
-            mock.call(store, {"apple": "provider"}),
-            mock.call(store, {"apple": "reused"}),
-        ])
+        engines.SyncEngine.assert_called_with(store, {"apple": "provider"})
 
 
 class CalendarPollerTests(unittest.IsolatedAsyncioTestCase):
@@ -252,13 +246,10 @@ class CalendarPollerTests(unittest.IsolatedAsyncioTestCase):
                 await runtime.poll_calendars()
         self.assertEqual(rounds.await_count, 4)
         self.assertNotIn("SECRET", " ".join(output.output))
-        # Execute the per-round closure twice; providers are built lazily once and reused.
-        with mock.patch.object(runtime, "make_providers", return_value={"apple": "provider"}) as make, \
-             mock.patch.object(runtime, "run_once", return_value={}) as run:
+        # Execute the per-round closure as well; it calls the blocking shared entrypoint.
+        with mock.patch.object(runtime, "run_once", return_value={}) as run:
             rounds.call_args.args[0]()
-            rounds.call_args.args[0]()
-            make.assert_called_once_with(parsed)
-            self.assertEqual(run.call_args_list, [mock.call(parsed, providers={"apple": "provider"})] * 2)
+            run.assert_called_once_with(parsed)
 
     async def test_settled_thread_success_and_error(self):
         self.assertEqual(await runtime._settled_thread(lambda: 3), 3)

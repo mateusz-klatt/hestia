@@ -1,9 +1,13 @@
 """Phase-1 incremental calendar sync: CalDAV metadata-only fast path and no-change reconcile skip."""
 from __future__ import annotations
 
+import asyncio
+import base64
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+import os
+from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -13,9 +17,11 @@ from icalendar import Calendar
 from sqlalchemy import event as sqlalchemy_event
 
 from hestia import db
+from hestia.calendar_sync import config
 from hestia.calendar_sync import engine as engine_mod
 from hestia.calendar_sync import events as codec
 from hestia.calendar_sync import providers as p
+from hestia.calendar_sync import runtime
 from hestia.calendar_sync import store as store_mod
 from hestia.calendar_sync.engine import SyncEngine
 from hestia.calendar_sync.store import SyncStore
@@ -36,6 +42,12 @@ def fixed_dav_item(payload=None, *, uid="family-uid", href=http.RESOURCE, etag='
         '<d:getetag>' + escape(etag) + '</d:getetag><c:calendar-data>' + escape(data.decode()) + '</c:calendar-data>',
         href=href,
     )
+
+
+def principal_acl(principal_href, *, token="tok-1"):
+    extra = (f'<d:current-user-principal><d:href>{escape(principal_href)}</d:href></d:current-user-principal>'
+             if principal_href is not None else "")
+    return http.dav_acl(token=token, extra=extra)
 
 
 class CalendarIncrementalFastPathTests(unittest.TestCase):
@@ -75,10 +87,11 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
 
     def test_idle_round_skips_report_parse_fingerprint_reconcile_and_row_writes(self):
         self.configure_endpoints("apple", "google")
+        principal_url = "https://caldav.icloud.com/1/principal/"
         caldav_transport = http.QueueTransport(
-            http.dav_acl(token="tok-1"),
+            principal_acl("/1/principal/", token="tok-1"),
             http.multistatus(fixed_dav_item(http.PAYLOAD, uid="family-uid", href=http.RESOURCE, etag='"v1"')),
-            http.dav_acl(token="tok-1"),
+            principal_acl("/1/principal/", token="tok-1"),
         )
         caldav = p.CalDAVProvider(http.CALENDAR, username="user", password="secret", transport=caldav_transport)
         google_transport = http.QueueTransport(
@@ -99,12 +112,12 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
             self.assertEqual([call[0] for call in caldav_transport.calls], ["PROPFIND", "REPORT", "PROPFIND"])
             self.assertEqual([call[0] for call in google_transport.calls], ["POST", "GET", "GET", "GET"])
 
-            # Round 2: idle poll with unchanged CalDAV token and empty Google delta.
+            # Round 2: idle poll with unchanged CalDAV token/principal and empty Google delta.
             caldav_transport.calls.clear()
             google_transport.calls.clear()
             self.now += 60
             monotonic_now = 160.0
-            caldav_transport.responses.append(http.dav_acl(token="tok-1"))
+            caldav_transport.responses.append(principal_acl("/1/principal/", token="tok-1"))
             google_transport.responses.extend([
                 http.google_acl(),
                 http.google_page([], token="g-2"),
@@ -146,7 +159,7 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
             with self.sessions() as session:
                 apple_row = session.get(db.CalendarEndpoint, "apple")
                 google_row = session.get(db.CalendarEndpoint, "google")
-                self.assertEqual(apple_row.cursor, caldav._checkpoint("tok-1"))
+                self.assertEqual(apple_row.cursor, caldav._checkpoint("tok-1", principal_url))
                 self.assertEqual(apple_row.last_success, self.now)
                 self.assertIsNone(apple_row.last_error)
                 self.assertEqual(google_row.cursor, p.GoogleProvider.CURSOR_PREFIX + "g-2")
@@ -157,7 +170,7 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
             # Round 3: unchanged clock and unchanged tokens produce zero SQL writes at all.
             caldav_transport.calls.clear()
             google_transport.calls.clear()
-            caldav_transport.responses.append(http.dav_acl(token="tok-1"))
+            caldav_transport.responses.append(principal_acl("/1/principal/", token="tok-1"))
             google_transport.responses.extend([
                 http.google_acl(),
                 http.google_page([], token="g-2"),
@@ -217,6 +230,81 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
         self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
         self.assertEqual([call[0] for call in transport.calls], ["PROPFIND"])
 
+    def test_switching_caldav_principal_forces_full_read(self):
+        self.configure_endpoints("apple")
+        item = fixed_dav_item(http.PAYLOAD, uid="family-uid", href=http.RESOURCE, etag='"v1"')
+        caldav, transport = http.dav(
+            principal_acl("/1/principal/", token="tok-1"),
+            http.multistatus(item),
+            principal_acl("/1/principal/", token="tok-1"),
+        )
+        engine = SyncEngine(self.store, {"apple": caldav})
+        self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
+        with self.sessions() as session:
+            first_cursor = session.get(db.CalendarEndpoint, "apple").cursor
+        self.assertEqual(first_cursor, caldav._checkpoint("tok-1", "https://caldav.icloud.com/1/principal/"))
+        self.assertNotIn("/1/principal/", first_cursor)
+        self.assertNotIn("user", first_cursor)
+
+        # Same principal and same token take the metadata-only fast path.
+        transport.calls.clear()
+        self.now += 60
+        transport.responses.append(principal_acl("/1/principal/", token="tok-1"))
+        self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
+        self.assertEqual([call[0] for call in transport.calls], ["PROPFIND"])
+
+        # Switching the server's current-user-principal href forces a full read despite identical token.
+        transport.calls.clear()
+        self.now += 60
+        transport.responses.extend([
+            principal_acl("/2/principal/", token="tok-1"),
+            http.multistatus(item),
+            principal_acl("/2/principal/", token="tok-1"),
+        ])
+        self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
+        self.assertEqual([call[0] for call in transport.calls], ["PROPFIND", "REPORT", "PROPFIND"])
+        with self.sessions() as session:
+            second_cursor = session.get(db.CalendarEndpoint, "apple").cursor
+        self.assertEqual(second_cursor, caldav._checkpoint("tok-1", "https://caldav.icloud.com/2/principal/"))
+        self.assertNotEqual(second_cursor, first_cursor)
+
+        # Principal disappearing / becoming unauthenticated also forces a full read.
+        transport.calls.clear()
+        self.now += 60
+        unauth = http.dav_acl(token="tok-1", extra='<d:current-user-principal><d:unauthenticated/></d:current-user-principal>')
+        transport.responses.extend([unauth, http.multistatus(item), unauth])
+        self.assertEqual(engine.run_once(), {"read": 1, "delivered": 0, "errors": {}})
+        self.assertEqual([call[0] for call in transport.calls], ["PROPFIND", "REPORT", "PROPFIND"])
+
+        # Switching the authenticated CalDAV account username forces a full read even when token and principal match.
+        self.now += 60
+        other_transport = http.QueueTransport(
+            principal_acl(None, token="tok-1"),
+            http.multistatus(item),
+            principal_acl(None, token="tok-1"),
+        )
+        other_user = p.CalDAVProvider(http.CALENDAR, username="other-account", password="secret",
+                                      transport=other_transport)
+        self.assertEqual(SyncEngine(self.store, {"apple": other_user}).run_once(),
+                         {"read": 1, "delivered": 0, "errors": {}})
+        self.assertEqual([call[0] for call in other_transport.calls], ["PROPFIND", "REPORT", "PROPFIND"])
+        with self.sessions() as session:
+            switched_cursor = session.get(db.CalendarEndpoint, "apple").cursor
+        self.assertEqual(switched_cursor, other_user._checkpoint("tok-1", None))
+        self.assertNotIn("other-account", switched_cursor)
+
+        # A principal change during inventory aborts without advancing the checkpoint.
+        self.now += 60
+        other_transport.responses.extend([
+            principal_acl("/1/principal/", token="tok-1"),
+            http.multistatus(item),
+            principal_acl("/2/principal/", token="tok-1"),
+        ])
+        self.assertEqual(SyncEngine(self.store, {"apple": other_user}).run_once(),
+                         {"read": 0, "delivered": 0, "errors": {"apple": "provider_error"}})
+        with self.sessions() as session:
+            self.assertEqual(session.get(db.CalendarEndpoint, "apple").cursor, switched_cursor)
+
     def test_legacy_invalid_mismatched_and_empty_token_checkpoints_take_full_path(self):
         self.configure_endpoints("apple")
         item = fixed_dav_item()
@@ -233,9 +321,11 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
         with self.sessions() as session:
             self.assertEqual(session.get(db.CalendarEndpoint, "apple").cursor, caldav._checkpoint("tok-1"))
 
-        other_calendar = p.CalDAVProvider(http.CALENDAR + "other/", username="u", password="p")
-        warsaw_provider = p.CalDAVProvider(http.CALENDAR, username="u", password="p",
+        other_calendar = p.CalDAVProvider(http.CALENDAR + "other/", username="user", password="secret")
+        warsaw_provider = p.CalDAVProvider(http.CALENDAR, username="user", password="secret",
                                            floating_time_zone="Europe/Warsaw")
+        other_account = p.CalDAVProvider(http.CALENDAR, username="different", password="secret")
+        principal_digest = caldav._principal_digest(None)
         invalid_cursors = [
             None,
             "tok-1",
@@ -243,10 +333,16 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
             p.CalDAVProvider.CURSOR_PREFIX + "[]",
             other_calendar._checkpoint("tok-1"),
             warsaw_provider._checkpoint("tok-1"),
+            other_account._checkpoint("tok-1"),
+            caldav._checkpoint("tok-1", "https://caldav.icloud.com/other/principal/"),
             p.CalDAVProvider.CURSOR_PREFIX + json.dumps(
-                {"calendar_id": http.CALENDAR, "floating_time_zone": None, "token": ""}),
+                {"calendar_id": http.CALENDAR, "floating_time_zone": None, "token": "tok-1"}),
             p.CalDAVProvider.CURSOR_PREFIX + json.dumps(
-                {"calendar_id": http.CALENDAR, "floating_time_zone": None, "token": 123}),
+                {"calendar_id": http.CALENDAR, "floating_time_zone": None,
+                 "principal": principal_digest, "token": ""}),
+            p.CalDAVProvider.CURSOR_PREFIX + json.dumps(
+                {"calendar_id": http.CALENDAR, "floating_time_zone": None,
+                 "principal": principal_digest, "token": 123}),
         ]
         for bad_cursor in invalid_cursors:
             with self.subTest(bad_cursor=bad_cursor):
@@ -455,34 +551,96 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
             self.assertEqual(row.last_success, self.now)
             self.assertIsNone(row.last_error)
 
-    def test_reused_google_provider_caches_oauth_token_until_expiry(self):
+
+class CalendarPollerCredentialRotationTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.addCleanup(db.reset_engine_cache)
+        self.addCleanup(runtime.close_executor)
+        self.db_path = Path(self.temp.name) / "rotate.db"
+
+    async def test_rotating_credentials_between_polls_uses_new_credentials(self):
+        parsed = config.parse_config({
+            "version": 1,
+            "accounts": {
+                "wife": {"provider": "caldav", "username_env": "ROTATE_C_USER", "password_env": "ROTATE_C_PASS"},
+                "me": {"provider": "google", "client_id_env": "ROTATE_G_ID",
+                       "client_secret_env": "ROTATE_G_SECRET", "refresh_token_env": "ROTATE_G_TOKEN"},
+            },
+            "groups": [{"id": "family", "calendars": [
+                {"id": "apple", "account": "wife", "calendar_id": http.CALENDAR},
+                {"id": "google", "account": "me", "calendar_id": "family"},
+            ]}],
+        })
+        item = fixed_dav_item(http.PAYLOAD, uid="family-uid", href=http.RESOURCE, etag='"v1"')
+        google_ev = http.google_event("event", http.PAYLOAD, etag='"g1"')
+        env = {
+            "ROTATE_C_USER": "alice",
+            "ROTATE_C_PASS": "pass-1",
+            "ROTATE_G_ID": "id-1",
+            "ROTATE_G_SECRET": "sec-1",
+            "ROTATE_G_TOKEN": "ref-1",
+        }
         transport = http.QueueTransport(
-            http.response({"access_token": "tok-1", "expires_in": 3600}),
+            # Poll 1: CalDAV full pull (alice) + Google OAuth + full pull (ref-1)
+            principal_acl("/alice/principal/", token="tok-1"),
+            http.multistatus(item),
+            principal_acl("/alice/principal/", token="tok-1"),
+            http.response({"access_token": "acc-1", "expires_in": 3600}),
             http.google_acl(),
-            http.google_page([], token="g-1"),
+            http.google_page([google_ev], token="g-1"),
             http.google_acl(),
+            # Poll 2: credentials rotated -> CalDAV forced full pull (bob, same tok-1) + Google OAuth (ref-2) + incremental pull
+            principal_acl("/bob/principal/", token="tok-1"),
+            http.multistatus(item),
+            principal_acl("/bob/principal/", token="tok-1"),
+            http.response({"access_token": "acc-2", "expires_in": 3600}),
             http.google_acl(),
             http.google_page([], token="g-2"),
             http.google_acl(),
-            http.response({"access_token": "tok-2", "expires_in": 3600}),
-            http.google_acl(),
-            http.google_page([], token="g-3"),
-            http.google_acl(),
         )
-        provider = p.GoogleProvider("family", client_id="id", client_secret="secret",
-                                    refresh_token="refresh", transport=transport)
-        monotonic_now = 100.0
-        with patch.object(p.time, "monotonic", side_effect=lambda: monotonic_now):
-            first = provider.pull(None)
-            monotonic_now = 3639.0
-            second = provider.pull(first.cursor)
-            monotonic_now = 3640.0
-            third = provider.pull(second.cursor)
+        sleep_calls = 0
+
+        async def rotate_between_polls(_seconds):
+            nonlocal sleep_calls
+            sleep_calls += 1
+            if sleep_calls == 1:
+                os.environ.update({
+                    "ROTATE_C_USER": "bob",
+                    "ROTATE_C_PASS": "pass-2",
+                    "ROTATE_G_ID": "id-2",
+                    "ROTATE_G_SECRET": "sec-2",
+                    "ROTATE_G_TOKEN": "ref-2",
+                })
+                return
+            raise asyncio.CancelledError()
+
+        with patch.dict(os.environ, env), \
+             patch.object(runtime, "load_config", return_value=parsed), \
+             patch.object(db, "db_path", return_value=self.db_path), \
+             patch.object(p, "HTTPTransport", return_value=transport), \
+             patch.object(runtime.asyncio, "sleep", side_effect=rotate_between_polls):
+            with self.assertRaises(asyncio.CancelledError):
+                await runtime.poll_calendars()
+
         self.assertEqual(transport.responses, [])
-        self.assertEqual(third.cursor, p.GoogleProvider.CURSOR_PREFIX + "g-3")
-        self.assertEqual(sum(call[0] == "POST" for call in transport.calls), 2)
-        self.assertTrue(all(call[2]["headers"]["Authorization"] == "Bearer tok-1" for call in transport.calls[4:7]))
-        self.assertTrue(all(call[2]["headers"]["Authorization"] == "Bearer tok-2" for call in transport.calls[8:11]))
+        alice_auth = "Basic " + base64.b64encode(b"alice:pass-1").decode()
+        bob_auth = "Basic " + base64.b64encode(b"bob:pass-2").decode()
+        self.assertEqual([call[0] for call in transport.calls[:3]], ["PROPFIND", "REPORT", "PROPFIND"])
+        self.assertTrue(all(call[2]["headers"]["Authorization"] == alice_auth for call in transport.calls[:3]))
+        self.assertEqual(transport.calls[3][0], "POST")
+        self.assertIn(b"client_id=id-1", transport.calls[3][2]["body"])
+        self.assertIn(b"client_secret=sec-1", transport.calls[3][2]["body"])
+        self.assertIn(b"refresh_token=ref-1", transport.calls[3][2]["body"])
+        self.assertTrue(all(call[2]["headers"]["Authorization"] == "Bearer acc-1" for call in transport.calls[4:7]))
+        self.assertEqual([call[0] for call in transport.calls[7:10]], ["PROPFIND", "REPORT", "PROPFIND"])
+        self.assertTrue(all(call[2]["headers"]["Authorization"] == bob_auth for call in transport.calls[7:10]))
+        self.assertEqual(transport.calls[10][0], "POST")
+        self.assertIn(b"client_id=id-2", transport.calls[10][2]["body"])
+        self.assertIn(b"client_secret=sec-2", transport.calls[10][2]["body"])
+        self.assertIn(b"refresh_token=ref-2", transport.calls[10][2]["body"])
+        self.assertTrue(all(call[2]["headers"]["Authorization"] == "Bearer acc-2" for call in transport.calls[11:14]))
 
 
 if __name__ == "__main__":
