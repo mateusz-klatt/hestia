@@ -11,19 +11,11 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .config import ConfigError, load_config, make_providers
+from .diagnostics import configure_diagnostics
 
 log = logging.getLogger("hestia.calendar_sync")
 _EXECUTOR = None
 _EXECUTOR_LOCK = threading.Lock()
-
-
-def configure_debug_logging(environ=None) -> bool:
-    """Bump only the calendar-sync logger to DEBUG when explicitly opted in."""
-    env = os.environ if environ is None else environ
-    if env.get("HESTIA_CALENDAR_SYNC_DEBUG") == "1":
-        log.setLevel(logging.DEBUG)
-        return True
-    return False
 
 
 def _background_priority():
@@ -118,7 +110,7 @@ async def poll_calendars() -> None:
             return
         if config is None:
             return
-        configure_debug_logging()
+        configure_diagnostics()
         log.info("Calendar synchronization enabled for %d explicit groups", len(config.groups))
         while True:
             try:

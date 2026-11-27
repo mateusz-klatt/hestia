@@ -297,7 +297,7 @@ class SyncStore:
             touched = set()
             observed_counts = {}
             for endpoint_id, snapshot in sorted(snapshots.items()):
-                ep_wall0, ep_cpu0 = time.perf_counter(), time.thread_time()
+                ep_wall0, ep_cpu0 = (time.perf_counter(), time.thread_time()) if stats is not None else (0.0, 0.0)
                 try:
                     # A malformed endpoint rolls back its entire inventory, including
                     # any earlier objects and cursor, without blocking healthy sources.
@@ -324,7 +324,8 @@ class SyncStore:
                         endpoint.last_error = None
                     # IDs belonging to a rolled-back savepoint must not escape.
                     touched.update(observed)
-                    observed_counts[endpoint_id] = len(observed)
+                    if stats is not None:
+                        observed_counts[endpoint_id] = len(observed)
                 except Exception as exc:
                     if not isolate_errors:
                         raise
@@ -335,7 +336,7 @@ class SyncStore:
                         (time.thread_time() - ep_cpu0) * 1000.0,
                     ]
             if touched:
-                rec_wall0, rec_cpu0 = time.perf_counter(), time.thread_time()
+                rec_wall0, rec_cpu0 = (time.perf_counter(), time.thread_time()) if stats is not None else (0.0, 0.0)
                 s.flush()
                 self._reconcile(s, touched)
                 if stats is not None:

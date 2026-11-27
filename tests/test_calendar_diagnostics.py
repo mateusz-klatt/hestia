@@ -1,4 +1,4 @@
-"""Per-round calendar-sync DEBUG diagnostics: path, reason, phase wall/CPU ms, and redaction."""
+"""Per-round calendar-sync DEBUG diagnostics: opt-in gating, isolation, phase wall/CPU ms, and redaction."""
 from __future__ import annotations
 
 import asyncio
@@ -13,10 +13,18 @@ from unittest.mock import AsyncMock, patch
 
 from hestia import db
 from hestia.calendar_sync import config
+from hestia.calendar_sync import diagnostics as diag_mod
 from hestia.calendar_sync import events as codec
 from hestia.calendar_sync import providers as p
 from hestia.calendar_sync import runtime
-from hestia.calendar_sync.engine import SyncEngine, endpoint_id_hash
+from hestia.calendar_sync.diagnostics import (
+    LOGGER_NAME,
+    configure_diagnostics,
+    diag_log,
+    diagnostics_enabled,
+    endpoint_id_hash,
+)
+from hestia.calendar_sync.engine import SyncEngine
 from hestia.calendar_sync.store import SyncStore
 from tests import test_calendar_providers as http
 from tests.test_calendar_incremental import DEFAULT_PRINCIPAL, fixed_dav_item, fixed_ical
@@ -52,13 +60,18 @@ class CalendarDiagnosticsTests(unittest.TestCase):
         self.now = datetime(2026, 10, 21, 10, 10, tzinfo=timezone.utc).timestamp()
         _, self.sessions = db.init_db(self.path)
         self.store = SyncStore(self.sessions, clock=lambda: self.now)
+        self._orig_diag_level = diag_log.level
+        self._orig_diag_handlers = list(diag_log.handlers)
 
     def tearDown(self):
+        diag_log.handlers[:] = self._orig_diag_handlers
+        diag_log.setLevel(self._orig_diag_level)
         db.reset_engine_cache()
         self.temp.cleanup()
 
     def _run_debug(self, engine: SyncEngine) -> tuple[dict, list[dict[str, str]], dict[str, str]]:
-        with self.assertLogs("hestia.calendar_sync", "DEBUG") as logs:
+        with patch.dict(os.environ, {"HESTIA_CALENDAR_SYNC_DEBUG": "1"}), \
+             self.assertLogs(LOGGER_NAME, "DEBUG") as logs:
             result = engine.run_once()
         endpoints, summary = _parse_logs(logs.records)
         return result, endpoints, summary
@@ -122,10 +135,11 @@ class CalendarDiagnosticsTests(unittest.TestCase):
         _, endpoints, _ = self._run_debug(engine)
         self.assertEqual((endpoints[0]["path"], endpoints[0]["reason"]), ("full", "no_token"))
 
-        # 7. principal_unverified -> full
+        # 7. principal_unverified -> full (missing collection principal + failing root lookup)
         self.now += 60
         transport.responses.extend([
             http.dav_acl(token="tok-2", principal=None),
+            http.multistatus(),
             http.multistatus(item),
             http.dav_acl(token="tok-2", principal=None),
         ])
@@ -285,12 +299,78 @@ class CalendarDiagnosticsTests(unittest.TestCase):
         self.assertGreaterEqual(float(summary["total_cpu_ms"]) + 0.5, cpu_sum)
         self.assertGreater(float(summary["total_ms"]), float(summary["total_cpu_ms"]))
 
-    def test_debug_env_var_gates_only_calendar_sync_logger_without_global_debug(self):
+    def test_disabled_diagnostics_has_zero_overhead_and_ignores_parent_debug(self):
+        self.store.configure([{"id": "family", "calendars": [
+            {"id": "apple", "provider": "caldav", "account": "wife", "calendar_id": http.CALENDAR},
+            {"id": "google", "provider": "google", "account": "me", "calendar_id": "family"},
+        ]}])
+        item = fixed_dav_item(http.PAYLOAD, uid="family-uid", href=http.RESOURCE, etag='"v1"')
+        caldav, caldav_tr = http.dav(
+            http.dav_acl(token="tok-1"),
+            http.multistatus(item),
+            http.dav_acl(token="tok-1"),
+            http.dav_acl(token="tok-1"),
+        )
+        google, google_tr = http.google(
+            http.google_acl(),
+            http.google_page([http.google_event("ev", http.PAYLOAD, etag='"g1"')], token="g-1"),
+            http.google_acl(),
+            http.google_acl(),
+            http.google_page([], token="g-2"),
+            http.google_acl(),
+        )
+        engine = SyncEngine(self.store, {"apple": caldav, "google": google})
+
+        root_logger = logging.getLogger()
+        parent_logger = logging.getLogger("hestia.calendar_sync")
+        orig_root, orig_parent = root_logger.level, parent_logger.level
+        diag_handler = _ListHandler()
+        parent_handler = _ListHandler()
+        diag_log.addHandler(diag_handler)
+        parent_logger.addHandler(parent_handler)
+        self.addCleanup(diag_log.removeHandler, diag_handler)
+        self.addCleanup(parent_logger.removeHandler, parent_handler)
+        self.addCleanup(root_logger.setLevel, orig_root)
+        self.addCleanup(parent_logger.setLevel, orig_parent)
+
+        # Inherited DEBUG on root and parent loggers must NOT enable diagnostics or collect metrics.
+        root_logger.setLevel(logging.DEBUG)
+        parent_logger.setLevel(logging.DEBUG)
+        self.assertFalse(diagnostics_enabled(environ={}))
+        self.assertFalse(diagnostics_enabled(environ={"HESTIA_CALENDAR_SYNC_DEBUG": "0"}))
+
+        with patch.dict(os.environ, {}, clear=False), \
+             patch.object(time, "thread_time", wraps=time.thread_time) as cpu_clock, \
+             patch.object(p, "_clocks", wraps=p._clocks) as provider_clocks, \
+             patch.object(p, "PullMetrics", wraps=p.PullMetrics) as pull_metrics, \
+             patch.object(diag_mod, "_RoundCollector", wraps=diag_mod._RoundCollector) as round_col:
+            os.environ.pop("HESTIA_CALENDAR_SYNC_DEBUG", None)
+            self.assertEqual(engine.run_once(), {"read": 2, "delivered": 0, "errors": {}})
+            self.assertEqual(engine.run_once(), {"read": 2, "delivered": 0, "errors": {}})
+
+        self.assertEqual(caldav_tr.responses, [])
+        self.assertEqual(google_tr.responses, [])
+        self.assertEqual(cpu_clock.call_count, 0)
+        self.assertEqual(provider_clocks.call_count, 0)
+        self.assertEqual(pull_metrics.call_count, 0)
+        self.assertEqual(round_col.call_count, 0)
+        self.assertEqual(diag_handler.records, [])
+        self.assertEqual(parent_handler.records, [])
+
+        # Direct provider pulls with diagnostics disabled allocate no PullMetrics.
+        caldav_tr.responses.append(http.dav_acl(token="tok-1"))
+        google_tr.responses.extend([http.google_acl(), http.google_page([], token="g-3"), http.google_acl()])
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HESTIA_CALENDAR_SYNC_DEBUG", None)
+            self.assertIsNone(caldav.pull(caldav._checkpoint("tok-1", DEFAULT_PRINCIPAL)).metrics)
+            self.assertIsNone(google.pull(p.GoogleProvider.CURSOR_PREFIX + "g-2").metrics)
+
+    def test_dedicated_logger_does_not_propagate_or_raise_instances_logger(self):
         self.store.configure([{"id": "family", "calendars": [
             {"id": "apple", "provider": "caldav", "account": "wife", "calendar_id": http.CALENDAR},
         ]}])
         item = fixed_dav_item(http.PAYLOAD, uid="family-uid", href=http.RESOURCE, etag='"v1"')
-        caldav, transport = http.dav(
+        caldav, _ = http.dav(
             http.dav_acl(token="tok-1"),
             http.multistatus(item),
             http.dav_acl(token="tok-1"),
@@ -298,40 +378,44 @@ class CalendarDiagnosticsTests(unittest.TestCase):
         engine = SyncEngine(self.store, {"apple": caldav})
 
         root_logger = logging.getLogger()
-        cal_logger = logging.getLogger("hestia.calendar_sync")
-        other_logger = logging.getLogger("hestia.server")
-        orig_root, orig_cal, orig_other = root_logger.level, cal_logger.level, other_logger.level
-        handler = _ListHandler()
-        root_logger.addHandler(handler)
-        self.addCleanup(root_logger.removeHandler, handler)
+        parent_logger = logging.getLogger("hestia.calendar_sync")
+        instances_logger = logging.getLogger("hestia.calendar_sync.instances")
+        orig_root = root_logger.level
+        orig_parent = parent_logger.level
+        orig_instances = instances_logger.level
+        root_handler = _ListHandler()
+        root_logger.addHandler(root_handler)
+        self.addCleanup(root_logger.removeHandler, root_handler)
         self.addCleanup(root_logger.setLevel, orig_root)
-        self.addCleanup(cal_logger.setLevel, orig_cal)
-        self.addCleanup(other_logger.setLevel, orig_other)
+        self.addCleanup(parent_logger.setLevel, orig_parent)
+        self.addCleanup(instances_logger.setLevel, orig_instances)
 
         root_logger.setLevel(logging.INFO)
-        cal_logger.setLevel(logging.NOTSET)
-        other_logger.setLevel(logging.NOTSET)
+        parent_logger.setLevel(logging.NOTSET)
+        instances_logger.setLevel(logging.NOTSET)
+        diag_log.handlers.clear()
 
-        self.assertFalse(runtime.configure_debug_logging(environ={}))
-        self.assertFalse(runtime.configure_debug_logging(environ={"HESTIA_CALENDAR_SYNC_DEBUG": "0"}))
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("HESTIA_CALENDAR_SYNC_DEBUG", None)
-            engine.run_once()
-        self.assertEqual([r for r in handler.records if r.levelno == logging.DEBUG], [])
+        # First call attaches a single StreamHandler; second call does not duplicate it.
+        self.assertTrue(configure_diagnostics(environ={"HESTIA_CALENDAR_SYNC_DEBUG": "1"}))
+        self.assertTrue(configure_diagnostics(environ={"HESTIA_CALENDAR_SYNC_DEBUG": "1"}))
+        self.assertFalse(diag_log.propagate)
+        self.assertEqual(len(diag_log.handlers), 1)
+        self.assertIsInstance(diag_log.handlers[0], logging.StreamHandler)
+        self.assertEqual(diag_log.level, logging.DEBUG)
+        self.assertEqual(root_logger.level, logging.INFO)
+        self.assertEqual(parent_logger.getEffectiveLevel(), logging.INFO)
+        self.assertEqual(instances_logger.getEffectiveLevel(), logging.INFO)
 
-        # Enabling HESTIA_CALENDAR_SYNC_DEBUG=1 bumps only hestia.calendar_sync to DEBUG.
-        transport.responses.append(http.dav_acl(token="tok-1"))
+        # Diagnostics emit only on diag_log; parent/root stay clean and instances DEBUG stays suppressed.
+        diag_handler = _ListHandler()
+        diag_log.handlers[:] = [diag_handler]
         with patch.dict(os.environ, {"HESTIA_CALENDAR_SYNC_DEBUG": "1"}):
             engine.run_once()
-            other_logger.debug("unrelated-server-debug")
+            instances_logger.debug("Skipping orphan override for calendar event secret-id at 2026-11-01")
 
-        self.assertEqual(cal_logger.level, logging.DEBUG)
-        self.assertEqual(root_logger.level, logging.INFO)
-        self.assertEqual(other_logger.getEffectiveLevel(), logging.INFO)
-        debug_messages = [r.getMessage() for r in handler.records if r.levelno == logging.DEBUG]
-        self.assertNotIn("unrelated-server-debug", debug_messages)
-        endpoints, summary = _parse_logs([r for r in handler.records if r.name == "hestia.calendar_sync"])
-        self.assertEqual(endpoints[0]["reason"], "token_unchanged")
+        self.assertEqual(root_handler.records, [])
+        endpoints, summary = _parse_logs(diag_handler.records)
+        self.assertEqual(endpoints[0]["reason"], "no_checkpoint")
         self.assertEqual(summary["read"], "1")
 
     def test_debug_logs_never_leak_secrets_urls_emails_account_names_or_event_content(self):
@@ -379,10 +463,11 @@ class CalendarDiagnosticsTests(unittest.TestCase):
         engine = SyncEngine(self.store, {secret_endpoint_id: caldav, "bob@example.com-google": google})
 
         all_messages = []
-        for _ in range(3):
-            with self.assertLogs("hestia.calendar_sync", "DEBUG") as logs:
-                engine.run_once()
-            all_messages.extend(r.getMessage() for r in logs.records)
+        with patch.dict(os.environ, {"HESTIA_CALENDAR_SYNC_DEBUG": "1"}):
+            for _ in range(3):
+                with self.assertLogs(LOGGER_NAME, "DEBUG") as logs:
+                    engine.run_once()
+                all_messages.extend(r.getMessage() for r in logs.records)
 
         self.assertEqual(caldav_transport.responses, [])
         self.assertEqual(google_transport.responses, [])
@@ -419,8 +504,14 @@ class CalendarDiagnosticsTests(unittest.TestCase):
 class CalendarPollerDebugEnvTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.addCleanup(runtime.close_executor)
+        self._orig_diag_level = diag_log.level
+        self._orig_diag_handlers = list(diag_log.handlers)
 
-    async def test_poll_calendars_enables_debug_from_env_without_touching_root(self):
+    async def asyncTearDown(self):
+        diag_log.handlers[:] = self._orig_diag_handlers
+        diag_log.setLevel(self._orig_diag_level)
+
+    async def test_poll_calendars_enables_dedicated_diagnostics_without_touching_parent_or_instances(self):
         parsed = config.parse_config({
             "version": 1,
             "accounts": {"wife": {"provider": "caldav", "username_env": "U", "password_env": "P"}},
@@ -429,12 +520,15 @@ class CalendarPollerDebugEnvTests(unittest.IsolatedAsyncioTestCase):
             ]}],
         })
         root_logger = logging.getLogger()
-        cal_logger = logging.getLogger("hestia.calendar_sync")
-        orig_root, orig_cal = root_logger.level, cal_logger.level
+        parent_logger = logging.getLogger("hestia.calendar_sync")
+        instances_logger = logging.getLogger("hestia.calendar_sync.instances")
+        orig_root, orig_parent, orig_instances = root_logger.level, parent_logger.level, instances_logger.level
         self.addCleanup(root_logger.setLevel, orig_root)
-        self.addCleanup(cal_logger.setLevel, orig_cal)
+        self.addCleanup(parent_logger.setLevel, orig_parent)
+        self.addCleanup(instances_logger.setLevel, orig_instances)
         root_logger.setLevel(logging.INFO)
-        cal_logger.setLevel(logging.INFO)
+        parent_logger.setLevel(logging.NOTSET)
+        instances_logger.setLevel(logging.NOTSET)
 
         with patch.dict(os.environ, {"HESTIA_CALENDAR_SYNC_DEBUG": "1"}), \
              patch.object(runtime, "load_config", return_value=parsed), \
@@ -443,8 +537,11 @@ class CalendarPollerDebugEnvTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await runtime.poll_calendars()
 
-        self.assertEqual(cal_logger.level, logging.DEBUG)
+        self.assertEqual(diag_log.level, logging.DEBUG)
+        self.assertFalse(diag_log.propagate)
         self.assertEqual(root_logger.level, logging.INFO)
+        self.assertEqual(parent_logger.getEffectiveLevel(), logging.INFO)
+        self.assertEqual(instances_logger.getEffectiveLevel(), logging.INFO)
 
 
 if __name__ == "__main__":

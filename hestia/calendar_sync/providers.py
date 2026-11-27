@@ -24,6 +24,7 @@ import xml.etree.ElementTree as ET
 from icalendar import Calendar
 
 from . import events as codec
+from .diagnostics import diagnostics_enabled
 from .types import CalendarInfo, ProviderError, PullMetrics, RemoteEvent, Snapshot
 
 
@@ -329,7 +330,8 @@ class GoogleCalendarProvider:
             raise ProviderError("Google event cannot be safely synchronized") from None
 
     def pull(self, cursor: str | None) -> Snapshot:
-        wall0, cpu0 = _clocks()
+        collect = diagnostics_enabled()
+        wall0, cpu0 = _clocks() if collect else (0.0, 0.0)
         self._check_calendar()
         # Query parameters form part of Google's cursor contract. Older stored
         # tokens used a list that omitted hidden invitations; rescan safely.
@@ -358,9 +360,7 @@ class GoogleCalendarProvider:
             reason = "google_recurring_delta"
         masters = {e["id"]: e for e in items if not e.get("recurringEventId")}
         grouped: dict[str, list[dict]] = {}
-        detached, detached_parents = [], set()
-        parse_wall_ms = 0.0
-        parse_cpu_ms = 0.0
+        detached_events, detached_parents = [], set()
         for event in items:
             parent = event.get("recurringEventId")
             if parent:
@@ -379,23 +379,22 @@ class GoogleCalendarProvider:
                     # Google can retain a visible occurrence after its series
                     # disappears. Keep that occurrence as a mapped one-off; do
                     # not invent a recurrence rule or discard its content.
-                    pw0, pc0 = _clocks()
-                    detached.append(self._record(event))
-                    pw1, pc1 = _clocks()
-                    parse_wall_ms += (pw1 - pw0) * 1000.0
-                    parse_cpu_ms += (pc1 - pc0) * 1000.0
+                    detached_events.append(event)
                 else:
                     grouped.setdefault(parent, []).append(event)
-        pw0, pc0 = _clocks()
+        pw0, pc0 = _clocks() if collect else (0.0, 0.0)
         records = [self._record(event, grouped.get(identifier)) for identifier, event in masters.items()]
-        pw1, pc1 = _clocks()
-        parse_wall_ms += (pw1 - pw0) * 1000.0
-        parse_cpu_ms += (pc1 - pc0) * 1000.0
+        detached = [self._record(event) for event in detached_events]
+        pw1, pc1 = _clocks() if collect else (0.0, 0.0)
         self._check_calendar()  # Permission loss midway must never become deletions.
-        wall1, cpu1 = _clocks()
-        fetch_wall_ms = max(0.0, (wall1 - wall0) * 1000.0 - parse_wall_ms)
-        fetch_cpu_ms = max(0.0, (cpu1 - cpu0) * 1000.0 - parse_cpu_ms)
-        metrics = PullMetrics(reason, fetch_wall_ms, fetch_cpu_ms, parse_wall_ms, parse_cpu_ms)
+        metrics = None
+        if collect:
+            wall1, cpu1 = _clocks()
+            parse_wall_ms = (pw1 - pw0) * 1000.0
+            parse_cpu_ms = (pc1 - pc0) * 1000.0
+            fetch_wall_ms = max(0.0, (wall1 - wall0) * 1000.0 - parse_wall_ms)
+            fetch_cpu_ms = max(0.0, (cpu1 - cpu0) * 1000.0 - parse_cpu_ms)
+            metrics = PullMetrics(reason, fetch_wall_ms, fetch_cpu_ms, parse_wall_ms, parse_cpu_ms)
         return Snapshot(records + detached, self.CURSOR_PREFIX + new_cursor, complete=True, full=full, metrics=metrics)
 
     def _current(self, remote_id: str) -> tuple[RemoteEvent, dict, list[dict]]:
@@ -754,6 +753,8 @@ class CalDAVProvider:
         self._explicit_end = host == "caldav.icloud.com" or host.endswith("-caldav.icloud.com")
         self._account_hash = hashlib.sha256(username.encode("utf-8")).hexdigest()
         self._auth = "Basic " + base64.b64encode((username + ":" + password).encode()).decode()
+        self._credential_hash = hashlib.sha256(self._auth.encode("ascii")).hexdigest()
+        self._principal_cache: dict[tuple[str, str], str | None] | None = None
         self._transport = transport or HTTPTransport()
 
     def allocate_id(self, uid: str) -> str:
@@ -814,14 +815,33 @@ class CalDAVProvider:
     _CALENDAR_PROPS = ('<d:resourcetype/><d:displayname/><d:current-user-privilege-set/>'
                        '<c:supported-calendar-component-set/><d:current-user-principal/><d:sync-token/>')
 
-    def discover(self) -> list[CalendarInfo]:
+    def _discover_principal(self) -> str:
         base, responses = self._propfind(self.url, "<d:current-user-principal/>")
-        principal = next((node.find("d:href", NS).text for response in responses
-                          for node in _properties(response).values()
-                          if node.tag == f"{{{DAV}}}current-user-principal" and node.find("d:href", NS) is not None), None)
+        principal = None
+        for response in responses:
+            prop = _properties(response).get(f"{{{DAV}}}current-user-principal")
+            if prop is not None and prop.find("d:unauthenticated", NS) is None:
+                href = (prop.findtext("d:href", namespaces=NS) or "").strip()
+                if href:
+                    principal = href
+                    break
         if not principal:
             raise ProviderError("CalDAV did not advertise the account principal")
-        principal_url = _trusted_url(urljoin(base, principal), self.url)
+        return _trusted_url(urljoin(base, principal), self.url)
+
+    def _resolve_root_principal(self, cache: dict[tuple[str, str], str | None]) -> str | None:
+        key = (self.url, self._credential_hash)
+        if key in cache:
+            return cache[key]
+        try:
+            resolved = self._discover_principal()
+        except ProviderError:
+            resolved = None
+        cache[key] = resolved
+        return resolved
+
+    def discover(self) -> list[CalendarInfo]:
+        principal_url = self._discover_principal()
         base, responses = self._propfind(principal_url, "<c:calendar-home-set/>")
         homes = [node.text for response in responses
                  for prop in _properties(response).values() if prop.tag == f"{{{CAL}}}calendar-home-set"
@@ -842,7 +862,8 @@ class CalDAVProvider:
                     result[identifier] = info
         return list(result.values())
 
-    def _check_collection(self) -> tuple[str | None, str | None]:
+    def _check_collection(self, *, resolve_principal: bool = False,
+                          principal_cache: dict[tuple[str, str], str | None] | None = None) -> tuple[str | None, str | None]:
         if not self.calendar_id:
             raise ProviderError("Select an explicit CalDAV calendar collection")
         base, responses = self._propfind(self.calendar_id, self._CALENDAR_PROPS)
@@ -862,12 +883,18 @@ class CalDAVProvider:
         token = properties.get(f"{{{DAV}}}sync-token")
         value = token.text.strip() if token is not None and token.text else ""
         principal_prop = properties.get(f"{{{DAV}}}current-user-principal")
+        unauthenticated = principal_prop is not None and principal_prop.find("d:unauthenticated", NS) is not None
         principal_href = (
             (principal_prop.findtext("d:href", namespaces=NS) or "").strip()
-            if principal_prop is not None and principal_prop.find("d:unauthenticated", NS) is None
+            if principal_prop is not None and not unauthenticated
             else ""
         )
-        principal = urljoin(self.calendar_id, principal_href) if principal_href else None
+        if principal_href:
+            principal = urljoin(self.calendar_id, principal_href)
+        elif resolve_principal and not unauthenticated:
+            principal = self._resolve_root_principal(principal_cache)
+        else:
+            principal = None
         return value or None, principal
 
     def _check_calendar(self) -> str | None:
@@ -913,19 +940,23 @@ class CalDAVProvider:
         return True, "token_unchanged"
 
     def pull(self, cursor: str | None) -> Snapshot:
-        wall0, cpu0 = _clocks()
-        before, before_principal = self._check_collection()
+        collect = diagnostics_enabled()
+        wall0, cpu0 = _clocks() if collect else (0.0, 0.0)
+        principal_cache = {} if self._principal_cache is None else self._principal_cache
+        before, before_principal = self._check_collection(resolve_principal=True, principal_cache=principal_cache)
         matched, reason = self._match_checkpoint(cursor, before, before_principal)
         if matched:
-            wall1, cpu1 = _clocks()
-            metrics = PullMetrics(reason, (wall1 - wall0) * 1000.0, (cpu1 - cpu0) * 1000.0)
+            metrics = None
+            if collect:
+                wall1, cpu1 = _clocks()
+                metrics = PullMetrics(reason, (wall1 - wall0) * 1000.0, (cpu1 - cpu0) * 1000.0)
             return Snapshot([], self._checkpoint(before, before_principal), complete=True, full=False, metrics=metrics)
         body = (f'<c:calendar-query xmlns:d="DAV:" xmlns:c="{CAL}">'
                 '<d:prop><d:getetag/><c:calendar-data/></d:prop>'
                 '<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"/>'
                 '</c:comp-filter></c:filter></c:calendar-query>').encode()
         response = self._request("REPORT", self.calendar_id, body=body, headers={"Depth": "1"})
-        parse_wall0, parse_cpu0 = _clocks()
+        pw0, pc0 = _clocks() if collect else (0.0, 0.0)
         records = []
         seen = set()
         for item in _xml(response.body).findall("d:response", NS):
@@ -943,16 +974,18 @@ class CalDAVProvider:
                 raise ProviderError("CalDAV returned an incomplete event inventory", retryable=True)
             seen.add(remote_id)
             records.append(_ical_record(remote_id, data.text.encode(), etag.text, floating_time_zone=self.floating_time_zone))
-        parse_wall1, parse_cpu1 = _clocks()
-        after, after_principal = self._check_collection()
+        pw1, pc1 = _clocks() if collect else (0.0, 0.0)
+        after, after_principal = self._check_collection(resolve_principal=True, principal_cache=principal_cache)
         if before != after or before_principal != after_principal:
             raise ProviderError("CalDAV calendar changed during inventory; retry required", retryable=True)
-        wall1, cpu1 = _clocks()
-        parse_wall_ms = (parse_wall1 - parse_wall0) * 1000.0
-        parse_cpu_ms = (parse_cpu1 - parse_cpu0) * 1000.0
-        fetch_wall_ms = max(0.0, (wall1 - wall0) * 1000.0 - parse_wall_ms)
-        fetch_cpu_ms = max(0.0, (cpu1 - cpu0) * 1000.0 - parse_cpu_ms)
-        metrics = PullMetrics(reason, fetch_wall_ms, fetch_cpu_ms, parse_wall_ms, parse_cpu_ms)
+        metrics = None
+        if collect:
+            wall1, cpu1 = _clocks()
+            parse_wall_ms = (pw1 - pw0) * 1000.0
+            parse_cpu_ms = (pc1 - pc0) * 1000.0
+            fetch_wall_ms = max(0.0, (wall1 - wall0) * 1000.0 - parse_wall_ms)
+            fetch_cpu_ms = max(0.0, (cpu1 - cpu0) * 1000.0 - parse_cpu_ms)
+            metrics = PullMetrics(reason, fetch_wall_ms, fetch_cpu_ms, parse_wall_ms, parse_cpu_ms)
         return Snapshot(records, self._checkpoint(after, after_principal), complete=True, full=True, metrics=metrics)
 
     def _get(self, remote_id: str) -> tuple[RemoteEvent, bytes]:
