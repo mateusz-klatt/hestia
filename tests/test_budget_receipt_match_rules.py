@@ -6,9 +6,11 @@ import unittest
 from unittest import mock
 from uuid import uuid4
 
+from sqlalchemy import event
+
 from hestia import api_contract, db
 from hestia.budget import receipt_api
-from hestia.budget.analytics_core import AnalyticsError
+from hestia.budget.analytics_core import AnalyticsError, financial_fingerprint
 from hestia.budget.gmail_store import GATEWAY_REF_DOMAIN, digest
 from hestia.budget.receipt_match_rules import (
     invoice_number_pattern, remittance_has_invoice_number, rounding_delta, stored_rounding_delta,
@@ -162,6 +164,9 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
                              remittance_information=[provider_ref])
         self.assertEqual(self.candidates(identifier), [])
         self.change_transaction("a", "late-gateway", amount="42.91")
+        self.assertEqual(self.candidates(identifier), [])
+        with self.sessions.begin() as session:
+            session.get(db.BudgetReceipt, identifier).invoice_number = _INVOICE_NUMBER
         candidate, = self.candidates(identifier)
         self.assertEqual(candidate["match_strength"], "id")
         self.assertTrue(self.receipts.confirm("owner", self.confirmation(identifier, candidate))["receipt"]["linked"])
@@ -169,7 +174,8 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
     def test_short_gateway_reference_does_not_widen_window(self):
         short_ref = "54321"
         identifier = self.add_receipt(
-            document_kind="invoice", receipt_date=_INVOICE_DATE, due_date=_DUE_DATE, gateway="payu",
+            document_kind="invoice", invoice_number=_INVOICE_NUMBER, receipt_date=_INVOICE_DATE,
+            due_date=_DUE_DATE, gateway="payu",
             gateway_ref_hmac=digest(_REFERENCE_KEY, GATEWAY_REF_DOMAIN, short_ref),
         )
         self.add_transaction("a", "short-gateway", amount="42.91", booking_date=_LATE_DATE, value_date=_LATE_DATE,
@@ -178,6 +184,79 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
         self.change_transaction("a", "short-gateway", booking_date=_DUE_DATE, value_date=_DUE_DATE)
         candidate, = self.candidates(identifier)
         self.assertEqual(candidate["match_strength"], "id")
+
+    def test_invoice_date_filters_and_party_name_query_count(self):
+        provider_ref = "P24-SYN-654-321"
+        identifier = self.add_receipt(
+            document_kind="invoice", invoice_number=_INVOICE_NUMBER, receipt_date=_INVOICE_DATE, due_date=_DUE_DATE,
+            gateway="p24", gateway_ref_hmac=digest(_REFERENCE_KEY, GATEWAY_REF_DOMAIN, provider_ref),
+        )
+        late = self.add_transaction("a", "late-with-metadata", amount="42.91", booking_date="2027-01-02",
+                                    value_date=_LATE_DATE, remittance_information=["Synthetic transfer"])
+        with self.sessions.begin() as session:
+            session.add(db.BudgetTransactionMetadata(
+                account_id=self.accounts["a"], entry_reference="late-with-metadata", owner="owner",
+                ledger_fingerprint=financial_fingerprint(late), payload_json=json.dumps({"creditor_name": provider_ref}),
+                source="api", observed_at=self.now, version=1,
+            ))
+        statements = []
+
+        def record(_conn, _cursor, statement, parameters, _context, _executemany):
+            if statement.startswith("SELECT") and (
+                "FROM budget_transactions" in statement or "budget_transaction_metadata" in statement
+            ):
+                statements.append((statement, parameters))
+
+        event.listen(self.engine, "before_cursor_execute", record)
+        self.addCleanup(event.remove, self.engine, "before_cursor_execute", record)
+
+        def match_and_check_sql(*, wide):
+            statements.clear()
+            candidates = self.candidates(identifier)
+            self.assertEqual(len(statements), 3 if wide else 2)
+            for sql, _ in statements:
+                self.assertIn("LEFT OUTER JOIN budget_transaction_metadata", sql)
+                self.assertIn(" BETWEEN ", sql)
+            self.assertEqual(sum("2026-12-18" in parameters for _, parameters in statements), 2 if wide else 0)
+            return [candidate["entry_reference"] for candidate in candidates if candidate["match_strength"] == "id"]
+
+        self.assertEqual(match_and_check_sql(wide=True), [fixtures.reference_digest("late-with-metadata")])
+        for index in range(12):
+            self.add_transaction("a", f"near-{index}", amount="42.91", booking_date=_INVOICE_DATE,
+                                 value_date=None, remittance_information=[_SHOP])
+            self.add_transaction("a", f"far-{index}", amount="42.91", booking_date="2027-01-02",
+                                 value_date=None, remittance_information=[provider_ref])
+        self.add_transaction("a", "invalid-date", amount="42.91", booking_date=f"{_INVOICE_DATE}T12:00",
+                             value_date=None, remittance_information=[provider_ref])
+        self.add_transaction("a", "invalid-amount", amount="bogus", booking_date=_INVOICE_DATE, value_date=None)
+        self.add_transaction("a", "pending", status="PDNG", booking_date=_INVOICE_DATE, value_date=None)
+        with self.sessions.begin() as session:
+            session.add(db.BudgetTransactionMetadata(
+                account_id=self.accounts["a"], entry_reference="near-0", owner="owner",
+                ledger_fingerprint="0" * 64, payload_json=json.dumps({"creditor_name": provider_ref}),
+                source="api", observed_at=self.now, version=1,
+            ))
+        self.assertEqual(match_and_check_sql(wide=True), [fixtures.reference_digest("late-with-metadata")])
+        for number in (None, "AB-123"):
+            with self.subTest(invoice_number=number):
+                with self.sessions.begin() as session:
+                    session.get(db.BudgetReceipt, identifier).invoice_number = number
+                self.assertEqual(match_and_check_sql(wide=False), [])
+
+    def test_peer_exact_debits_can_be_outside_the_receipt_match_window(self):
+        identifier = self.add_receipt(receipt_date=_INVOICE_DATE)
+        self.add_receipt(receipt_date=_LATE_DATE)
+        self.add_receipt(receipt_date=_LATE_DATE)
+        self.add_transaction("a", "shared-debit", amount="42.91", booking_date=_INVOICE_DATE,
+                             value_date=None, transaction_date=_LATE_DATE)
+        self.assertEqual(self.candidates(identifier), [])
+
+        self.add_transaction("a", "invalid-peer-debit", amount="bogus", booking_date=_LATE_DATE, value_date=None)
+        self.add_transaction("a", "different-amount", amount="42.90", booking_date=_LATE_DATE, value_date=None)
+        self.assertEqual(self.candidates(identifier), [])
+        self.add_transaction("b", "peer-only", amount="42.91", booking_date=_LATE_DATE, value_date=None)
+        candidate, = self.candidates(identifier)
+        self.assertEqual(candidate["entry_reference"], fixtures.reference_digest("shared-debit"))
 
     def test_round_up_without_distinctive_merchant_is_weak_even_on_the_same_day(self):
         identifier = self.add_receipt()
