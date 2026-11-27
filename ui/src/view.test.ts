@@ -247,4 +247,29 @@ describe("renderViewSwitch", () => {
     expect(base.eventsEl.hidden).toBe(false);
     expect(budgetEl.hidden).toBe(true);
   });
+
+  it("keeps all five app tabs readable and non-truncated on mobile in style.css", async () => {
+    const base = els();
+    const calendarEl = document.createElement("section");
+    const budgetEl = document.createElement("section");
+    const switcher = renderViewSwitch({ ...base, calendarEl, budgetEl }, () => undefined);
+    switcher.setBudgetAvailable(true);
+    switcher.apply("budget");
+
+    const tabs = [...base.switchBox.querySelectorAll("button")];
+    expect(tabs).toHaveLength(5);
+    expect(tabs.filter((btn) => btn.getAttribute("aria-pressed") === "true")).toHaveLength(1);
+    expect(tabs.find((btn) => btn.classList.contains("active"))?.textContent).toContain("Budget");
+
+    const fsModule = "node:fs";
+    const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as {
+      readFileSync: (path: string, encoding: "utf8") => string;
+    };
+    const css = readFileSync("src/style.css", "utf8");
+    const mobileViewBlock = css.slice(css.indexOf(".view-tab.active"), css.indexOf(".room-grid"));
+    expect(mobileViewBlock).toMatch(/\.view-switch\s*\{[^}]*flex-wrap:\s*wrap/);
+    expect(mobileViewBlock).not.toMatch(/flex-wrap:\s*nowrap/);
+    expect(mobileViewBlock).not.toMatch(/text-overflow:\s*ellipsis/);
+    expect(mobileViewBlock).not.toMatch(/overflow:\s*hidden/);
+  });
 });

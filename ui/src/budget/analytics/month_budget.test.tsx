@@ -1753,4 +1753,95 @@ describe("MonthBudgetView", () => {
     expect(host.textContent).toContain("Synthetic Salary Name");
     expect(host.textContent).toContain("Synthetic Spend Name");
   });
+
+  it("wraps all three chart data tables in scrollable min-width-safe containers with sticky first column and scalable SVGs", async () => {
+    const api = fakeApi();
+    await show(api, { locale: "pl-PL" });
+
+    const charts = [...host.querySelectorAll<HTMLElement>(".budget-month-chart")];
+    expect(charts).toHaveLength(3);
+    for (const chart of charts) {
+      const svg = chart.querySelector("svg");
+      expect(svg).not.toBeNull();
+      expect(svg?.getAttribute("viewBox")).toBe("0 0 360 210");
+      expect(svg?.hasAttribute("width")).toBe(false);
+      expect(svg?.hasAttribute("height")).toBe(false);
+
+      const details = chart.querySelector("details.budget-recurring-evidence");
+      expect(details).not.toBeNull();
+      const wrap = details?.querySelector(".budget-table-wrap.budget-chart-data-wrap");
+      expect(wrap).not.toBeNull();
+      expect(wrap?.getAttribute("role")).toBe("region");
+      expect(wrap?.getAttribute("tabindex")).toBe("0");
+
+      const table = wrap?.querySelector("table.budget-month-dashboard-table.budget-chart-data-table");
+      expect(table).not.toBeNull();
+      expect(table?.querySelector("thead th:first-child")).not.toBeNull();
+      expect(table?.querySelectorAll('tbody th[scope="row"]').length).toBeGreaterThan(0);
+    }
+
+    const fsModule = "node:fs";
+    const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as {
+      readFileSync: (path: string, encoding: "utf8") => string;
+    };
+    const css = readFileSync("src/budget/budget.css", "utf8");
+    expect(css).toMatch(/\.budget-month-charts\s*\{[^}]*min-width:\s*0/);
+    expect(css).toMatch(/\.budget-month-charts\s*>\s*\*\s*\{[^}]*min-width:\s*0/);
+    expect(css).toMatch(/\.budget-month-chart\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)[^}]*min-width:\s*0[^}]*max-width:\s*100%/);
+    expect(css).toMatch(/\.budget-month-chart\s*>\s*\*\s*\{[^}]*min-width:\s*0/);
+    expect(css).toMatch(/\.budget-recurring-evidence\s*\{[^}]*min-width:\s*0[^}]*max-width:\s*100%/);
+    expect(css).toMatch(/\.budget-month-chart\s+svg\s*\{[^}]*width:\s*100%[^}]*max-width:\s*min\(100%,\s*38rem\)[^}]*height:\s*auto/);
+    expect(css).toMatch(/\.budget-table-wrap\s*\{[^}]*overflow-x:\s*auto[^}]*max-width:\s*100%[^}]*min-width:\s*0/);
+    expect(css).toMatch(/\.budget-table-wrap\s*>\s*\.budget-month-dashboard-table\s*:is\(thead\s+th:first-child,\s*tbody\s+th\[scope="row"\],\s*tfoot\s+th\[scope="row"\]\)\s*\{[^}]*position:\s*sticky[^}]*inset-inline-start:\s*0/);
+  });
+
+  it("assigns tree depth classes and aligns parent vs sibling top-level rows in Wydatki i limity", async () => {
+    const api = fakeApi();
+    api.categories.mockResolvedValue(ok({ categories: [
+      { id: "personal", name: "Wydatki osobiste", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "wardrobe", name: "Ubrania", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: "personal" },
+      { id: "shoes", name: "Buty", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: "wardrobe" },
+      { id: "shop-card", name: "Zakupy (karta/BLIK)", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "health", name: "Zdrowie", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+    ] }));
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      category_spend: [
+        monthlyBudgetCategorySpend({ category_id: "shoes", name: "Buty", expenses: "120", refunds: "0", net_spending: "120", limit: null }),
+        monthlyBudgetCategorySpend({ category_id: "shop-card", name: "Zakupy (karta/BLIK)", expenses: "200", refunds: "0", net_spending: "200", limit: null }),
+        monthlyBudgetCategorySpend({ category_id: "health", name: "Zdrowie", expenses: "90", refunds: "0", net_spending: "90", limit: null }),
+        monthlyBudgetCategorySpend({ category_id: null, name: null, expenses: "30", refunds: "0", net_spending: "30", limit: null }),
+      ],
+    })));
+    await show(api, { locale: "pl-PL" });
+
+    const rows = [...host.querySelectorAll<HTMLTableRowElement>('section[aria-label="Wydatki i limity"] tbody tr')];
+    expect(rows.map((row) => [
+      row.querySelector(".budget-tree-label")?.textContent,
+      row.getAttribute("data-depth"),
+      [...row.classList].filter((cls) => cls.startsWith("budget-tree-depth-") || cls === "is-uncategorised"),
+    ])).toEqual([
+      ["Wydatki osobiste", "0", ["budget-tree-depth-0"]],
+      ["Ubrania", "1", ["budget-tree-depth-1"]],
+      ["Buty", "2", ["budget-tree-depth-2"]],
+      ["Zakupy (karta/BLIK)", "0", ["budget-tree-depth-0"]],
+      ["Zdrowie", "0", ["budget-tree-depth-0"]],
+      ["Bez kategorii", "0", ["budget-tree-depth-0", "is-uncategorised"]],
+    ]);
+
+    expect(rows[0]?.querySelector(".budget-tree-toggle")).not.toBeNull();
+    expect(rows[1]?.querySelector(".budget-tree-toggle")).not.toBeNull();
+    expect(rows[2]?.querySelector(".budget-tree-spacer")).not.toBeNull();
+    expect(rows[3]?.querySelector(".budget-tree-spacer")).not.toBeNull();
+    expect(rows[4]?.querySelector(".budget-tree-spacer")).not.toBeNull();
+
+    const fsModule = "node:fs";
+    const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as {
+      readFileSync: (path: string, encoding: "utf8") => string;
+    };
+    const css = readFileSync("src/budget/budget.css", "utf8");
+    expect(css).toMatch(/tr\.budget-tree-depth-0\):not\(\.is-uncategorised\)\s*>\s*th\[scope="row"\]\s*\{[^}]*font-weight:\s*650/);
+    expect(css).toMatch(/tr\.budget-tree-depth-1\)\s*>\s*th\[scope="row"\][^}]*font-weight:\s*400/);
+    expect(css).toMatch(/tr\.budget-tree-depth-1\)\s*>\s*th\s*\{\s*padding-inline-start:/);
+    expect(css).toMatch(/tr\.budget-tree-depth-2\)\s*>\s*th\s*\{\s*padding-inline-start:/);
+  });
 });

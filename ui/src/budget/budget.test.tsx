@@ -3018,4 +3018,80 @@ describe("simple everyday navigation", () => {
     expect(css).not.toMatch(/text-overflow:\s*ellipsis/);
     expect(css).not.toMatch(/white-space:\s*nowrap/);
   });
+
+  it("keeps only one active/pressed tab while switching from Receipts to a More sub-view and during loading", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    await loadLocale("pl");
+    await render(api, true, "owner");
+
+    const pressedTabs = () => [...host.querySelectorAll<HTMLButtonElement>(".budget-nav button")]
+      .filter((btn) => btn.getAttribute("aria-pressed") === "true");
+
+    await click(button("Paragony i dowody"));
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Paragony i dowody"]);
+
+    // Hold capabilities() and recurring() pending while selecting Cykliczne from Więcej.
+    const capPending = deferred<Awaited<ReturnType<BudgetApi["capabilities"]>> extends BudgetResult<infer T> ? T : never>();
+    const recPending = deferred<Awaited<ReturnType<BudgetApi["recurring"]>> extends BudgetResult<infer T> ? T : never>();
+    api.capabilities.mockReturnValueOnce(capPending.promise);
+    api.recurring.mockReturnValueOnce(recPending.promise);
+
+    await click(moreToggle());
+    await act(async () => {
+      button("Cykliczne").click();
+      await Promise.resolve();
+    });
+
+    // Immediately upon clicking Cykliczne (even before capabilities resolves), Paragony i dowody is unpressed
+    // and only Cykliczne is pressed.
+    expect(button("Paragony i dowody").getAttribute("aria-pressed")).toBe("false");
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Cykliczne"]);
+
+    await act(async () => {
+      capPending.settle({ ok: true, data: authorization });
+      await Promise.resolve();
+    });
+    await settle();
+
+    // While Cykliczne itself is loading, only Cykliczne is pressed.
+    expect(button("Paragony i dowody").getAttribute("aria-pressed")).toBe("false");
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Cykliczne"]);
+    expect(host.querySelector('[role="status"]')?.textContent).toBe("Wczytywanie powtarzalnych wydatków…");
+
+    await act(async () => {
+      recPending.settle({ ok: true, data: recurringOf([recurringHint({ label: "Synthetic Fiber" })]) });
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Cykliczne"]);
+    expect(host.textContent).toContain("Synthetic Fiber");
+
+    // Clicking a newer tab before an older capabilities check finishes ignores the stale transition.
+    const slowRecurringCap = deferred<Awaited<ReturnType<BudgetApi["capabilities"]>> extends BudgetResult<infer T> ? T : never>();
+    const fastMonthCap = deferred<Awaited<ReturnType<BudgetApi["capabilities"]>> extends BudgetResult<infer T> ? T : never>();
+    api.capabilities
+      .mockReturnValueOnce(slowRecurringCap.promise)
+      .mockReturnValueOnce(fastMonthCap.promise);
+    await click(button("Paragony i dowody"));
+    await click(moreToggle());
+    await act(async () => { button("Cykliczne").click(); await Promise.resolve(); });
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Cykliczne"]);
+    await act(async () => { button("Miesiąc").click(); await Promise.resolve(); });
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Miesiąc"]);
+    await act(async () => { fastMonthCap.settle({ ok: true, data: authorization }); await Promise.resolve(); });
+    await settle();
+    await act(async () => { slowRecurringCap.settle({ ok: true, data: authorization }); await Promise.resolve(); });
+    await settle();
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Miesiąc"]);
+
+    // Confirm More toggle itself has no secondary-active background fill competing with the active tab pill.
+    const fsModule = "node:fs";
+    const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as {
+      readFileSync: (path: string, encoding: "utf8") => string;
+    };
+    const budgetCss = readFileSync("src/budget/budget.css", "utf8");
+    expect(budgetCss).not.toMatch(/\.budget-nav-more-toggle\[data-secondary-active="true"\]/);
+  });
 });

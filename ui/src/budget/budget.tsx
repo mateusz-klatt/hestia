@@ -132,6 +132,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   const [pending, setPending] = useState<BudgetConsentFlow[]>([]);
   const [detail, setDetail] = useState<string | null>(null);
   const [view, setView] = useState<View>("monthly_budget");
+  const [pendingView, setPendingView] = useState<View | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const [devicesFocus, setDevicesFocus] = useState(0);
   // A month chosen in the monthly budget or year view; the month view opens on it.
@@ -152,6 +153,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   // out, other principal, disabled), so no response started before that may bring the data back.
   const alive = useRef(true);
   const generation = useRef(0);
+  const navGeneration = useRef(0);
   const epoch = useRef(0);
   const [sessionEpoch, setSessionEpoch] = useState(0);
   const [revision, setRevision] = useState(0);
@@ -174,6 +176,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       principalRef.current = principal;
       epoch.current += 1;
       generation.current += 1;
+      navGeneration.current += 1;
       receiptEpochRef.current += 1;
       receiptAccessRef.current = true;
       receiptUnavailableRef.current = false;
@@ -187,6 +190,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
       setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined);
       setView("accounts");
+      setPendingView(null);
       setMoreOpen(false);
       setDevicesFocus(0);
       setSessionUpgrade(false);
@@ -198,7 +202,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   const [pollTick, setPollTick] = useState(0);
   useEffect(() => {
     alive.current = true;
-    return () => { alive.current = false; generation.current += 1; };
+    return () => { alive.current = false; generation.current += 1; navGeneration.current += 1; };
   }, []);
   useEffect(() => {
     const next = authorization === null ? "" : [
@@ -216,6 +220,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   const invalidate = useCallback((disabled: boolean, next?: Load) => {
     epoch.current += 1;
     generation.current += 1;
+    navGeneration.current += 1;
     bumpReceiptEpoch();
     receiptAccessRef.current = true;
     receiptUnavailableRef.current = false;
@@ -226,6 +231,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     setReceiptAccess(true); setReceiptUnavailable(false);
     setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
     setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined); setView("accounts");
+    setPendingView(null);
     setMoreOpen(false);
     setDevicesFocus(0);
     const target = next ?? (disabled ? "disabled" : "denied");
@@ -592,12 +598,19 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   }, [onLogout]);
 
   const openAuthorizedView = useCallback((nextView: View, beforeShow?: () => void) => {
+    const navToken = ++navGeneration.current;
+    const startEpoch = epoch.current;
     setMoreOpen(false);
-    authorizeView(() => {
-      beforeShow?.();
-      setView(nextView);
+    setPendingView(nextView);
+    void refreshAuthorization().then((allowed) => {
+      if (!alive.current || startEpoch !== epoch.current || navToken !== navGeneration.current) return;
+      setPendingView(null);
+      if (allowed) {
+        beforeShow?.();
+        setView(nextView);
+      }
     });
-  }, [authorizeView]);
+  }, [refreshAuthorization]);
 
   const selectNavView = useCallback((item: View) => {
     openAuthorizedView(item, () => {
@@ -642,6 +655,12 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   const shownView: View = view === "receipts"
     ? (receiptsAllowed ? "receipts" : "accounts")
     : (!analysis ? "accounts" : view);
+  const activeNavView: View = pendingView === null
+    ? shownView
+    : (pendingView === "receipts"
+      ? (receiptsAllowed ? "receipts" : "accounts")
+      : (!analysis ? "accounts" : pendingView));
+  const viewTransitionPending = pendingView !== null && activeNavView !== shownView;
   const header = (
     <header className="budget-header">
       <div><h2>{t("budget.main.title")}</h2><p>{t("budget.main.subtitle")}</p></div>
@@ -658,8 +677,8 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
           </button>
         ) : null}
         {shownLoad === "ready" && !analysis && receiptsAllowed ? (
-          <button type="button" aria-pressed={shownView === "receipts"}
-            onClick={() => { authorizeView(() => { setView((current) => (current === "receipts" ? "accounts" : "receipts")); }); }}>
+          <button type="button" aria-pressed={activeNavView === "receipts"}
+            onClick={() => { openAuthorizedView(shownView === "receipts" ? "accounts" : "receipts"); }}>
             {t("budget.main.views.receipts")}
           </button>
         ) : null}
@@ -718,10 +737,12 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
         </section>
       )}
       {analysis ? (
-        <BudgetNavigation shownView={shownView} receiptsAllowed={receiptsAllowed}
+        <BudgetNavigation shownView={activeNavView} receiptsAllowed={receiptsAllowed}
           moreOpen={moreOpen} onOpenChange={setMoreOpen} onSelectView={selectNavView} />
       ) : null}
-      {shownView === "monthly_budget" ? (
+      {viewTransitionPending ? (
+        <p className="budget-status" role="status">{t("budget.main.loading")}</p>
+      ) : shownView === "monthly_budget" ? (
         <MonthBudgetView api={api} accounts={accounts} locale={locale} revision={revision}
           onAccessLoss={barrier} onOpenMonth={(month, serverCurrentMonth, options) => {
             openAuthorizedView("month", () => {
