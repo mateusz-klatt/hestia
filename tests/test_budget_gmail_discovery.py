@@ -137,6 +137,7 @@ class GmailDocumentDiscoveryTests(TestCase):
             "Potwierdzenie anulowania zamówienia", "Anulowanie zamówienia TEST/42",
             "Informujemy, że zamówienie zostało anulowane.", "Anulowane: TEST/42",
             "Zwrot środków: TEST/42", "Zwrot: TEST/42", "Otrzymaliśmy zwrot towaru.",
+            "Dokonano zwrotu",
             "Korekta: TEST/42", "Faktura korygująca TEST/42",
             "Your order has been cancelled", "Order canceled", "Cancellation confirmation",
             "Refund", "We processed your refund", "Your return has been approved",
@@ -151,8 +152,21 @@ class GmailDocumentDiscoveryTests(TestCase):
                                      ("skipped_non_receipt", False, None))
 
     def test_amount_bearing_refund_notice_in_body_cannot_create_a_purchase(self):
-        for notice in ("Zwrot w kwocie 43,20 PLN", "Zwrot środków w kwocie 43,20 PLN",
-                       "Refund of 43.20 PLN", "Refund amount: PLN 43.20"):
+        for notice in (
+            "Zwrot w kwocie 43,20 PLN",
+            "Zwrot środków w kwocie 43,20 PLN",
+            "Refund of 43.20 PLN",
+            "Refund amount: PLN 43.20",
+            "Your refund of 43.20 PLN",
+            "Your refund of 43.20 PLN has been processed",
+            "Refund of 43.20 PLN has been processed",
+            "Refund of 43.20 PLN has been issued",
+            "Dokonano zwrotu w kwocie 43,20 PLN",
+            "Dokonano zwrotu środków w kwocie 43,20 PLN",
+            "Zwrot w kwocie 43,20 PLN został zlecony",
+            "Zwrot środków w kwocie 43,20 PLN został wykonany",
+            "Zwrot w kwocie 43,20 PLN został zrealizowany",
+        ):
             with self.subTest(notice=notice):
                 result = self.process(_email(UNLISTED, DOCUMENT + "\n" + notice))
                 self.assertEqual((result.outcome, result.card_required, result.invoice),
@@ -164,6 +178,8 @@ class GmailDocumentDiscoveryTests(TestCase):
                   "Cancellation policy: You can cancel your order within 24 hours.\n"
                   "Return policy: You can return unopened items within 14 days.\n"
                   "You can request a refund of 7.50 PLN if the order is canceled.\n"
+                  "If your refund of 7.50 PLN has been processed, allow three days.\n"
+                  "Jeśli dokonano zwrotu środków w kwocie 7,50 PLN, sprawdź konto.\n"
                   "Jeśli zwrot w kwocie 7,50 PLN jest potrzebny, skontaktuj się z nami.\n")
         result = self.process(_email(UNLISTED, DOCUMENT + footer))
         self.assertEqual((result.outcome, result.card_required, result.invoice.amount), ("imported", True, "7.5"))

@@ -30,11 +30,12 @@ _REVERSAL_HEADING = re.compile(
     r"(?:order )?cancell?ation (?:confirmation|notice)|"
     r"return (?:confirmation|notice|approved|received|completed)|"
     r"(?:zwrot (?:srodkow|platnosci|pieniedzy|za zamowienie|towaru)|"
-    r"zwrot|refund|return|korekta|anulowanie|anulowan[aeoy]|cancell?ed|returned|(?:order )?cancell?ation)"
+    r"zwrot|dokonano zwrotu|refund|return|korekta|anulowanie|anulowan[aeoy]|cancell?ed|returned|(?:order )?cancell?ation)"
     r"(?=\s*[:#–-]|\s+\d|\s*[.!]?$))\b"
 )
 _REFUND_AMOUNT = re.compile(
-    r"^(?:zwrot(?: srodkow| platnosci| pieniedzy)? w kwocie|refund (?:of|amount))\b"
+    r"^(?:(?:zwrot|dokonano zwrotu)(?: srodkow| platnosci| pieniedzy)? w kwocie"
+    r"|(?:your )?refund of|refund amount)\b"
     rf" *[:=]? *(?:(?:{_CURRENCY}|zl) *)?[-−]? *[0-9]",
     re.IGNORECASE,
 )
