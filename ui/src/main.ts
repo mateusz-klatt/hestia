@@ -5,9 +5,9 @@ import { mountBudget } from "./budget/budget";
 
 import {
   addUser,
-  apiUrl,
   changeOwnPassword,
   deleteRule,
+  eventsUrl,
   fetchAudit,
   fetchAutomations,
   fetchDbStats,
@@ -122,6 +122,7 @@ const live = new LiveController(
     hdrText: el("hdr-text"),
     mode: el("mode"),
     crib: el("g-crib"),
+    cribHumidity: el("g-crib-humidity"),
     cribMeta: el("g-crib-meta"),
     outdoor: el("g-outdoor"),
     outdoorHumidity: el("g-outdoor-humidity"),
@@ -319,7 +320,7 @@ function startApp(canEditCalendar: boolean, onLogout: () => void): void {
 
   // Server-Sent Events: live state / globals patches + discovery deltas. The
   // browser auto-reconnects on drop; `open` re-syncs the full snapshot.
-  const events = new EventSource(apiUrl("events"));
+  const events = new EventSource(eventsUrl());
   events.addEventListener("open", () => {
     live.setConnected(true);
     void live.refresh();

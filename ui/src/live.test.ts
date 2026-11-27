@@ -11,6 +11,7 @@ function harness(): LiveView {
     hdrText: mk("span"),
     mode: mk("span"),
     crib: mk("span"),
+    cribHumidity: mk("span"),
     cribMeta: mk("span"),
     outdoor: mk("span"),
     outdoorHumidity: mk("span"),
@@ -196,11 +197,17 @@ describe("LiveController.applyGlobals", () => {
     );
     await live.refresh();
     expect(view.crib.textContent).toBe("20.0°");
+    expect(view.cribHumidity.hidden).toBe(true);
     expect(view.outdoorHumidity.textContent).toBe("50%");
-    live.applyGlobals({ crib_temp: 25.2 });
+    live.applyGlobals({ crib_temp: 25.2, crib_humidity: 48 });
     expect(view.crib.textContent).toBe("25.2°");
+    expect(view.cribHumidity.textContent).toBe(" · 48%");
+    expect(view.cribHumidity.hidden).toBe(false);
     expect(view.outdoor.textContent).toBe("10.0°"); // untouched by a crib-only delta
     expect(view.outdoorHumidity.textContent).toBe("50%"); // untouched too
+    live.applyGlobals({ crib_humidity: null });
+    expect(view.cribHumidity.textContent).toBe("");
+    expect(view.cribHumidity.hidden).toBe(true);
     live.applyGlobals({ outdoor_temp: null });
     expect(view.outdoor.textContent).toBe("—");
     live.applyGlobals({ outdoor_humidity: 58 }); // 433 push carries humidity
@@ -720,6 +727,11 @@ describe("LiveController heatmap (flash / scene / last-seen)", () => {
     live.tick();
     expect(view.cribMeta.textContent).toBe("20m ago");
     expect(view.cribMeta.textContent).not.toContain("🪫");
+    expect(view.cribMeta.classList.contains("warn")).toBe(true);
+
+    // An opt-in 433 low-battery delta flags the crib badge with 🪫 low.
+    live.applyGlobals({ crib_temp_ts: new Date(20 * 60_000).toISOString(), crib_battery_ok: false });
+    expect(view.cribMeta.textContent).toBe("now · 🪫 low");
     expect(view.cribMeta.classList.contains("warn")).toBe(true);
   });
 

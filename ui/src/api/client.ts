@@ -33,9 +33,20 @@ export function apiBase(pageHref: string): URL {
   return dir.pathname.endsWith("/ui/") ? new URL("../api/", dir) : new URL("api/", dir);
 }
 
+const CONTRACT_HEADER = "X-Hestia-Contract-Version";
+export const DISCOVERY_CONTRACT_VERSION = "0.62.0";
+
 /** Resolve an API path (e.g. "discovery", "events") against the page-derived base. */
 export function apiUrl(path: string): URL {
   return new URL(path, apiBase(document.baseURI));
+}
+
+/** Resolve `/api/events` with the negotiated contract version query parameter (browser EventSource
+ *  cannot send custom headers; pre-0.62.0 servers ignore unknown query parameters). */
+export function eventsUrl(): URL {
+  const target = apiUrl("events");
+  target.searchParams.set("contract_version", DISCOVERY_CONTRACT_VERSION);
+  return target;
 }
 
 /**
@@ -47,7 +58,14 @@ export function apiUrl(path: string): URL {
  */
 export async function fetchDiscovery(): Promise<Discovery | null> {
   try {
-    const response = await fetch(apiUrl("discovery"));
+    let response = await fetch(apiUrl("discovery"), {
+      headers: { [CONTRACT_HEADER]: DISCOVERY_CONTRACT_VERSION },
+    });
+    if (response.status === 400) {
+      const body = await readJsonBody(response);
+      if (body.error !== "contract_version_invalid") return null;
+      response = await fetch(apiUrl("discovery"));
+    }
     return response.ok ? ((await response.json()) as Discovery) : null;
   } catch {
     return null;

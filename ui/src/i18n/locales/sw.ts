@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} sek zilizopita",
   "time.minutesAgo": "{n} dak zilizopita",
   "time.hoursAgo": "{n} saa zilizopita",
+  "globals.cribHumidity": "Unyevu wa kitanda cha mtoto: {humidity}",
 
   "type.light": "taa",
   "type.blind": "pazia",

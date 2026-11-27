@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n}秒前",
   "time.minutesAgo": "{n}分鐘前",
   "time.hoursAgo": "{n}小時前",
+  "globals.cribHumidity": "嬰兒床濕度：{humidity}",
 
   "type.light": "燈光",
   "type.blind": "百葉窗",

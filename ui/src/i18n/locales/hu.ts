@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} mp-e",
   "time.minutesAgo": "{n} perce",
   "time.hoursAgo": "{n} órája",
+  "globals.cribHumidity": "Kiságy páratartalma: {humidity}",
 
   "type.light": "lámpa",
   "type.blind": "redőny",

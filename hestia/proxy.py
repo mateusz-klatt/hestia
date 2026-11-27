@@ -936,17 +936,27 @@ def _iso(ts: "float | None") -> "str | None":
     return None if ts is None else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
 
 
-def globals_snapshot(state: State) -> dict:
+def globals_snapshot(state: State, *, include_crib_extras: bool = True) -> dict:
     """The node-less GLOBAL fields — surfaced to the dashboard (``/api/discovery``) and the ``state``
-    control op. ``crib_temp`` / ``outdoor_temp`` are °C automation fields; ``outdoor_humidity`` is a
-    display-only %RH companion from the local 433 feeder (no rule trigger). ``outdoor_temp_ts`` (ISO ts of
-    the last outdoor sample) + ``outdoor_battery_ok`` (433 battery flag) drive the freshness / low-battery
-    badge. ``None`` when the relevant poller is off / has no sample → JSON ``null``; the UI renders "—"."""
-    return {"crib_temp": state.crib_temp, "crib_temp_ts": _iso(state.crib_temp_ts),
-            "outdoor_temp": state.outdoor_temp,
-            "outdoor_humidity": state.outdoor_humidity,
-            "outdoor_temp_ts": _iso(state.outdoor_temp_ts),
-            "outdoor_battery_ok": state.outdoor_battery_ok}
+    control op. ``crib_temp`` / ``outdoor_temp`` are °C automation fields; ``crib_humidity`` /
+    ``outdoor_humidity`` are display-only %RH companions from the local 433 feeder (no rule trigger).
+    ``crib_temp_ts`` / ``outdoor_temp_ts`` (ISO ts of the last sample) + ``crib_battery_ok`` /
+    ``outdoor_battery_ok`` (433 battery flags) drive the freshness / low-battery badges.
+    ``crib_humidity`` and ``crib_battery_ok`` are contract-gated (0.62.0) and omitted when
+    ``include_crib_extras`` is ``False``. ``None`` when the relevant poller is off / has no sample →
+    JSON ``null``; the UI renders "—"."""
+    snap = {
+        "crib_temp": state.crib_temp,
+        "crib_temp_ts": _iso(state.crib_temp_ts),
+        "outdoor_temp": state.outdoor_temp,
+        "outdoor_humidity": state.outdoor_humidity,
+        "outdoor_temp_ts": _iso(state.outdoor_temp_ts),
+        "outdoor_battery_ok": state.outdoor_battery_ok,
+    }
+    if include_crib_extras:
+        snap["crib_humidity"] = state.crib_humidity
+        snap["crib_battery_ok"] = state.crib_battery_ok
+    return snap
 
 
 def state_snapshot(state: State) -> dict:
@@ -1505,8 +1515,16 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
                 log.warning("sensor433: crib sensor (%s) battery low", resolved_crib_model)
             if battery_ok is not None:
                 last_crib_battery_ok = battery_ok
-            # Crib has no Globals humidity/battery fields — just update crib_temp + crib_temp_ts and fire rules.
-            await _apply_global(rt, "crib_temp", reading.temperature_C, "sensor433", with_timestamp=True)
+            humidity_changed = rt.state.crib_humidity != reading.humidity
+            rt.state.crib_humidity = reading.humidity
+            rt.state.crib_battery_ok = battery_ok                     # runtime-only, opt-in low-battery flag
+            await _apply_global(
+                rt, "crib_temp", reading.temperature_C, "sensor433",
+                with_timestamp=True,
+                extra_fields={"crib_humidity": reading.humidity},
+                post_fields={"crib_battery_ok": battery_ok},
+                dirty=humidity_changed,
+            )
         except Exception:                            # one bad reading/rule-eval must NOT drop the SDR stream
             log.exception("sensor433 reading failed")
 

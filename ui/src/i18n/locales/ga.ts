@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} soic ó shin",
   "time.minutesAgo": "{n} nóim ó shin",
   "time.hoursAgo": "{n}u ó shin",
+  "globals.cribHumidity": "Taise an chliabháin: {humidity}",
 
   "type.light": "solas",
   "type.blind": "dallóg",

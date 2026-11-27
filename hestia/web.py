@@ -41,7 +41,7 @@ from pathlib import Path
 
 from aiohttp import ClientConnectionError, web
 
-from . import auth, auth_qr, authz, store_sql
+from . import api_contract, auth, auth_qr, authz, store_sql
 from .budget import api as budget_api
 from .budget import consent_api, consent_context, device_token
 from .budget.config import BudgetConfigError
@@ -94,6 +94,13 @@ _PUBLIC_DOCUMENTS = {
     "/privacy-policy.html": "privacy-policy.html",
     "/terms-of-service.html": "terms-of-service.html",
 }
+_CONTRACT_HEADER = "X-Hestia-Contract-Version"
+_CONTRACT_QUERY = "contract_version"
+_CONTRACT_VERSION_RE = re.compile(r"0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\Z")
+_CRIB_HUMIDITY_VERSION = (0, 62, 0)
+_CURRENT_CONTRACT_VERSION = tuple(int(part) for part in api_contract.CONTRACT_VERSION.split("."))
+_CONTRACT_VERSION_ERROR = "contract_version_invalid"
+_CRIB_EXTRA_GLOBAL_FIELDS = ("crib_humidity", "crib_battery_ok")
 
 # App-level login (#43). OPT-IN: gating is enforced ONLY when HESTIA_SESSION_SECRET is set. With no secret
 # auth is OFF and routes stay OPEN (loopback/dev and pre-config deployments are unaffected; the reverse
@@ -1741,10 +1748,54 @@ async def _ui_document(request):  # NOSONAR S7503: aiohttp route handlers must b
     return response
 
 
+def _parse_contract_values(values):
+    if not values:
+        return None
+    if len(values) != 1 or not _CONTRACT_VERSION_RE.fullmatch(values[0]):
+        raise ValueError(_CONTRACT_VERSION_ERROR)
+    version = tuple(int(part) for part in values[0].split("."))
+    if version > _CURRENT_CONTRACT_VERSION:
+        raise ValueError(_CONTRACT_VERSION_ERROR)
+    return version
+
+
+def _contract_version(request, *, allow_query: bool = False):
+    header_version = _parse_contract_values(request.headers.getall(_CONTRACT_HEADER, []))
+    query_version = (
+        _parse_contract_values(request.query.getall(_CONTRACT_QUERY, []))
+        if allow_query else None
+    )
+    if header_version is not None and query_version is not None and header_version != query_version:
+        raise ValueError(_CONTRACT_VERSION_ERROR)
+    return header_version or query_version or (0, 0, 0)
+
+
+def _filter_sse_event(event, *, include_crib_extras: bool):
+    if include_crib_extras or event.get("type") != "globals":
+        return event
+    fields = {k: v for k, v in event["fields"].items() if k not in _CRIB_EXTRA_GLOBAL_FIELDS}
+    if not fields:
+        return None
+    return {**event, "fields": fields}
+
+
+def _sse_payload(event, *, include_crib_extras: bool) -> "bytes | None":
+    if event is None:
+        return b":keepalive\n\n"
+    filtered = _filter_sse_event(event, include_crib_extras=include_crib_extras)
+    if filtered is None:
+        return None
+    return f"data: {json.dumps(filtered)}\n\n".encode("utf-8")
+
+
 async def _discovery(request):  # NOSONAR S7503: aiohttp route handlers must be coroutines (the framework awaits them)
+    try:
+        version = _contract_version(request)
+    except ValueError as exc:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
     rt = _rt(request)
     devices = _merged_discovery(rt)
-    globs = globals_snapshot(rt.state)
+    globs = globals_snapshot(rt.state, include_crib_extras=version >= _CRIB_HUMIDITY_VERSION)
     # mode = the RUNNING server; target_mode = the PERSISTED registry mode (Phase-3 graduation,
     # applied on next restart); env_override = HESTIA_MODE if it is pinning the mode (else null).
     return _json(HTTPStatus.OK,
@@ -1760,6 +1811,11 @@ async def _events(request):
     → row flash) and `discovery_changed` (name op / classifier update
     → UI re-fetch). Heatmap UX for onboarding: operator wiggles a
     switch, the row lights up, they know which to name."""
+    try:
+        version = _contract_version(request, allow_query=True)
+    except ValueError as exc:
+        return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
+    include_crib_extras = version >= _CRIB_HUMIDITY_VERSION
     sub = await _rt(request).event_bus.try_subscribe()
     if sub is None:                            # cap reached or bus closing
         return _empty(HTTPStatus.TOO_MANY_REQUESTS)
@@ -1787,8 +1843,9 @@ async def _events(request):
                 next_authz_check = _clock() + SSE_IDLE_TIMEOUT
             if event is _CLOSED_SENTINEL:
                 break                          # graceful shutdown
-            payload = (b":keepalive\n\n" if event is None
-                       else f"data: {json.dumps(event)}\n\n".encode("utf-8"))
+            payload = _sse_payload(event, include_crib_extras=include_crib_extras)
+            if payload is None:
+                continue
             try:
                 await resp.write(payload)
             except (ConnectionResetError, ClientConnectionError, asyncio.CancelledError):

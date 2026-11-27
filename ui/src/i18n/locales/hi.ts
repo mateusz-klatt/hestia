@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} सेकं पहले",
   "time.minutesAgo": "{n} मि पहले",
   "time.hoursAgo": "{n} घं पहले",
+  "globals.cribHumidity": "पालने की आर्द्रता: {humidity}",
 
   "type.light": "लाइट",
   "type.blind": "ब्लाइंड",

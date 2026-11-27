@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "for {n}s siden",
   "time.minutesAgo": "for {n}min siden",
   "time.hoursAgo": "for {n}t siden",
+  "globals.cribHumidity": "Luftfugtighed ved tremmesengen: {humidity}",
 
   "type.light": "lys",
   "type.blind": "persienne",

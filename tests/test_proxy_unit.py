@@ -288,27 +288,39 @@ class StateSnapshotTests(unittest.TestCase):
         self.assertEqual(snap["switches"], {"0x0e": True})
         self.assertIn("temperature", snap)
         self.assertEqual(snap["gang"], {"0x07": {"1": True, "2": False}})   # both key levels stringified
-        self.assertEqual(snap["globals"],                  # node-less globals (+ freshness ts / battery flag)
-                         {"crib_temp": None, "crib_temp_ts": None, "outdoor_temp": None,
-                          "outdoor_humidity": None, "outdoor_temp_ts": None, "outdoor_battery_ok": None})
+        self.assertEqual(snap["globals"],                  # node-less globals (+ freshness ts / battery flags)
+                         {"crib_temp": None, "crib_humidity": None, "crib_temp_ts": None, "crib_battery_ok": None,
+                          "outdoor_temp": None, "outdoor_humidity": None, "outdoor_temp_ts": None,
+                          "outdoor_battery_ok": None})
 
     def test_snapshot_reflects_global_temps(self):
         rt = proxy.ProxyRuntime()
         rt.state.crib_temp = 22.0
+        rt.state.crib_humidity = 48.0
         snap = proxy.state_snapshot(rt.state)
-        self.assertEqual(snap["globals"], {"crib_temp": 22.0, "crib_temp_ts": None, "outdoor_temp": None,
+        self.assertEqual(snap["globals"], {"crib_temp": 22.0, "crib_humidity": 48.0, "crib_temp_ts": None,
+                                           "crib_battery_ok": None, "outdoor_temp": None,
                                            "outdoor_humidity": None, "outdoor_temp_ts": None,
                                            "outdoor_battery_ok": None})
 
     def test_globals_snapshot_set_and_none(self):
         st = proxy.State()
         self.assertEqual(proxy.globals_snapshot(st),
+                         {"crib_temp": None, "crib_humidity": None, "crib_temp_ts": None, "crib_battery_ok": None,
+                          "outdoor_temp": None, "outdoor_humidity": None, "outdoor_temp_ts": None,
+                          "outdoor_battery_ok": None})
+        self.assertEqual(proxy.globals_snapshot(st, include_crib_extras=False),
                          {"crib_temp": None, "crib_temp_ts": None, "outdoor_temp": None,
                           "outdoor_humidity": None, "outdoor_temp_ts": None, "outdoor_battery_ok": None})
-        st.crib_temp, st.outdoor_temp, st.outdoor_humidity = 21.5, -3.0, 44.0
-        st.crib_temp_ts = 1_700_000_000.0
+        st.crib_temp, st.crib_humidity, st.outdoor_temp, st.outdoor_humidity = 21.5, 48.0, -3.0, 44.0
+        st.crib_temp_ts, st.crib_battery_ok = 1_700_000_000.0, True
         st.outdoor_temp_ts, st.outdoor_battery_ok = 1_700_000_000.0, False
         self.assertEqual(proxy.globals_snapshot(st),
+                         {"crib_temp": 21.5, "crib_humidity": 48.0, "crib_temp_ts": "2023-11-14T22:13:20Z",
+                          "crib_battery_ok": True, "outdoor_temp": -3.0,
+                          "outdoor_humidity": 44.0, "outdoor_temp_ts": "2023-11-14T22:13:20Z",
+                          "outdoor_battery_ok": False})
+        self.assertEqual(proxy.globals_snapshot(st, include_crib_extras=False),
                          {"crib_temp": 21.5, "crib_temp_ts": "2023-11-14T22:13:20Z", "outdoor_temp": -3.0,
                           "outdoor_humidity": 44.0, "outdoor_temp_ts": "2023-11-14T22:13:20Z",
                           "outdoor_battery_ok": False})
@@ -1714,17 +1726,21 @@ class NianiaPollerTests(unittest.IsolatedAsyncioTestCase):
     async def test_stamps_crib_temp_ts_in_state_and_delta(self):
         # The niania poll runs with_timestamp=True, so a successful read stamps crib_temp_ts (freshness
         # badge) in State AND the live `globals` delta — without it the crib "N ago" badge never updates.
+        # Tuya DP 239 is unconfirmed, so crib_humidity and crib_battery_ok remain None.
         rt, _ = self._rt()
         sub = await rt.event_bus.try_subscribe()
         dev = mock.Mock()
-        dev.status.return_value = {"238": 256}                    # 25.6 °C
+        dev.status.return_value = {"238": 256, "239": 55}          # 25.6 °C; DP 239 ignored
         await self._run(rt, make_device=lambda: dev)
         self.assertIsNotNone(rt.state.crib_temp_ts)               # sample time stamped
+        self.assertIsNone(rt.state.crib_humidity)                 # Tuya route keeps crib_humidity null
+        self.assertIsNone(rt.state.crib_battery_ok)               # Tuya route has no battery flag
         events = []
         while not sub.queue.empty():
             events.append(sub.queue.get_nowait())
         gl = [e for e in events if e.get("type") == "globals"]
         self.assertTrue(gl)
+        self.assertEqual(set(gl[0]["fields"]), {"crib_temp", "crib_temp_ts"})
         self.assertEqual(gl[0]["fields"]["crib_temp"], 25.6)
         self.assertRegex(gl[0]["fields"]["crib_temp_ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 
@@ -2229,7 +2245,7 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
         ).encode("utf-8")
         self.assertEqual(f"data: {json.dumps(gl[0])}\n\n".encode("utf-8"), expected_bytes)
 
-    async def test_crib_route_updates_state_ts_ignores_humidity_and_fires_via_apply_global(self):
+    async def test_crib_route_updates_state_humidity_ts_and_fires_via_apply_global(self):
         rt = proxy.ProxyRuntime()
         rt.engine.set_rule(Rule.from_dict(CRIB_RULE))
         rt.engine.set_rule(Rule.from_dict(OUTDOOR_RULE))
@@ -2252,6 +2268,8 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rt.state.outdoor_temp, -5.0)
         self.assertEqual(rt.state.outdoor_humidity, 70.0)
         self.assertEqual(rt.state.crib_temp, 25.6)
+        self.assertEqual(rt.state.crib_humidity, 55.0)
+        self.assertIsNone(rt.state.crib_battery_ok)               # battery_warn defaults False
         self.assertIsNotNone(rt.state.crib_temp_ts)
         self.assertTrue(rt.state.dirty)
         self.assertEqual(len(sess.sent), 2)                        # both OUTDOOR_RULE and CRIB_RULE fired
@@ -2261,8 +2279,120 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
         crib_events = [e["fields"] for e in _drain_events(sub)
                        if e.get("type") == "globals" and "crib_temp" in e["fields"]]
         self.assertEqual(len(crib_events), 1)
-        self.assertEqual(set(crib_events[0]), {"crib_temp", "crib_temp_ts"})  # humidity ignored, no new API field
+        self.assertEqual(
+            list(crib_events[0].keys()),
+            ["crib_temp", "crib_humidity", "crib_temp_ts", "crib_battery_ok"],
+        )
+        self.assertEqual(crib_events[0]["crib_humidity"], 55.0)
+        self.assertIsNone(crib_events[0]["crib_battery_ok"])
         self.assertRegex(crib_events[0]["crib_temp_ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+
+    async def test_crib_synthetic_rtl433_json_sets_humidity_and_humidity_only_change_fires_no_rules(self):
+        # End-to-end with synthetic rtl_433 JSON lines through sensor433.stream_readings:
+        # 1) First packet (temp 21.3, humidity 48, battery_ok 1) sets state; temp <= 24 so no rule fires.
+        # 2) Second packet (temp 21.3, humidity 62, battery_ok 1) changes humidity only: updates state +
+        #    marks dirty + publishes SSE delta, without firing crib_temp rules.
+        # 3) Third packet (temp 25.0, humidity 62) fires CRIB_RULE once; fourth packet (temp 25.0, humidity 70)
+        #    changes humidity only while already above threshold -> still no extra rule firing.
+        lines = [
+            json.dumps({"model": "Prologue-TH", "id": 17, "channel": 2,
+                        "temperature_C": 21.3, "humidity": 48, "battery_ok": 1}).encode() + b"\n",
+            json.dumps({"model": "Prologue-TH", "id": 17, "channel": 2,
+                        "temperature_C": 21.3, "humidity": 62, "battery_ok": 1}).encode() + b"\n",
+            json.dumps({"model": "Prologue-TH", "id": 17, "channel": 2,
+                        "temperature_C": 25.0, "humidity": 62, "battery_ok": 1}).encode() + b"\n",
+            json.dumps({"model": "Prologue-TH", "id": 17, "channel": 2,
+                        "temperature_C": 25.0, "humidity": 70, "battery_ok": 0}).encode() + b"\n",
+        ]
+        done = asyncio.Event()
+
+        class _SyntheticProc:
+            returncode = None
+            stderr = None
+
+            def __init__(self):
+                self.stdout = self._iter()
+
+            async def _iter(self):
+                for line in lines:
+                    yield line
+                done.set()
+                await asyncio.Event().wait()
+
+            def terminate(self):
+                self.returncode = 0
+
+            def kill(self):
+                self.returncode = -9
+
+            async def wait(self):
+                self.returncode = 0
+                return 0
+
+        async def fake_create(*_cmd, **_kw):
+            return _SyntheticProc()
+
+        async def real_stream(*args, **kwargs):
+            return await sensor433.stream_readings(*args, create=fake_create, **kwargs)
+
+        rt = proxy.ProxyRuntime()
+        rt.engine.set_rule(Rule.from_dict(CRIB_RULE))
+        sess = FakeSession()
+        rt.sessions.append(sess)
+        sub = await rt.event_bus.try_subscribe()
+        task = asyncio.create_task(proxy._sensor433_poller(
+            rt, stream=real_stream, enabled=False, battery_warn=False,
+            crib_model="Prologue-TH", crib_id="*", crib_channel="2", backoff=0.0))
+        await asyncio.wait_for(done.wait(), timeout=1.0)
+        await asyncio.sleep(0.02)
+        task.cancel()
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1.0)
+        self.assertEqual(rt.state.crib_temp, 25.0)
+        self.assertEqual(rt.state.crib_humidity, 70.0)
+        self.assertIsNone(rt.state.crib_battery_ok)               # battery_warn=False suppresses battery flag
+        self.assertTrue(rt.state.dirty)
+        self.assertEqual(len(sess.sent), 1)                       # fired ONCE on 21.3->25.0, NEVER on humidity changes
+        crib_events = [e["fields"] for e in _drain_events(sub) if e.get("type") == "globals"]
+        self.assertEqual([e["crib_humidity"] for e in crib_events], [48.0, 62.0, 62.0, 70.0])
+        self.assertTrue(all(e["crib_battery_ok"] is None for e in crib_events))
+
+    async def test_crib_humidity_only_change_marks_dirty_without_firing_rules(self):
+        rt = proxy.ProxyRuntime()
+        rt.engine.set_rule(Rule.from_dict(CRIB_RULE))
+        sess = FakeSession()
+        rt.sessions.append(sess)
+        rt.state.crib_temp = 21.3
+        rt.state.crib_humidity = 48.0
+        rt.state.dirty = False
+        stream = _FakeStream(crib_readings=[sensor433.Reading(21.3, 53.0, battery_ok=1)])
+        task = asyncio.create_task(proxy._sensor433_poller(
+            rt, stream=stream, enabled=False, battery_warn=True,
+            crib_model="Prologue-TH", crib_id="*", crib_channel="2", backoff=0.0))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1.0)
+        self.assertEqual(rt.state.crib_temp, 21.3)
+        self.assertEqual(rt.state.crib_humidity, 53.0)
+        self.assertIs(rt.state.crib_battery_ok, True)             # battery_warn=True populates crib_battery_ok
+        self.assertTrue(rt.state.dirty)                           # humidity change persisted
+        self.assertEqual(sess.sent, [])                           # humidity alone never fires rules
+
+    async def test_crib_battery_flag_populated_only_when_warn_enabled(self):
+        rt = proxy.ProxyRuntime()
+        sub = await rt.event_bus.try_subscribe()
+        stream = _FakeStream(crib_readings=[sensor433.Reading(21.3, 48.0, battery_ok=0)])
+        with self.assertLogs("hestia.proxy", level="WARNING"):
+            task = asyncio.create_task(proxy._sensor433_poller(
+                rt, stream=stream, enabled=False, battery_warn=True,
+                crib_model="Prologue-TH", crib_id="*", crib_channel="2", backoff=0.0))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1.0)
+        self.assertIs(rt.state.crib_battery_ok, False)
+        gl = [e["fields"] for e in _drain_events(sub) if e.get("type") == "globals"]
+        self.assertEqual(len(gl), 1)
+        self.assertIs(gl[0]["crib_battery_ok"], False)
+        self.assertEqual(gl[0]["crib_humidity"], 48.0)
 
     async def test_crib_only_runs_even_when_outdoor_open_meteo_or_off(self):
         for enabled, source in ((False, "open-meteo"), (True, "open-meteo")):
@@ -2795,8 +2925,9 @@ class AutosaveTests(unittest.IsolatedAsyncioTestCase):
                                   "thermostat_setpoint": {}, "thermostat_on": {},
                                   "temperature": {}, "plug_w": {}, "plug_kwh": {},
                                   "plug_v": {}, "gang": {},
-                                  "globals": {"crib_temp": None, "crib_temp_ts": None, "outdoor_temp": None,
-                                              "outdoor_humidity": None, "outdoor_temp_ts": None},
+                                  "globals": {"crib_temp": None, "crib_humidity": None, "crib_temp_ts": None,
+                                              "outdoor_temp": None, "outdoor_humidity": None,
+                                              "outdoor_temp_ts": None},
                                   "klima": None}])
 
     async def test_persist_state_dirty_false_is_noop(self):
