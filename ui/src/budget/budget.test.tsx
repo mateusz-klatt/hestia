@@ -1975,7 +1975,11 @@ describe("receipts tab & capability gate", () => {
       setSearchInput("Tab");
       await Promise.resolve();
     });
-    await click(button("Apply filters"));
+    await act(async () => {
+      host.querySelector<HTMLFormElement>(".budget-range")?.requestSubmit();
+      await Promise.resolve();
+    });
+    await settle();
     expect(rApi.receiptsSearch).toHaveBeenCalledTimes(1);
     expect(host.textContent).not.toContain("Tab Integration Market");
     await act(async () => {
@@ -1995,7 +1999,11 @@ describe("receipts tab & capability gate", () => {
       setSearchInput("Tab");
       await Promise.resolve();
     });
-    await click(button("Apply filters"));
+    await act(async () => {
+      host.querySelector<HTMLFormElement>(".budget-range")?.requestSubmit();
+      await Promise.resolve();
+    });
+    await settle();
     expect(rApi.receiptsSearch).toHaveBeenCalledTimes(2);
     expect(host.textContent).not.toContain("Tab Integration Market");
     await act(async () => {
@@ -2294,7 +2302,11 @@ describe("receipts tab & capability gate", () => {
       searchQuery.dispatchEvent(new Event("input", { bubbles: true }));
       await Promise.resolve();
     });
-    await click(button("Apply filters"));
+    await act(async () => {
+      host.querySelector<HTMLFormElement>(".budget-range")?.requestSubmit();
+      await Promise.resolve();
+    });
+    await settle();
     expect(host.textContent).not.toContain("Tab Integration Market");
 
     // Panel recovers in the new epoch (Reload confirms can_use_receipts=true) before confirm resolves.
@@ -2379,7 +2391,11 @@ describe("receipts tab & capability gate", () => {
       searchQuery.dispatchEvent(new Event("input", { bubbles: true }));
       await Promise.resolve();
     });
-    await click(button("Apply filters"));
+    await act(async () => {
+      host.querySelector<HTMLFormElement>(".budget-range")?.requestSubmit();
+      await Promise.resolve();
+    });
+    await settle();
     await click(button("Reload"));
     expect(host.textContent).toContain("Confirming…");
 
@@ -2415,7 +2431,11 @@ describe("receipts tab & capability gate", () => {
       searchQuery.dispatchEvent(new Event("input", { bubbles: true }));
       await Promise.resolve();
     });
-    await click(button("Apply filters"));
+    await act(async () => {
+      host.querySelector<HTMLFormElement>(".budget-range")?.requestSubmit();
+      await Promise.resolve();
+    });
+    await settle();
     await click(button("Reload"));
     expect(host.textContent).toContain("Deleting…");
 
