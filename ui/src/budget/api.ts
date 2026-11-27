@@ -34,6 +34,7 @@ import type {
 const RECEIPT_CONTRACT_HEADER = "X-Hestia-Contract-Version";
 export const RECEIPT_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.57.0" } as const;
 const RECEIPT_GROUP_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.59.0" } as const;
+const LINK_INDICATORS_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.60.0" } as const;
 
 export interface ReceiptDevice {
   token_id: string;
@@ -192,19 +193,44 @@ export function createBudgetApi(expectedActor: string | null = null) {
 
   function readReceipts<T>(target: URL, body?: object): Promise<BudgetResult<T>> {
     const init: RequestInit = body === undefined
-      ? { headers: RECEIPT_GROUP_CONTRACT_HEADERS }
+      ? { headers: LINK_INDICATORS_CONTRACT_HEADERS }
       : {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...RECEIPT_GROUP_CONTRACT_HEADERS },
+        headers: { "Content-Type": "application/json", ...LINK_INDICATORS_CONTRACT_HEADERS },
+        body: JSON.stringify(body),
+      };
+    return runGated<T>(target, init, false, async (finalTarget, finalInit) => {
+      let result = await request<T>(finalTarget, finalInit);
+      for (const fallback of [
+        RECEIPT_GROUP_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER],
+        RECEIPT_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER],
+      ]) {
+        if (result.ok || result.status !== 400 || result.error !== "budget_receipt_contract_version_invalid"
+          || finalInit.signal?.aborted) return result;
+        // Older servers reject the newer version before handling these read-only requests.
+        const headers = new Headers(finalInit.headers);
+        headers.set(RECEIPT_CONTRACT_HEADER, fallback);
+        result = await request<T>(finalTarget, { ...finalInit, headers });
+      }
+      return result;
+    });
+  }
+
+  function readAnalyticsTransactions<T>(target: URL, body?: object): Promise<BudgetResult<T>> {
+    const init: RequestInit = body === undefined
+      ? { headers: LINK_INDICATORS_CONTRACT_HEADERS }
+      : {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...LINK_INDICATORS_CONTRACT_HEADERS },
         body: JSON.stringify(body),
       };
     return runGated<T>(target, init, false, async (finalTarget, finalInit) => {
       const result = await request<T>(finalTarget, finalInit);
-      if (result.ok || result.status !== 400 || result.error !== "budget_receipt_contract_version_invalid"
+      if (result.ok || result.status !== 400 || result.error !== "budget_analytics_contract_version_invalid"
         || finalInit.signal?.aborted) return result;
-      // Older servers reject the new version before handling these read-only requests.
+      // Older servers reject 0.60.0 before handling these read-only requests.
       const headers = new Headers(finalInit.headers);
-      headers.set(RECEIPT_CONTRACT_HEADER, RECEIPT_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER]);
+      headers.delete(RECEIPT_CONTRACT_HEADER);
       return request<T>(finalTarget, { ...finalInit, headers });
     });
   }
@@ -282,13 +308,13 @@ export function createBudgetApi(expectedActor: string | null = null) {
     call<AnalyticsOverview>(url("analytics/overview", { period, currency })),
   /** One server-bounded page of a period's entries; empty filter values are omitted. */
   analyticsTransactions: (period: string, filter: TransactionFilter, cursor?: string, limit?: number) =>
-    call<AnalyticsTransactions>(url("analytics/transactions", {
+    readAnalyticsTransactions<AnalyticsTransactions>(url("analytics/transactions", {
       period, currency: filter.currency, category_id: filter.category, kind: filter.kind, query: filter.query,
       cursor, limit,
     })),
   /** One server-bounded page matching 1..500 exact row keys across periods via JSON POST. */
   analyticsTransactionsByKeys: (request: AnalyticsTransactionsByKeysRequest) =>
-    post<AnalyticsTransactions>("analytics/transactions-by-keys", request, {}, false),
+    readAnalyticsTransactions<AnalyticsTransactions>(url("analytics/transactions-by-keys"), request),
   categories: () => call<{ categories: AnalyticsCategory[] }>(url("analytics/categories")),
   /** The owner's explicit category/kind decision for one entry, versioned against concurrent edits. */
   annotate: (request: AnnotationRequest) => post<{ annotation: AnnotationSaved }>("analytics/annotation", request),

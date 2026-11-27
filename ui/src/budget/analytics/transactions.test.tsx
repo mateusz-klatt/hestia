@@ -1504,4 +1504,59 @@ describe("manual own-transfer pairing", () => {
     expect(host.querySelector('input[name="provisional"]')).toBeNull();
     expect(host.querySelectorAll(".budget-transaction-table tbody tr")).toHaveLength(1);
   });
+
+  it("renders inline receipt link indicators with tooltip for 1:1 and group links, and omits them when unlinked", async () => {
+    const linked = entry("e-1to1", {
+      receipt: {
+        receipt_id: "10000000-0000-4000-8000-000000000001",
+        shop_name: "Biedronka",
+        total: "42.50",
+        currency: "PLN",
+        status: "confirmed",
+      },
+    });
+    const grouped = entry("e-group", {
+      receipt: {
+        receipt_id: "10000000-0000-4000-8000-000000000011",
+        shop_name: "Apple +2",
+        total: "60.00",
+        currency: "PLN",
+        status: "needs_review",
+      },
+    });
+    const unlinked = entry("e-unlinked", { receipt: null });
+
+    await show(fakeApi([linked, grouped, unlinked]));
+    const rows = [...host.querySelectorAll(".budget-transaction-table tbody tr")];
+    expect(rows).toHaveLength(3);
+
+    const firstBadge = rows[0]?.querySelector<HTMLButtonElement>("button.budget-tx-receipt-link");
+    expect(firstBadge).not.toBeNull();
+    expect(firstBadge?.type).toBe("button");
+    expect(firstBadge?.getAttribute("aria-expanded")).toBe("false");
+    expect(firstBadge?.textContent).toContain("🧾");
+    expect(firstBadge?.textContent).toContain("Biedronka");
+    expect(firstBadge?.getAttribute("title")).toContain("Biedronka");
+    expect(firstBadge?.getAttribute("aria-label")).toContain("Biedronka");
+    expect(firstBadge?.getAttribute("data-receipt-status")).toBe("confirmed");
+
+    // Tapping the indicator button expands details inline (for touch viewports) without opening the row drawer.
+    await click(firstBadge as HTMLButtonElement);
+    expect(firstBadge?.getAttribute("aria-expanded")).toBe("true");
+    expect(firstBadge?.querySelector(".budget-link-primary")?.textContent).toBe("Biedronka");
+    expect(firstBadge?.querySelector(".budget-link-meta")?.textContent).toContain("42.50 PLN");
+    expect(host.querySelector(".budget-entry-drawer")).toBeNull();
+    await click(firstBadge as HTMLButtonElement);
+    expect(firstBadge?.getAttribute("aria-expanded")).toBe("false");
+
+    const secondBadge = rows[1]?.querySelector<HTMLButtonElement>("button.budget-tx-receipt-link");
+    expect(secondBadge).not.toBeNull();
+    expect(secondBadge?.textContent).toContain("🧾");
+    expect(secondBadge?.textContent).toContain("Apple +2");
+    expect(secondBadge?.getAttribute("title")).toContain("Apple +2");
+    expect(secondBadge?.getAttribute("aria-label")).toContain("Apple +2");
+    expect(secondBadge?.getAttribute("data-receipt-status")).toBe("needs_review");
+
+    expect(rows[2]?.querySelector(".budget-tx-receipt-link")).toBeNull();
+  });
 });

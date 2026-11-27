@@ -455,6 +455,7 @@ const en = {
   "budget.receipts.noAmount": "No total",
   "budget.receipts.open": "Details",
   "budget.receipts.linkedBadge": "Linked",
+  "budget.receipts.linkedTransaction": "Linked bank transaction: {details}",
   "budget.receipts.groupedBadge": "Grouped ({count})",
   "budget.receipts.linkedGroupSection": "Linked group",
   "budget.receipts.groupMembers": "Documents in group",
@@ -924,6 +925,7 @@ const en = {
   "budget.transactions.oneOffLabel": "One-off label",
   "budget.transactions.oneOffHint": "The amount shows under this name in the bars instead of Other.",
   "budget.transactions.accountRule": "Create rule from recipient account",
+  "budget.transactions.linkedReceipt": "Linked receipt: {details}",
 
   "budget.export.open": "Export",
   "budget.export.xlsx": "XLSX",

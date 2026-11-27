@@ -437,6 +437,7 @@ const pl: Partial<Messages> = {
   "budget.receipts.noAmount": "Brak kwoty",
   "budget.receipts.open": "Szczegóły",
   "budget.receipts.linkedBadge": "Powiązany",
+  "budget.receipts.linkedTransaction": "Powiązana transakcja bankowa: {details}",
   "budget.receipts.groupedBadge": "W grupie ({count})",
   "budget.receipts.linkedGroupSection": "Powiązana grupa",
   "budget.receipts.groupMembers": "Dokumenty w grupie",
@@ -906,6 +907,7 @@ const pl: Partial<Messages> = {
   "budget.transactions.oneOffLabel": "Etykieta jednorazowa",
   "budget.transactions.oneOffHint": "Kwota pojawi się pod tą etykietą na słupkach zamiast w Pozostałe.",
   "budget.transactions.accountRule": "Utwórz regułę z konta odbiorcy",
+  "budget.transactions.linkedReceipt": "Powiązany paragon: {details}",
 
   "budget.export.open": "Eksportuj",
   "budget.export.xlsx": "XLSX",

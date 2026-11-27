@@ -10,7 +10,7 @@ from aiohttp import web
 
 from .. import api_contract, authz, store_sql
 from ..db import init_db
-from . import api
+from . import api, device_token
 from .analytics_core import AnalyticsError
 from .analytics_views import (BudgetAnalyticsViews, _forecast_query, _monthly_budget_charts_query,
                               _monthly_budget_query)
@@ -65,11 +65,12 @@ _BOUNDED_READ_CAPS = {
 _CONTRACT_HEADER = "X-Hestia-Contract-Version"
 _CONTRACT_VERSION = re.compile(r"0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\Z")
 _APPOINTMENTS_INBOX_VERSION = (0, 58, 0)
+_LINK_INDICATORS_VERSION = (0, 60, 0)
 _CURRENT_VERSION = tuple(int(part) for part in api_contract.CONTRACT_VERSION.split("."))
 
 
-def _inbox_contract(request, operation):
-    if operation not in ("inbox", "inbox-mark"):
+def _contract_version(request, operation):
+    if operation not in ("inbox", "inbox-mark", "transactions", _TRANSACTIONS_BY_KEYS_OP):
         return (0, 0, 0)
     values = request.headers.getall(_CONTRACT_HEADER, [])
     if not values:
@@ -184,17 +185,19 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             if not enabled():
                 raise api._Rejected(404, "budget_analytics_disabled")
             if request.method == "GET":
-                version = _inbox_contract(request, operation)
+                version = _contract_version(request, operation)
                 query = _query(request, operation)
                 if operation == "inbox":
                     query = {**query, "include_appointments": version >= _APPOINTMENTS_INBOX_VERSION}
+                elif operation == "transactions" and version >= _LINK_INDICATORS_VERSION:
+                    query = {**query, "include_receipts": True, "device_id": request.get(device_token.REQUEST_KEY)}
                 result = await asyncio.to_thread(_read, owner, operation, query, secret)
                 if operation in _BOUNDED_READ_CAPS:
                     return web.Response(body=result, content_type="application/json", charset="utf-8",
                                         headers=api.PRIVATE_HEADERS)
             else:
                 api._browser(request, owner, secret)
-                version = _inbox_contract(request, operation)
+                version = _contract_version(request, operation)
                 max_bytes = (MAX_TRANSACTIONS_BY_KEYS_BYTES if operation in (_TRANSACTIONS_BY_KEYS_OP, "translation-import")
                              else 65536 if operation == "inbox-mark"
                              else 262144 if operation == "rule-batch-preview" else 16384)
@@ -210,6 +213,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                           else parsed.model_dump(exclude_unset=operation in ("annotation", "category-update")))
                 if operation == "inbox-mark":
                     values["include_appointments"] = version >= _APPOINTMENTS_INBOX_VERSION
+                elif operation == _TRANSACTIONS_BY_KEYS_OP and version >= _LINK_INDICATORS_VERSION:
+                    values["include_receipts"] = True
                 owner = api._principal(request, auth_enabled)
                 secret = api._secret(session_secret)
                 api._browser(request, owner, secret)

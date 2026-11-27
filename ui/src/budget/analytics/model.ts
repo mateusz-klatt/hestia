@@ -118,6 +118,7 @@ export type AnnotationSaved = Schemas["BudgetAnalyticsAnnotationSaved"];
 export type TransferStatus = "suggested" | "accepted" | "review" | "boundary" | "rejected" | "undone";
 
 export type AnalyticsTransaction = Schemas["BudgetAnalyticsTransaction"];
+export type AnalyticsTransactionReceipt = Schemas["BudgetAnalyticsTransactionReceipt"];
 
 export type AnalyticsTransactions = Schemas["BudgetAnalyticsTransactions"];
 type RawTransactionsByKeysRequest = Schemas["BudgetAnalyticsTransactionsByKeysRequest"];

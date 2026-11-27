@@ -7,6 +7,7 @@ import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount, transactionDate, transactionText } from "../model";
 import type { ReceiptsApi } from "../receipts_api";
+import { isRedactedValue } from "../receipts_model";
 import type { ReceiptSummary } from "../receipts_model";
 import { CategoryBadge } from "./category_badge";
 import { buildCategoryColors } from "./category_colors";
@@ -16,7 +17,7 @@ import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, TRANSACTION
   TRANSACTION_TRANSFER_STATUS_KEYS, UNCATEGORISED, annotationRequest, canPair, canonicalAmount,
   counterparty, counterpartyRuleCandidate, accountName as nameOf, currentChoice, daysBetween, kindChoice, kindChoicesFor, labelOf, manualPairRequest,
   pairCandidates, pairDate, pairPeriods, transactionRowKey } from "./model";
-import type { AnalyticsCategory, AnalyticsTransaction, AnalyticsTransactionsByKeysRequest, CategoryChoice, KindChoice,
+import type { AnalyticsCategory, AnalyticsTransaction, AnalyticsTransactionReceipt, AnalyticsTransactionsByKeysRequest, CategoryChoice, KindChoice,
   RuleCandidate, TransactionFilter } from "./model";
 import { useTransactionDocuments } from "./transaction_documents";
 
@@ -639,6 +640,7 @@ export function TransactionsPanel({ api, receiptsList, period, currencies, accou
                       </button>
                       <div className="budget-entry-facts">
                         <span>{accountName(row.account_id)}</span>
+                        {row.receipt != null ? <TransactionReceiptLink receipt={row.receipt} locale={locale} /> : null}
                         {row.effective.kind === "expense" || row.effective.kind === "income" ? null
                           : <span className="budget-chip">{kindText(row.effective.kind)}</span>}
                         {transfer === "" ? null : <span className="budget-chip">{transfer}</span>}
@@ -727,6 +729,40 @@ function entryTitle(row: AnalyticsTransaction): string {
 
 function documentKind(row: ReceiptSummary): string {
   return t(`budget.receipts.documentKind.${row.document_kind ?? "receipt"}`);
+}
+
+function TransactionReceiptLink({ receipt, locale }: {
+  receipt: AnalyticsTransactionReceipt;
+  locale: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const shopText = receipt.shop_name === null || receipt.shop_name === ""
+    ? t("budget.receipts.unknownMerchant")
+    : isRedactedValue(receipt.shop_name)
+      ? t("budget.receipts.redactedLabel")
+      : receipt.shop_name;
+  const amountText = receipt.total !== null && receipt.currency !== null
+    ? formatAmount(receipt.total, receipt.currency, locale)
+    : null;
+  const details = amountText === null ? shopText : `${shopText} · ${amountText}`;
+  const label = t("budget.transactions.linkedReceipt", { details });
+  return (
+    <button
+      type="button"
+      className="budget-chip budget-link-indicator budget-tx-receipt-link"
+      data-receipt-status={receipt.status}
+      aria-expanded={expanded}
+      title={label}
+      aria-label={label}
+      onClick={() => { setExpanded((current) => !current); }}
+    >
+      <span className="budget-link-icon" aria-hidden="true">🧾</span>
+      <span className="budget-link-detail">
+        <span className="budget-link-primary">{shopText}</span>
+        {expanded && amountText !== null ? <span className="budget-link-meta">{" · "}{amountText}</span> : null}
+      </span>
+    </button>
+  );
 }
 
 type DocumentIndexState = ReturnType<typeof useTransactionDocuments>["state"];

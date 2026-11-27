@@ -11,6 +11,7 @@ import { receiptsApi as defaultReceiptsApi } from "./receipts_api";
 import type { ReceiptsApi } from "./receipts_api";
 import { ReceiptGroupController } from "./receipt_group_controller";
 import type { ReceiptGroupControllerTarget } from "./receipt_group_controller";
+import { LinkedTransactionIndicator } from "./receipt_link_indicator";
 import {
   EMPTY_RECEIPT_FILTER,
   RECEIPT_DOCUMENT_KINDS,
@@ -1321,6 +1322,9 @@ export function ReceiptsView({
                             {row.linked ? t("budget.receipts.linkedBadge") : t("budget.receipts.unlinkedBadge")}
                           </span>
                         ) : <ReceiptGroupBadge group={row.link_group} />}
+                        {row.linked_transaction == null ? null : (
+                          <LinkedTransactionIndicator transaction={row.linked_transaction} locale={locale} />
+                        )}
                         {rowPending === null ? null : (
                           <span className="budget-chip budget-muted" role="status">
                             {pendingActionLabel(rowPending)}
