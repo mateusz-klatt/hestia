@@ -40,6 +40,7 @@ _ID_MATCH_VERSION = (0, 57, 0)
 _MANY_TO_ONE_VERSION = (0, 59, 0)
 _LINK_INDICATORS_VERSION = (0, 60, 0)
 _DISPLAY_SHOP_NAME_VERSION = (0, 61, 0)
+_MULTI_STATUS_VERSION = (0, 65, 0)
 _CURRENT_VERSION = tuple(int(part) for part in api_contract.CONTRACT_VERSION.split("."))
 _RECEIPT_RESULT_KEY = {"parse-text": "draft", "confirm": "receipt", "list": "receipts",
                        "search": "receipts", "detail": "receipt"}
@@ -215,8 +216,11 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
             body, error = await read_json_body(request, WRITES[operation][1], reject_duplicates=True)
             if error:
                 return body
+            if (operation == "list" and version < _MULTI_STATUS_VERSION
+                    and isinstance(body, dict) and "statuses" in body):
+                raise ReceiptError()
             validated = WRITES[operation][0].model_validate(body)
-            values = validated.model_dump(exclude_unset=True) if operation == "confirm" else validated.model_dump()
+            values = validated.model_dump(exclude_unset=operation in ("confirm", "list"))
             owner = api._principal(request, auth_enabled)
             secret = api._secret(session_secret)
             if device_id is None:

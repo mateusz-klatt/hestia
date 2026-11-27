@@ -131,6 +131,7 @@ export function isReceiptGrouped(receipt: Pick<ReceiptSummary, "link_group">): b
 }
 
 export const RECEIPT_STATUSES: readonly ReceiptStatus[] = ["imported", "needs_review", "confirmed", "draft"];
+const RECEIPT_NEEDS_ACTION_STATUSES: readonly ReceiptStatus[] = ["imported", "needs_review", "draft"];
 export const RECEIPT_DOCUMENT_KINDS: readonly ReceiptDocumentKind[] = ["receipt", "invoice", "payment_confirmation"];
 export const RECEIPT_SOURCE_KINDS: readonly ReceiptSourceKind[] = [
   "local_ocr", "live_text", "email", "attachment", "cloud_ai", "paste", "photo",
@@ -190,9 +191,11 @@ export const RECEIPT_LINE_KIND_KEYS: Readonly<Record<string, MessageKey>> = {
   other: "budget.receipts.lineKinds.other",
 };
 
+export type ReceiptStatusFilter = "" | "needs_action" | ReceiptStatus;
+
 export interface ReceiptFilter {
   query: string;
-  status: "" | ReceiptStatus;
+  status: ReceiptStatusFilter;
   documentKind: "" | ReceiptDocumentKind;
   sourceKind: "" | ReceiptSourceKind;
   linked: "" | "linked" | "unlinked";
@@ -253,7 +256,11 @@ export function buildReceiptListRequest(
   const month = listMonthForFilter(filter);
   const request: ReceiptListRequest = { limit };
   if (month !== undefined) request.month = month;
-  if (filter.status !== "") request.status = filter.status;
+  if (filter.status === "needs_action") {
+    request.statuses = [...RECEIPT_NEEDS_ACTION_STATUSES];
+  } else if (filter.status !== "") {
+    request.status = filter.status;
+  }
   if (filter.documentKind !== "") request.document_kind = filter.documentKind;
   if (filter.linked !== "") request.linked = filter.linked === "linked";
   if (cursor !== null) request.cursor = cursor;
@@ -274,7 +281,11 @@ export function filterReceiptRows(
 ): ReceiptSummary[] {
   return rows.filter((row) => {
     if (searchMode) {
-      if (filter.status !== "" && row.status !== filter.status) return false;
+      if (filter.status === "needs_action") {
+        if (!receiptNeedsConfirmation(row)) return false;
+      } else if (filter.status !== "" && row.status !== filter.status) {
+        return false;
+      }
       if (filter.documentKind !== "" && row.document_kind !== filter.documentKind) return false;
       if (filter.linked !== "" && row.linked !== (filter.linked === "linked")) return false;
     }
@@ -1926,7 +1937,7 @@ export function sameReceiptFilter(a: ReceiptFilter, b: ReceiptFilter): boolean {
 export function receiptNeedsConfirmation(
   receipt: Pick<ReceiptSummary, "status">,
 ): boolean {
-  return receipt.status === "imported" || receipt.status === "draft" || receipt.status === "needs_review";
+  return RECEIPT_NEEDS_ACTION_STATUSES.includes(receipt.status);
 }
 
 export function findAdjacentReceiptId(

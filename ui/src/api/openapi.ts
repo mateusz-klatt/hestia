@@ -6893,6 +6893,11 @@ export interface components {
              * @default null
              */
             status: ("draft" | "confirmed" | "needs_review" | "imported") | null;
+            /**
+             * Statuses
+             * @description Filter by any of these statuses (duplicates ignored). Available from 0.65.0. Omit status when using this field.
+             */
+            statuses?: ("draft" | "confirmed" | "needs_review" | "imported")[];
         };
         /** BudgetReceiptListResult */
         BudgetReceiptListResult: {
