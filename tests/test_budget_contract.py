@@ -387,7 +387,8 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertIn("parse_failed_reasons", document["components"]["schemas"]["BudgetReceiptGmailStatus"]["required"])
         reasons_schema = document["components"]["schemas"]["BudgetReceiptGmailStatus"]["properties"]["parse_failed_reasons"]
         self.assertEqual(reasons_schema["propertyNames"]["enum"], list(PARSE_FAILED_REASONS))
-        self.assertIn("other", reasons_schema["propertyNames"]["enum"])
+        for reason in ("other", "worker_crash", "discovery_pdf_too_large"):
+            self.assertIn(reason, reasons_schema["propertyNames"]["enum"])
         base_gmail_status = {
             "enabled": True, "configured": True, "grant_status": "active", "grant_generation": 1, "version": 2,
             "sync_phase": "idle", "attention": None, "last_sync_at": 1.0, "next_sync_at": 2.0,
@@ -420,7 +421,10 @@ class BudgetOpenApiTests(unittest.TestCase):
         ts_text = ts_path.read_text(encoding="utf-8")
         status_block = ts_text.split("BudgetReceiptGmailStatus: {", 1)[1].split("\n        };", 1)[0]
         sync_req_block = ts_text.split("BudgetReceiptGmailSyncRequest: {", 1)[1].split("\n        };", 1)[0]
+        status_operation_block = ts_text.split("getBudgetReceiptGmailStatus: {", 1)[1].split("requestBody", 1)[0]
         self.assertIn("parse_failed_reasons:", status_block)
+        for term in ("0.66.0", "worker_crash", "discovery_pdf_too_large"):
+            self.assertIn(term, status_operation_block)
         self.assertIn("retry_parse_failed:", sync_req_block)
         batch = analytics["/api/budget/analytics/rule-batch-preview"]["post"]["description"]
         self.assertIn("1..100", batch)
