@@ -440,7 +440,6 @@ const en = {
   "budget.receipts.sourceKindLabel": "Source",
   "budget.receipts.linkFilterLabel": "Transaction link",
   "budget.receipts.all": "All",
-  "budget.receipts.apply": "Apply filters",
   "budget.receipts.clearFilters": "Reset filters",
   "budget.receipts.loading": "Loading receipts…",
   "budget.receipts.loadError": "Receipts could not be loaded. Try again.",
@@ -634,6 +633,10 @@ const en = {
   "budget.receipts.groupBusyError": "One of the selected documents has another action in progress.",
   "budget.receipts.groupNeedTwoMembers": "At least two eligible receipts are required to form a group.",
   "budget.receipts.groupInvalidMembers": "Selected documents are not eligible for this bank transaction (check dates, currency and type).",
+  "budget.receipts.prevAction": "Previous",
+  "budget.receipts.nextAction": "Next",
+  "budget.receipts.autoAdvanceLabel": "Go to next after confirming",
+  "budget.receipts.allConfirmed": "All confirmed.",
 
   "budget.consent.title": "Consent status & renewal overview",
   "budget.consent.intro": "Read-only summary of bank consent validity and stored authorization records. No remote closure, deletion or bank request runs here.",

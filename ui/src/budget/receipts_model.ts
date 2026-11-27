@@ -1831,3 +1831,97 @@ export function buildGroupLinkRequest(params: {
   };
 }
 
+// ---- Filter equality, in-place list updates & detail navigation ----
+
+export function sameReceiptFilter(a: ReceiptFilter, b: ReceiptFilter): boolean {
+  return a.query.trim() === b.query.trim()
+    && a.status === b.status
+    && a.documentKind === b.documentKind
+    && a.sourceKind === b.sourceKind
+    && a.linked === b.linked
+    && a.dateFrom === b.dateFrom
+    && a.dateTo === b.dateTo;
+}
+
+export function receiptSummaryFromDetail(detail: ReceiptDetail): ReceiptSummary {
+  const { lines, payment_evidence: paymentEvidence, ...summary } = detail;
+  void lines;
+  void paymentEvidence;
+  return summary;
+}
+
+export function upsertReceiptRowInPlace(
+  rows: readonly ReceiptSummary[],
+  updated: ReceiptSummary,
+): ReceiptSummary[] {
+  const idx = rows.findIndex((row) => row.receipt_id === updated.receipt_id);
+  if (idx < 0) return [...rows];
+  const next = [...rows];
+  next[idx] = updated;
+  return next;
+}
+
+export function upsertReceiptRowsInPlace(
+  rows: readonly ReceiptSummary[],
+  updates: readonly ReceiptSummary[],
+): ReceiptSummary[] {
+  if (updates.length === 0) return [...rows];
+  const byId = new Map(updates.map((row) => [row.receipt_id, row]));
+  let changed = false;
+  const next = rows.map((row) => {
+    const replacement = byId.get(row.receipt_id);
+    if (replacement === undefined) return row;
+    changed = true;
+    return replacement;
+  });
+  return changed ? next : [...rows];
+}
+
+export function removeReceiptRowInPlace(
+  rows: readonly ReceiptSummary[],
+  receiptId: string,
+): ReceiptSummary[] {
+  return rows.filter((row) => row.receipt_id !== receiptId);
+}
+
+export function receiptNeedsConfirmation(
+  receipt: Pick<ReceiptSummary, "status">,
+): boolean {
+  return receipt.status === "imported" || receipt.status === "draft" || receipt.status === "needs_review";
+}
+
+export function findAdjacentReceiptId(
+  rows: readonly ReceiptSummary[],
+  currentId: string,
+  direction: "prev" | "next",
+): string | null {
+  const idx = rows.findIndex((row) => row.receipt_id === currentId);
+  if (idx < 0) return null;
+  const target = direction === "prev" ? rows[idx - 1] : rows[idx + 1];
+  return target?.receipt_id ?? null;
+}
+
+export function findNextUnconfirmedReceiptId(
+  rows: readonly ReceiptSummary[],
+  currentId: string,
+  options: { wrap?: boolean; predicate?: (row: ReceiptSummary) => boolean } = {},
+): string | null {
+  const idx = rows.findIndex((row) => row.receipt_id === currentId);
+  const matches = (row: ReceiptSummary): boolean =>
+    row.receipt_id !== currentId
+    && receiptNeedsConfirmation(row)
+    && (options.predicate === undefined || options.predicate(row));
+  for (let i = idx + 1; i < rows.length; i += 1) {
+    const row = rows[i];
+    if (row !== undefined && matches(row)) return row.receipt_id;
+  }
+  if (options.wrap === true) {
+    const limit = idx < 0 ? rows.length : idx;
+    for (let i = 0; i < limit; i += 1) {
+      const row = rows[i];
+      if (row !== undefined && matches(row)) return row.receipt_id;
+    }
+  }
+  return null;
+}
+

@@ -21,7 +21,9 @@ import {
   draftFromDetail,
   editReceiptLine,
   filterReceiptRows,
+  findAdjacentReceiptId,
   findCurrentLinkedCandidate,
+  findNextUnconfirmedReceiptId,
   formatBulkErrorBucket,
   hasActiveReceiptFilter,
   hasClientSideFilter,
@@ -48,14 +50,20 @@ import {
   receiptHasRedactedLines,
   receiptMerchantGroupIdentity,
   receiptMerchantGroupKey,
+  receiptNeedsConfirmation,
+  receiptSummaryFromDetail,
   receiptTotalAdjustment,
   reconcileLinkChoice,
+  removeReceiptRowInPlace,
   resolveDraftFromDetailSession,
+  sameReceiptFilter,
   selectCandidateDraft,
   selectKeepDraft,
   subtractDecimals,
   suggestedCandidateDates,
   uniqueIdCandidate,
+  upsertReceiptRowInPlace,
+  upsertReceiptRowsInPlace,
   validPolishNip,
   validReceiptDateRange,
 } from "./receipts_model";
@@ -1426,5 +1434,61 @@ describe("receipts_model", () => {
       evidence_expected_version: 3,
       fee_amount: "0.5",
     });
+  });
+
+  it("supports filter equality, in-place row updates/removals, and adjacent/unconfirmed navigation", () => {
+    expect(sameReceiptFilter(EMPTY_RECEIPT_FILTER, { ...EMPTY_RECEIPT_FILTER, query: "   " })).toBe(true);
+    expect(sameReceiptFilter(EMPTY_RECEIPT_FILTER, { ...EMPTY_RECEIPT_FILTER, query: "Lidl" })).toBe(false);
+    expect(sameReceiptFilter(EMPTY_RECEIPT_FILTER, { ...EMPTY_RECEIPT_FILTER, status: "imported" })).toBe(false);
+    expect(sameReceiptFilter(EMPTY_RECEIPT_FILTER, { ...EMPTY_RECEIPT_FILTER, sourceKind: "email" })).toBe(false);
+
+    const det = detailOf({ receipt_id: "r1", status: "confirmed", raw_shop_name: "Updated Shop", version: 3 });
+    const sum = receiptSummaryFromDetail(det);
+    expect(sum.receipt_id).toBe("r1");
+    expect(sum.raw_shop_name).toBe("Updated Shop");
+    expect("lines" in sum).toBe(false);
+    expect("payment_evidence" in sum).toBe(false);
+
+    const r1 = summary({ receipt_id: "r1", status: "imported", version: 1 });
+    const r2 = summary({ receipt_id: "r2", status: "confirmed", version: 2 });
+    const r3 = summary({ receipt_id: "r3", status: "draft", version: 1 });
+    const r4 = summary({ receipt_id: "r4", status: "needs_review", version: 1 });
+    const rows = [r1, r2, r3, r4];
+
+    const updatedSingle = upsertReceiptRowInPlace(rows, { ...r2, raw_shop_name: "In Place", version: 3 });
+    expect(updatedSingle.map((r) => r.receipt_id)).toEqual(["r1", "r2", "r3", "r4"]);
+    expect(updatedSingle[1]?.raw_shop_name).toBe("In Place");
+    expect(updatedSingle[1]?.version).toBe(3);
+
+    const updatedBatch = upsertReceiptRowsInPlace(rows, [
+      { ...r1, status: "confirmed", version: 2 },
+      { ...r4, linked: true, version: 2 },
+    ]);
+    expect(updatedBatch.map((r) => [r.receipt_id, r.status, r.linked])).toEqual([
+      ["r1", "confirmed", false],
+      ["r2", "confirmed", false],
+      ["r3", "draft", false],
+      ["r4", "needs_review", true],
+    ]);
+
+    expect(removeReceiptRowInPlace(rows, "r2").map((r) => r.receipt_id)).toEqual(["r1", "r3", "r4"]);
+
+    expect(receiptNeedsConfirmation(r1)).toBe(true);
+    expect(receiptNeedsConfirmation(r2)).toBe(false);
+    expect(receiptNeedsConfirmation(r3)).toBe(true);
+    expect(receiptNeedsConfirmation(r4)).toBe(true);
+
+    expect(findAdjacentReceiptId(rows, "r1", "prev")).toBeNull();
+    expect(findAdjacentReceiptId(rows, "r1", "next")).toBe("r2");
+    expect(findAdjacentReceiptId(rows, "r4", "prev")).toBe("r3");
+    expect(findAdjacentReceiptId(rows, "r4", "next")).toBeNull();
+    expect(findAdjacentReceiptId(rows, "missing", "next")).toBeNull();
+
+    expect(findNextUnconfirmedReceiptId(rows, "r1", { wrap: false })).toBe("r3");
+    expect(findNextUnconfirmedReceiptId(rows, "r4", { wrap: false })).toBeNull();
+    expect(findNextUnconfirmedReceiptId(rows, "r4", { wrap: true })).toBe("r1");
+    expect(findNextUnconfirmedReceiptId(rows, "r1", { wrap: false, predicate: (r) => r.receipt_id !== "r3" })).toBe("r4");
+    const allConfirmed = rows.map((r) => ({ ...r, status: "confirmed" as const }));
+    expect(findNextUnconfirmedReceiptId(allConfirmed, "r1", { wrap: true })).toBeNull();
   });
 });

@@ -39,7 +39,9 @@ import {
   createPendingReceiptStore,
   editReceiptLine,
   filterReceiptRows,
+  findAdjacentReceiptId,
   findCurrentLinkedCandidate,
+  findNextUnconfirmedReceiptId,
   formatBulkErrorBucket,
   hasActiveReceiptFilter,
   hasClientSideFilter,
@@ -58,12 +60,17 @@ import {
   receiptAccountLabel,
   receiptHasRedactedLines,
   receiptMerchantGroupKey,
+  receiptSummaryFromDetail,
   receiptTotalAdjustment,
   reconcileLinkChoice,
+  removeReceiptRowInPlace,
   resolveDraftFromDetailSession,
+  sameReceiptFilter,
   selectCandidateDraft,
   selectKeepDraft,
   suggestedCandidateDates,
+  upsertReceiptRowInPlace,
+  upsertReceiptRowsInPlace,
   validReceiptDateRange,
 } from "./receipts_model";
 import type {
@@ -77,6 +84,7 @@ import type {
   ReceiptFilter,
   ReceiptGroupCandidate,
   ReceiptGroupDetailResult,
+  ReceiptGroupUnlinkResult,
   ReceiptLineEditField,
   ReceiptLineInput,
   ReceiptLinkExplicitChoice,
@@ -318,6 +326,31 @@ function releaseGroupParticipantLocks(
   }
 }
 
+const SEARCH_DEBOUNCE_MS = 300;
+const AUTO_ADVANCE_STORAGE_KEY = "hestia.receipts.autoAdvance";
+
+function readAutoAdvancePreference(): boolean {
+  try {
+    return localStorage.getItem(AUTO_ADVANCE_STORAGE_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function writeAutoAdvancePreference(enabled: boolean): void {
+  try {
+    localStorage.setItem(AUTO_ADVANCE_STORAGE_KEY, enabled ? "1" : "0");
+  } catch {
+    // Storage unavailable (private mode or blocked storage); keep in-memory state only.
+  }
+}
+
+type LoadMoreOutcome =
+  | { kind: "loaded"; rows: ReceiptSummary[]; nextCursor: string | null }
+  | { kind: "noop" }
+  | { kind: "stale_or_aborted" }
+  | { kind: "error" };
+
 export function ReceiptsView({
   receiptsApi = defaultReceiptsApi,
   pendingStore,
@@ -336,6 +369,7 @@ export function ReceiptsView({
   const [listRefresh, setListRefresh] = useState(0);
   const [disabledAtRevision, setDisabledAtRevision] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [autoAdvance, setAutoAdvance] = useState<boolean>(readAutoAdvancePreference);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailState, setDetailState] = useState<DetailState>({ kind: "loading" });
@@ -379,10 +413,47 @@ export function ReceiptsView({
   const bulkRunGenRef = useRef(0);
   const actorKeyRef = useRef(actorKey);
   const groupReturnFocusRef = useRef<HTMLButtonElement | null>(null);
+  const listStateRef = useRef<ListState>(listState);
+  const draftRef = useRef<ReceiptFilter>(draft);
+  const filterRef = useRef<ReceiptFilter>(filter);
+  const searchMode = filter.query.trim() !== "";
+  const searchModeRef = useRef(searchMode);
+  const bulkProgressRef = useRef(bulkProgress);
+  const autoAdvanceRef = useRef(autoAdvance);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadMorePromiseRef = useRef<Promise<LoadMoreOutcome> | null>(null);
+  const navGenerationRef = useRef(0);
 
   useLayoutEffect(() => {
     openReceiptIdRef.current = selectedId;
   }, [selectedId]);
+
+  useLayoutEffect(() => {
+    filterRef.current = filter;
+    searchModeRef.current = searchMode;
+    bulkProgressRef.current = bulkProgress;
+    autoAdvanceRef.current = autoAdvance;
+  }, [filter, searchMode, bulkProgress, autoAdvance]);
+
+  const updateListState = useCallback((updater: (current: ListState) => ListState): ListState => {
+    const next = updater(listStateRef.current);
+    listStateRef.current = next;
+    setListState(next);
+    return next;
+  }, []);
+
+  const cancelSearchDebounce = useCallback(() => {
+    if (searchDebounceRef.current !== null) {
+      clearTimeout(searchDebounceRef.current);
+      searchDebounceRef.current = null;
+    }
+  }, []);
+
+  const updateAutoAdvance = useCallback((enabled: boolean) => {
+    autoAdvanceRef.current = enabled;
+    setAutoAdvance(enabled);
+    writeAutoAdvancePreference(enabled);
+  }, []);
 
   const clearImage = useCallback(() => {
     imageGeneration.current += 1;
@@ -393,6 +464,7 @@ export function ReceiptsView({
 
   const resetDrawer = useCallback(() => {
     detailGeneration.current += 1;
+    navGenerationRef.current += 1;
     openReceiptIdRef.current = null;
     receiptDrawerTriggerRef.current = null;
     loadedReceiptIdRef.current = null;
@@ -408,7 +480,10 @@ export function ReceiptsView({
   }, []);
 
   const clearAllReceiptsState = useCallback((disabled: boolean, disabledRevision: number | null = null) => {
+    cancelSearchDebounce();
     listGeneration.current += 1;
+    navGenerationRef.current += 1;
+    loadMorePromiseRef.current = null;
     bulkCancelledRef.current = true;
     bulkRunGenRef.current += 1;
     receiptFloorGenRef.current.clear();
@@ -421,12 +496,15 @@ export function ReceiptsView({
     setSelectedForBulk(new Set());
     setBulkConfirmPlan(null);
     setBulkProgress(null);
+    draftRef.current = EMPTY_RECEIPT_FILTER;
+    filterRef.current = EMPTY_RECEIPT_FILTER;
+    searchModeRef.current = false;
     setDraft(EMPTY_RECEIPT_FILTER);
     setFilter(EMPTY_RECEIPT_FILTER);
     setNotice(null);
     setDisabledAtRevision(disabled ? disabledRevision : null);
-    setListState(disabled ? { kind: "disabled" } : { kind: "error" });
-  }, [resetDrawer]);
+    updateListState(() => (disabled ? { kind: "disabled" } : { kind: "error" }));
+  }, [cancelSearchDebounce, resetDrawer, updateListState]);
 
   useLayoutEffect(() => {
     if (actorKeyRef.current !== actorKey) {
@@ -453,16 +531,19 @@ export function ReceiptsView({
     mounted.current = true;
     return () => {
       mounted.current = false;
+      cancelSearchDebounce();
       listGeneration.current += 1;
       detailGeneration.current += 1;
       imageGeneration.current += 1;
+      navGenerationRef.current += 1;
+      loadMorePromiseRef.current = null;
       bulkCancelledRef.current = true;
       bulkRunGenRef.current += 1;
       openReceiptIdRef.current = null;
       revokeObjectUrl(activeImageUrl.current);
       activeImageUrl.current = null;
     };
-  }, []);
+  }, [cancelSearchDebounce]);
 
   const runBulkConfirm = useCallback(async (plan: {
     targets: ReceiptSummary[];
@@ -647,54 +728,107 @@ export function ReceiptsView({
     });
   }, [store, reloadList, resetDrawer]);
 
-  const searchMode = filter.query.trim() !== "";
+  const removeRowInPlace = useCallback((receiptId: string) => {
+    setSelectedForBulk((current) => {
+      if (!current.has(receiptId)) return current;
+      const next = new Set(current);
+      next.delete(receiptId);
+      return next;
+    });
+    updateListState((current) => (current.kind === "ready"
+      ? { ...current, rows: removeReceiptRowInPlace(current.rows, receiptId) }
+      : current));
+  }, [updateListState]);
+
+  const upsertRowsInPlace = useCallback((updates: readonly ReceiptSummary[]) => {
+    if (updates.length === 0) return;
+    updateListState((current) => (current.kind === "ready"
+      ? { ...current, rows: upsertReceiptRowsInPlace(current.rows, updates) }
+      : current));
+  }, [updateListState]);
+
+  const refreshRowsInPlace = useCallback((receiptIds: readonly string[]) => {
+    const cur = listStateRef.current;
+    if (cur.kind !== "ready") return;
+    const presentIds = new Set(cur.rows.map((row) => row.receipt_id));
+    const targets = [...new Set(receiptIds)].filter((id) => presentIds.has(id));
+    if (targets.length === 0) return;
+    const token = listGeneration.current;
+    for (const id of targets) {
+      void receiptsApi.receiptDetail(id).then((res) => {
+        if (checkBarrier(res) || !mounted.current || token !== listGeneration.current) return;
+        if (!res.ok) {
+          if (res.status === 404) removeRowInPlace(id);
+          return;
+        }
+        upsertRowsInPlace([receiptSummaryFromDetail(res.data.receipt)]);
+      });
+    }
+  }, [receiptsApi, checkBarrier, removeRowInPlace, upsertRowsInPlace]);
 
   useEffect(() => {
     if (disabledAtRevision === revision) {
-      setListState({ kind: "disabled" });
+      updateListState(() => ({ kind: "disabled" }));
       return;
     }
     const token = ++listGeneration.current;
-    setListState({ kind: "loading" });
+    loadMorePromiseRef.current = null;
+    navGenerationRef.current += 1;
+    updateListState(() => ({ kind: "loading" }));
     const request = searchMode
       ? receiptsApi.receiptsSearch({ query: filter.query.trim(), limit: 50 })
       : receiptsApi.receiptsList(buildReceiptListRequest(filter));
     void request.then((result) => {
       if (checkBarrier(result) || !mounted.current || token !== listGeneration.current) return;
       if (!result.ok) {
-        setListState({ kind: "error" });
+        updateListState(() => ({ kind: "error" }));
         return;
       }
-      setListState({
+      updateListState(() => ({
         kind: "ready",
         rows: result.data.receipts,
         nextCursor: result.data.next_cursor,
         loadingMore: false,
         loadMoreError: false,
-      });
+      }));
     });
-  }, [receiptsApi, filter, searchMode, revision, listRefresh, disabledAtRevision, checkBarrier]);
+    return () => {
+      if (listGeneration.current === token) {
+        listGeneration.current += 1;
+      }
+      loadMorePromiseRef.current = null;
+    };
+  }, [receiptsApi, filter, searchMode, revision, listRefresh, disabledAtRevision, checkBarrier, updateListState]);
 
-  const loadMore = useCallback(() => {
-    if (listState.kind !== "ready" || listState.loadingMore || listState.nextCursor === null) return;
-    const cursor = listState.nextCursor;
+  const fetchNextPage = useCallback((): Promise<LoadMoreOutcome> => {
+    if (loadMorePromiseRef.current !== null) return loadMorePromiseRef.current;
+    const cur = listStateRef.current;
+    if (cur.kind !== "ready" || cur.loadingMore || cur.nextCursor === null) {
+      return Promise.resolve({ kind: "noop" });
+    }
+    const cursor = cur.nextCursor;
     const token = listGeneration.current;
-    setListState((current) => (current.kind === "ready"
+    const activeFilter = filterRef.current;
+    const activeSearchMode = searchModeRef.current;
+    updateListState((current) => (current.kind === "ready"
       ? { ...current, loadingMore: true, loadMoreError: false }
       : current));
-    const request = searchMode
-      ? receiptsApi.receiptsSearch({ query: filter.query.trim(), limit: 50, cursor })
-      : receiptsApi.receiptsList(buildReceiptListRequest(filter, cursor));
-    void request.then((result) => {
-      if (checkBarrier(result) || !mounted.current || token !== listGeneration.current) return;
+    const request = activeSearchMode
+      ? receiptsApi.receiptsSearch({ query: activeFilter.query.trim(), limit: 50, cursor })
+      : receiptsApi.receiptsList(buildReceiptListRequest(activeFilter, cursor));
+    const pending: Promise<LoadMoreOutcome> = request.then((result): LoadMoreOutcome => {
+      if (loadMorePromiseRef.current === pending) loadMorePromiseRef.current = null;
+      if (checkBarrier(result) || !mounted.current || token !== listGeneration.current) {
+        return { kind: "stale_or_aborted" };
+      }
       if (!result.ok) {
         if (isStaleCursorError(result) && !staleCursorReloadedRef.current) {
           staleCursorReloadedRef.current = true;
           setNotice(t("budget.receipts.cursorExpiredNotice"));
           setListRefresh((current) => current + 1);
-          return;
+          return { kind: "error" };
         }
-        setListState((current) => (current.kind === "ready"
+        updateListState((current) => (current.kind === "ready"
           ? {
               ...current,
               loadingMore: false,
@@ -702,10 +836,10 @@ export function ReceiptsView({
               nextCursor: isStaleCursorError(result) ? null : current.nextCursor,
             }
           : current));
-        return;
+        return { kind: "error" };
       }
       staleCursorReloadedRef.current = false;
-      setListState((current) => {
+      const nextState = updateListState((current) => {
         if (current.kind !== "ready") return current;
         const merged = mergeReceiptRows(current.rows, result.data.receipts);
         const next = result.data.next_cursor;
@@ -718,8 +852,16 @@ export function ReceiptsView({
           loadMoreError: false,
         };
       });
+      if (nextState.kind !== "ready") return { kind: "stale_or_aborted" };
+      return { kind: "loaded", rows: nextState.rows, nextCursor: nextState.nextCursor };
     });
-  }, [receiptsApi, filter, listState, searchMode, checkBarrier]);
+    loadMorePromiseRef.current = pending;
+    return pending;
+  }, [receiptsApi, checkBarrier, updateListState]);
+
+  const loadMore = useCallback(() => {
+    void fetchNextPage();
+  }, [fetchNextPage]);
 
   useEffect(() => {
     if (selectedId === null) {
@@ -745,8 +887,7 @@ export function ReceiptsView({
         if (result.status === 404) {
           resetDrawer();
           setNotice(t("budget.receipts.notFound"));
-          staleCursorReloadedRef.current = false;
-          setListRefresh((current) => current + 1);
+          removeRowInPlace(targetId);
           return;
         }
         loadedReceiptIdRef.current = null;
@@ -759,6 +900,7 @@ export function ReceiptsView({
       const groupCandidates = result.data.group_candidates ?? [];
       loadedReceiptIdRef.current = receipt.receipt_id;
       latestReadyCandidatesRef.current = { receiptId: receipt.receipt_id, candidates };
+      upsertRowsInPlace([receiptSummaryFromDetail(receipt)]);
       setDetailState({
         kind: "ready",
         detail: receipt,
@@ -789,7 +931,7 @@ export function ReceiptsView({
         });
       }
     });
-  }, [receiptsApi, selectedId, revision, detailRefresh, checkBarrier, clearImage, resetDrawer]);
+  }, [receiptsApi, selectedId, revision, detailRefresh, checkBarrier, clearImage, resetDrawer, removeRowInPlace, upsertRowsInPlace]);
 
   const drawerActionBusy: ReceiptActionKind | null =
     selectedId === null ? null : (pendingMap.get(selectedId) ?? null);
@@ -799,26 +941,136 @@ export function ReceiptsView({
   ), []);
 
   const openReceipt = useCallback((receiptId: string, trigger?: HTMLButtonElement) => {
-    if (bulkProgress !== null
+    if (bulkProgressRef.current !== null
       || groupControllerTarget !== null
       || (openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null)
       || openReceiptIdRef.current === receiptId) return;
     if (openReceiptIdRef.current === null) receiptDrawerTriggerRef.current = trigger ?? null;
+    navGenerationRef.current += 1;
     openReceiptIdRef.current = receiptId;
     loadedReceiptIdRef.current = null;
     latestReadyCandidatesRef.current = null;
     setDetailState({ kind: "loading" });
     setNotice(null);
     setSelectedId(receiptId);
-  }, [store, bulkProgress, groupControllerTarget]);
+  }, [store, groupControllerTarget]);
 
   const closeDetail = useCallback(() => {
     if (groupControllerTarget !== null
       || (openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null)) return;
     const trigger = receiptDrawerTriggerRef.current;
     resetDrawer();
-    trigger?.focus();
+    if (trigger?.isConnected === true) trigger.focus({ preventScroll: true });
   }, [store, resetDrawer, groupControllerTarget]);
+
+  const navigateDetail = useCallback(async (direction: "prev" | "next") => {
+    const currentId = openReceiptIdRef.current;
+    if (currentId === null || bulkProgressRef.current !== null || groupControllerTarget !== null) return;
+    if (store.get(currentId) !== null) return;
+    const curList = listStateRef.current;
+    if (curList.kind !== "ready") return;
+    const shown = filterReceiptRows(curList.rows, filterRef.current, searchModeRef.current);
+    const directTarget = findAdjacentReceiptId(shown, currentId, direction);
+    if (directTarget !== null) {
+      openReceipt(directTarget);
+      return;
+    }
+    if (direction === "prev" || curList.nextCursor === null) return;
+
+    const startListGen = listGeneration.current;
+    const startNavGen = ++navGenerationRef.current;
+    let nextCursor: string | null = curList.nextCursor;
+    while (nextCursor !== null) {
+      const outcome = await fetchNextPage();
+      if (!mounted.current || listGeneration.current !== startListGen
+        || navGenerationRef.current !== startNavGen || openReceiptIdRef.current !== currentId) {
+        return;
+      }
+      if (outcome.kind !== "loaded") return;
+      nextCursor = outcome.nextCursor;
+      const nextShown = filterReceiptRows(outcome.rows, filterRef.current, searchModeRef.current);
+      const nextTarget = findAdjacentReceiptId(nextShown, currentId, "next");
+      if (nextTarget !== null) {
+        openReceipt(nextTarget);
+        return;
+      }
+    }
+  }, [groupControllerTarget, store, openReceipt, fetchNextPage]);
+
+  const handleConfirmed = useCallback(async (updated: ReceiptDetail) => {
+    receiptLinkMemoryRef.current.delete(`${actorKey}:${updated.receipt_id}`);
+    const floorToken = ++detailGeneration.current;
+    receiptFloorGenRef.current.set(updated.receipt_id, floorToken);
+    latestReadyCandidatesRef.current = { receiptId: updated.receipt_id, candidates: [] };
+    setSelectedForBulk((current) => {
+      if (!current.has(updated.receipt_id)) return current;
+      const next = new Set(current);
+      next.delete(updated.receipt_id);
+      return next;
+    });
+    const nextList = updateListState((current) => (current.kind === "ready"
+      ? { ...current, rows: upsertReceiptRowInPlace(current.rows, receiptSummaryFromDetail(updated)) }
+      : current));
+
+    if (!autoAdvanceRef.current || nextList.kind !== "ready") {
+      setDetailState({ kind: "ready", detail: updated, candidates: [], groupCandidates: [], noBankData: false });
+      setNotice(t("budget.receipts.confirmSuccess"));
+      return;
+    }
+
+    const findVisibleNextUnconfirmed = (rows: readonly ReceiptSummary[], wrap: boolean): string | null => {
+      const visibleIds = new Set(
+        filterReceiptRows(rows, filterRef.current, searchModeRef.current).map((row) => row.receipt_id),
+      );
+      return findNextUnconfirmedReceiptId(rows, updated.receipt_id, {
+        wrap,
+        predicate: (row) => visibleIds.has(row.receipt_id),
+      });
+    };
+
+    const forwardTarget = findVisibleNextUnconfirmed(nextList.rows, false);
+    if (forwardTarget !== null) {
+      openReceipt(forwardTarget);
+      setNotice(t("budget.receipts.confirmSuccess"));
+      return;
+    }
+
+    let latestRows = nextList.rows;
+    let latestCursor: string | null = nextList.nextCursor;
+    if (latestCursor !== null) {
+      setDetailState({ kind: "ready", detail: updated, candidates: [], groupCandidates: [], noBankData: false });
+      const startListGen = listGeneration.current;
+      const startNavGen = ++navGenerationRef.current;
+      do {
+        const outcome = await fetchNextPage();
+        if (!mounted.current || listGeneration.current !== startListGen
+          || navGenerationRef.current !== startNavGen || openReceiptIdRef.current !== updated.receipt_id) {
+          return;
+        }
+        if (outcome.kind !== "loaded") return;
+        latestRows = outcome.rows;
+        latestCursor = outcome.nextCursor;
+        const nextForward = findVisibleNextUnconfirmed(latestRows, false);
+        if (nextForward !== null) {
+          openReceipt(nextForward);
+          setNotice(t("budget.receipts.confirmSuccess"));
+          return;
+        }
+      } while (latestCursor !== null);
+    }
+
+    const wrappedTarget = findVisibleNextUnconfirmed(latestRows, true);
+    if (wrappedTarget !== null) {
+      openReceipt(wrappedTarget);
+      setNotice(t("budget.receipts.confirmSuccess"));
+      return;
+    }
+
+    const trigger = receiptDrawerTriggerRef.current;
+    resetDrawer();
+    setNotice(t("budget.receipts.allConfirmed"));
+    if (trigger?.isConnected === true) trigger.focus({ preventScroll: true });
+  }, [actorKey, fetchNextPage, openReceipt, resetDrawer, updateListState]);
 
   const resolveDetailDraft = useCallback((
     detail: ReceiptDetail,
@@ -856,20 +1108,53 @@ export function ReceiptsView({
     });
   }, [actorKey]);
 
-  const applyFilter = (next: ReceiptFilter) => {
-    if (bulkProgress !== null || !validReceiptDateRange(next)) return;
+  const commitFilter = useCallback((next: ReceiptFilter) => {
+    cancelSearchDebounce();
+    if (bulkProgressRef.current !== null || !validReceiptDateRange(next)) return;
     staleCursorReloadedRef.current = false;
     setNotice(null);
-    setFilter(next);
-  };
+    filterRef.current = next;
+    searchModeRef.current = next.query.trim() !== "";
+    setFilter((current) => (sameReceiptFilter(current, next) ? current : next));
+  }, [cancelSearchDebounce]);
 
-  const clearFilters = () => {
-    if (bulkProgress !== null) return;
+  const updateImmediateFilter = useCallback((patch: Partial<ReceiptFilter>) => {
+    const nextDraft: ReceiptFilter = { ...draftRef.current, ...patch };
+    draftRef.current = nextDraft;
+    setDraft(nextDraft);
+    commitFilter(nextDraft);
+  }, [commitFilter]);
+
+  const updateSearchQuery = useCallback((query: string) => {
+    const nextDraft: ReceiptFilter = { ...draftRef.current, query };
+    draftRef.current = nextDraft;
+    setDraft(nextDraft);
+    cancelSearchDebounce();
+    if (bulkProgressRef.current !== null || !validReceiptDateRange(nextDraft)) return;
+    searchDebounceRef.current = setTimeout(() => {
+      searchDebounceRef.current = null;
+      if (!mounted.current || bulkProgressRef.current !== null) return;
+      const latest = draftRef.current;
+      if (!validReceiptDateRange(latest)) return;
+      staleCursorReloadedRef.current = false;
+      setNotice(null);
+      filterRef.current = latest;
+      searchModeRef.current = latest.query.trim() !== "";
+      setFilter((current) => (sameReceiptFilter(current, latest) ? current : latest));
+    }, SEARCH_DEBOUNCE_MS);
+  }, [cancelSearchDebounce]);
+
+  const clearFilters = useCallback(() => {
+    if (bulkProgressRef.current !== null) return;
+    cancelSearchDebounce();
     staleCursorReloadedRef.current = false;
+    draftRef.current = EMPTY_RECEIPT_FILTER;
+    filterRef.current = EMPTY_RECEIPT_FILTER;
+    searchModeRef.current = false;
     setDraft(EMPTY_RECEIPT_FILTER);
     setFilter(EMPTY_RECEIPT_FILTER);
     setNotice(null);
-  };
+  }, [cancelSearchDebounce]);
 
   const title = t("budget.receipts.title");
 
@@ -950,7 +1235,7 @@ export function ReceiptsView({
         </div>
       </header>
 
-      <form className="budget-range" onSubmit={(event) => { event.preventDefault(); applyFilter(draft); }}>
+      <form className="budget-range" onSubmit={(event) => { event.preventDefault(); commitFilter(draftRef.current); }}>
         <label>
           {t("budget.receipts.search")}
           <input
@@ -959,7 +1244,13 @@ export function ReceiptsView({
             maxLength={128}
             placeholder={t("budget.receipts.searchPlaceholder")}
             value={draft.query}
-            onChange={(event) => { setDraft({ ...draft, query: event.currentTarget.value }); }}
+            onChange={(event) => { updateSearchQuery(event.currentTarget.value); }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                commitFilter(draftRef.current);
+              }
+            }}
           />
         </label>
         <label>
@@ -967,7 +1258,7 @@ export function ReceiptsView({
           <select
             name="status"
             value={draft.status}
-            onChange={(event) => { setDraft({ ...draft, status: event.currentTarget.value as "" | ReceiptStatus }); }}
+            onChange={(event) => { updateImmediateFilter({ status: event.currentTarget.value as "" | ReceiptStatus }); }}
           >
             <option value="">{t("budget.receipts.all")}</option>
             {RECEIPT_STATUSES.map((item) => (
@@ -981,7 +1272,7 @@ export function ReceiptsView({
             name="document_kind"
             value={draft.documentKind}
             onChange={(event) => {
-              setDraft({ ...draft, documentKind: event.currentTarget.value as "" | ReceiptDocumentKind });
+              updateImmediateFilter({ documentKind: event.currentTarget.value as "" | ReceiptDocumentKind });
             }}
           >
             <option value="">{t("budget.receipts.all")}</option>
@@ -996,7 +1287,7 @@ export function ReceiptsView({
             name="source_kind"
             value={draft.sourceKind}
             onChange={(event) => {
-              setDraft({ ...draft, sourceKind: event.currentTarget.value as "" | ReceiptSourceKind });
+              updateImmediateFilter({ sourceKind: event.currentTarget.value as "" | ReceiptSourceKind });
             }}
           >
             <option value="">{t("budget.receipts.all")}</option>
@@ -1011,7 +1302,7 @@ export function ReceiptsView({
             name="linked"
             value={draft.linked}
             onChange={(event) => {
-              setDraft({ ...draft, linked: event.currentTarget.value as "" | "linked" | "unlinked" });
+              updateImmediateFilter({ linked: event.currentTarget.value as "" | "linked" | "unlinked" });
             }}
           >
             <option value="">{t("budget.receipts.all")}</option>
@@ -1026,7 +1317,7 @@ export function ReceiptsView({
             type="date"
             value={draft.dateFrom}
             max={draft.dateTo || undefined}
-            onChange={(event) => { setDraft({ ...draft, dateFrom: event.currentTarget.value }); }}
+            onChange={(event) => { updateImmediateFilter({ dateFrom: event.currentTarget.value }); }}
           />
         </label>
         <label>
@@ -1036,10 +1327,9 @@ export function ReceiptsView({
             type="date"
             value={draft.dateTo}
             min={draft.dateFrom || undefined}
-            onChange={(event) => { setDraft({ ...draft, dateTo: event.currentTarget.value }); }}
+            onChange={(event) => { updateImmediateFilter({ dateTo: event.currentTarget.value }); }}
           />
         </label>
-        <button type="submit">{t("budget.receipts.apply")}</button>
         {hasActiveReceiptFilter(draft) || hasActiveReceiptFilter(filter) ? (
           <button type="button" onClick={clearFilters}>{t("budget.receipts.clearFilters")}</button>
         ) : null}
@@ -1360,81 +1650,110 @@ export function ReceiptsView({
         </>
       ) : null}
 
-      {selectedId === null ? null : (
-        <ReceiptDetailDrawer
-          key={`${actorKey}:${selectedId}`}
-          api={receiptsApi}
-          store={store}
-          accounts={accounts}
-          connections={connections}
-          locale={locale}
-          detailState={detailState}
-          imageState={imageState}
-          actionBusy={drawerActionBusy}
-          groupControllerOpen={groupControllerTarget !== null}
-          isOpenReceipt={(receiptId) => openReceiptIdRef.current === receiptId}
-          getLatestCandidates={getLatestCandidates}
-          resolveDetailDraft={resolveDetailDraft}
-          onLinkChoiceTouched={recordLinkChoiceTouched}
-          onAccessLoss={checkBarrier}
-          onClose={closeDetail}
-          onOpenReceipt={openReceipt}
-          onOpenGroupCandidates={(detail, trigger) => {
-            if (bulkBusy) return;
-            groupReturnFocusRef.current = trigger;
-            setGroupControllerSession((current) => current + 1);
-            setGroupControllerTarget({ kind: "candidates", anchor: detail });
-          }}
-          onReviewGroupProposal={(detail, proposal, trigger) => {
-            if (bulkBusy) return;
-            groupReturnFocusRef.current = trigger;
-            setGroupControllerSession((current) => current + 1);
-            setGroupControllerTarget({ kind: "proposal", anchor: detail, proposal });
-          }}
-          onRetryDetail={() => { setDetailRefresh((current) => current + 1); }}
-          onConfirmed={(updated) => {
-            receiptLinkMemoryRef.current.delete(`${actorKey}:${updated.receipt_id}`);
-            const floorToken = ++detailGeneration.current;
-            receiptFloorGenRef.current.set(updated.receipt_id, floorToken);
-            latestReadyCandidatesRef.current = { receiptId: updated.receipt_id, candidates: [] };
-            setDetailState({ kind: "ready", detail: updated, candidates: [], groupCandidates: [], noBankData: false });
-            setNotice(t("budget.receipts.confirmSuccess"));
-            reloadList();
-          }}
-          onGroupUnlinked={(receiptId) => {
-            receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
-            const floorToken = ++detailGeneration.current;
-            receiptFloorGenRef.current.set(receiptId, floorToken);
-            setNotice(t("budget.receipts.groupUnlinkSuccess"));
-            setDetailRefresh((current) => current + 1);
-            reloadList();
-          }}
-          onConflictOrStale={(receiptId) => {
-            recordLinkChoiceTouched(receiptId, { kind: "empty" });
-            const floorToken = ++detailGeneration.current;
-            receiptFloorGenRef.current.set(receiptId, floorToken);
-            setDetailRefresh((current) => current + 1);
-            reloadList();
-          }}
-          onNotFound={(receiptId) => {
-            receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
-            const floorToken = ++detailGeneration.current;
-            receiptFloorGenRef.current.set(receiptId, floorToken);
-            resetDrawer();
-            setNotice(t("budget.receipts.notFound"));
-            reloadList();
-          }}
-          onDeleted={(receiptId, dissolvedGroup = false) => {
-            receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
-            const floorToken = ++detailGeneration.current;
-            receiptFloorGenRef.current.set(receiptId, floorToken);
-            resetDrawer();
-            if (dissolvedGroup) setNotice(t("budget.receipts.dissolveDeleteSuccess"));
-            reloadList();
-          }}
-          onMutationError={reloadList}
-        />
-      )}
+      {selectedId === null ? null : (() => {
+        const selectedRowIndex = shownRows.findIndex((row) => row.receipt_id === selectedId);
+        const canPrev = selectedRowIndex > 0;
+        const canNext = selectedRowIndex >= 0
+          && (selectedRowIndex + 1 < shownRows.length
+            || (listState.kind === "ready" && listState.nextCursor !== null));
+        const loadingMoreList = listState.kind === "ready" && listState.loadingMore;
+        return (
+          <ReceiptDetailDrawer
+            key={`${actorKey}:${selectedId}`}
+            api={receiptsApi}
+            store={store}
+            accounts={accounts}
+            connections={connections}
+            locale={locale}
+            detailState={detailState}
+            imageState={imageState}
+            actionBusy={drawerActionBusy}
+            groupControllerOpen={groupControllerTarget !== null}
+            canPrev={canPrev}
+            canNext={canNext}
+            loadingMore={loadingMoreList}
+            autoAdvance={autoAdvance}
+            onAutoAdvanceChange={updateAutoAdvance}
+            onPrev={() => { void navigateDetail("prev"); }}
+            onNext={() => { void navigateDetail("next"); }}
+            isOpenReceipt={(receiptId) => openReceiptIdRef.current === receiptId}
+            getLatestCandidates={getLatestCandidates}
+            resolveDetailDraft={resolveDetailDraft}
+            onLinkChoiceTouched={recordLinkChoiceTouched}
+            onAccessLoss={checkBarrier}
+            onClose={closeDetail}
+            onOpenReceipt={openReceipt}
+            onOpenGroupCandidates={(detail, trigger) => {
+              if (bulkBusy) return;
+              groupReturnFocusRef.current = trigger;
+              setGroupControllerSession((current) => current + 1);
+              setGroupControllerTarget({ kind: "candidates", anchor: detail });
+            }}
+            onReviewGroupProposal={(detail, proposal, trigger) => {
+              if (bulkBusy) return;
+              groupReturnFocusRef.current = trigger;
+              setGroupControllerSession((current) => current + 1);
+              setGroupControllerTarget({ kind: "proposal", anchor: detail, proposal });
+            }}
+            onRetryDetail={() => { setDetailRefresh((current) => current + 1); }}
+            onConfirmed={(updated) => { void handleConfirmed(updated); }}
+            onGroupUnlinked={(receiptId, unlinkResult) => {
+              receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
+              const floorToken = ++detailGeneration.current;
+              receiptFloorGenRef.current.set(receiptId, floorToken);
+              const updatedRows: ReceiptSummary[] = [
+                ...unlinkResult.members,
+                ...(unlinkResult.evidence === null ? [] : [unlinkResult.evidence]),
+              ];
+              upsertRowsInPlace(updatedRows);
+              setNotice(t("budget.receipts.groupUnlinkSuccess"));
+              setDetailRefresh((current) => current + 1);
+            }}
+            onConflictOrStale={(receiptId) => {
+              recordLinkChoiceTouched(receiptId, { kind: "empty" });
+              const floorToken = ++detailGeneration.current;
+              receiptFloorGenRef.current.set(receiptId, floorToken);
+              setDetailRefresh((current) => current + 1);
+            }}
+            onNotFound={(receiptId) => {
+              receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
+              const floorToken = ++detailGeneration.current;
+              receiptFloorGenRef.current.set(receiptId, floorToken);
+              const trigger = receiptDrawerTriggerRef.current;
+              resetDrawer();
+              setNotice(t("budget.receipts.notFound"));
+              removeRowInPlace(receiptId);
+              if (trigger?.isConnected === true) trigger.focus({ preventScroll: true });
+            }}
+            onDeleted={(receiptId, dissolvedGroup = false, siblingIds = []) => {
+              receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
+              const floorToken = ++detailGeneration.current;
+              receiptFloorGenRef.current.set(receiptId, floorToken);
+              const extraSiblingIds: string[] = [...siblingIds];
+              if (dissolvedGroup && listStateRef.current.kind === "ready") {
+                const deletedRow = listStateRef.current.rows.find((row) => row.receipt_id === receiptId);
+                const dissolvedGroupId = deletedRow?.link_group?.group_id ?? null;
+                if (dissolvedGroupId !== null) {
+                  for (const row of listStateRef.current.rows) {
+                    if (row.receipt_id !== receiptId && row.link_group?.group_id === dissolvedGroupId) {
+                      extraSiblingIds.push(row.receipt_id);
+                    }
+                  }
+                }
+              }
+              const trigger = receiptDrawerTriggerRef.current;
+              resetDrawer();
+              removeRowInPlace(receiptId);
+              if (dissolvedGroup) {
+                setNotice(t("budget.receipts.dissolveDeleteSuccess"));
+                if (extraSiblingIds.length > 0) refreshRowsInPlace(extraSiblingIds);
+              }
+              if (trigger?.isConnected === true) trigger.focus({ preventScroll: true });
+            }}
+            onMutationError={reloadList}
+          />
+        );
+      })()}
 
       {groupControllerTarget === null ? null : (
         <ReceiptGroupController
@@ -1452,25 +1771,29 @@ export function ReceiptsView({
             setGroupControllerTarget(null);
             const opener = groupReturnFocusRef.current;
             groupReturnFocusRef.current = null;
-            if (opener?.isConnected === true) opener.focus();
+            if (opener?.isConnected === true) opener.focus({ preventScroll: true });
           }}
           onPartialConfirm={(affectedIds) => {
-            reloadList();
+            refreshRowsInPlace(affectedIds);
             const openId = openReceiptIdRef.current;
             if (openId !== null && affectedIds.includes(openId)) {
               receiptFloorGenRef.current.set(openId, ++detailGeneration.current);
               setDetailRefresh((current) => current + 1);
             }
           }}
-          onGroupLinked={(_result, affectedIds) => {
+          onGroupLinked={(result, affectedIds) => {
             setGroupControllerTarget(null);
             setSelectedForBulk((current) => {
               const next = new Set(current);
               for (const id of affectedIds) next.delete(id);
               return next;
             });
+            const updatedRows: ReceiptSummary[] = [
+              ...result.members,
+              ...(result.evidence === null ? [] : [result.evidence]),
+            ];
+            upsertRowsInPlace(updatedRows);
             setNotice(t("budget.receipts.groupLinkSuccess"));
-            reloadList();
             const openId = openReceiptIdRef.current;
             if (openId !== null && affectedIds.includes(openId)) {
               receiptLinkMemoryRef.current.delete(`${actorKey}:${openId}`);
@@ -1479,7 +1802,7 @@ export function ReceiptsView({
             }
             const opener = groupReturnFocusRef.current;
             groupReturnFocusRef.current = null;
-            if (opener?.isConnected === true) opener.focus();
+            if (opener?.isConnected === true) opener.focus({ preventScroll: true });
           }}
         />
       )}
@@ -1506,6 +1829,13 @@ interface DrawerProps {
   imageState: ImageState;
   actionBusy: ReceiptActionKind | null;
   groupControllerOpen: boolean;
+  canPrev: boolean;
+  canNext: boolean;
+  loadingMore: boolean;
+  autoAdvance: boolean;
+  onAutoAdvanceChange: (enabled: boolean) => void;
+  onPrev: () => void;
+  onNext: () => void;
   isOpenReceipt: (receiptId: string) => boolean;
   getLatestCandidates: (receiptId: string) => readonly ReceiptCandidate[] | null;
   resolveDetailDraft: (
@@ -1520,10 +1850,10 @@ interface DrawerProps {
   onReviewGroupProposal: (detail: ReceiptDetail, proposal: ReceiptGroupCandidate, trigger: HTMLButtonElement | null) => void;
   onRetryDetail: () => void;
   onConfirmed: (receipt: ReceiptDetail) => void;
-  onGroupUnlinked: (receiptId: string) => void;
+  onGroupUnlinked: (receiptId: string, result: ReceiptGroupUnlinkResult) => void;
   onConflictOrStale: (receiptId: string) => void;
   onNotFound: (receiptId: string) => void;
-  onDeleted: (receiptId: string, dissolvedGroup?: boolean) => void;
+  onDeleted: (receiptId: string, dissolvedGroup?: boolean, siblingIds?: readonly string[]) => void;
   onMutationError: () => void;
 }
 
@@ -1738,6 +2068,13 @@ function ReceiptDetailDrawer({
   imageState,
   actionBusy,
   groupControllerOpen,
+  canPrev,
+  canNext,
+  loadingMore,
+  autoAdvance,
+  onAutoAdvanceChange,
+  onPrev,
+  onNext,
   isOpenReceipt,
   getLatestCandidates,
   resolveDetailDraft,
@@ -1770,7 +2107,7 @@ function ReceiptDetailDrawer({
     groupDetailRef.current = loaded;
   }, []);
 
-  useLayoutEffect(() => { closeButtonRef.current?.focus(); }, []);
+  useLayoutEffect(() => { closeButtonRef.current?.focus({ preventScroll: true }); }, []);
 
   useEffect(() => {
     drawerMountedRef.current = true;
@@ -1876,6 +2213,12 @@ function ReceiptDetailDrawer({
     setActionError(null);
     let outcome: ReceiptSettledEvent["outcome"] = "error";
     let handledInMountedDrawer = false;
+    let lockReleased = false;
+    const releaseLock = (finalOutcome?: ReceiptSettledEvent["outcome"]) => {
+      if (lockReleased) return;
+      lockReleased = true;
+      store.release(detail.receipt_id, lockToken, finalOutcome);
+    };
     try {
       const result = await api.confirmReceipt(built.request);
       outcome = settledOutcome(result, "confirmed");
@@ -1884,6 +2227,7 @@ function ReceiptDetailDrawer({
       handledInMountedDrawer = true;
       if (!result.ok) {
         if (result.status === 404) {
+          releaseLock();
           onNotFound(detail.receipt_id);
           return;
         }
@@ -1897,9 +2241,10 @@ function ReceiptDetailDrawer({
         }
         return;
       }
+      releaseLock();
       onConfirmed(result.data.receipt);
     } finally {
-      store.release(detail.receipt_id, lockToken, handledInMountedDrawer ? undefined : outcome);
+      releaseLock(handledInMountedDrawer ? undefined : outcome);
     }
   };
 
@@ -1911,6 +2256,12 @@ function ReceiptDetailDrawer({
     setActionError(null);
     let outcome: ReceiptSettledEvent["outcome"] = "error";
     let handledInMountedDrawer = false;
+    let lockReleased = false;
+    const releaseLock = (finalOutcome?: ReceiptSettledEvent["outcome"]) => {
+      if (lockReleased) return;
+      lockReleased = true;
+      store.release(detail.receipt_id, lockToken, finalOutcome);
+    };
     try {
       const result = await api.deleteReceipt({ receipt_id: detail.receipt_id, expected_version: detail.version });
       outcome = settledOutcome(result, "deleted");
@@ -1919,6 +2270,7 @@ function ReceiptDetailDrawer({
       handledInMountedDrawer = true;
       if (!result.ok) {
         if (result.status === 404) {
+          releaseLock();
           onNotFound(detail.receipt_id);
           return;
         }
@@ -1936,9 +2288,10 @@ function ReceiptDetailDrawer({
         }
         return;
       }
+      releaseLock();
       onDeleted(detail.receipt_id, false);
     } finally {
-      store.release(detail.receipt_id, lockToken, handledInMountedDrawer ? undefined : outcome);
+      releaseLock(handledInMountedDrawer ? undefined : outcome);
     }
   };
 
@@ -1964,6 +2317,12 @@ function ReceiptDetailDrawer({
     setActionError(null);
     let outcome: ReceiptSettledEvent["outcome"] = "error";
     let handledInMountedDrawer = false;
+    let locksReleased = false;
+    const releaseLocks = (finalOutcome?: ReceiptSettledEvent["outcome"]) => {
+      if (locksReleased) return;
+      locksReleased = true;
+      releaseGroupParticipantLocks(store, acquired, finalOutcome);
+    };
     try {
       const result = await api.unlinkReceiptGroup({
         group_id: group.group_id,
@@ -1985,9 +2344,10 @@ function ReceiptDetailDrawer({
         return;
       }
       setConfirmingDissolve(false);
-      onGroupUnlinked(detail.receipt_id);
+      releaseLocks();
+      onGroupUnlinked(detail.receipt_id, result.data);
     } finally {
-      releaseGroupParticipantLocks(store, acquired, handledInMountedDrawer ? undefined : outcome);
+      releaseLocks(handledInMountedDrawer ? undefined : outcome);
     }
   };
 
@@ -2009,10 +2369,26 @@ function ReceiptDetailDrawer({
       setActionError(t("budget.receipts.groupBusyError"));
       return;
     }
+    const siblingIds: string[] = [];
+    const loadedGroup = groupDetailRef.current;
+    if (loadedGroup !== null && loadedGroup.group.group_id === group.group_id) {
+      for (const member of loadedGroup.members) {
+        if (member.receipt_id !== detail.receipt_id) siblingIds.push(member.receipt_id);
+      }
+      if (loadedGroup.evidence !== null && loadedGroup.evidence.receipt_id !== detail.receipt_id) {
+        siblingIds.push(loadedGroup.evidence.receipt_id);
+      }
+    }
     keepActionErrorRef.current = false;
     setActionError(null);
     let outcome: ReceiptSettledEvent["outcome"] = "error";
     let handledInMountedDrawer = false;
+    let locksReleased = false;
+    const releaseLocks = (finalOutcome?: ReceiptSettledEvent["outcome"]) => {
+      if (locksReleased) return;
+      locksReleased = true;
+      releaseGroupParticipantLocks(store, acquired, finalOutcome);
+    };
     try {
       const result = await api.deleteReceipt({
         receipt_id: detail.receipt_id,
@@ -2026,6 +2402,7 @@ function ReceiptDetailDrawer({
       handledInMountedDrawer = true;
       if (!result.ok) {
         if (result.status === 404) {
+          releaseLocks();
           onNotFound(detail.receipt_id);
           return;
         }
@@ -2041,9 +2418,10 @@ function ReceiptDetailDrawer({
         }
         return;
       }
-      onDeleted(detail.receipt_id, true);
+      releaseLocks();
+      onDeleted(detail.receipt_id, true, siblingIds);
     } finally {
-      releaseGroupParticipantLocks(store, acquired, handledInMountedDrawer ? undefined : outcome);
+      releaseLocks(handledInMountedDrawer ? undefined : outcome);
     }
   };
 
@@ -2098,9 +2476,25 @@ function ReceiptDetailDrawer({
       <div className="modal-card budget-receipt-drawer" role="dialog" aria-modal="true" aria-label={title}>
         <header className="budget-receipt-drawer-head">
           <h3>{title}</h3>
-          <button ref={closeButtonRef} type="button" disabled={actionBusy !== null} onClick={onClose}>
-            {t("budget.main.close")}
-          </button>
+          <div className="budget-receipt-drawer-head-actions">
+            <button
+              type="button"
+              disabled={actionBusy !== null || groupControllerOpen || loadingMore || !canPrev}
+              onClick={onPrev}
+            >
+              {t("budget.receipts.prevAction")}
+            </button>
+            <button
+              type="button"
+              disabled={actionBusy !== null || groupControllerOpen || loadingMore || !canNext}
+              onClick={onNext}
+            >
+              {t("budget.receipts.nextAction")}
+            </button>
+            <button ref={closeButtonRef} type="button" disabled={actionBusy !== null} onClick={onClose}>
+              {t("budget.main.close")}
+            </button>
+          </div>
         </header>
 
         {detailState.kind === "loading" ? (
@@ -2899,6 +3293,16 @@ function ReceiptDetailDrawer({
                       {t("budget.receipts.deleteAction")}
                     </button>
                   </div>
+                  <label className="budget-toggle budget-receipt-auto-advance">
+                    <input
+                      type="checkbox"
+                      name="auto_advance_on_confirm"
+                      checked={autoAdvance}
+                      disabled={actionBusy !== null}
+                      onChange={(event) => { onAutoAdvanceChange(event.currentTarget.checked); }}
+                    />
+                    <span>{t("budget.receipts.autoAdvanceLabel")}</span>
+                  </label>
                 </form>
               )}
 

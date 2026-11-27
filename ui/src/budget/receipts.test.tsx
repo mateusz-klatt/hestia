@@ -211,6 +211,11 @@ let root: Root;
 
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  try {
+    localStorage.removeItem("hestia.receipts.autoAdvance");
+  } catch {
+    // Ignore when localStorage is unavailable in this test environment.
+  }
   await loadLocale("en");
   host = document.createElement("div");
   document.body.append(host);
@@ -223,6 +228,11 @@ afterEach(async () => {
     await Promise.resolve();
   });
   host.remove();
+  try {
+    localStorage.removeItem("hestia.receipts.autoAdvance");
+  } catch {
+    // Ignore when localStorage is unavailable in this test environment.
+  }
   await loadLocale("en");
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -497,31 +507,40 @@ describe("ReceiptsView", () => {
       receiptSummary({ receipt_id: "p1-b", status: "needs_review", document_kind: "invoice", source_kind: "email", receipt_date: "2026-11-10", linked: true }),
       receiptSummary({ receipt_id: "p1-c", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-28", linked: true }),
     ]);
-    vi.mocked(clients.rApi.receiptsList)
-      .mockImplementationOnce(() => ok<ReceiptListResult>({ receipts: [receiptSummary()], next_cursor: null }))
-      .mockImplementationOnce(() => ok<ReceiptListResult>({
-        receipts: [
-          receiptSummary({ receipt_id: "p1-a", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-10", linked: true }),
-          receiptSummary({ receipt_id: "p1-b", status: "needs_review", document_kind: "invoice", source_kind: "email", receipt_date: "2026-11-10", linked: true }),
-          receiptSummary({ receipt_id: "p1-c", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-28", linked: true }),
-        ],
-        next_cursor: "cursor-page-2",
-      }))
-      .mockImplementationOnce(() => ok<ReceiptListResult>({
-        receipts: [
-          receiptSummary({ receipt_id: "p2-a", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-12", raw_shop_name: "Second Page Vendor", linked: true }),
-        ],
-        next_cursor: "cursor-expired",
-      }))
-      .mockImplementationOnce(() => fail(400, "budget_receipt_invalid_request"))
-      .mockImplementationOnce(() => ok<ReceiptListResult>({
-        receipts: [
-          receiptSummary({ receipt_id: "reloaded-p1", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-10", raw_shop_name: "Fresh Page 1 Vendor", linked: true }),
-        ],
-        next_cursor: "cursor-second-bad",
-      }))
-      .mockImplementationOnce(() => fail(400, "budget_receipt_invalid_request"))
-      .mockImplementationOnce(() => ok<ReceiptListResult>({ receipts: [receiptSummary()], next_cursor: null }));
+    let filteredPage1Loads = 0;
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      if (req?.cursor === "cursor-page-2") {
+        return ok<ReceiptListResult>({
+          receipts: [
+            receiptSummary({ receipt_id: "p2-a", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-12", raw_shop_name: "Second Page Vendor", linked: true }),
+          ],
+          next_cursor: "cursor-expired",
+        });
+      }
+      if (req?.cursor === "cursor-expired" || req?.cursor === "cursor-second-bad") {
+        return fail(400, "budget_receipt_invalid_request");
+      }
+      if (req?.month === "2026-11" && req.status === "needs_review" && req.document_kind === "invoice" && req.linked === true) {
+        filteredPage1Loads += 1;
+        if (filteredPage1Loads === 1) {
+          return ok<ReceiptListResult>({
+            receipts: [
+              receiptSummary({ receipt_id: "p1-a", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-10", linked: true }),
+              receiptSummary({ receipt_id: "p1-b", status: "needs_review", document_kind: "invoice", source_kind: "email", receipt_date: "2026-11-10", linked: true }),
+              receiptSummary({ receipt_id: "p1-c", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-28", linked: true }),
+            ],
+            next_cursor: "cursor-page-2",
+          });
+        }
+        return ok<ReceiptListResult>({
+          receipts: [
+            receiptSummary({ receipt_id: "reloaded-p1", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-10", raw_shop_name: "Fresh Page 1 Vendor", linked: true }),
+          ],
+          next_cursor: "cursor-second-bad",
+        });
+      }
+      return ok<ReceiptListResult>({ receipts: [receiptSummary()], next_cursor: null });
+    });
 
     vi.mocked(clients.rApi.receiptsSearch).mockImplementationOnce(() => ok<ReceiptListResult>({
       receipts: [
@@ -532,6 +551,7 @@ describe("ReceiptsView", () => {
     }));
 
     await renderReceipts(clients);
+    expect([...host.querySelectorAll("button")].some((b) => b.textContent === "Apply filters")).toBe(false);
     expect(host.textContent).not.toContain("Filtering loaded pages only");
 
     await choose(selectByName("status"), "needs_review");
@@ -540,9 +560,9 @@ describe("ReceiptsView", () => {
     await choose(selectByName("linked"), "linked");
     await typeInto(inputByName("date_from"), "2026-11-05");
     await typeInto(inputByName("date_to"), "2026-11-20");
-    await submit(host.querySelector(".budget-range"));
+    await settle();
 
-    expect(clients.rApi.receiptsList).toHaveBeenNthCalledWith(2, {
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({
       limit: 50,
       month: "2026-11",
       status: "needs_review",
@@ -553,7 +573,7 @@ describe("ReceiptsView", () => {
     expect(host.textContent).toContain("Filtering loaded pages only — load more to check older entries.");
 
     await click(button("Load more"));
-    expect(clients.rApi.receiptsList).toHaveBeenNthCalledWith(3, {
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({
       limit: 50,
       month: "2026-11",
       status: "needs_review",
@@ -655,7 +675,7 @@ describe("ReceiptsView", () => {
     expect(img?.getAttribute("src")).toBe("blob:synthetic-receipt");
     await click(button("Close", dialog()));
     expect(revokeUrlSpy).toHaveBeenCalledWith("blob:synthetic-receipt");
-    expect(storageGetSpy).not.toHaveBeenCalled();
+    expect(storageGetSpy.mock.calls.every(([key]) => key === "hestia.receipts.autoAdvance")).toBe(true);
     expect(storageSetSpy).not.toHaveBeenCalled();
   });
 
@@ -700,6 +720,7 @@ describe("ReceiptsView", () => {
     await click(button("Confirm receipt", d1));
     expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({ link: null }));
     expect("lines" in (vi.mocked(clients.rApi.confirmReceipt).mock.calls.at(-1)?.[0] ?? {})).toBe(false);
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
 
     // 2. Confirmed linked receipt also requires explicit Unlink before Confirm becomes active.
     vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
@@ -713,7 +734,6 @@ describe("ReceiptsView", () => {
       }),
       candidates: [],
     }));
-    await click(button("Close", dialog()));
     await click(button("Details"));
     const d2 = dialog();
     expect(d2.textContent).toContain("Confirmed receipts cannot keep or choose candidates on edit");
@@ -822,6 +842,7 @@ describe("ReceiptsView", () => {
     await renderReceipts(clients, { revision: 1 });
     await click(openDetailButton(0));
     expect(dialog().textContent).toContain("Version 5");
+    await click(inputByName("auto_advance_on_confirm", dialog()));
 
     // Simulate a Budget reload bumping revision while Confirm starts: slowDetailReload (v5) is in flight.
     await renderReceipts(clients, { revision: 2 });
@@ -1050,7 +1071,7 @@ describe("ReceiptsView", () => {
     expect("lines" in (reformatCall ?? {})).toBe(false);
 
     // Reopen and edit net -> discount stays 1, gross updates cleanly; then edit discount -> net updates cleanly.
-    await click(button("Close", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
     await click(openDetailButton(0));
     const drawer2 = dialog();
     await typeInto(inputByName("line_net", drawer2), "8.00");
@@ -1077,7 +1098,7 @@ describe("ReceiptsView", () => {
     }));
 
     // Entering the redacted placeholder into an editable line is blocked before submit.
-    await click(button("Close", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
     await click(openDetailButton(0));
     const drawer3 = dialog();
     await typeInto(inputByName("line_name", drawer3), REDACTED_VALUE);
@@ -1542,7 +1563,7 @@ describe("ReceiptsView", () => {
     }));
 
     // 2. Explicitly picking a candidate in the drawer links it on confirm.
-    await click(button("Close", drawer1));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
     await click(openDetailButton(0));
     const drawer2 = dialog();
     expect(linkRadio("unlink", drawer2).checked).toBe(false);
@@ -1684,6 +1705,7 @@ describe("ReceiptsView", () => {
     await click(button("Odłącz / bez powiązania", dPl2));
     expect(dPl2.querySelector(".budget-receipt-suggested")).toBeNull();
     expect(linkRadio("unlink", dPl2).checked).toBe(true);
+    await click(inputByName("auto_advance_on_confirm", dPl2));
     const submitPl2 = dPl2.querySelector<HTMLButtonElement>("form.budget-receipt-confirm button.budget-primary");
     if (submitPl2 === null) throw new Error("expected submit button");
     expect(submitPl2.disabled).toBe(false);
@@ -2167,6 +2189,7 @@ describe("ReceiptsView", () => {
 
     // Part 1: Keep survives nonce-only refresh and submits the originally reviewed tok-t1 (never swaps in tok-t2).
     await click(openDetailButton(0, "Szczegóły"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
     const keepRadioSame = linkRadio("keep", dialog());
     await click(keepRadioSame);
     expect(keepRadioSame.checked).toBe(true);
@@ -2531,8 +2554,10 @@ describe("ReceiptsView", () => {
       expected_group_version: groupDetail.group.group_version,
     });
     expect(host.textContent).toContain("Group unlinked and document deleted.");
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(0);
 
     // Revoked access on unlink clears view via onAccessLoss barrier.
+    await renderReceipts(clients, { onAccessLoss, revision: 1 });
     vi.mocked(clients.rApi.unlinkReceiptGroup).mockResolvedValueOnce({
       ok: false, status: 401, error: "budget_unauthorized",
     });
@@ -2540,5 +2565,297 @@ describe("ReceiptsView", () => {
     await click(button("Unlink group", dialog()));
     expect(onAccessLoss).toHaveBeenCalled();
     expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("auto-applies filter changes without a button, debounces search, applies on Enter, and ignores stale responses", async () => {
+    const slowStatusResp = deferred<ReceiptListResult>();
+    const fastStatusResp = deferred<ReceiptListResult>();
+    const clients = fakeClients([receiptSummary({ receipt_id: "init-1", raw_shop_name: "Initial Store" })]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      if (req?.status === "imported") return slowStatusResp.promise;
+      if (req?.status === "confirmed") return fastStatusResp.promise;
+      return ok<ReceiptListResult>({
+        receipts: [receiptSummary({ receipt_id: "init-1", raw_shop_name: "Initial Store" })],
+        next_cursor: null,
+      });
+    });
+
+    await renderReceipts(clients);
+    expect([...host.querySelectorAll("button")].some((b) => b.textContent === "Apply filters")).toBe(false);
+    expect(clients.rApi.receiptsList).toHaveBeenCalledTimes(1);
+
+    // Immediate filter change triggers fetch without clicking any button, and stale response is ignored.
+    await choose(selectByName("status"), "imported");
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50, status: "imported" });
+
+    await choose(selectByName("status"), "confirmed");
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50, status: "confirmed" });
+
+    await act(async () => {
+      fastStatusResp.resolve({
+        ok: true,
+        data: {
+          receipts: [receiptSummary({ receipt_id: "fast-1", status: "confirmed", raw_shop_name: "Latest Confirmed Store" })],
+          next_cursor: null,
+        },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).toContain("Latest Confirmed Store");
+
+    await act(async () => {
+      slowStatusResp.resolve({
+        ok: true,
+        data: {
+          receipts: [receiptSummary({ receipt_id: "stale-1", status: "imported", raw_shop_name: "Stale Imported Store" })],
+          next_cursor: null,
+        },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).toContain("Latest Confirmed Store");
+    expect(host.textContent).not.toContain("Stale Imported Store");
+
+    // Search is debounced (~300 ms), and Enter applies immediately without a duplicate fetch.
+    vi.useFakeTimers();
+    try {
+      const searchClients = fakeClients([receiptSummary({ receipt_id: "s0", raw_shop_name: "Base Store" })]);
+      vi.mocked(searchClients.rApi.receiptsSearch).mockImplementation((req) => ok<ReceiptListResult>({
+        receipts: [receiptSummary({ receipt_id: `res-${req.query}`, raw_shop_name: `Found ${req.query}` })],
+        next_cursor: null,
+      }));
+      const onAccessLoss = vi.fn(() => false);
+      await act(async () => {
+        root.render(
+          <ReceiptsView
+            receiptsApi={searchClients.rApi}
+            actorKey="owner-debounce"
+            accounts={accounts}
+            connections={[connection]}
+            locale="en"
+            revision={0}
+            onAccessLoss={onAccessLoss}
+          />,
+        );
+        await Promise.resolve();
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+      await typeInto(inputByName("query"), "Bie");
+      await act(async () => { await vi.advanceTimersByTimeAsync(150); });
+      await typeInto(inputByName("query"), "Biedronka");
+      await act(async () => { await vi.advanceTimersByTimeAsync(299); });
+      expect(searchClients.rApi.receiptsSearch).not.toHaveBeenCalled();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      await act(async () => { await Promise.resolve(); });
+      expect(searchClients.rApi.receiptsSearch).toHaveBeenCalledTimes(1);
+      expect(searchClients.rApi.receiptsSearch).toHaveBeenLastCalledWith({ query: "Biedronka", limit: 50 });
+      expect(host.textContent).toContain("Found Biedronka");
+
+      await typeInto(inputByName("query"), "Lidl");
+      expect(searchClients.rApi.receiptsSearch).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        inputByName("query").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+        await Promise.resolve();
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      await act(async () => { await Promise.resolve(); });
+      expect(searchClients.rApi.receiptsSearch).toHaveBeenCalledTimes(2);
+      expect(searchClients.rApi.receiptsSearch).toHaveBeenLastCalledWith({ query: "Lidl", limit: 50 });
+      expect(host.textContent).toContain("Found Lidl");
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(searchClients.rApi.receiptsSearch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps loaded pages beyond page 1 and scroll position after editing or deleting in the detail dialog", async () => {
+    const p1a = receiptSummary({ receipt_id: "p1-a", status: "needs_review", raw_shop_name: "Page One Shop A", version: 1 });
+    const p1b = receiptSummary({ receipt_id: "p1-b", status: "confirmed", raw_shop_name: "Page One Shop B", version: 1 });
+    const p2a = receiptSummary({ receipt_id: "p2-a", status: "needs_review", raw_shop_name: "Page Two Shop A", version: 2 });
+    const p2b = receiptSummary({ receipt_id: "p2-b", status: "needs_review", raw_shop_name: "Page Two Shop B", version: 1 });
+
+    const clients = fakeClients([p1a, p1b]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      if (req?.cursor === "cursor-2") {
+        return ok<ReceiptListResult>({ receipts: [p2a, p2b], next_cursor: "cursor-3" });
+      }
+      return ok<ReceiptListResult>({ receipts: [p1a, p1b], next_cursor: "cursor-2" });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = [p1a, p1b, p2a, p2b].find((row) => row.receipt_id === id) ?? p2a;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...match, lines: receiptDetail().lines.slice(0, 1) }), candidates: [] });
+    });
+
+    const scrollToSpy = vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
+    await renderReceipts(clients);
+    await click(button("Load more"));
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(4);
+    expect(host.textContent).toContain("Page Two Shop A");
+    expect(host.textContent).toContain("Page Two Shop B");
+
+    const listElementBefore = host.querySelector("ul.budget-entry-list");
+    const listCallsBeforeEdit = vi.mocked(clients.rApi.receiptsList).mock.calls.length;
+
+    // Edit & confirm a page-2 receipt in place -> no list reload, DOM list stays mounted, page-2 rows remain.
+    await click(openDetailButton(2));
+    const drawer = dialog();
+    await click(inputByName("auto_advance_on_confirm", drawer));
+    await typeInto(inputByName("raw_shop_name", drawer), "Page Two Shop A Edited");
+    await typeInto(inputByName("total_amount", drawer), "12.50");
+    await click(button("Confirm receipt", drawer));
+
+    expect(clients.rApi.receiptsList).toHaveBeenCalledTimes(listCallsBeforeEdit);
+    expect(host.querySelector("ul.budget-entry-list")).toBe(listElementBefore);
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(4);
+    expect(host.textContent).toContain("Page One Shop A");
+    expect(host.textContent).toContain("Page Two Shop A Edited");
+    expect(host.textContent).toContain("Page Two Shop B");
+    expect(button("Load more").disabled).toBe(false);
+    expect(scrollToSpy).not.toHaveBeenCalled();
+
+    // Delete another page-2 receipt in place -> removed without resetting page 1 or page 2.
+    await click(button("Close", dialog()));
+    await click(openDetailButton(3));
+    await click(button("Delete document", dialog()));
+    await click(button("Confirm deletion", dialog()));
+
+    expect(clients.rApi.receiptsList).toHaveBeenCalledTimes(listCallsBeforeEdit);
+    expect(host.querySelector("ul.budget-entry-list")).toBe(listElementBefore);
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(3);
+    expect(host.textContent).toContain("Page One Shop A");
+    expect(host.textContent).toContain("Page Two Shop A Edited");
+    expect(host.textContent).not.toContain("Page Two Shop B");
+    expect(scrollToSpy).not.toHaveBeenCalled();
+  });
+
+  it("navigates Previous and Next inside the detail dialog and auto-loads the next page at the end", async () => {
+    const r1 = receiptSummary({ receipt_id: "nav-1", raw_shop_name: "First Receipt", version: 1 });
+    const r2 = receiptSummary({ receipt_id: "nav-2", raw_shop_name: "Second Receipt", version: 1 });
+    const r3 = receiptSummary({ receipt_id: "nav-3", raw_shop_name: "Third Page-2 Receipt", version: 1 });
+
+    const clients = fakeClients([r1, r2]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      if (req?.cursor === "nav-cursor-2") {
+        return ok<ReceiptListResult>({ receipts: [r3], next_cursor: null });
+      }
+      return ok<ReceiptListResult>({ receipts: [r1, r2], next_cursor: "nav-cursor-2" });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = [r1, r2, r3].find((row) => row.receipt_id === id) ?? r1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail(match), candidates: [] });
+    });
+
+    await renderReceipts(clients);
+    await click(openDetailButton(0));
+    expect(dialog().textContent).toContain("First Receipt");
+    expect(button("Previous", dialog()).disabled).toBe(true);
+    expect(button("Next", dialog()).disabled).toBe(false);
+
+    await click(button("Next", dialog()));
+    expect(dialog().textContent).toContain("Second Receipt");
+    expect(button("Previous", dialog()).disabled).toBe(false);
+    expect(button("Next", dialog()).disabled).toBe(false);
+
+    await click(button("Previous", dialog()));
+    expect(dialog().textContent).toContain("First Receipt");
+
+    await click(button("Next", dialog()));
+    expect(dialog().textContent).toContain("Second Receipt");
+
+    // Reaching the end of page 1 with next_cursor present auto-loads page 2 and navigates to r3.
+    await click(button("Next", dialog()));
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50, cursor: "nav-cursor-2" });
+    expect(dialog().textContent).toContain("Third Page-2 Receipt");
+    expect(button("Next", dialog()).disabled).toBe(true);
+    expect(button("Previous", dialog()).disabled).toBe(false);
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(3);
+
+    await click(button("Previous", dialog()));
+    expect(dialog().textContent).toContain("Second Receipt");
+  });
+
+  it("auto-advances to the next unconfirmed receipt after Confirm, persists the toggle, and closes with All confirmed when none remain", async () => {
+    const storeMap = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storeMap.get(key) ?? null,
+      setItem: (key: string, value: string) => { storeMap.set(key, value); },
+      removeItem: (key: string) => { storeMap.delete(key); },
+    });
+
+    const r1 = receiptSummary({ receipt_id: "adv-1", status: "imported", raw_shop_name: "First Imported", version: 1 });
+    const r2 = receiptSummary({ receipt_id: "adv-2", status: "confirmed", raw_shop_name: "Already Confirmed", version: 2 });
+    const r3 = receiptSummary({ receipt_id: "adv-3", status: "draft", raw_shop_name: "Third Draft", version: 1 });
+    const r4 = receiptSummary({ receipt_id: "adv-4", status: "needs_review", raw_shop_name: "Fourth Page-2 Review", version: 1 });
+
+    const clients = fakeClients([r1, r2, r3]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      if (req?.cursor === "adv-page-2") {
+        return ok<ReceiptListResult>({ receipts: [r4], next_cursor: null });
+      }
+      return ok<ReceiptListResult>({ receipts: [r1, r2, r3], next_cursor: "adv-page-2" });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = [r1, r2, r3, r4].find((row) => row.receipt_id === id) ?? r1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail(match), candidates: [] });
+    });
+
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailButton(0, "Szczegóły"));
+    const checkbox = inputByName("auto_advance_on_confirm", dialog());
+    expect(checkbox.checked).toBe(true);
+    expect(dialog().textContent).toContain("Przejdź do następnego po zatwierdzeniu");
+
+    // Confirm r1 -> skips confirmed r2 and opens draft r3 automatically.
+    await click(button("Zatwierdź dokument", dialog()));
+    expect(dialog().textContent).toContain("Third Draft");
+
+    // Confirm r3 -> auto-loads page 2 and opens needs_review r4 automatically.
+    await click(button("Zatwierdź dokument", dialog()));
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50, cursor: "adv-page-2" });
+    expect(dialog().textContent).toContain("Fourth Page-2 Review");
+
+    // Confirm r4 -> none left -> closes dialog with "Wszystko zatwierdzone." note while keeping all 4 rows in place.
+    await click(button("Zatwierdź dokument", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.textContent).toContain("Wszystko zatwierdzone.");
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(4);
+
+    // Toggling checkbox OFF persists in localStorage and survives remount.
+    await click(openDetailButton(0, "Szczegóły"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+    expect(storeMap.get("hestia.receipts.autoAdvance")).toBe("0");
+    await click(button("Zamknij", dialog()));
+
+    await act(async () => {
+      root.unmount();
+      root = createRoot(host);
+      await Promise.resolve();
+    });
+    await renderReceipts(clients, { locale: "en" });
+    await click(openDetailButton(0));
+    expect(inputByName("auto_advance_on_confirm", dialog()).checked).toBe(false);
+    await click(button("Confirm receipt", dialog()));
+    expect(dialog().textContent).toContain("First Imported");
+
+    // Throwing localStorage falls back cleanly to ON without error.
+    vi.stubGlobal("localStorage", {
+      getItem: () => { throw new Error("blocked"); },
+      setItem: () => { throw new Error("blocked"); },
+      removeItem: () => { throw new Error("blocked"); },
+    });
+    await act(async () => {
+      root.unmount();
+      root = createRoot(host);
+      await Promise.resolve();
+    });
+    await renderReceipts(clients, { locale: "en" });
+    await click(openDetailButton(0));
+    expect(inputByName("auto_advance_on_confirm", dialog()).checked).toBe(true);
   });
 });

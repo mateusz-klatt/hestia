@@ -422,7 +422,6 @@ const pl: Partial<Messages> = {
   "budget.receipts.sourceKindLabel": "Źródło",
   "budget.receipts.linkFilterLabel": "Powiązanie z transakcją",
   "budget.receipts.all": "Wszystkie",
-  "budget.receipts.apply": "Zastosuj filtry",
   "budget.receipts.clearFilters": "Wyczyść filtry",
   "budget.receipts.loading": "Wczytywanie paragonów i dowodów…",
   "budget.receipts.loadError": "Nie udało się wczytać paragonów i dowodów. Spróbuj ponownie.",
@@ -616,6 +615,10 @@ const pl: Partial<Messages> = {
   "budget.receipts.groupBusyError": "Dla jednego z wybranych dokumentów trwa już inna operacja.",
   "budget.receipts.groupNeedTwoMembers": "Do utworzenia grupy potrzebne są co najmniej dwa kwalifikujące się dokumenty.",
   "budget.receipts.groupInvalidMembers": "Wybrane dokumenty nie kwalifikują się dla tej transakcji bankowej (sprawdź daty, walutę i typ).",
+  "budget.receipts.prevAction": "Poprzedni",
+  "budget.receipts.nextAction": "Następny",
+  "budget.receipts.autoAdvanceLabel": "Przejdź do następnego po zatwierdzeniu",
+  "budget.receipts.allConfirmed": "Wszystko zatwierdzone.",
 
   "budget.consent.title": "Stan zgód i przypomnienia o odnowieniu",
   "budget.consent.intro": "Wyłącznie podgląd ważności zgód bankowych oraz zapisanych prób autoryzacji. Nie zamyka sesji w banku, niczego nie usuwa i nie wysyła żądań do banku.",
