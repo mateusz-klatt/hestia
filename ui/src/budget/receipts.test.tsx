@@ -9,7 +9,7 @@ import type { BudgetResult } from "./api";
 import { account, connection } from "./fixtures";
 import { ReceiptsView } from "./receipts";
 import type { ReceiptsApi } from "./receipts_api";
-import { REDACTED_VALUE } from "./receipts_model";
+import { REDACTED_VALUE, createPendingReceiptStore } from "./receipts_model";
 import type {
   ReceiptCandidate,
   ReceiptDetail,
@@ -211,6 +211,11 @@ let root: Root;
 
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  try {
+    localStorage.removeItem("hestia.receipts.autoAdvance");
+  } catch {
+    // Ignore when localStorage is unavailable in this test environment.
+  }
   await loadLocale("en");
   host = document.createElement("div");
   document.body.append(host);
@@ -223,6 +228,11 @@ afterEach(async () => {
     await Promise.resolve();
   });
   host.remove();
+  try {
+    localStorage.removeItem("hestia.receipts.autoAdvance");
+  } catch {
+    // Ignore when localStorage is unavailable in this test environment.
+  }
   await loadLocale("en");
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -290,6 +300,12 @@ function openDetailButton(index: number, label = "Details"): HTMLButtonElement {
   const found = [...host.querySelectorAll("button")].filter((btn) => btn.textContent === label)[index];
   if (found === undefined) throw new Error(`${label} button #${String(index)} missing`);
   return found;
+}
+
+function openDetailById(receiptId: string, label = "Details"): HTMLButtonElement {
+  const row = host.querySelector<HTMLElement>(`li[data-receipt-id="${receiptId}"]`);
+  if (row === null) throw new Error(`receipt row ${receiptId} missing`);
+  return button(label, row);
 }
 
 function linkRadio(value: string, scope: ParentNode): HTMLInputElement {
@@ -497,31 +513,40 @@ describe("ReceiptsView", () => {
       receiptSummary({ receipt_id: "p1-b", status: "needs_review", document_kind: "invoice", source_kind: "email", receipt_date: "2026-11-10", linked: true }),
       receiptSummary({ receipt_id: "p1-c", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-28", linked: true }),
     ]);
-    vi.mocked(clients.rApi.receiptsList)
-      .mockImplementationOnce(() => ok<ReceiptListResult>({ receipts: [receiptSummary()], next_cursor: null }))
-      .mockImplementationOnce(() => ok<ReceiptListResult>({
-        receipts: [
-          receiptSummary({ receipt_id: "p1-a", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-10", linked: true }),
-          receiptSummary({ receipt_id: "p1-b", status: "needs_review", document_kind: "invoice", source_kind: "email", receipt_date: "2026-11-10", linked: true }),
-          receiptSummary({ receipt_id: "p1-c", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-28", linked: true }),
-        ],
-        next_cursor: "cursor-page-2",
-      }))
-      .mockImplementationOnce(() => ok<ReceiptListResult>({
-        receipts: [
-          receiptSummary({ receipt_id: "p2-a", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-12", raw_shop_name: "Second Page Vendor", linked: true }),
-        ],
-        next_cursor: "cursor-expired",
-      }))
-      .mockImplementationOnce(() => fail(400, "budget_receipt_invalid_request"))
-      .mockImplementationOnce(() => ok<ReceiptListResult>({
-        receipts: [
-          receiptSummary({ receipt_id: "reloaded-p1", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-10", raw_shop_name: "Fresh Page 1 Vendor", linked: true }),
-        ],
-        next_cursor: "cursor-second-bad",
-      }))
-      .mockImplementationOnce(() => fail(400, "budget_receipt_invalid_request"))
-      .mockImplementationOnce(() => ok<ReceiptListResult>({ receipts: [receiptSummary()], next_cursor: null }));
+    let filteredPage1Loads = 0;
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      if (req?.cursor === "cursor-page-2") {
+        return ok<ReceiptListResult>({
+          receipts: [
+            receiptSummary({ receipt_id: "p2-a", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-12", raw_shop_name: "Second Page Vendor", linked: true }),
+          ],
+          next_cursor: "cursor-expired",
+        });
+      }
+      if (req?.cursor === "cursor-expired" || req?.cursor === "cursor-second-bad") {
+        return fail(400, "budget_receipt_invalid_request");
+      }
+      if (req?.month === "2026-11" && req.status === "needs_review" && req.document_kind === "invoice" && req.linked === true) {
+        filteredPage1Loads += 1;
+        if (filteredPage1Loads === 1) {
+          return ok<ReceiptListResult>({
+            receipts: [
+              receiptSummary({ receipt_id: "p1-a", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-10", linked: true }),
+              receiptSummary({ receipt_id: "p1-b", status: "needs_review", document_kind: "invoice", source_kind: "email", receipt_date: "2026-11-10", linked: true }),
+              receiptSummary({ receipt_id: "p1-c", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-28", linked: true }),
+            ],
+            next_cursor: "cursor-page-2",
+          });
+        }
+        return ok<ReceiptListResult>({
+          receipts: [
+            receiptSummary({ receipt_id: "reloaded-p1", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-10", raw_shop_name: "Fresh Page 1 Vendor", linked: true }),
+          ],
+          next_cursor: "cursor-second-bad",
+        });
+      }
+      return ok<ReceiptListResult>({ receipts: [receiptSummary()], next_cursor: null });
+    });
 
     vi.mocked(clients.rApi.receiptsSearch).mockImplementationOnce(() => ok<ReceiptListResult>({
       receipts: [
@@ -532,6 +557,7 @@ describe("ReceiptsView", () => {
     }));
 
     await renderReceipts(clients);
+    expect([...host.querySelectorAll("button")].some((b) => b.textContent === "Apply filters")).toBe(false);
     expect(host.textContent).not.toContain("Filtering loaded pages only");
 
     await choose(selectByName("status"), "needs_review");
@@ -540,9 +566,9 @@ describe("ReceiptsView", () => {
     await choose(selectByName("linked"), "linked");
     await typeInto(inputByName("date_from"), "2026-11-05");
     await typeInto(inputByName("date_to"), "2026-11-20");
-    await submit(host.querySelector(".budget-range"));
+    await settle();
 
-    expect(clients.rApi.receiptsList).toHaveBeenNthCalledWith(2, {
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({
       limit: 50,
       month: "2026-11",
       status: "needs_review",
@@ -553,7 +579,7 @@ describe("ReceiptsView", () => {
     expect(host.textContent).toContain("Filtering loaded pages only — load more to check older entries.");
 
     await click(button("Load more"));
-    expect(clients.rApi.receiptsList).toHaveBeenNthCalledWith(3, {
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({
       limit: 50,
       month: "2026-11",
       status: "needs_review",
@@ -655,7 +681,7 @@ describe("ReceiptsView", () => {
     expect(img?.getAttribute("src")).toBe("blob:synthetic-receipt");
     await click(button("Close", dialog()));
     expect(revokeUrlSpy).toHaveBeenCalledWith("blob:synthetic-receipt");
-    expect(storageGetSpy).not.toHaveBeenCalled();
+    expect(storageGetSpy.mock.calls.every(([key]) => key === "hestia.receipts.autoAdvance")).toBe(true);
     expect(storageSetSpy).not.toHaveBeenCalled();
   });
 
@@ -700,6 +726,7 @@ describe("ReceiptsView", () => {
     await click(button("Confirm receipt", d1));
     expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({ link: null }));
     expect("lines" in (vi.mocked(clients.rApi.confirmReceipt).mock.calls.at(-1)?.[0] ?? {})).toBe(false);
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
 
     // 2. Confirmed linked receipt also requires explicit Unlink before Confirm becomes active.
     vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
@@ -713,7 +740,6 @@ describe("ReceiptsView", () => {
       }),
       candidates: [],
     }));
-    await click(button("Close", dialog()));
     await click(button("Details"));
     const d2 = dialog();
     expect(d2.textContent).toContain("Confirmed receipts cannot keep or choose candidates on edit");
@@ -735,6 +761,7 @@ describe("ReceiptsView", () => {
       candidates: [candKeep, candAlt],
     }));
     await click(button("Close", dialog()));
+    await click(button("Discard", dialog()));
     await click(button("Details"));
     const d3 = dialog();
     expect(d3.textContent).toContain("Choose whether to keep the link, change it or unlink");
@@ -779,6 +806,7 @@ describe("ReceiptsView", () => {
       }));
 
     await click(button("Close", dialog()));
+    await click(button("Discard", dialog()));
     await click(button("Details"));
     const d4 = dialog();
     expect(linkRadio("candidate:0", d4).checked).toBe(false);
@@ -795,6 +823,7 @@ describe("ReceiptsView", () => {
 
     // 5. Server 409 budget_receipt_stale_source (ledger update while fields untouched) reloads detail and explains.
     await click(button("Close", dialog()));
+    await click(button("Discard", dialog()));
     await click(button("Details"));
     await click(linkRadio("candidate:0", dialog()));
     vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => fail(409, "budget_receipt_stale_source"));
@@ -822,6 +851,7 @@ describe("ReceiptsView", () => {
     await renderReceipts(clients, { revision: 1 });
     await click(openDetailButton(0));
     expect(dialog().textContent).toContain("Version 5");
+    await click(inputByName("auto_advance_on_confirm", dialog()));
 
     // Simulate a Budget reload bumping revision while Confirm starts: slowDetailReload (v5) is in flight.
     await renderReceipts(clients, { revision: 2 });
@@ -850,7 +880,7 @@ describe("ReceiptsView", () => {
 
     const loadingB = deferred<ReceiptDetailResult>();
     vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => loadingB.promise);
-    await click(openDetailButton(1));
+    await click(openDetailById("rec-b"));
     const drawerB = dialog();
     expect(drawerB.textContent).toContain("Loading document details");
     expect(drawerB.textContent).not.toContain("Secret Store A");
@@ -1050,7 +1080,7 @@ describe("ReceiptsView", () => {
     expect("lines" in (reformatCall ?? {})).toBe(false);
 
     // Reopen and edit net -> discount stays 1, gross updates cleanly; then edit discount -> net updates cleanly.
-    await click(button("Close", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
     await click(openDetailButton(0));
     const drawer2 = dialog();
     await typeInto(inputByName("line_net", drawer2), "8.00");
@@ -1077,7 +1107,7 @@ describe("ReceiptsView", () => {
     }));
 
     // Entering the redacted placeholder into an editable line is blocked before submit.
-    await click(button("Close", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
     await click(openDetailButton(0));
     const drawer3 = dialog();
     await typeInto(inputByName("line_name", drawer3), REDACTED_VALUE);
@@ -1542,7 +1572,7 @@ describe("ReceiptsView", () => {
     }));
 
     // 2. Explicitly picking a candidate in the drawer links it on confirm.
-    await click(button("Close", drawer1));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
     await click(openDetailButton(0));
     const drawer2 = dialog();
     expect(linkRadio("unlink", drawer2).checked).toBe(false);
@@ -1610,10 +1640,12 @@ describe("ReceiptsView", () => {
     vi.mocked(clients.rApi.receiptDetail)
       // 1. PL imported single "nip" -> banner + preselect + Zmień
       .mockImplementationOnce(() => ok({ receipt: baseDetail({ receipt_id: "rec-nip", status: "imported" }), candidates: [candNip] }))
-      // 2. PL draft single "distinctive" -> banner + Odłącz / bez powiązania -> sends link: null
+      // 2. PL draft single "distinctive" -> banner + Odłącz / bez powiązania -> sends link: null (+ post-confirm detail reload)
       .mockImplementationOnce(() => ok({ receipt: baseDetail({ receipt_id: "rec-dist", status: "draft" }), candidates: [candDist] }))
-      // 3. EN needs_review single "nip" -> 1-click Confirm sends candNip link
+      .mockImplementationOnce(() => ok({ receipt: baseDetail({ receipt_id: "rec-dist", status: "confirmed", version: 2 }), candidates: [] }))
+      // 3. EN needs_review single "nip" -> 1-click Confirm sends candNip link (+ post-confirm detail reload)
       .mockImplementationOnce(() => ok({ receipt: baseDetail({ receipt_id: "rec-review", status: "needs_review" }), candidates: [candNip] }))
+      .mockImplementationOnce(() => ok({ receipt: baseDetail({ receipt_id: "rec-review", status: "confirmed", linked: true, version: 2 }), candidates: [] }))
       // 4. EN single "generic" -> NO preselect
       .mockImplementationOnce(() => ok({ receipt: baseDetail({ receipt_id: "rec-gen", status: "imported" }), candidates: [candGeneric] }))
       // 5. EN single "none" -> NO preselect
@@ -1684,6 +1716,7 @@ describe("ReceiptsView", () => {
     await click(button("Odłącz / bez powiązania", dPl2));
     expect(dPl2.querySelector(".budget-receipt-suggested")).toBeNull();
     expect(linkRadio("unlink", dPl2).checked).toBe(true);
+    await click(inputByName("auto_advance_on_confirm", dPl2));
     const submitPl2 = dPl2.querySelector<HTMLButtonElement>("form.budget-receipt-confirm button.budget-primary");
     if (submitPl2 === null) throw new Error("expected submit button");
     expect(submitPl2.disabled).toBe(false);
@@ -1830,7 +1863,7 @@ describe("ReceiptsView", () => {
     }));
   });
 
-  it("keeps Odłącz across background refreshes and drawer reopen, and clears preselection if candidates change", async () => {
+  it("keeps Odłącz across background refreshes in the same open session, resets fresh on reopen, and clears preselection if candidates change", async () => {
     const candNipA = receiptCandidate({
       entry_reference: "a".repeat(64),
       candidate_token: "tok-a",
@@ -1859,16 +1892,18 @@ describe("ReceiptsView", () => {
     await click(button("Odłącz / bez powiązania", dialog()));
     expect(linkRadio("unlink", dialog()).checked).toBe(true);
 
-    // Background refresh returns the exact same strong candidate -> unlink must stay selected, banner gone.
+    // Background refresh in the same open session returns the exact same strong candidate -> unlink stays selected, banner gone.
     await renderReceipts(clients, { locale: "pl", revision: 2 });
     expect(linkRadio("unlink", dialog()).checked).toBe(true);
     expect(dialog().querySelector(".budget-receipt-suggested")).toBeNull();
 
-    // Close and re-open same receipt -> still unlink and no banner.
+    // INV-B: Close (discarding Unlink edit) and re-open same receipt -> builds a fresh draft from server detail.
     await click(button("Zamknij", dialog()));
+    await click(button("Odrzuć", dialog()));
     await click(openDetailButton(0, "Szczegóły"));
-    expect(linkRadio("unlink", dialog()).checked).toBe(true);
-    expect(dialog().querySelector(".budget-receipt-suggested")).toBeNull();
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
+    expect(linkRadio("unlink", dialog()).checked).toBe(false);
+    expect(dialog().querySelector(".budget-receipt-suggested")).not.toBeNull();
     await click(button("Zamknij", dialog()));
 
     // Untouched receipt where background refresh changes candidate set -> preselection must not re-apply to candNipB.
@@ -2167,6 +2202,7 @@ describe("ReceiptsView", () => {
 
     // Part 1: Keep survives nonce-only refresh and submits the originally reviewed tok-t1 (never swaps in tok-t2).
     await click(openDetailButton(0, "Szczegóły"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
     const keepRadioSame = linkRadio("keep", dialog());
     await click(keepRadioSame);
     expect(keepRadioSame.checked).toBe(true);
@@ -2540,5 +2576,1772 @@ describe("ReceiptsView", () => {
     await click(button("Unlink group", dialog()));
     expect(onAccessLoss).toHaveBeenCalled();
     expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("auto-applies filter changes without a button, debounces search, applies on Enter, and ignores stale responses", async () => {
+    const slowStatusResp = deferred<ReceiptListResult>();
+    const fastStatusResp = deferred<ReceiptListResult>();
+    const clients = fakeClients([receiptSummary({ receipt_id: "init-1", raw_shop_name: "Initial Store" })]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      if (req?.status === "imported") return slowStatusResp.promise;
+      if (req?.status === "confirmed") return fastStatusResp.promise;
+      return ok<ReceiptListResult>({
+        receipts: [receiptSummary({ receipt_id: "init-1", raw_shop_name: "Initial Store" })],
+        next_cursor: null,
+      });
+    });
+
+    await renderReceipts(clients);
+    expect([...host.querySelectorAll("button")].some((b) => b.textContent === "Apply filters")).toBe(false);
+    expect(clients.rApi.receiptsList).toHaveBeenCalledTimes(1);
+
+    // Immediate filter change triggers fetch without clicking any button, and stale response is ignored.
+    await choose(selectByName("status"), "imported");
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50, status: "imported" });
+
+    await choose(selectByName("status"), "confirmed");
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50, status: "confirmed" });
+
+    await act(async () => {
+      fastStatusResp.resolve({
+        ok: true,
+        data: {
+          receipts: [receiptSummary({ receipt_id: "fast-1", status: "confirmed", raw_shop_name: "Latest Confirmed Store" })],
+          next_cursor: null,
+        },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).toContain("Latest Confirmed Store");
+
+    await act(async () => {
+      slowStatusResp.resolve({
+        ok: true,
+        data: {
+          receipts: [receiptSummary({ receipt_id: "stale-1", status: "imported", raw_shop_name: "Stale Imported Store" })],
+          next_cursor: null,
+        },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.textContent).toContain("Latest Confirmed Store");
+    expect(host.textContent).not.toContain("Stale Imported Store");
+
+    // Search is debounced (~300 ms), and Enter applies immediately without a duplicate fetch.
+    vi.useFakeTimers();
+    try {
+      const searchClients = fakeClients([receiptSummary({ receipt_id: "s0", raw_shop_name: "Base Store" })]);
+      vi.mocked(searchClients.rApi.receiptsSearch).mockImplementation((req) => ok<ReceiptListResult>({
+        receipts: [receiptSummary({ receipt_id: `res-${req.query}`, raw_shop_name: `Found ${req.query}` })],
+        next_cursor: null,
+      }));
+      const onAccessLoss = vi.fn(() => false);
+      await act(async () => {
+        root.render(
+          <ReceiptsView
+            receiptsApi={searchClients.rApi}
+            actorKey="owner-debounce"
+            accounts={accounts}
+            connections={[connection]}
+            locale="en"
+            revision={0}
+            onAccessLoss={onAccessLoss}
+          />,
+        );
+        await Promise.resolve();
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+      await typeInto(inputByName("query"), "Bie");
+      await act(async () => { await vi.advanceTimersByTimeAsync(150); });
+      await typeInto(inputByName("query"), "Biedronka");
+      await act(async () => { await vi.advanceTimersByTimeAsync(299); });
+      expect(searchClients.rApi.receiptsSearch).not.toHaveBeenCalled();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      await act(async () => { await Promise.resolve(); });
+      expect(searchClients.rApi.receiptsSearch).toHaveBeenCalledTimes(1);
+      expect(searchClients.rApi.receiptsSearch).toHaveBeenLastCalledWith({ query: "Biedronka", limit: 50 });
+      expect(host.textContent).toContain("Found Biedronka");
+
+      await typeInto(inputByName("query"), "Lidl");
+      expect(searchClients.rApi.receiptsSearch).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        inputByName("query").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+        await Promise.resolve();
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      await act(async () => { await Promise.resolve(); });
+      expect(searchClients.rApi.receiptsSearch).toHaveBeenCalledTimes(2);
+      expect(searchClients.rApi.receiptsSearch).toHaveBeenLastCalledWith({ query: "Lidl", limit: 50 });
+      expect(host.textContent).toContain("Found Lidl");
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(searchClients.rApi.receiptsSearch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("quietly refreshes the loaded range after edit or delete, keeping loaded pages and scroll without full loading state", async () => {
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    let page1Rows: ReceiptSummary[] = [
+      receiptSummary({ receipt_id: "p1-a", status: "needs_review", raw_shop_name: "Page One Shop A", total_amount: "12.50", version: 1 }),
+      receiptSummary({ receipt_id: "p1-b", status: "confirmed", raw_shop_name: "Page One Shop B", total_amount: "12.50", version: 1 }),
+    ];
+    let page2Rows: ReceiptSummary[] = [
+      receiptSummary({ receipt_id: "p2-a", status: "needs_review", raw_shop_name: "Page Two Shop A", total_amount: "12.50", version: 2 }),
+      receiptSummary({ receipt_id: "p2-b", status: "needs_review", raw_shop_name: "Page Two Shop B", total_amount: "12.50", version: 1 }),
+    ];
+
+    const pendingRefreshPage1 = deferred<ReceiptListResult>();
+    let holdNextPage1 = false;
+    const clients = fakeClients(page1Rows);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      if (req?.cursor === "cursor-2") {
+        return ok<ReceiptListResult>({ receipts: page2Rows, next_cursor: "cursor-3" });
+      }
+      if (req?.cursor === "cursor-3") {
+        return ok<ReceiptListResult>({ receipts: [], next_cursor: null });
+      }
+      if (holdNextPage1) {
+        holdNextPage1 = false;
+        return pendingRefreshPage1.promise;
+      }
+      return ok<ReceiptListResult>({ receipts: page1Rows, next_cursor: "cursor-2" });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = [...page1Rows, ...page2Rows].find((row) => row.receipt_id === id)
+        ?? receiptSummary({ receipt_id: id, total_amount: "12.50" });
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...match, lines: singleLine }), candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => {
+      const target = [...page1Rows, ...page2Rows].find((row) => row.receipt_id === req.receipt_id);
+      const updated = receiptDetail({
+        ...(target ?? receiptSummary({ receipt_id: req.receipt_id })),
+        status: "confirmed",
+        ...(req.raw_shop_name === undefined ? {} : { raw_shop_name: req.raw_shop_name }),
+        total_amount: req.total_amount,
+        version: req.expected_version + 1,
+        lines: singleLine,
+      });
+      page1Rows = page1Rows.map((row) => (row.receipt_id === updated.receipt_id ? updated : row));
+      page2Rows = page2Rows.map((row) => (row.receipt_id === updated.receipt_id ? updated : row));
+      return ok({ ok: true, receipt: updated });
+    });
+    vi.mocked(clients.rApi.deleteReceipt).mockImplementation((req) => {
+      page1Rows = page1Rows.filter((row) => row.receipt_id !== req.receipt_id);
+      page2Rows = page2Rows.filter((row) => row.receipt_id !== req.receipt_id);
+      return ok({ ok: true, deleted: true });
+    });
+
+    let simulatedScrollY = 400;
+    let p2aDocTop = 580;
+    const origScrollY = Object.getOwnPropertyDescriptor(window, "scrollY");
+    Object.defineProperty(window, "scrollY", {
+      configurable: true,
+      get: () => simulatedScrollY,
+    });
+    const scrollToSpy = vi.spyOn(window, "scrollTo").mockImplementation((...args: unknown[]) => {
+      if (typeof args[1] === "number") simulatedScrollY = args[1];
+    });
+
+    try {
+      await renderReceipts(clients);
+      await click(button("Load more"));
+      expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(4);
+      const listElementBefore = host.querySelector("ul.budget-entry-list");
+      const p2aEl = host.querySelector<HTMLElement>('li[data-receipt-id="p2-a"]');
+      if (p2aEl === null) throw new Error("expected p2-a row");
+      vi.spyOn(p2aEl, "getBoundingClientRect").mockImplementation(() => {
+        const top = p2aDocTop - simulatedScrollY;
+        return {
+          top,
+          bottom: top + 40,
+          left: 0,
+          right: 200,
+          width: 200,
+          height: 40,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        };
+      });
+
+      // Edit & confirm a page-2 receipt -> quiet refresh keeps list mounted, shows subtle Refreshing…,
+      // refetches all loaded pages sequentially, and uses anchor-based scroll restore (keeping p2-a's
+      // viewport top constant at 180 without overcorrecting when both docTop and window.scrollY shift).
+      await click(openDetailById("p2-a"));
+      const drawer = dialog();
+      await click(inputByName("auto_advance_on_confirm", drawer));
+      await typeInto(inputByName("raw_shop_name", drawer), "Page Two Shop A Edited");
+      holdNextPage1 = true;
+
+      await act(async () => {
+        button("Confirm receipt", drawer).click();
+        await Promise.resolve();
+      });
+      await settle();
+
+      expect(host.querySelector("ul.budget-entry-list")).toBe(listElementBefore);
+      expect(host.textContent).toContain("Refreshing…");
+      expect(host.textContent).not.toContain("Loading documents…");
+
+      // Simulate row above shrinking by 60px (docTop 580 -> 520) AND scroll drifting to 100.
+      // Live top is 420 (delta = +240 from saved anchorTop 180); target scrollY must be 100 + 240 = 340 (not 400 + 240 = 640).
+      p2aDocTop = 520;
+      simulatedScrollY = 100;
+      await act(async () => {
+        pendingRefreshPage1.resolve({ ok: true, data: { receipts: page1Rows, next_cursor: "cursor-2" } });
+        await Promise.resolve();
+      });
+      await settle();
+
+      expect(host.querySelector("ul.budget-entry-list")).toBe(listElementBefore);
+      expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(4);
+      expect(host.textContent).toContain("Page One Shop A");
+      expect(host.textContent).toContain("Page Two Shop A Edited");
+      expect(host.textContent).toContain("Page Two Shop B");
+      expect(button("Load more").disabled).toBe(false);
+      expect(scrollToSpy).toHaveBeenCalledWith(0, 340);
+      expect(simulatedScrollY).toBe(340);
+      expect(p2aEl.getBoundingClientRect().top).toBe(180);
+
+      // Delete another page-2 receipt -> anchor row p2-b disappears, so fallback restores absolute scrollY (340).
+      await click(button("Close", dialog()));
+      await click(openDetailById("p2-b"));
+      const pendingDeleteRefresh = deferred<ReceiptListResult>();
+      vi.mocked(clients.rApi.receiptsList).mockImplementationOnce(() => pendingDeleteRefresh.promise);
+      await click(button("Delete document", dialog()));
+      await act(async () => {
+        button("Confirm deletion", dialog()).click();
+        await Promise.resolve();
+      });
+      await settle();
+      simulatedScrollY = 0;
+      await act(async () => {
+        pendingDeleteRefresh.resolve({ ok: true, data: { receipts: page1Rows, next_cursor: "cursor-2" } });
+        await Promise.resolve();
+      });
+      await settle();
+
+      expect(host.querySelector("ul.budget-entry-list")).toBe(listElementBefore);
+      expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(3);
+      expect(host.textContent).toContain("Page One Shop A");
+      expect(host.textContent).toContain("Page Two Shop A Edited");
+      expect(host.textContent).not.toContain("Page Two Shop B");
+      expect(simulatedScrollY).toBe(340);
+    } finally {
+      if (origScrollY !== undefined) {
+        Object.defineProperty(window, "scrollY", origScrollY);
+      } else {
+        Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+      }
+    }
+  });
+
+  it("ignores stale list/search/refresh generations and coalesces concurrent refreshes via dirty flag", async () => {
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const d1 = receiptSummary({ receipt_id: "d1", status: "needs_review", raw_shop_name: "Lidl First", total_amount: "12.50", version: 1 });
+    const d2 = receiptSummary({ receipt_id: "d2", status: "needs_review", raw_shop_name: "Lidl Second", total_amount: "12.50", version: 1 });
+    const d2Edited = { ...d2, status: "confirmed" as const, raw_shop_name: "Lidl Fresh", version: 2 };
+
+    const staleSearchResp = deferred<ReceiptListResult>();
+    const staleRefreshResp = deferred<ReceiptListResult>();
+    let searchCalls = 0;
+    const clients = fakeClients([d1, d2]);
+    vi.mocked(clients.rApi.receiptsSearch).mockImplementation(() => {
+      searchCalls += 1;
+      if (searchCalls === 1) return staleSearchResp.promise;
+      if (searchCalls === 2) return staleRefreshResp.promise;
+      return ok<ReceiptListResult>({ receipts: [d2Edited], next_cursor: null });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = id === "d1" ? d1 : d2;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...match, lines: singleLine }), candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation(() => ok({
+      ok: true,
+      receipt: receiptDetail({ ...d2Edited, lines: singleLine }),
+    }));
+
+    await renderReceipts(clients);
+
+    await typeInto(inputByName("query"), "Lidl");
+    await submit(host.querySelector(".budget-range"));
+    expect(searchCalls).toBe(1);
+
+    await act(async () => {
+      staleSearchResp.resolve({ ok: true, data: { receipts: [d1, d2], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(2);
+
+    // Delete d1 -> starts quiet refetch #1 (staleRefreshResp, pending).
+    await click(openDetailById("d1"));
+    await click(button("Delete document", dialog()));
+    await click(button("Confirm deletion", dialog()));
+    expect(searchCalls).toBe(2);
+
+    // While quiet refetch #1 is pending, edit & confirm d2 -> marks dirty instead of firing an overlapping request.
+    await click(openDetailById("d2"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+    await typeInto(inputByName("raw_shop_name", dialog()), "Lidl Fresh");
+    await act(async () => {
+      button("Confirm receipt", dialog()).click();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(searchCalls).toBe(2);
+
+    // Older refresh resolves with stale [d1, d2] -> discarded because dirty; runs exactly one follow-up refresh returning [d2Edited].
+    await act(async () => {
+      staleRefreshResp.resolve({ ok: true, data: { receipts: [d1, d2], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(searchCalls).toBe(3);
+    expect(host.querySelector('[data-receipt-id="d1"]')).toBeNull();
+    expect(host.textContent).toContain("Lidl Fresh");
+    expect(host.textContent).not.toContain("Lidl Second");
+  });
+
+  it("navigates Previous and Next by ID, auto-loads the next page at the end, and advances to same index or closes when current ID disappears", async () => {
+    const r1 = receiptSummary({ receipt_id: "nav-1", status: "imported", raw_shop_name: "First Receipt", version: 1 });
+    const r2 = receiptSummary({ receipt_id: "nav-2", status: "imported", raw_shop_name: "Second Receipt", version: 1 });
+    const r3 = receiptSummary({ receipt_id: "nav-3", status: "imported", raw_shop_name: "Third Page-2 Receipt", version: 1 });
+
+    let page1 = [r1, r2];
+    let page2 = [r3];
+    const clients = fakeClients(page1);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      const filterImported = req?.status === "imported";
+      const p1 = filterImported ? page1.filter((row) => row.status === "imported") : page1;
+      const p2 = filterImported ? page2.filter((row) => row.status === "imported") : page2;
+      if (req?.cursor === "nav-cursor-2") {
+        return ok<ReceiptListResult>({ receipts: p2, next_cursor: null });
+      }
+      return ok<ReceiptListResult>({ receipts: p1, next_cursor: p2.length > 0 ? "nav-cursor-2" : null });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = [...page1, ...page2].find((row) => row.receipt_id === id) ?? r1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail(match), candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => {
+      const all = [...page1, ...page2];
+      const match = all.find((row) => row.receipt_id === req.receipt_id) ?? r1;
+      const updated = receiptDetail({ ...match, status: "confirmed", version: req.expected_version + 1 });
+      page1 = page1.map((row) => (row.receipt_id === req.receipt_id ? updated : row));
+      page2 = page2.map((row) => (row.receipt_id === req.receipt_id ? updated : row));
+      return ok({ ok: true, receipt: updated });
+    });
+
+    await renderReceipts(clients);
+    await click(openDetailById("nav-1"));
+    expect(dialog().textContent).toContain("First Receipt");
+    expect(button("Previous", dialog()).disabled).toBe(true);
+    expect(button("Next", dialog()).disabled).toBe(false);
+
+    await click(button("Next", dialog()));
+    expect(dialog().textContent).toContain("Second Receipt");
+    expect(button("Previous", dialog()).disabled).toBe(false);
+    expect(button("Next", dialog()).disabled).toBe(false);
+
+    await click(button("Previous", dialog()));
+    expect(dialog().textContent).toContain("First Receipt");
+
+    await click(button("Next", dialog()));
+    expect(dialog().textContent).toContain("Second Receipt");
+
+    // Reaching the end of page 1 with next_cursor present auto-loads page 2 and navigates to r3.
+    await click(button("Next", dialog()));
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50, cursor: "nav-cursor-2" });
+    expect(dialog().textContent).toContain("Third Page-2 Receipt");
+    expect(button("Next", dialog()).disabled).toBe(true);
+    expect(button("Previous", dialog()).disabled).toBe(false);
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(3);
+    await click(button("Close", dialog()));
+
+    // Under "Imported" filter with auto-advance OFF, confirming the middle row removes it on refresh
+    // and selects the row now at the same index (nav-3); confirming the tail falls back to nav-1; confirming the last closes.
+    await choose(selectByName("status"), "imported");
+    await settle();
+    await click(button("Load more"));
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(3);
+
+    await click(openDetailById("nav-2"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+    await click(button("Confirm receipt", dialog()));
+    expect(host.querySelector('[data-receipt-id="nav-2"]')).toBeNull();
+    expect(dialog().textContent).toContain("Third Page-2 Receipt");
+    expect(button("Previous", dialog()).disabled).toBe(false);
+    expect(button("Next", dialog()).disabled).toBe(true);
+
+    await click(button("Confirm receipt", dialog()));
+    expect(dialog().textContent).toContain("First Receipt");
+    expect(button("Previous", dialog()).disabled).toBe(true);
+    expect(button("Next", dialog()).disabled).toBe(true);
+
+    await click(button("Confirm receipt", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(0);
+  });
+
+  it("auto-advances after refresh, persists the toggle, closes with All confirmed when none remain, and never loops on unchanged statuses", async () => {
+    const storeMap = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storeMap.get(key) ?? null,
+      setItem: (key: string, value: string) => { storeMap.set(key, value); },
+      removeItem: (key: string) => { storeMap.delete(key); },
+    });
+
+    const r1 = receiptSummary({ receipt_id: "adv-1", status: "imported", raw_shop_name: "First Imported", version: 1 });
+    let rowsState: ReceiptSummary[] = [
+      r1,
+      receiptSummary({ receipt_id: "adv-2", status: "confirmed", raw_shop_name: "Already Confirmed", version: 2 }),
+      receiptSummary({ receipt_id: "adv-3", status: "draft", raw_shop_name: "Third Draft", version: 1 }),
+      receiptSummary({ receipt_id: "adv-4", status: "needs_review", raw_shop_name: "Fourth Page-2 Review", version: 1 }),
+    ];
+
+    const clients = fakeClients(rowsState.slice(0, 3));
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      if (req?.cursor === "adv-page-2") {
+        return ok<ReceiptListResult>({ receipts: rowsState.slice(3), next_cursor: null });
+      }
+      return ok<ReceiptListResult>({ receipts: rowsState.slice(0, 3), next_cursor: "adv-page-2" });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = rowsState.find((row) => row.receipt_id === id) ?? r1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail(match), candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => {
+      const match = rowsState.find((row) => row.receipt_id === req.receipt_id) ?? r1;
+      const updated = receiptDetail({ ...match, status: "confirmed", version: req.expected_version + 1 });
+      rowsState = rowsState.map((row) => (row.receipt_id === req.receipt_id ? updated : row));
+      return ok({ ok: true, receipt: updated });
+    });
+
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailById("adv-1", "Szczegóły"));
+    const checkbox = inputByName("auto_advance_on_confirm", dialog());
+    expect(checkbox.checked).toBe(true);
+    expect(dialog().textContent).toContain("Przejdź do następnego po zatwierdzeniu");
+
+    // Confirm adv-1 -> waits for refresh, skips confirmed adv-2, opens draft adv-3.
+    await click(button("Zatwierdź dokument", dialog()));
+    expect(dialog().textContent).toContain("Third Draft");
+
+    // Confirm adv-3 -> auto-loads page 2 and opens needs_review adv-4.
+    await click(button("Zatwierdź dokument", dialog()));
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50, cursor: "adv-page-2" });
+    expect(dialog().textContent).toContain("Fourth Page-2 Review");
+
+    // Confirm adv-4 -> none left -> closes dialog with "Wszystko zatwierdzone." while keeping all 4 rows loaded.
+    await click(button("Zatwierdź dokument", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.textContent).toContain("Wszystko zatwierdzone.");
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(4);
+
+    // Toggling checkbox OFF persists in localStorage and survives remount.
+    await click(openDetailById("adv-1", "Szczegóły"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+    expect(storeMap.get("hestia.receipts.autoAdvance")).toBe("0");
+    await click(button("Zamknij", dialog()));
+
+    await act(async () => {
+      root.unmount();
+      root = createRoot(host);
+      await Promise.resolve();
+    });
+    await renderReceipts(clients, { locale: "en" });
+    await click(openDetailById("adv-1"));
+    expect(inputByName("auto_advance_on_confirm", dialog()).checked).toBe(false);
+    await click(button("Confirm receipt", dialog()));
+    expect(dialog().textContent).toContain("First Imported");
+
+    // Throwing localStorage falls back cleanly to ON without error.
+    vi.stubGlobal("localStorage", {
+      getItem: () => { throw new Error("blocked"); },
+      setItem: () => { throw new Error("blocked"); },
+      removeItem: () => { throw new Error("blocked"); },
+    });
+    await act(async () => {
+      root.unmount();
+      root = createRoot(host);
+      await Promise.resolve();
+    });
+    await renderReceipts(clients, { locale: "en" });
+    await click(openDetailById("adv-1"));
+    expect(inputByName("auto_advance_on_confirm", dialog()).checked).toBe(true);
+    await click(button("Close", dialog()));
+
+    // No-loop guard: two linked needs_review receipts whose status stays unchanged stop after one full pass.
+    const u1 = receiptSummary({
+      receipt_id: "u1",
+      status: "needs_review",
+      linked: true,
+      linked_account_id: "local-a",
+      linked_entry_ref: "a".repeat(64),
+      raw_shop_name: "Linked Review One",
+      version: 1,
+    });
+    const u2 = receiptSummary({
+      receipt_id: "u2",
+      status: "needs_review",
+      linked: true,
+      linked_account_id: "local-a",
+      linked_entry_ref: "b".repeat(64),
+      raw_shop_name: "Linked Review Two",
+      version: 1,
+    });
+    const noLoopClients = fakeClients([u1, u2]);
+    vi.mocked(noLoopClients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = id === "u1" ? u1 : u2;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail(match), candidates: [] });
+    });
+    vi.mocked(noLoopClients.rApi.confirmReceipt).mockImplementation((req) => {
+      const match = req.receipt_id === "u1" ? u1 : u2;
+      return ok({
+        ok: true,
+        receipt: receiptDetail({ ...match, status: "needs_review", linked: true, version: req.expected_version + 1 }),
+      });
+    });
+
+    await renderReceipts(noLoopClients, { revision: 1 });
+    await click(openDetailById("u1"));
+    expect(dialog().textContent).toContain("Linked Review One");
+
+    await click(linkRadio("unlink", dialog()));
+    await click(button("Confirm receipt", dialog()));
+    expect(dialog().textContent).toContain("Linked Review Two");
+
+    await click(linkRadio("unlink", dialog()));
+    await click(button("Confirm receipt", dialog()));
+    expect(dialog().textContent).toContain("Linked Review Two");
+    expect(dialog().textContent).not.toContain("Linked Review One");
+    expect(host.textContent).not.toContain("All confirmed.");
+
+    await click(linkRadio("unlink", dialog()));
+    await click(button("Confirm receipt", dialog()));
+    expect(dialog().textContent).toContain("Linked Review Two");
+    expect(dialog().textContent).not.toContain("Linked Review One");
+    expect(host.textContent).not.toContain("All confirmed.");
+  });
+
+  it("mounts ReceiptsView without throwing and renders the loaded receipts list", async () => {
+    const clients = fakeClients([
+      receiptSummary({ receipt_id: "mount-1", raw_shop_name: "Clean Mount Store", version: 1 }),
+    ]);
+    const onAccessLoss = vi.fn(() => false);
+    await act(async () => {
+      expect(() => {
+        root.render(
+          <ReceiptsView
+            receiptsApi={clients.rApi}
+            actorKey="owner-mount"
+            accounts={accounts}
+            connections={[connection]}
+            locale="en"
+            revision={0}
+            onAccessLoss={onAccessLoss}
+          />,
+        );
+      }).not.toThrow();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.querySelector('[data-receipt-id="mount-1"]')?.textContent).toContain("Clean Mount Store");
+  });
+
+  it("closes group controller before refresh so grouping under Unlinked filter falls back cleanly to same-index survivor", async () => {
+    const g1 = receiptSummary({ receipt_id: "ug-1", status: "confirmed", linked: false, raw_shop_name: "First Unlinked", total_amount: "20.00", version: 2 });
+    const g2 = receiptSummary({ receipt_id: "ug-2", status: "confirmed", linked: false, raw_shop_name: "Second Unlinked", total_amount: "30.00", version: 2 });
+    const g3 = receiptSummary({ receipt_id: "ug-3", status: "confirmed", linked: false, raw_shop_name: "Third Surviving Unlinked", total_amount: "15.00", version: 1 });
+    const groupTx = {
+      account_id: "local-a",
+      entry_reference: "c".repeat(64),
+      amount: "50.00",
+      currency: "PLN",
+      credit_debit_indicator: "DBIT" as const,
+      transaction_date: "2026-11-14",
+      booking_date: "2026-11-14",
+      value_date: "2026-11-14",
+      merchant_token_hit: false,
+      match_strength: "none" as const,
+      date_distance: 0,
+      evidence_fingerprint: "fp-ug-1",
+      candidate_token: "tok-ug-1",
+    };
+
+    let unlinkedRows: ReceiptSummary[] = [g1, g2, g3];
+    const clients = fakeClients(unlinkedRows);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => ok<ReceiptListResult>({
+      receipts: req?.linked === false ? unlinkedRows : [g1, g2, g3],
+      next_cursor: null,
+    }));
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = [g1, g2, g3].find((row) => row.receipt_id === id) ?? g1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail(match), candidates: [], group_candidates: [] });
+    });
+    clients.rApi.receiptGroupCandidates = vi.fn<NonNullable<ReceiptsApi["receiptGroupCandidates"]>>(() => ok<ReceiptGroupCandidatesResult>({
+      anchor_receipt_id: "ug-1",
+      transactions: [groupTx],
+      proposals: [],
+      eligible_receipts: [g1, g2],
+      eligible_evidence: [],
+      no_bank_data: false,
+    }));
+    clients.rApi.linkReceiptGroup = vi.fn<NonNullable<ReceiptsApi["linkReceiptGroup"]>>(() => {
+      unlinkedRows = [g3];
+      return ok<ReceiptGroupLinkResult>({
+        ok: true,
+        group: { group_id: "grp-ug", group_version: 1, group_status: "confirmed", member_count: 2, evidence_receipt_id: null, fee_amount: null },
+        members: [{ ...g1, linked: true, version: 3 }, { ...g2, linked: true, version: 3 }],
+        evidence: null,
+        linked_account_id: "local-a",
+        linked_entry_ref: "c".repeat(64),
+      });
+    });
+
+    await renderReceipts(clients);
+    await choose(selectByName("linked"), "unlinked");
+    await settle();
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(3);
+
+    await click(openDetailById("ug-1"));
+    await click(button("Group with other receipts", dialog()));
+    const groupModal = [...host.querySelectorAll<HTMLElement>('[role="dialog"]')].at(-1);
+    if (groupModal === undefined) throw new Error("Expected group controller modal");
+    const txRadio = groupModal.querySelector<HTMLInputElement>('input[name="group_tx_choice"][value="0"]');
+    if (txRadio === null) throw new Error("Expected tx choice");
+    await click(txRadio);
+    for (const box of groupModal.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) {
+      if (!box.checked) await click(box);
+    }
+    await click(button("Confirm group link", groupModal));
+
+    // Group controller closed before refresh, ug-1 disappeared under Unlinked filter -> drawer switches to ug-3.
+    expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(dialog().textContent).toContain("Third Surviving Unlinked");
+    expect(dialog().textContent).not.toContain("First Unlinked");
+    expect(host.textContent).toContain("Receipt group linked.");
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(1);
+  });
+
+  it("applies the shared post-refresh fallback when confirming while a debounced search is loading or when search omits the open receipt", async () => {
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const r1 = receiptSummary({ receipt_id: "srch-1", status: "needs_review", raw_shop_name: "Lidl One", total_amount: "12.50", version: 1 });
+    const r2 = receiptSummary({ receipt_id: "srch-2", status: "needs_review", raw_shop_name: "Lidl Two", total_amount: "12.50", version: 1 });
+    const r3 = receiptSummary({ receipt_id: "srch-3", status: "needs_review", raw_shop_name: "Biedronka Three", total_amount: "12.50", version: 1 });
+
+    const pendingFirstSearch = deferred<ReceiptListResult>();
+    let searchCallCount = 0;
+    const clients = fakeClients([r1, r2, r3]);
+    vi.mocked(clients.rApi.receiptsSearch).mockImplementation((req) => {
+      searchCallCount += 1;
+      if (req.query === "EmptyQuery") {
+        return ok<ReceiptListResult>({ receipts: [], next_cursor: null });
+      }
+      if (searchCallCount === 1) return pendingFirstSearch.promise;
+      return ok<ReceiptListResult>({ receipts: [r3], next_cursor: null });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = [r1, r2, r3].find((row) => row.receipt_id === id) ?? r1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...match, lines: singleLine }), candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => ok({
+      ok: true,
+      receipt: receiptDetail({ ...r2, status: "confirmed", version: req.expected_version + 1, lines: singleLine }),
+    }));
+
+    await renderReceipts(clients);
+    await click(openDetailById("srch-2"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+
+    // Start a search that stays in loading state while confirming srch-2.
+    await typeInto(inputByName("query"), "Biedronka");
+    await submit(host.querySelector(".budget-range"));
+    expect(searchCallCount).toBe(1);
+
+    // Confirming while search is loading supersedes it with a post-confirm search returning [r3],
+    // and the shared post-refresh handler switches the drawer from omitted srch-2 to r3.
+    await click(button("Confirm receipt", dialog()));
+    expect(searchCallCount).toBe(2);
+    expect(dialog().textContent).toContain("Biedronka Three");
+    expect(dialog().textContent).not.toContain("Lidl Two");
+
+    // Late resolution of the superseded search is ignored.
+    await act(async () => {
+      pendingFirstSearch.resolve({ ok: true, data: { receipts: [r1, r2], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(dialog().textContent).toContain("Biedronka Three");
+
+    // A subsequent search returning empty results closes the drawer via the same shared fallback.
+    await typeInto(inputByName("query"), "EmptyQuery");
+    await submit(host.querySelector(".budget-range"));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("coalesces multi-participant settlement refetches into one in-flight plus at most one dirty follow-up and cancels on unmount", async () => {
+    const store = createPendingReceiptStore();
+    const m1 = receiptSummary({ receipt_id: "coal-1", raw_shop_name: "Group Member 1", version: 1 });
+    const m2 = receiptSummary({ receipt_id: "coal-2", raw_shop_name: "Group Member 2", version: 1 });
+    const ev1 = receiptSummary({ receipt_id: "coal-ev", raw_shop_name: "Group Evidence", version: 1 });
+    const freshRow = receiptSummary({ receipt_id: "coal-1", raw_shop_name: "Group Member 1 Unlinked", version: 2 });
+
+    const t1 = store.tryAcquire("coal-1", "group_unlink");
+    const t2 = store.tryAcquire("coal-2", "group_unlink");
+    const t3 = store.tryAcquire("coal-ev", "group_unlink");
+    if (t1 === null || t2 === null || t3 === null) throw new Error("expected locks");
+
+    const refresh1 = deferred<ReceiptListResult>();
+    let listCallCount = 0;
+    const clients = fakeClients([m1, m2, ev1]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation(() => {
+      listCallCount += 1;
+      if (listCallCount === 1) return ok<ReceiptListResult>({ receipts: [m1, m2, ev1], next_cursor: null });
+      if (listCallCount === 2) return refresh1.promise;
+      return ok<ReceiptListResult>({ receipts: [freshRow], next_cursor: null });
+    });
+
+    const onAccessLoss = vi.fn(() => false);
+    await act(async () => {
+      root.render(
+        <ReceiptsView
+          receiptsApi={clients.rApi}
+          pendingStore={store}
+          actorKey="owner-coalesce"
+          accounts={accounts}
+          connections={[connection]}
+          locale="en"
+          revision={0}
+          onAccessLoss={onAccessLoss}
+        />,
+      );
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listCallCount).toBe(1);
+
+    // Release all 3 participant locks synchronously -> only 1 refresh starts while the others mark dirty.
+    await act(async () => {
+      store.release("coal-1", t1, "group_unlinked");
+      store.release("coal-2", t2, "group_unlinked");
+      store.release("coal-ev", t3, "group_unlinked");
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listCallCount).toBe(2);
+
+    // Completing refresh #1 triggers exactly 1 dirty follow-up pass (#3) and renders the fresh row.
+    await act(async () => {
+      refresh1.resolve({ ok: true, data: { receipts: [m1, m2, ev1], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listCallCount).toBe(3);
+    expect(host.textContent).toContain("Group Member 1 Unlinked");
+
+    // Unmounting while a dirty refresh is in flight cancels the follow-up pass completely.
+    const u1 = store.tryAcquire("coal-1", "group_unlink");
+    const u2 = store.tryAcquire("coal-2", "group_unlink");
+    if (u1 === null || u2 === null) throw new Error("expected locks");
+    const refreshBeforeUnmount = deferred<ReceiptListResult>();
+    vi.mocked(clients.rApi.receiptsList).mockImplementationOnce(() => refreshBeforeUnmount.promise);
+
+    await act(async () => {
+      store.release("coal-1", u1, "group_unlinked");
+      store.release("coal-2", u2, "group_unlinked");
+      await Promise.resolve();
+    });
+    expect(listCallCount).toBe(3); // mockImplementationOnce intercepted call #4
+    const callsBeforeUnmount = vi.mocked(clients.rApi.receiptsList).mock.calls.length;
+
+    await act(async () => {
+      root.unmount();
+      root = createRoot(host);
+      refreshBeforeUnmount.resolve({ ok: true, data: { receipts: [freshRow], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(vi.mocked(clients.rApi.receiptsList).mock.calls.length).toBe(callsBeforeUnmount);
+  });
+
+  it("keeps the drawer open when search omits a receipt with a dirty draft and applies deferred reconciliation on discard or save", async () => {
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const r1 = receiptSummary({ receipt_id: "dirty-s1", status: "needs_review", raw_shop_name: "Lidl Draft One", total_amount: "12.50", version: 1 });
+    const r2 = receiptSummary({ receipt_id: "dirty-s2", status: "needs_review", raw_shop_name: "Biedronka Survivor", total_amount: "12.50", version: 1 });
+    const r3 = receiptSummary({ receipt_id: "dirty-s3", status: "needs_review", raw_shop_name: "Carrefour Last", total_amount: "12.50", version: 1 });
+
+    let searchResults: ReceiptSummary[] = [r2];
+    const clients = fakeClients([r1, r2, r3]);
+    vi.mocked(clients.rApi.receiptsSearch).mockImplementation(() => ok<ReceiptListResult>({
+      receipts: searchResults,
+      next_cursor: null,
+    }));
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = [r1, r2, r3].find((row) => row.receipt_id === id) ?? r1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...match, lines: singleLine }), candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => {
+      const match = [r1, r2, r3].find((row) => row.receipt_id === req.receipt_id) ?? r1;
+      return ok({
+        ok: true,
+        receipt: receiptDetail({
+          ...match,
+          status: "confirmed",
+          raw_shop_name: req.raw_shop_name ?? match.raw_shop_name,
+          version: req.expected_version + 1,
+          lines: singleLine,
+        }),
+      });
+    });
+
+    await renderReceipts(clients);
+    await click(openDetailById("dirty-s1"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+
+    // Edit r1 so its draft is dirty, then search for something that omits r1.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Unsaved Merchant Edit");
+    await typeInto(inputByName("query"), "Biedronka");
+    await submit(host.querySelector(".budget-range"));
+
+    // List updated to [r2], but drawer MUST stay on r1 with unsaved edits preserved and Prev/Next disabled.
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(1);
+    expect(host.querySelector('[data-receipt-id="dirty-s2"]')).not.toBeNull();
+    expect(dialog().textContent).toContain("Lidl Draft One");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Unsaved Merchant Edit");
+    expect(button("Previous", dialog()).disabled).toBe(true);
+    expect(button("Next", dialog()).disabled).toBe(true);
+
+    // Reverting the edit (discard) makes the draft clean -> deferred reconciliation switches cleanly to r2.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Lidl Draft One");
+    await settle();
+    expect(dialog().textContent).toContain("Biedronka Survivor");
+    expect(dialog().textContent).not.toContain("Lidl Draft One");
+
+    // Also verify saving a dirty omitted receipt reconciles cleanly after save (closes when search returns empty).
+    await typeInto(inputByName("raw_shop_name", dialog()), "Biedronka Edited");
+    searchResults = [];
+    await typeInto(inputByName("query"), "NoMatchAtAll");
+    await submit(host.querySelector(".budget-range"));
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(0);
+    expect(dialog().textContent).toContain("Biedronka Survivor");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Biedronka Edited");
+
+    await click(button("Confirm receipt", dialog()));
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
+      receipt_id: "dirty-s2",
+      raw_shop_name: "Biedronka Edited",
+    }));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("skips post-save detail reload when the user starts a newer dirty draft during the refetch and preserves the draft", async () => {
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const v1 = receiptSummary({ receipt_id: "draft-v", status: "needs_review", raw_shop_name: "Initial Shop", total_amount: "12.50", version: 1 });
+    const v2 = { ...v1, status: "confirmed" as const, raw_shop_name: "Saved V2 Shop", version: 2 };
+    const v3Server = { ...v2, raw_shop_name: "Server Concurrent V3", version: 3 };
+
+    const pendingPostSaveRefresh = deferred<ReceiptListResult>();
+    let listCalls = 0;
+    let detailCalls = 0;
+    const clients = fakeClients([v1]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation(() => {
+      listCalls += 1;
+      if (listCalls === 1) return ok<ReceiptListResult>({ receipts: [v1], next_cursor: null });
+      if (listCalls === 2) return pendingPostSaveRefresh.promise;
+      return ok<ReceiptListResult>({ receipts: [v3Server], next_cursor: null });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => {
+      detailCalls += 1;
+      if (detailCalls === 1) return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...v1, lines: singleLine }), candidates: [] });
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...v3Server, lines: singleLine }), candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt)
+      .mockImplementationOnce(() => ok({ ok: true, receipt: receiptDetail({ ...v2, lines: singleLine }) }))
+      .mockImplementationOnce(() => fail(409, "budget_receipt_conflict"));
+
+    await renderReceipts(clients);
+    await click(openDetailById("draft-v"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+
+    // Save v1 -> v2 while post-save list refetch stays pending.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Saved V2 Shop");
+    await act(async () => {
+      button("Confirm receipt", dialog()).click();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(dialog().textContent).toContain("Version 2");
+    expect(detailCalls).toBe(1);
+
+    // Start editing a newer v3 draft BEFORE the post-save refetch settles.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Newer Unsaved V3 Draft");
+
+    // Post-save refetch finishes -> MUST skip detail reload and keep "Newer Unsaved V3 Draft" intact.
+    await act(async () => {
+      pendingPostSaveRefresh.resolve({ ok: true, data: { receipts: [v2], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(detailCalls).toBe(1);
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Newer Unsaved V3 Draft");
+
+    // Submitting the newer draft uses version 2; on 409 conflict, draft MUST stay intact with an inline
+    // conflict message and explicit reload button, discarding the draft ONLY on clicking Load latest version.
+    await click(button("Confirm receipt", dialog()));
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
+      receipt_id: "draft-v",
+      expected_version: 2,
+      raw_shop_name: "Newer Unsaved V3 Draft",
+    }));
+    expect(detailCalls).toBe(1);
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("This document changed in the meantime.");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Newer Unsaved V3 Draft");
+
+    await click(button("Load latest version", dialog()));
+    expect(detailCalls).toBe(2);
+    expect(dialog().textContent).toContain("Version 3");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Server Concurrent V3");
+  });
+
+  it("tracks refresh reconciliation per drawer ID so confirming A, closing A, and grouping B still reconciles B", async () => {
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const a = receiptSummary({ receipt_id: "per-id-a", status: "needs_review", linked: false, raw_shop_name: "Receipt Alpha", total_amount: "12.50", version: 1 });
+    const b = receiptSummary({ receipt_id: "per-id-b", status: "confirmed", linked: false, raw_shop_name: "Receipt Beta", total_amount: "20.00", version: 2 });
+    const b2 = receiptSummary({ receipt_id: "per-id-b2", status: "confirmed", linked: false, raw_shop_name: "Receipt Beta Partner", total_amount: "30.00", version: 2 });
+    const c = receiptSummary({ receipt_id: "per-id-c", status: "confirmed", linked: false, raw_shop_name: "Receipt Gamma Survivor", total_amount: "15.00", version: 1 });
+    const groupTx = {
+      account_id: "local-a",
+      entry_reference: "d".repeat(64),
+      amount: "50.00",
+      currency: "PLN",
+      credit_debit_indicator: "DBIT" as const,
+      transaction_date: "2026-11-14",
+      booking_date: "2026-11-14",
+      value_date: "2026-11-14",
+      merchant_token_hit: false,
+      match_strength: "none" as const,
+      date_distance: 0,
+      evidence_fingerprint: "fp-per-id",
+      candidate_token: "tok-per-id",
+    };
+
+    const pendingConfirmARefresh = deferred<ReceiptListResult>();
+    let unlinkedListCalls = 0;
+    const clients = fakeClients([a, b, b2, c]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      if (req?.linked !== false) {
+        return ok<ReceiptListResult>({ receipts: [a, b, b2, c], next_cursor: null });
+      }
+      unlinkedListCalls += 1;
+      if (unlinkedListCalls === 1) {
+        return ok<ReceiptListResult>({ receipts: [a, b, b2, c], next_cursor: null });
+      }
+      if (unlinkedListCalls === 2) {
+        return pendingConfirmARefresh.promise;
+      }
+      return ok<ReceiptListResult>({ receipts: [{ ...a, status: "confirmed", version: 2 }, c], next_cursor: null });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = [a, b, b2, c].find((row) => row.receipt_id === id) ?? a;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...match, lines: singleLine }), candidates: [], group_candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => ok({
+      ok: true,
+      receipt: receiptDetail({ ...a, status: "confirmed", version: req.expected_version + 1, lines: singleLine }),
+    }));
+    clients.rApi.receiptGroupCandidates = vi.fn<NonNullable<ReceiptsApi["receiptGroupCandidates"]>>(() => ok<ReceiptGroupCandidatesResult>({
+      anchor_receipt_id: "per-id-b",
+      transactions: [groupTx],
+      proposals: [],
+      eligible_receipts: [b, b2],
+      eligible_evidence: [],
+      no_bank_data: false,
+    }));
+    clients.rApi.linkReceiptGroup = vi.fn<NonNullable<ReceiptsApi["linkReceiptGroup"]>>(() => ok<ReceiptGroupLinkResult>({
+      ok: true,
+      group: { group_id: "grp-beta", group_version: 1, group_status: "confirmed", member_count: 2, evidence_receipt_id: null, fee_amount: null },
+      members: [{ ...b, linked: true, version: 3 }, { ...b2, linked: true, version: 3 }],
+      evidence: null,
+      linked_account_id: "local-a",
+      linked_entry_ref: "d".repeat(64),
+    }));
+
+    await renderReceipts(clients);
+    await choose(selectByName("linked"), "unlinked");
+    await settle();
+    expect(unlinkedListCalls).toBe(1);
+
+    // 1. Confirm A -> starts quiet refetch #1 (deferred only for A, stays pending).
+    await click(openDetailById("per-id-a"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+    await act(async () => {
+      button("Confirm receipt", dialog()).click();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(unlinkedListCalls).toBe(2);
+
+    // 2. Close A while refresh #1 is still in flight, then open B and group B + B2.
+    await click(button("Close", dialog()));
+    await click(openDetailById("per-id-b"));
+    await click(button("Group with other receipts", dialog()));
+    const groupModal = [...host.querySelectorAll<HTMLElement>('[role="dialog"]')].at(-1);
+    if (groupModal === undefined) throw new Error("Expected group controller modal");
+    const txRadio = groupModal.querySelector<HTMLInputElement>('input[name="group_tx_choice"][value="0"]');
+    if (txRadio === null) throw new Error("Expected tx choice");
+    await click(txRadio);
+    for (const box of groupModal.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) {
+      if (!box.checked) await click(box);
+    }
+    await click(button("Confirm group link", groupModal));
+    // Coalesced onto A's in-flight refresh (#2), so no overlapping request fired yet.
+    expect(unlinkedListCalls).toBe(2);
+
+    // 3. Resolve A's refresh -> dirty follow-up pass (#3) runs and MUST reconcile B (switching to C).
+    await act(async () => {
+      pendingConfirmARefresh.resolve({ ok: true, data: { receipts: [{ ...a, status: "confirmed", version: 2 }, b, b2, c], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+    await settle();
+
+    expect(unlinkedListCalls).toBe(3);
+    expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(dialog().textContent).toContain("Receipt Gamma Survivor");
+    expect(dialog().textContent).not.toContain("Receipt Beta");
+    expect(host.textContent).toContain("Receipt group linked.");
+  });
+
+  it("cancels async page-boundary Next navigation if the draft becomes dirty while the next page loads", async () => {
+    const r1 = receiptSummary({ receipt_id: "nav-dirty-1", status: "needs_review", raw_shop_name: "Boundary Receipt One", total_amount: "12.50", version: 1 });
+    const r2 = receiptSummary({ receipt_id: "nav-dirty-2", status: "needs_review", raw_shop_name: "Page Two Receipt", total_amount: "12.50", version: 1 });
+    const pendingPage2 = deferred<ReceiptListResult>();
+
+    const clients = fakeClients([r1]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      if (req?.cursor === "boundary-cursor-2") return pendingPage2.promise;
+      return ok<ReceiptListResult>({ receipts: [r1], next_cursor: "boundary-cursor-2" });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = id === "nav-dirty-2" ? r2 : r1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail(match), candidates: [] });
+    });
+
+    await renderReceipts(clients);
+    await click(openDetailById("nav-dirty-1"));
+    expect(dialog().textContent).toContain("Boundary Receipt One");
+    expect(button("Next", dialog()).disabled).toBe(false);
+
+    // Click Next at the page boundary -> starts async page 2 load.
+    await act(async () => {
+      button("Next", dialog()).click();
+      await Promise.resolve();
+    });
+
+    // While page 2 is still in flight, edit the current receipt so its draft becomes dirty.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Edited During Page Load");
+
+    // Resolve page 2 -> list loads r2, but navigation MUST cancel at commit time and keep r1's dirty draft.
+    await act(async () => {
+      pendingPage2.resolve({ ok: true, data: { receipts: [r2], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(2);
+    expect(dialog().textContent).toContain("Boundary Receipt One");
+    expect(dialog().textContent).not.toContain("Page Two Receipt");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Edited During Page Load");
+  });
+
+  it("keeps the dirty draft on 409 save conflict with Polish conflict message and reloads only when Wczytaj aktualną wersję is clicked", async () => {
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const v1 = receiptSummary({ receipt_id: "pl-409", status: "needs_review", raw_shop_name: "Sklep Pierwotny", total_amount: "12.50", version: 1 });
+    const v2Server = { ...v1, raw_shop_name: "Sklep Z Serwera V2", version: 2 };
+
+    let detailCalls = 0;
+    const clients = fakeClients([v1]);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => {
+      detailCalls += 1;
+      if (detailCalls === 1) return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...v1, lines: singleLine }), candidates: [] });
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...v2Server, lines: singleLine }), candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => fail(409, "budget_receipt_conflict"));
+
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailById("pl-409", "Szczegóły"));
+    await typeInto(inputByName("raw_shop_name", dialog()), "Moja Edycja Szkicu");
+
+    await click(button("Zatwierdź dokument", dialog()));
+
+    // 409 MUST keep user's draft untouched and never auto-reload detail.
+    expect(detailCalls).toBe(1);
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Moja Edycja Szkicu");
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("Dokument zmienił się w międzyczasie");
+    const reloadBtn = button("Wczytaj aktualną wersję", dialog());
+    expect(reloadBtn.disabled).toBe(false);
+
+    // Explicit click discards draft and loads the latest server version.
+    await click(reloadBtn);
+    expect(detailCalls).toBe(2);
+    expect(dialog().textContent).toContain("Wersja 2");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Sklep Z Serwera V2");
+    expect(dialog().querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("processes a dirty request that joins after pass publish and before coalescer clears in-flight state", async () => {
+    const store = createPendingReceiptStore();
+    const initialRow = receiptSummary({ receipt_id: "interleave-1", raw_shop_name: "Initial Row", version: 1 });
+    const pass1Row = receiptSummary({ receipt_id: "interleave-1", raw_shop_name: "Pass One Stale Row", version: 2 });
+    const pass2Row = receiptSummary({ receipt_id: "interleave-1", raw_shop_name: "Pass Two Fresh Row", version: 3 });
+
+    const t1 = store.tryAcquire("interleave-1", "confirm");
+    const t2 = store.tryAcquire("interleave-2", "confirm");
+    if (t1 === null || t2 === null) throw new Error("expected locks");
+
+    const pass1Deferred = deferred<ReceiptListResult>();
+    let listCalls = 0;
+    const clients = fakeClients([initialRow]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation(() => {
+      listCalls += 1;
+      if (listCalls === 1) return ok<ReceiptListResult>({ receipts: [initialRow], next_cursor: null });
+      if (listCalls === 2) return pass1Deferred.promise;
+      return ok<ReceiptListResult>({ receipts: [pass2Row], next_cursor: null });
+    });
+
+    const onAccessLoss = vi.fn(() => false);
+    await act(async () => {
+      root.render(
+        <ReceiptsView
+          receiptsApi={clients.rApi}
+          pendingStore={store}
+          actorKey="owner-interleave"
+          accounts={accounts}
+          connections={[connection]}
+          locale="en"
+          revision={0}
+          onAccessLoss={onAccessLoss}
+        />,
+      );
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listCalls).toBe(1);
+
+    // Release lock 1 -> starts refresh pass #1 (listCalls becomes 2, awaiting pass1Deferred).
+    await act(async () => {
+      store.release("interleave-1", t1, "confirmed");
+      await Promise.resolve();
+    });
+    expect(listCalls).toBe(2);
+
+    // Interleave: resolve pass #1 (microtask 1 runs runPass publish & return, queueing microtask 3 for outer loop),
+    // while microtask 2 releases lock 2 right AFTER pass #1 published and BEFORE outer loop resumes to clear activeRefreshRef.
+    await act(async () => {
+      pass1Deferred.resolve({ ok: true, data: { receipts: [pass1Row], next_cursor: null } });
+      void Promise.resolve().then(() => {
+        store.release("interleave-2", t2, "confirmed");
+      });
+      await Promise.resolve();
+    });
+    await settle();
+
+    // Outer loop MUST observe dirty === true synchronously before clearing inFlight and run pass #2.
+    expect(listCalls).toBe(3);
+    expect(host.textContent).toContain("Pass Two Fresh Row");
+    expect(host.textContent).not.toContain("Pass One Stale Row");
+
+    // Once pass #2 finishes and clears inFlight in the same synchronous tick, a subsequent settlement starts a brand-new run.
+    const t3 = store.tryAcquire("interleave-3", "confirm");
+    if (t3 === null) throw new Error("expected lock 3");
+    await act(async () => {
+      store.release("interleave-3", t3, "confirmed");
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listCalls).toBe(4);
+  });
+
+  it("guards sync Prev/Next, list selection, and Close with an inline Save/Discard prompt and navigates only after Save succeeds or Discard is clicked", async () => {
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const g1 = receiptSummary({ receipt_id: "g-1", status: "needs_review", raw_shop_name: "Sklep Pierwszy", total_amount: "12.50", version: 1 });
+    const g2 = receiptSummary({ receipt_id: "g-2", status: "needs_review", raw_shop_name: "Sklep Drugi", total_amount: "12.50", version: 1 });
+    const g3 = receiptSummary({ receipt_id: "g-3", status: "needs_review", raw_shop_name: "Sklep Trzeci", total_amount: "12.50", version: 1 });
+    let rows: ReceiptSummary[] = [g1, g2, g3];
+
+    const clients = fakeClients(rows);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation(() => ok<ReceiptListResult>({ receipts: rows, next_cursor: null }));
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = rows.find((row) => row.receipt_id === id) ?? g1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...match, lines: singleLine }), candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => {
+      const match = rows.find((row) => row.receipt_id === req.receipt_id) ?? g1;
+      const updated = receiptDetail({
+        ...match,
+        status: "confirmed",
+        raw_shop_name: req.raw_shop_name ?? match.raw_shop_name,
+        version: req.expected_version + 1,
+        lines: singleLine,
+      });
+      rows = rows.map((row) => (row.receipt_id === updated.receipt_id ? updated : row));
+      return ok({ ok: true, receipt: updated });
+    });
+
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailById("g-1", "Szczegóły"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+
+    // 1. Sync Next with dirty draft -> stays on g-1, shows inline Polish prompt, navigates only after Discard.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Szkic Pierwszy");
+    await click(button("Następny", dialog()));
+    expect(dialog().textContent).toContain("Sklep Pierwszy");
+    expect(dialog().textContent).not.toContain("Sklep Drugi");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Szkic Pierwszy");
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+    expect(button("Zapisz", dialog()).disabled).toBe(false);
+    expect(button("Odrzuć", dialog()).disabled).toBe(false);
+
+    await click(button("Odrzuć", dialog()));
+    expect(dialog().textContent).toContain("Sklep Drugi");
+    expect(dialog().textContent).not.toContain("Masz niezapisane zmiany");
+
+    // 2. Sync Previous with dirty draft -> Save saves g-2 and then navigates to g-1.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Zapisany Drugi");
+    await click(button("Poprzedni", dialog()));
+    expect(dialog().textContent).toContain("Sklep Drugi");
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+
+    await click(button("Zapisz", dialog()));
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
+      receipt_id: "g-2",
+      raw_shop_name: "Zapisany Drugi",
+    }));
+    expect(dialog().textContent).toContain("Sklep Pierwszy");
+    expect(host.textContent).toContain("Zapisany Drugi");
+
+    // 3. Selecting another row in the list with dirty draft -> stays on g-1 until Discard.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Szkic Przy Liście");
+    await click(openDetailById("g-3", "Szczegóły"));
+    expect(dialog().textContent).toContain("Sklep Pierwszy");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Szkic Przy Liście");
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+    await click(button("Odrzuć", dialog()));
+    expect(dialog().textContent).toContain("Sklep Trzeci");
+
+    // 4. Close with dirty draft -> Save failure (409) keeps drawer open with draft; Discard closes drawer.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Szkic Trzeci");
+    await click(button("Zamknij", dialog()));
+    expect(dialog().textContent).toContain("Sklep Trzeci");
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => fail(409, "budget_receipt_conflict"));
+    await click(button("Zapisz", dialog()));
+    expect(dialog().textContent).toContain("Sklep Trzeci");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Szkic Trzeci");
+    expect(dialog().textContent).toContain("Dokument zmienił się w międzyczasie");
+
+    await click(button("Odrzuć", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("closes the drawer with Dokument został usunięty when post-refresh probe or detail reload returns 404 after a lost-response delete", async () => {
+    const r1 = receiptSummary({ receipt_id: "del-lost-1", status: "confirmed", raw_shop_name: "Usunięty Paragon", total_amount: "12.50", version: 2 });
+    const r2 = receiptSummary({ receipt_id: "del-lost-2", status: "confirmed", raw_shop_name: "Drugi Paragon", total_amount: "12.50", version: 2 });
+
+    let serverRows: ReceiptSummary[] = [r1, r2];
+    const deletedIds = new Set<string>();
+    const clients = fakeClients(serverRows);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation(() => ok<ReceiptListResult>({ receipts: serverRows, next_cursor: null }));
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      if (deletedIds.has(id)) return fail(404, "budget_receipt_not_found");
+      const match = serverRows.find((row) => row.receipt_id === id) ?? r2;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail(match), candidates: [] });
+    });
+    vi.mocked(clients.rApi.deleteReceipt).mockImplementationOnce((req) => {
+      // Server commits the delete, then the HTTP response is lost due to a network error.
+      deletedIds.add(req.receipt_id);
+      serverRows = serverRows.filter((row) => row.receipt_id !== req.receipt_id);
+      return fail(0, "budget_network_error");
+    });
+
+    await renderReceipts(clients, { locale: "pl", revision: 1 });
+    await click(openDetailById("del-lost-1", "Szczegóły"));
+    expect(dialog().textContent).toContain("Usunięty Paragon");
+
+    await click(button("Usuń dokument", dialog()));
+    await click(button("Tak, usuń", dialog()));
+
+    // Refreshed list drops del-lost-1 and the 404 detail probe closes the drawer with "Dokument został usunięty".
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.textContent).toContain("Dokument został usunięty");
+    expect(host.querySelector('[data-receipt-id="del-lost-1"]')).toBeNull();
+
+    // Also verify the drawer's own detail reload returning 404 (even with a dirty draft) closes with the same notice.
+    await click(openDetailById("del-lost-2", "Szczegóły"));
+    await typeInto(inputByName("raw_shop_name", dialog()), "Brudny Szkic Usuniętego");
+    deletedIds.add("del-lost-2");
+    serverRows = [];
+
+    await renderReceipts(clients, { locale: "pl", revision: 2 });
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.textContent).toContain("Dokument został usunięty");
+  });
+
+  it("INV-A: resets draft and link choice synchronously on Discard even when subsequent navigation finds no target", async () => {
+    const candNip = receiptCandidate({
+      entry_reference: "9".repeat(64),
+      candidate_token: "tok-inv-a",
+      match_strength: "nip",
+    });
+    const r1 = receiptSummary({
+      receipt_id: "inv-a-1",
+      status: "imported",
+      linked: false,
+      raw_shop_name: "Sklep Serwerowy",
+      total_amount: "12.50",
+      version: 1,
+    });
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const pendingEmptyPage2 = deferred<ReceiptListResult>();
+
+    const clients = fakeClients([r1]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      if (req?.cursor === "inv-a-empty-page-2") return pendingEmptyPage2.promise;
+      return ok<ReceiptListResult>({ receipts: [r1], next_cursor: "inv-a-empty-page-2" });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => ok<ReceiptDetailResult>({
+      receipt: receiptDetail({ ...r1, lines: singleLine }),
+      candidates: [candNip],
+    }));
+
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailById("inv-a-1", "Szczegóły"));
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
+    expect(dialog().querySelector(".budget-receipt-suggested")).not.toBeNull();
+
+    // Edit merchant AND change link choice to unlink, then click Next at page boundary.
+    await click(button("Odłącz / bez powiązania", dialog()));
+    expect(linkRadio("unlink", dialog()).checked).toBe(true);
+    await typeInto(inputByName("raw_shop_name", dialog()), "Szkic Do Odrzucenia");
+    await click(button("Następny", dialog()));
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+
+    // Click Discard -> draft AND link choice reset SYNCHRONOUSLY BEFORE page 2 even resolves!
+    await act(async () => {
+      button("Odrzuć", dialog()).click();
+      await Promise.resolve();
+    });
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Sklep Serwerowy");
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
+    expect(linkRadio("unlink", dialog()).checked).toBe(false);
+    expect(dialog().querySelector(".budget-receipt-suggested")).not.toBeNull();
+    expect(dialog().textContent).not.toContain("Masz niezapisane zmiany");
+
+    // Page 2 resolves empty (no target found) -> drawer stays on r1 with a clean draft equal to server state.
+    await act(async () => {
+      pendingEmptyPage2.resolve({ ok: true, data: { receipts: [], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(dialog().textContent).toContain("Sklep Serwerowy");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Sklep Serwerowy");
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
+
+    // Closing now succeeds immediately without an unsaved-changes prompt because draft is genuinely clean.
+    await click(button("Zamknij", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("INV-B: builds a completely fresh draft on reopen with no link choice, candidate selection, or line edits carried over", async () => {
+    const candKeep = receiptCandidate({
+      entry_reference: "a".repeat(64),
+      candidate_token: "tok-keep-b",
+      match_strength: "nip",
+    });
+    const firstLine = receiptDetail().lines[0];
+    if (firstLine === undefined) throw new Error("expected receipt line");
+    const singleLine = [firstLine];
+    let serverDetail = receiptDetail({
+      receipt_id: "inv-b-1",
+      status: "needs_review",
+      linked: true,
+      linked_account_id: "local-a",
+      linked_entry_ref: "a".repeat(64),
+      raw_shop_name: "Original Shop B",
+      total_amount: "12.50",
+      version: 2,
+      lines: singleLine,
+    });
+
+    const clients = fakeClients([serverDetail]);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => ok<ReceiptDetailResult>({
+      receipt: serverDetail,
+      candidates: [candKeep],
+    }));
+
+    await renderReceipts(clients);
+    await click(openDetailById("inv-b-1"));
+
+    // Select Keep, edit merchant and line description, then close via Discard.
+    await click(linkRadio("keep", dialog()));
+    expect(linkRadio("keep", dialog()).checked).toBe(true);
+    await typeInto(inputByName("line_name", dialog()), "Edited Line Text");
+    await typeInto(inputByName("raw_shop_name", dialog()), "Edited Shop B");
+    await click(button("Close", dialog()));
+    await click(button("Discard", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+
+    // Update server detail before reopening -> reopen MUST build a brand-new draft from freshly fetched detail.
+    serverDetail = {
+      ...serverDetail,
+      raw_shop_name: "Fresh Server Shop B",
+      version: 3,
+      lines: [{ ...firstLine, raw_name: "Fresh Server Line" }],
+    };
+
+    await click(openDetailById("inv-b-1"));
+    expect(dialog().textContent).toContain("Version 3");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Fresh Server Shop B");
+    expect(inputByName("line_name", dialog()).value).toBe("Fresh Server Line");
+    expect(linkRadio("keep", dialog()).checked).toBe(false);
+    expect(linkRadio("unlink", dialog()).checked).toBe(false);
+    expect(button("Confirm receipt", dialog()).disabled).toBe(true);
+  });
+
+  it("INV-C: reloads a clean open drawer after any list refresh so lost-response confirm updates content and 404 closes with Dokument został usunięty", async () => {
+    const store = createPendingReceiptStore();
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const v1 = receiptSummary({
+      receipt_id: "inv-c-1",
+      status: "needs_review",
+      linked: false,
+      raw_shop_name: "Przed Zapisem",
+      total_amount: "12.50",
+      version: 1,
+    });
+    const v2Committed = {
+      ...v1,
+      status: "confirmed" as const,
+      raw_shop_name: "Zapisane Po Stracie Odpowiedzi",
+      version: 2,
+    };
+    const v3Server = {
+      ...v2Committed,
+      raw_shop_name: "Zmienione W Innej Karcie",
+      version: 3,
+    };
+
+    let currentRow: ReceiptSummary | null = v1;
+    const clients = fakeClients([v1]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation(() => ok<ReceiptListResult>({
+      receipts: currentRow === null ? [] : [currentRow],
+      next_cursor: null,
+    }));
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => {
+      if (currentRow === null) return fail(404, "budget_receipt_not_found");
+      return ok<ReceiptDetailResult>({
+        receipt: receiptDetail({ ...currentRow, lines: singleLine }),
+        candidates: [],
+      });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => {
+      // Server commits confirm (v1 -> v2, confirmed), then the HTTP response is lost.
+      currentRow = v2Committed;
+      return fail(0, "budget_network_error");
+    });
+
+    await loadLocale("pl");
+    const onAccessLoss = vi.fn(() => false);
+    await act(async () => {
+      root.render(
+        <ReceiptsView
+          receiptsApi={clients.rApi}
+          pendingStore={store}
+          actorKey="owner-inv-c"
+          accounts={accounts}
+          connections={[connection]}
+          locale="pl"
+          revision={0}
+          onAccessLoss={onAccessLoss}
+        />,
+      );
+      await Promise.resolve();
+    });
+    await settle();
+
+    await click(openDetailById("inv-c-1", "Szczegóły"));
+    expect(dialog().textContent).toContain("Wersja 1");
+    expect(dialog().textContent).toContain("Przed Zapisem");
+
+    // 1. Clean confirm whose HTTP response is lost -> post-error list refresh triggers INV-C detail reload,
+    // replacing drawer content with committed Version 2 / Confirmed and clearing the stale error alert.
+    await click(button("Zatwierdź dokument", dialog()));
+    expect(dialog().textContent).toContain("Wersja 2");
+    expect(dialog().textContent).toContain("Zapisane Po Stracie Odpowiedzi");
+    expect(dialog().querySelector('[role="alert"]')).toBeNull();
+
+    // 2. Subsequent background list refresh with newer server version -> clean drawer reloads to Version 3.
+    currentRow = v3Server;
+    const lock1 = store.tryAcquire("other-rec", "confirm");
+    if (lock1 === null) throw new Error("expected lock");
+    await act(async () => {
+      store.release("other-rec", lock1, "confirmed");
+      await Promise.resolve();
+    });
+    await settle();
+    expect(dialog().textContent).toContain("Wersja 3");
+    expect(dialog().textContent).toContain("Zmienione W Innej Karcie");
+
+    // 3. Subsequent list refresh when receipt returns 404 -> closes drawer with "Dokument został usunięty".
+    currentRow = null;
+    const lock2 = store.tryAcquire("other-rec-2", "delete");
+    if (lock2 === null) throw new Error("expected lock 2");
+    await act(async () => {
+      store.release("other-rec-2", lock2, "deleted");
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.textContent).toContain("Dokument został usunięty");
+  });
+
+  it("prompts Save/Discard when Unlink, Keep, or candidate choice is the only edit and clears dirty when reverted", async () => {
+    const candNip = receiptCandidate({
+      entry_reference: "a".repeat(64),
+      candidate_token: "tok-link-only-1",
+      amount: "12.50",
+      match_strength: "nip",
+    });
+    const candAlt = receiptCandidate({
+      entry_reference: "b".repeat(64),
+      candidate_token: "tok-link-only-2",
+      amount: "12.50",
+      match_strength: "none",
+    });
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const r1 = receiptSummary({
+      receipt_id: "link-dirty-1",
+      status: "imported",
+      linked: false,
+      raw_shop_name: "Sklep Z Dopasowaniem",
+      total_amount: "12.50",
+      version: 1,
+    });
+    const r2 = receiptSummary({
+      receipt_id: "link-dirty-2",
+      status: "needs_review",
+      linked: true,
+      raw_shop_name: "Sklep Do Przeglądu",
+      total_amount: "12.50",
+      version: 2,
+    });
+    const clients = fakeClients([r1, r2]);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      if (id === "link-dirty-1") {
+        return ok<ReceiptDetailResult>({
+          receipt: receiptDetail({ ...r1, lines: singleLine }),
+          candidates: [candNip],
+        });
+      }
+      return ok<ReceiptDetailResult>({
+        receipt: receiptDetail({
+          ...r2,
+          linked: true,
+          linked_account_id: candNip.account_id,
+          linked_entry_ref: candNip.entry_reference,
+          lines: singleLine,
+        }),
+        candidates: [candNip, candAlt],
+      });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => ok({
+      ok: true,
+      receipt: receiptDetail({
+        ...(req.receipt_id === "link-dirty-1" ? r1 : r2),
+        status: "confirmed",
+        linked: req.link !== null,
+        version: req.expected_version + 1,
+        lines: singleLine,
+      }),
+    }));
+
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailById("link-dirty-1", "Szczegóły"));
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
+
+    // 1. Choosing Unlink as the ONLY edit triggers Save/Discard on Next AND Close without dropping the edit.
+    await click(button("Odłącz / bez powiązania", dialog()));
+    expect(linkRadio("unlink", dialog()).checked).toBe(true);
+    await click(button("Następny", dialog()));
+    expect(dialog().textContent).toContain("Sklep Z Dopasowaniem");
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+    expect(linkRadio("unlink", dialog()).checked).toBe(true);
+
+    await click(button("Zamknij", dialog()));
+    expect(dialog().textContent).toContain("Sklep Z Dopasowaniem");
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+    expect(linkRadio("unlink", dialog()).checked).toBe(true);
+
+    // Reverting link choice back to the server baseline clears dirty and allows immediate Next navigation.
+    await click(linkRadio("candidate:0", dialog()));
+    expect(dialog().textContent).not.toContain("Masz niezapisane zmiany");
+    await click(button("Następny", dialog()));
+    expect(dialog().textContent).toContain("Sklep Do Przeglądu");
+
+    // 2. Choosing Keep as the ONLY edit prompts Save/Discard on Close; Discard closes cleanly.
+    await click(linkRadio("keep", dialog()));
+    expect(linkRadio("keep", dialog()).checked).toBe(true);
+    await click(button("Zamknij", dialog()));
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+    await click(button("Odrzuć", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+
+    // 3. Choosing a candidate radio as the ONLY edit prompts Save/Discard on Previous; Save commits and navigates.
+    await click(openDetailById("link-dirty-2", "Szczegóły"));
+    await click(linkRadio("candidate:1", dialog()));
+    await click(button("Poprzedni", dialog()));
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+    await click(button("Zapisz", dialog()));
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
+      receipt_id: "link-dirty-2",
+      link: {
+        account_id: candAlt.account_id,
+        entry_reference: candAlt.entry_reference,
+        candidate_token: "tok-link-only-2",
+      },
+    }));
+    expect(dialog().textContent).toContain("Sklep Z Dopasowaniem");
+  });
+
+  it("reloads clean open drawer via INV-C when group dialog closes after partial pre-confirm and rejected linking under Imported filter", async () => {
+    const firstLine = receiptDetail().lines[0];
+    if (firstLine === undefined) throw new Error("expected receipt line");
+    const lineFor = (amount: string) => [{
+      ...firstLine,
+      unit_price_raw: amount,
+      gross_line_total: amount,
+      net_line_total: amount,
+    }];
+    const g1Imported = receiptSummary({
+      receipt_id: "grp-part-1",
+      status: "imported",
+      linked: false,
+      raw_shop_name: "Imported Group Anchor",
+      total_amount: "20.00",
+      version: 1,
+    });
+    const g2Imported = receiptSummary({
+      receipt_id: "grp-part-2",
+      status: "imported",
+      linked: false,
+      raw_shop_name: "Imported Group Partner",
+      total_amount: "30.00",
+      version: 1,
+    });
+    const groupTx = {
+      account_id: "local-a",
+      entry_reference: "e".repeat(64),
+      amount: "50.00",
+      currency: "PLN",
+      credit_debit_indicator: "DBIT" as const,
+      transaction_date: "2026-11-14",
+      booking_date: "2026-11-14",
+      value_date: "2026-11-14",
+      merchant_token_hit: false,
+      match_strength: "none" as const,
+      date_distance: 0,
+      evidence_fingerprint: "fp-grp-part",
+      candidate_token: "tok-grp-part",
+    };
+
+    const serverState = new Map<string, ReceiptSummary>([
+      [g1Imported.receipt_id, g1Imported],
+      [g2Imported.receipt_id, g2Imported],
+    ]);
+    const clients = fakeClients([g1Imported, g2Imported]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      const all = [...serverState.values()];
+      const filtered = req?.status === undefined ? all : all.filter((row) => row.status === req.status);
+      return ok<ReceiptListResult>({ receipts: filtered, next_cursor: null });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const current = serverState.get(id) ?? g1Imported;
+      return ok<ReceiptDetailResult>({
+        receipt: receiptDetail({ ...current, lines: lineFor(current.total_amount ?? "20.00") }),
+        candidates: [],
+        group_candidates: [],
+      });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => {
+      const current = serverState.get(req.receipt_id);
+      if (current === undefined) return fail(404, "budget_receipt_not_found");
+      const confirmed: ReceiptSummary = {
+        ...current,
+        status: "confirmed",
+        version: current.version + 1,
+      };
+      serverState.set(req.receipt_id, confirmed);
+      return ok({
+        ok: true,
+        receipt: receiptDetail({ ...confirmed, lines: lineFor(confirmed.total_amount ?? "20.00") }),
+      });
+    });
+    clients.rApi.receiptGroupCandidates = vi.fn<NonNullable<ReceiptsApi["receiptGroupCandidates"]>>(() => ok<ReceiptGroupCandidatesResult>({
+      anchor_receipt_id: g1Imported.receipt_id,
+      transactions: [groupTx],
+      proposals: [],
+      eligible_receipts: [...serverState.values()],
+      eligible_evidence: [],
+      no_bank_data: false,
+    }));
+    clients.rApi.linkReceiptGroup = vi.fn<NonNullable<ReceiptsApi["linkReceiptGroup"]>>(
+      () => fail(409, "budget_receipt_group_sum_mismatch"),
+    );
+
+    await renderReceipts(clients);
+    await choose(selectByName("status"), "imported");
+    await settle();
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(2);
+
+    await click(openDetailById("grp-part-1"));
+    expect(dialog().querySelector(".budget-receipt-status")?.getAttribute("data-status")).toBe("imported");
+    expect(dialog().textContent).toContain("Version 1");
+
+    // Open group dialog and submit: pre-confirm succeeds (imported v1 -> confirmed v2), final linking is rejected.
+    await click(button("Group with other receipts", dialog()));
+    const groupModal = [...host.querySelectorAll<HTMLElement>('[role="dialog"]')].at(-1);
+    if (groupModal === undefined) throw new Error("Expected group controller modal");
+    const txRadio = groupModal.querySelector<HTMLInputElement>('input[name="group_tx_choice"][value="0"]');
+    if (txRadio === null) throw new Error("Expected tx choice");
+    await click(txRadio);
+    for (const box of groupModal.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) {
+      if (!box.checked) await click(box);
+    }
+    await click(button("Confirm group link", groupModal));
+    await settle();
+
+    // Pre-confirm committed both receipts, linkReceiptGroup was rejected, and Imported list is now empty.
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledTimes(2);
+    expect(clients.rApi.linkReceiptGroup).toHaveBeenCalledTimes(1);
+    expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(2);
+    expect(groupModal.querySelector('[role="alert"]')).not.toBeNull();
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(0);
+
+    // Closing the group dialog MUST trigger INV-C so the clean drawer shows Confirmed / Version 2, not stale Imported / Version 1.
+    await click(button("Close", groupModal));
+    await settle();
+    expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(dialog().querySelector(".budget-receipt-status")?.getAttribute("data-status")).toBe("confirmed");
+    expect(dialog().textContent).toContain("Version 2");
+    expect(dialog().textContent).not.toContain("Version 1");
   });
 });

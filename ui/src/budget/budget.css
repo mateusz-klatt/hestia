@@ -1043,8 +1043,9 @@
 }
 
 .budget-receipt-drawer { max-width: min(100%, 40rem); width: 100%; height: 100%; max-height: 100vh; border-radius: 0; overflow-y: auto; display: grid; align-content: start; gap: .85rem; padding: 1.1rem 1.2rem 2rem; }
-.budget-receipt-drawer-head { display: flex; justify-content: space-between; align-items: center; gap: .75rem; border-bottom: 1px solid var(--border); padding-bottom: .55rem; }
+.budget-receipt-drawer-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .75rem; border-bottom: 1px solid var(--border); padding-bottom: .55rem; }
 .budget-receipt-drawer-head h3 { margin: 0; }
+.budget-receipt-drawer-head-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
 .budget-receipt-drawer-body { display: grid; gap: .95rem; }
 .budget-receipt-hero { display: flex; justify-content: space-between; align-items: flex-start; gap: .75rem; flex-wrap: wrap; }
 .budget-receipt-hero-merchant { margin: 0 0 .25rem; font-size: 1.15rem; }
@@ -1070,6 +1071,7 @@
 .budget-receipt-suggested { display: grid; gap: .45rem; border-radius: .55rem; }
 .budget-receipt-suggested-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .4rem; }
 .budget-receipt-delete-dialog { display: grid; gap: .5rem; }
+.budget-receipt-auto-advance { font-size: .85rem; color: var(--fg-soft); }
 
 @media (prefers-reduced-motion: reduce) {
   .budget-app *,

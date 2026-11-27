@@ -211,6 +211,7 @@ export const EMPTY_RECEIPT_FILTER: ReceiptFilter = {
 };
 
 export const RECEIPT_PAGE_LIMIT = 50;
+export const RECEIPT_MAX_PAGE_LIMIT = 200;
 
 export function hasActiveReceiptFilter(filter: ReceiptFilter): boolean {
   return filter.query.trim() !== ""
@@ -244,9 +245,13 @@ export function listMonthForFilter(filter: Pick<ReceiptFilter, "dateFrom" | "dat
   return fromMonth === toMonth ? fromMonth : undefined;
 }
 
-export function buildReceiptListRequest(filter: ReceiptFilter, cursor: string | null = null): ReceiptListRequest {
+export function buildReceiptListRequest(
+  filter: ReceiptFilter,
+  cursor: string | null = null,
+  limit: number = RECEIPT_PAGE_LIMIT,
+): ReceiptListRequest {
   const month = listMonthForFilter(filter);
-  const request: ReceiptListRequest = { limit: RECEIPT_PAGE_LIMIT };
+  const request: ReceiptListRequest = { limit };
   if (month !== undefined) request.month = month;
   if (filter.status !== "") request.status = filter.status;
   if (filter.documentKind !== "") request.document_kind = filter.documentKind;
@@ -932,6 +937,80 @@ export function draftFromDetail(
     keepBinding: null,
     candidateSetKey: buildCandidateSetKey(detail, candidates),
   };
+}
+
+function canonicalDraftSnapshot(draft: ReceiptConfirmDraft): string {
+  return JSON.stringify({
+    receiptId: draft.receiptId,
+    rawShopName: draft.rawShopName,
+    rawNip: draft.rawNip,
+    receiptKind: draft.receiptKind,
+    receiptDate: draft.receiptDate,
+    receiptTime: draft.receiptTime,
+    totalAmount: draft.totalAmount,
+    currency: draft.currency,
+    paymentMethod: draft.paymentMethod,
+    lines: draft.lines.map((line) => ({
+      line_kind: line.line_kind,
+      raw_name: line.raw_name,
+      ptu_code: line.ptu_code,
+      quantity: line.quantity,
+      raw_unit: line.raw_unit,
+      unit_price_raw: line.unit_price_raw,
+      gross_line_total: line.gross_line_total,
+      discount_amount: line.discount_amount,
+      net_line_total: line.net_line_total,
+    })),
+    linkChoice: draft.linkChoice,
+    selectedCandidate: draft.selectedCandidate === null
+      ? null
+      : {
+          account_id: draft.selectedCandidate.account_id,
+          entry_reference: draft.selectedCandidate.entry_reference,
+          match_strength: draft.selectedCandidate.match_strength,
+          evidence_fingerprint: draft.selectedCandidate.evidence_fingerprint,
+        },
+    keepBinding: draft.keepBinding === null
+      ? null
+      : {
+          account_id: draft.keepBinding.account_id,
+          entry_reference: draft.keepBinding.entry_reference,
+          match_strength: draft.keepBinding.match_strength,
+          evidence_fingerprint: draft.keepBinding.evidence_fingerprint,
+          evidence_digest: draft.keepBinding.evidence_digest,
+        },
+  });
+}
+
+/**
+ * True when the full editable draft (header fields, lines, link choice, candidate selection,
+ * and keep binding) differs from the clean server snapshot derived from `detail` and `candidates`.
+ */
+export function isReceiptDraftDirty(
+  detail: ReceiptDetail,
+  draft: ReceiptConfirmDraft,
+  candidates: readonly ReceiptCandidate[] = [],
+): boolean {
+  if (draft.receiptId !== detail.receipt_id) return false;
+  return canonicalDraftSnapshot(draft) !== canonicalDraftSnapshot(draftFromDetail(detail, candidates));
+}
+
+/**
+ * True when header fields or lines differ from `detail`, ignoring link/candidate selection changes
+ * (used only to distinguish stale candidate token 409s from unsaved receipt field/line edits).
+ */
+export function hasReceiptFieldOrLineEdits(
+  detail: ReceiptDetail,
+  draft: ReceiptConfirmDraft,
+): boolean {
+  if (draft.receiptId !== detail.receipt_id) return false;
+  const baseline = draftFromDetail(detail, []);
+  return canonicalDraftSnapshot({
+    ...draft,
+    linkChoice: baseline.linkChoice,
+    selectedCandidate: baseline.selectedCandidate,
+    keepBinding: baseline.keepBinding,
+  }) !== canonicalDraftSnapshot(baseline);
 }
 
 /** Keeps link choices valid after field edits: disables stale tokens without silently picking unlink. */
@@ -1829,5 +1908,95 @@ export function buildGroupLinkRequest(params: {
       ...(fee === null ? {} : { fee_amount: fee }),
     }),
   };
+}
+
+// ---- Filter equality & detail navigation ----
+
+export function sameReceiptFilter(a: ReceiptFilter, b: ReceiptFilter): boolean {
+  return a.query.trim() === b.query.trim()
+    && a.status === b.status
+    && a.documentKind === b.documentKind
+    && a.sourceKind === b.sourceKind
+    && a.linked === b.linked
+    && a.dateFrom === b.dateFrom
+    && a.dateTo === b.dateTo;
+}
+
+export function receiptNeedsConfirmation(
+  receipt: Pick<ReceiptSummary, "status">,
+): boolean {
+  return receipt.status === "imported" || receipt.status === "draft" || receipt.status === "needs_review";
+}
+
+export function findAdjacentReceiptId(
+  rows: readonly ReceiptSummary[],
+  currentId: string,
+  direction: "prev" | "next",
+): string | null {
+  const idx = rows.findIndex((row) => row.receipt_id === currentId);
+  if (idx < 0) return null;
+  const target = direction === "prev" ? rows[idx - 1] : rows[idx + 1];
+  return target?.receipt_id ?? null;
+}
+
+/**
+ * Resolves which receipt should remain selected after a list refresh:
+ * keeps `currentId` if it is still present, otherwise selects the row now at the same index
+ * (clamped to the last row), or `null` if the list is empty.
+ */
+export function resolvePostRefreshSelectionId(
+  rows: readonly ReceiptSummary[],
+  currentId: string,
+  previousIndex: number,
+): string | null {
+  if (rows.some((row) => row.receipt_id === currentId)) return currentId;
+  if (rows.length === 0) return null;
+  const clamped = Math.max(0, Math.min(previousIndex, rows.length - 1));
+  return rows[clamped]?.receipt_id ?? null;
+}
+
+export function findNextUnconfirmedReceiptId(
+  rows: readonly ReceiptSummary[],
+  currentId: string,
+  options: {
+    wrap?: boolean;
+    startIndex?: number;
+    predicate?: (row: ReceiptSummary) => boolean;
+  } = {},
+): string | null {
+  const matches = (row: ReceiptSummary): boolean =>
+    row.receipt_id !== currentId
+    && receiptNeedsConfirmation(row)
+    && (options.predicate === undefined || options.predicate(row));
+
+  const idx = rows.findIndex((row) => row.receipt_id === currentId);
+  if (idx >= 0) {
+    for (let i = idx + 1; i < rows.length; i += 1) {
+      const row = rows[i];
+      if (row !== undefined && matches(row)) return row.receipt_id;
+    }
+    if (options.wrap === true) {
+      for (let i = 0; i < idx; i += 1) {
+        const row = rows[i];
+        if (row !== undefined && matches(row)) return row.receipt_id;
+      }
+    }
+    return null;
+  }
+
+  const start = options.startIndex === undefined
+    ? 0
+    : Math.max(0, Math.min(options.startIndex, rows.length));
+  for (let i = start; i < rows.length; i += 1) {
+    const row = rows[i];
+    if (row !== undefined && matches(row)) return row.receipt_id;
+  }
+  if (options.wrap === true) {
+    for (let i = 0; i < start; i += 1) {
+      const row = rows[i];
+      if (row !== undefined && matches(row)) return row.receipt_id;
+    }
+  }
+  return null;
 }
 

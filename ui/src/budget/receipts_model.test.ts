@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { account, connection } from "./fixtures";
 import {
   EMPTY_RECEIPT_FILTER,
+  RECEIPT_MAX_PAGE_LIMIT,
+  RECEIPT_PAGE_LIMIT,
   REDACTED_VALUE,
   addDecimals,
   availableLinkOptions,
@@ -21,17 +23,21 @@ import {
   draftFromDetail,
   editReceiptLine,
   filterReceiptRows,
+  findAdjacentReceiptId,
   findCurrentLinkedCandidate,
+  findNextUnconfirmedReceiptId,
   formatBulkErrorBucket,
   hasActiveReceiptFilter,
   hasClientSideFilter,
   hasMatchingFieldsChanged,
+  hasReceiptFieldOrLineEdits,
   haveConfirmLinesChanged,
   isBulkConfirmable,
   isExcludedDraftForBulk,
   isGmailImportSource,
   isGroupDateSpanValid,
   isGroupMemberEligible,
+  isReceiptDraftDirty,
   isReceiptGrouped,
   mergeGroupPoolMembers,
   positiveGroupFee,
@@ -48,9 +54,12 @@ import {
   receiptHasRedactedLines,
   receiptMerchantGroupIdentity,
   receiptMerchantGroupKey,
+  receiptNeedsConfirmation,
   receiptTotalAdjustment,
   reconcileLinkChoice,
   resolveDraftFromDetailSession,
+  resolvePostRefreshSelectionId,
+  sameReceiptFilter,
   selectCandidateDraft,
   selectKeepDraft,
   subtractDecimals,
@@ -1426,5 +1435,129 @@ describe("receipts_model", () => {
       evidence_expected_version: 3,
       fee_amount: "0.5",
     });
+  });
+
+  it("supports filter equality, list limit sizing, post-refresh selection, and adjacent/unconfirmed navigation", () => {
+    expect(RECEIPT_PAGE_LIMIT).toBe(50);
+    expect(RECEIPT_MAX_PAGE_LIMIT).toBe(200);
+    expect(buildReceiptListRequest(EMPTY_RECEIPT_FILTER, null, 120)).toEqual({ limit: 120 });
+    expect(buildReceiptListRequest(EMPTY_RECEIPT_FILTER, "c-2", RECEIPT_MAX_PAGE_LIMIT)).toEqual({
+      limit: 200,
+      cursor: "c-2",
+    });
+
+    expect(sameReceiptFilter(EMPTY_RECEIPT_FILTER, { ...EMPTY_RECEIPT_FILTER, query: "   " })).toBe(true);
+    expect(sameReceiptFilter(EMPTY_RECEIPT_FILTER, { ...EMPTY_RECEIPT_FILTER, query: "Lidl" })).toBe(false);
+    expect(sameReceiptFilter(EMPTY_RECEIPT_FILTER, { ...EMPTY_RECEIPT_FILTER, status: "imported" })).toBe(false);
+    expect(sameReceiptFilter(EMPTY_RECEIPT_FILTER, { ...EMPTY_RECEIPT_FILTER, sourceKind: "email" })).toBe(false);
+
+    const r1 = summary({ receipt_id: "r1", status: "imported", version: 1 });
+    const r2 = summary({ receipt_id: "r2", status: "confirmed", version: 2 });
+    const r3 = summary({ receipt_id: "r3", status: "draft", version: 1 });
+    const r4 = summary({ receipt_id: "r4", status: "needs_review", version: 1 });
+    const rows = [r1, r2, r3, r4];
+
+    expect(receiptNeedsConfirmation(r1)).toBe(true);
+    expect(receiptNeedsConfirmation(r2)).toBe(false);
+    expect(receiptNeedsConfirmation(r3)).toBe(true);
+    expect(receiptNeedsConfirmation(r4)).toBe(true);
+
+    expect(findAdjacentReceiptId(rows, "r1", "prev")).toBeNull();
+    expect(findAdjacentReceiptId(rows, "r1", "next")).toBe("r2");
+    expect(findAdjacentReceiptId(rows, "r4", "prev")).toBe("r3");
+    expect(findAdjacentReceiptId(rows, "r4", "next")).toBeNull();
+    expect(findAdjacentReceiptId(rows, "missing", "next")).toBeNull();
+
+    // Post-refresh selection keeps current ID when present, falls back to same index (clamped) when gone, or null when empty.
+    expect(resolvePostRefreshSelectionId([r1, r2, r3], "r2", 1)).toBe("r2");
+    expect(resolvePostRefreshSelectionId([r1, r3], "r2", 1)).toBe("r3");
+    expect(resolvePostRefreshSelectionId([r1, r2], "r3", 2)).toBe("r2");
+    expect(resolvePostRefreshSelectionId([], "r1", 0)).toBeNull();
+
+    expect(findNextUnconfirmedReceiptId(rows, "r1", { wrap: false })).toBe("r3");
+    expect(findNextUnconfirmedReceiptId(rows, "r4", { wrap: false })).toBeNull();
+    expect(findNextUnconfirmedReceiptId(rows, "r4", { wrap: true })).toBe("r1");
+    expect(findNextUnconfirmedReceiptId(rows, "r1", { wrap: false, predicate: (r) => r.receipt_id !== "r3" })).toBe("r4");
+    expect(findNextUnconfirmedReceiptId([r1, r3], "r2", { wrap: false, startIndex: 1 })).toBe("r3");
+    expect(findNextUnconfirmedReceiptId([r1], "r2", { wrap: true, startIndex: 1 })).toBe("r1");
+    const allConfirmed = rows.map((r) => ({ ...r, status: "confirmed" as const }));
+    expect(findNextUnconfirmedReceiptId(allConfirmed, "r1", { wrap: true })).toBeNull();
+  });
+
+  it("detects dirty receipt drafts via a single full-draft snapshot comparison including link, candidate, and keep state", () => {
+    const baseDetail = detailOf({
+      receipt_id: "dirty-1",
+      currency: null,
+      payment_method: null,
+      receipt_time: null,
+      raw_nip: null,
+    });
+    const clean = draftFromDetail(baseDetail, []);
+    expect(isReceiptDraftDirty(baseDetail, clean)).toBe(false);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, receiptId: "other-id", rawShopName: "Changed" })).toBe(false);
+
+    // Header and line edits mark the draft dirty.
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, rawShopName: "Edited Shop" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, rawNip: "5261040828" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, receiptKind: "refund" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, receiptDate: "2026-11-15" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, receiptTime: "10:15" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, totalAmount: "43.00" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, currency: "EUR" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, paymentMethod: "cash" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, lines: [] })).toBe(true);
+    const editedLine = clean.lines.map((line, idx) => (idx === 0 ? { ...line, raw_name: "Edited Milk" } : line));
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, lines: editedLine })).toBe(true);
+    expect(hasReceiptFieldOrLineEdits(baseDetail, { ...clean, rawShopName: "Edited Shop" })).toBe(true);
+    expect(hasReceiptFieldOrLineEdits(baseDetail, { ...clean, lines: editedLine })).toBe(true);
+
+    // Link choice (Unlink / Keep) and candidate selection edits mark the draft dirty.
+    const candNip: ReceiptCandidate = {
+      account_id: "acc-1",
+      entry_reference: "a".repeat(64),
+      amount: "42.50",
+      currency: "PLN",
+      credit_debit_indicator: "DBIT",
+      transaction_date: "2026-11-14",
+      booking_date: "2026-11-14",
+      value_date: "2026-11-14",
+      merchant_token_hit: true,
+      match_strength: "nip",
+      date_distance: 0,
+      candidate_token: "tok-1",
+    };
+    const candAlt: ReceiptCandidate = {
+      ...candNip,
+      entry_reference: "b".repeat(64),
+      match_strength: "none",
+      candidate_token: "tok-2",
+    };
+
+    const importedUnlinked = detailOf({ receipt_id: "dirty-imp", status: "imported", linked: false });
+    const preselectedClean = draftFromDetail(importedUnlinked, [candNip]);
+    expect(isReceiptDraftDirty(importedUnlinked, preselectedClean, [candNip])).toBe(false);
+    // Token rotation on the same candidate does not introduce false dirtiness.
+    expect(isReceiptDraftDirty(importedUnlinked, preselectedClean, [{ ...candNip, candidate_token: "tok-rotated" }])).toBe(false);
+    // Choosing Unlink as the only edit makes the draft dirty (while header/line edit helper stays false).
+    const unlinkedOnly = { ...preselectedClean, linkChoice: "unlink", selectedCandidate: null, keepBinding: null };
+    expect(isReceiptDraftDirty(importedUnlinked, unlinkedOnly, [candNip])).toBe(true);
+    expect(hasReceiptFieldOrLineEdits(importedUnlinked, unlinkedOnly)).toBe(false);
+    // Reverting back to candidate:0 restores clean state.
+    expect(isReceiptDraftDirty(importedUnlinked, selectCandidateDraft(unlinkedOnly, candNip, 0), [candNip])).toBe(false);
+
+    // Linked needs_review receipt: baseline is "", so choosing Keep, Unlink, or an alternate candidate is dirty.
+    const linkedReview = detailOf({
+      receipt_id: "dirty-linked",
+      status: "needs_review",
+      linked: true,
+      linked_account_id: candNip.account_id,
+      linked_entry_ref: candNip.entry_reference,
+    });
+    const linkedClean = draftFromDetail(linkedReview, [candNip, candAlt]);
+    expect(isReceiptDraftDirty(linkedReview, linkedClean, [candNip, candAlt])).toBe(false);
+    expect(isReceiptDraftDirty(linkedReview, selectKeepDraft(linkedClean, candNip), [candNip, candAlt])).toBe(true);
+    expect(isReceiptDraftDirty(linkedReview, { ...linkedClean, linkChoice: "unlink" }, [candNip, candAlt])).toBe(true);
+    expect(isReceiptDraftDirty(linkedReview, selectCandidateDraft(linkedClean, candAlt, 1), [candNip, candAlt])).toBe(true);
+    expect(hasReceiptFieldOrLineEdits(linkedReview, selectKeepDraft(linkedClean, candNip))).toBe(false);
   });
 });
