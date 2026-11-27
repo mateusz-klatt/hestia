@@ -97,6 +97,10 @@ class ReceiptParserTests(AnalyticsCase):
         super().setUp()
         self.receipts = BudgetReceiptStore(self.sessions, clock=lambda: self.now, cursor_secret=b"receipts-only")
 
+    def add_transaction(self, account, reference, **changes):
+        changes.setdefault("remittance_information", [PRIVATE_SHOP])
+        return super().add_transaction(account, reference, **changes)
+
     def draft(self, **kwargs):
         return self.receipts.parse_text("owner", receipt_text(**kwargs))
 
@@ -1770,7 +1774,7 @@ NR KARTY ****5555
         self.assertEqual(saved["linked_entry_ref"], digest)
         self.assertNotIn(reference, json.dumps(saved))
         self.assertEqual(evidence["remittance_digest"], hashlib.sha256(
-            json.dumps(["Synthetic SHOP"], ensure_ascii=True, separators=(",", ":")).encode("ascii")).hexdigest())
+            json.dumps([PRIVATE_SHOP], ensure_ascii=True, separators=(",", ":")).encode("ascii")).hexdigest())
         self.assertNotIn("remittance_information", evidence)
         self.assertNotIn("creditor_name", evidence)
         self.assertIsNone(evidence["creditor_digest"])
@@ -1788,7 +1792,7 @@ NR KARTY ****5555
         self.assertEqual((stale_text.exception.code, stale_text.exception.status),
                          ("budget_receipt_stale_source", 409))
         self.assertEqual(self.receipt_row(preview["receipt_id"]).status, "draft")
-        self.change_transaction(remittance_information=["Synthetic SHOP"])
+        self.change_transaction(remittance_information=[PRIVATE_SHOP])
         self.change_transaction(amount="101")
         with self.assertRaises(ReceiptError) as stale_amount:
             self.receipts.confirm("owner", confirm_values(preview, link=debit))
@@ -1915,6 +1919,7 @@ NR KARTY ****5555
     def test_long_remittance_still_yields_a_candidate_and_confirms(self):
         remittance = "S" * 4096
         self.change_transaction(remittance_information=[remittance])
+        self.change_transaction("d", "debit-2", amount="101")
         parsed = self.draft()
         candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == reference_digest("debit"))
         self.assertNotIn("remittance_information", candidate)
@@ -2069,8 +2074,10 @@ NR KARTY ****5555
         self.assertEqual(candidates[0]["date_distance"], 22)
 
         # Boundary inclusivity: issue_date - 1 and due_date + 14 are accepted.
-        self.add_transaction("a", "inv-start", amount="123.45", booking_date="2026-10-31", value_date=None)
-        self.add_transaction("a", "inv-end", amount="123.45", booking_date="2026-12-04", value_date=None)
+        self.add_transaction("a", "inv-start", amount="123.45", booking_date="2026-10-31", value_date=None,
+                             remittance_information=["ORANGE POLSKA FV"])
+        self.add_transaction("a", "inv-end", amount="123.45", booking_date="2026-12-04", value_date=None,
+                             remittance_information=["ORANGE POLSKA FV"])
         boundary_refs = {item["entry_reference"] for item in self.receipts.detail("owner", invoice_id)["candidates"]}
         self.assertEqual(boundary_refs, {
             reference_digest("inv-due-plus-3"),
@@ -2174,8 +2181,10 @@ NR KARTY ****5555
         self.assertEqual((reconfirmed["status"], reconfirmed["linked"]), ("confirmed", True))
 
         # Invoice without due_date or with due_date < issue_date uses [issue_date - 1, issue_date + 14].
-        self.add_transaction("a", "nodue-in", amount="55.00", booking_date="2026-11-15", value_date=None)
-        self.add_transaction("a", "nodue-out", amount="55.00", booking_date="2026-11-16", value_date=None)
+        self.add_transaction("a", "nodue-in", amount="55.00", booking_date="2026-11-15", value_date=None,
+                             remittance_information=["ORANGE POLSKA FV"])
+        self.add_transaction("a", "nodue-out", amount="55.00", booking_date="2026-11-16", value_date=None,
+                             remittance_information=["ORANGE POLSKA FV"])
         no_due = self._seed_imported(document_kind="invoice", issue_date="2026-11-01", due_date=None, total="55.00")
         early_due = self._seed_imported(
             document_kind="invoice", issue_date="2026-11-01", due_date="2026-10-25", total="55.00",
@@ -2198,10 +2207,8 @@ NR KARTY ****5555
         candidates = detail["candidates"]
         self.assertEqual([item["entry_reference"] for item in candidates], [
             reference_digest("pc-plus-4"),
-            reference_digest("pc-minus-4"),
         ])
         self.assertTrue(candidates[0]["merchant_token_hit"])
-        self.assertFalse(candidates[1]["merchant_token_hit"])
 
         # Out-of-window ±5 transactions are also rejected by _verify_link.
         cleaned_pc = validate_confirm({
@@ -2248,7 +2255,7 @@ NR KARTY ****5555
         direct_cands = self.receipts.detail("owner", direct_id)["candidates"]
         self.assertEqual(
             [(item["entry_reference"], item["merchant_token_hit"]) for item in direct_cands],
-            [(reference_digest("direct-same-shop"), True), (reference_digest("p24-other-shop"), False)],
+            [(reference_digest("direct-same-shop"), True)],
         )
 
         # 2. Whole-word chain aliases ("LIDLBERG" != "LIDL"; "MARTINS" alone != Biedronka) + ALL distinctive tokens.
@@ -2263,7 +2270,7 @@ NR KARTY ****5555
         self.assertEqual(
             {item["entry_reference"]: item["merchant_token_hit"]
              for item in self.receipts.detail("owner", lidlberg_id)["candidates"]},
-            {reference_digest("lidlberg-tx"): True, reference_digest("lidl-tx"): False},
+            {reference_digest("lidlberg-tx"): True},
         )
 
         self.add_transaction("a", "biedronka-tx", amount="43.00", booking_date="2026-11-10", value_date=None,
@@ -2277,7 +2284,7 @@ NR KARTY ****5555
         self.assertEqual(
             {item["entry_reference"]: item["merchant_token_hit"]
              for item in self.receipts.detail("owner", martins_id)["candidates"]},
-            {reference_digest("martins-only-tx"): True, reference_digest("biedronka-tx"): False},
+            {reference_digest("martins-only-tx"): True},
         )
         jm_id = self._seed_imported(
             document_kind="invoice", issue_date="2026-11-10", due_date="2026-11-15",
@@ -2286,7 +2293,7 @@ NR KARTY ****5555
         self.assertEqual(
             {item["entry_reference"]: item["merchant_token_hit"]
              for item in self.receipts.detail("owner", jm_id)["candidates"]},
-            {reference_digest("biedronka-tx"): True, reference_digest("martins-only-tx"): False},
+            {reference_digest("biedronka-tx"): True},
         )
 
         self.add_transaction("a", "partial-tokens", amount="44.00", booking_date="2026-11-10", value_date=None,
@@ -2306,7 +2313,6 @@ NR KARTY ****5555
             [
                 (reference_digest("all-tokens"), True),
                 (reference_digest("partial-tokens"), True),
-                (reference_digest("no-tokens"), False),
             ],
         )
         # NIP match ranks above multi-token name match, and sole-token generic "GROCERY" matches only when alone.
@@ -2374,13 +2380,6 @@ NR KARTY ****5555
         self.assertEqual(nip_hits, {
             reference_digest("nip-exact"): True,
             reference_digest("nip-pl"): True,
-            reference_digest("nip-nbsp-iban"): False,
-            reference_digest("nip-wrong-len"): False,
-            reference_digest("nip-hyphen-longer"): False,
-            reference_digest("nip-lead-digit"): False,
-            reference_digest("nip-lead-alpha"): False,
-            reference_digest("nip-apl-prefix"): False,
-            reference_digest("nip-tail-alpha"): False,
         })
 
         # 4. Graded ranking before MAX_CANDIDATES (>= 50, currently 100) cap:
@@ -2905,7 +2904,7 @@ NR KARTY ****5555
             self.assertEqual(reconcile_receipt_links(session, "owner", self.now + 30), 1)
         self.assertEqual(self.receipt_row(rec_refund_reconcile).status, "needs_review")
 
-        # 6. Gateway-sourced receipt (AppMeta payee, gateway shop token, or gateway domain) gives "none" on clean bank tx.
+        # 6. Gateway receipts use the manual suggestion strength on a clean merchant match.
         self.add_transaction(
             "a", "ms-clean-bank", amount="140.00", booking_date="2026-11-15", value_date=None,
             remittance_information=["BIEDRONKA SKLEP NIP 7791011327"],
@@ -2917,14 +2916,14 @@ NR KARTY ****5555
         with self.sessions.begin() as session:
             session.add(db.AppMeta(key=_payment_payee_key(rec_appmeta), value="gw-hash"))
         cand_appmeta = self.receipts.detail("owner", rec_appmeta)["candidates"]
-        self.assertEqual(cand_appmeta[0]["match_strength"], "none")
+        self.assertEqual(cand_appmeta[0]["match_strength"], "generic")
         self.assertTrue(cand_appmeta[0]["merchant_token_hit"])
 
         rec_shop_gw = self._seed_imported(
             document_kind="payment_confirmation", issue_date="2026-11-15", total="140.00",
             shop="PAYNOW / BIEDRONKA", nip="7791011327", with_line=True,
         )
-        self.assertEqual(self.receipts.detail("owner", rec_shop_gw)["candidates"][0]["match_strength"], "none")
+        self.assertEqual(self.receipts.detail("owner", rec_shop_gw)["candidates"][0]["match_strength"], "generic")
 
         for dom in ("przelewy24.pl", "payu.pl", "payu.com", "autopay.pl", "mail.bluemedia.pl",
                     "tpay.com", "paynow.pl", "dotpay.pl", "paypro.pl", "p24.pl"):
@@ -2932,7 +2931,7 @@ NR KARTY ****5555
                 document_kind="payment_confirmation", issue_date="2026-11-15", total="140.00",
                 shop="BIEDRONKA", nip="7791011327", with_line=True, forwarded_sender_domain=dom,
             )
-            self.assertEqual(self.receipts.detail("owner", rec_dom_gw)["candidates"][0]["match_strength"], "none", dom)
+            self.assertEqual(self.receipts.detail("owner", rec_dom_gw)["candidates"][0]["match_strength"], "generic", dom)
 
         rec_non_gw_dom = self._seed_imported(
             document_kind="invoice", issue_date="2026-11-15", total="140.00",
@@ -3215,7 +3214,7 @@ NR KARTY ****5555
         )
         self.assertEqual(self.receipts.detail("owner", rec_brand)["candidates"][0]["match_strength"], "distinctive")
 
-    def test_v1f_durable_gateway_suppresses_strength_and_evidence_rows_skip_candidates(self):
+    def test_v1f_durable_gateway_suggests_merchant_matches_and_evidence_rows_skip_candidates(self):
         self.add_transaction(
             "a", "r5-v1f-gw", amount="230.00", booking_date="2026-11-15", value_date=None,
             remittance_information=["BIEDRONKA NIP 7791011327"],
@@ -3233,7 +3232,7 @@ NR KARTY ****5555
         with self.sessions.begin() as session:
             session.get(db.BudgetReceipt, dur_gw_rec).gateway = "Example Pay"
         cand_gw = self.receipts.detail("owner", dur_gw_rec)["candidates"]
-        self.assertEqual(cand_gw[0]["match_strength"], "none")
+        self.assertEqual(cand_gw[0]["match_strength"], "generic")
         self.assertTrue(cand_gw[0]["merchant_token_hit"])
 
         ev_rec = self._seed_imported(

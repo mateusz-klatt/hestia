@@ -22,6 +22,7 @@ from tests.test_budget_receipts import confirm_values, receipt_text
 class DelegatedReceiptStoreTests(AnalyticsCase):
     def setUp(self):
         super().setUp()
+        self.change_transaction(remittance_information=["BIEDRONKA"])
         store_sql.activate_catalog_compat(path=self.path)
         with self.sessions.begin() as session:
             session.add(db.User(username="delegate", password_hash="unused", role="viewer"))

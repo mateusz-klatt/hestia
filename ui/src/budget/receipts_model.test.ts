@@ -1336,6 +1336,12 @@ describe("receipts_model", () => {
     expect(preselectedCandidate(gatewayImported, [idCand], "card")).toEqual(idCand);
     expect(preselectedCandidate(gatewayImported, [idCand, weakCand], "card")).toBeNull();
 
+    for (const match_strength of ["generic", "none"] as const) {
+      const suggestion = { ...weakCand, match_strength };
+      expect(preselectedCandidate(gatewayImported, [suggestion], "unknown")).toBeNull();
+      expect(uniqueIdCandidate(gatewayImported, [suggestion])).toBeNull();
+    }
+
     // Unique "id" links even when an extra "none" coincidence candidate exists, while "nip" / "distinctive" / empty / 2-"id" confirm unlinked.
     expect(uniqueIdCandidate(gatewayImported, [idCand, weakCand])?.candidate).toEqual(idCand);
     expect(uniqueIdCandidate(gatewayImported, [nipCand])).toBeNull();
