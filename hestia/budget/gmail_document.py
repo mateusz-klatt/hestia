@@ -9,7 +9,7 @@ from .analytics_core import canonical_money
 from .gmail_invoice import _normalized_invoice_lines, _parse_nip, _safe_field
 from .gmail_respect import settlement_items
 from .gmail_payment import _following_values, _parse_amount, _parse_date, _RejectedPayment, purchase_payment_scope
-from .receipt_parser import MAX_TEXT_BYTES, ReceiptError
+from .receipt_parser import BUYER_PARTY_LABELS, MAX_TEXT_BYTES, ReceiptError
 
 
 @dataclass(frozen=True, repr=False)
@@ -41,7 +41,7 @@ _LABELS = {
     "due": r"termin płatności|date due|payment due on",
     "seller": r"sprzedawca|merchant(?=\s*:)|seller(?=\s*:)|from(?=\s*:|\s*$)",
     "issuer": r"faktura wystawiona przez",
-    "buyer": r"dane nabywcy|nabywca|odbiorca|kupujący|billed to|bill to|sold to|customer",
+    "buyer": BUYER_PARTY_LABELS,
     "nip": r"nip",
     "total0": r"do zapłaty razem|razem do zapłaty",
     "total1": r"kwota do zapłaty|do zapłaty|amount due|total due",
@@ -68,7 +68,7 @@ _EU_VAT_VALUE = re.compile(
     r"[\s-]*(?=[A-Z0-9 .-]*[0-9])[A-Z0-9 .-]+$", re.I | re.ASCII,
 )
 _SELLER_ADDRESS = re.compile(r"\s+ul\.|,\s*[0-9]{2}-[0-9]{3}\b", re.I)
-_BUYER_INLINE = re.compile(r"\b(?:dane nabywcy|nabywca|odbiorca|kupujący|billed to|bill to|sold to|customer)\s*:", re.I)
+_BUYER_INLINE = re.compile(rf"\b(?:{BUYER_PARTY_LABELS})\s*:", re.I)
 _VAT_SUMMARY = re.compile(r"^(?:suma\s*:|wartość brutto\s*:?)\s*$", re.I)
 _VAT_COLUMN = re.compile(r"^(?:wartość\s+|kwota\s+)?(netto|podatek(?:\s+vat)?|vat|brutto)\s*:?\s*$", re.I)
 

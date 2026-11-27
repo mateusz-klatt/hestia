@@ -114,6 +114,90 @@ class ParserEdgeTests(unittest.TestCase):
         self.assertTrue(receipt_parser._ascii_word("_"))
         self.assertFalse(receipt_parser._ascii_word("ł"))
 
+    def test_parse_selects_the_seller_nip_outside_buyer_sections(self):
+        seller, buyer = "1010101016", "1020101012"
+        with self.subTest("synthetic checksums"):
+            self.assertTrue(valid_nip(seller))
+            self.assertTrue(valid_nip(buyer))
+        cases = (
+            (f"NIP: {seller}\nNIP nabywcy: {buyer}", seller),
+            (f"Nabywca:\nKlient Testowy\nNIP: {buyer}\nSprzedawca: Sklep Testowy\nNIP: {seller}", seller),
+            (f"Nabywca:\nNIP: {buyer}\nSprzedawca\nSklep Testowy\nNIP: {seller}", seller),
+            (f"Nabywca:\nNIP: {buyer}\nSprzedawca NIP: {seller}", seller),
+            (f"Nabywca może zwrócić towar\nNIP: {seller}", seller),
+            (f"Zwrot zgłasza nabywca, podając NIP: {seller}", seller),
+            (f"NIP: {seller} Nabywca: NIP: {buyer}", seller),
+            (f"Nabywca: NIP: {buyer} Sprzedawca: NIP: {seller}", seller),
+            (f"NIP odbiorcy: {buyer}\nNIP sprzedawcy: {seller}", seller),
+            (f"NIP: 1060101017 Nabywca: NIP: {buyer}", None),
+            (f"Nabywca NIP: {buyer}", None),
+        )
+        for party_lines, expected in cases:
+            with self.subTest(party_lines=party_lines):
+                self.assertEqual(parse_receipt(f"Sklep Testowy\n{party_lines}")["raw_nip"], expected)
+
+        for marker in ("NIP nabywcy:", "NIP odbiorcy", "Nabywca:", "NABYWCA", "Dane nabywcy:", "Kupujący", "Odbiorca:"):
+            with self.subTest(marker=marker):
+                text = f"Sklep Testowy\n{marker}\nKlient Testowy\nNIP: {buyer}"
+                self.assertIsNone(parse_receipt(text)["raw_nip"])
+                self.assertEqual(redact_pan(text), text)
+                for boundary in ("", "PARAGON FISKALNY", "-------"):
+                    self.assertEqual(parse_receipt(f"{text}\n{boundary}\nNIP: {seller}")["raw_nip"], seller)
+
+    def test_gap_under_buyer_heading_keeps_its_nip_in_the_buyer_block(self):
+        buyer_block = "Nabywca:\n\nKlient Testowy\nul. Testowa 1\nNIP: 1020101012"
+        seller_block = "Sprzedawca:\n\nSklep Testowy\nNIP: 1010101016"
+        self.assertEqual(parse_receipt(f"{buyer_block}\n\n{seller_block}")["raw_nip"], "1010101016")
+        self.assertIsNone(parse_receipt(buyer_block)["raw_nip"])
+
+    def test_headings_and_seller_prose_keep_unread_buyer_nip_in_its_block(self):
+        for line in ("Faktura VAT", "PARAGON FISKALNY", "Pozycje", "Podsumowanie", "Suma PLN",
+                     "Sprzedawca udziela gwarancji na towar"):
+            with self.subTest(line=line):
+                text = f"Nabywca:\nKlient Testowy\n{line}\nNIP: 1020101012"
+                self.assertIsNone(parse_receipt(text)["raw_nip"])
+                self.assertEqual(parse_receipt(f"{text}\n\nNIP: 1010101016")["raw_nip"], "1010101016")
+
+    def test_receipt_body_after_section_heading_releases_the_seller_footer_nip(self):
+        text = ("Odbiorca:\nKlient\nPARAGON FISKALNY\nTOWAR 1 x 1,00 1,00 A\n"
+                "SUMA PLN 1,00\nNIP: 1010101016")
+        self.assertEqual(parse_receipt(text)["raw_nip"], "1010101016")
+
+    def test_nip_is_still_buyer_data_directly_below_a_section_heading(self):
+        for following in ("NIP: 1020101012", "\nNIP1020101012", "PODSUMOWANIE\n\nNIP: 1020101012"):
+            with self.subTest(following=following):
+                text = f"Nabywca:\nPARAGON FISKALNY\n{following}"
+                self.assertIsNone(parse_receipt(text)["raw_nip"])
+
+    def test_qualified_buyer_heading_starts_a_new_block_after_section_heading(self):
+        text = "Nabywca:\nPARAGON FISKALNY\nNIP nabywcy:\n\nKlient Testowy\nNIP: 1020101012"
+        self.assertIsNone(parse_receipt(text)["raw_nip"])
+
+    def test_explicit_boundaries_end_a_buyer_block_before_its_nip(self):
+        for boundary in ("-------", "Sprzedawca:"):
+            with self.subTest(boundary=boundary):
+                text = f"Nabywca:\nKlient Testowy\n{boundary}\nNIP: 1010101016"
+                self.assertEqual(parse_receipt(text)["raw_nip"], "1010101016")
+
+    def test_invalid_nip_does_not_allow_a_blank_to_end_the_buyer_block(self):
+        text = "Nabywca:\nNIP: 1060101017\n\nNIP: 1020101012"
+        self.assertIsNone(parse_receipt(text)["raw_nip"])
+
+    def test_buyer_nip_with_an_inline_qualifier_allows_a_later_blank_to_end_the_block(self):
+        for label in ("NIP nabywcy:", "NIP odbiorcy"):
+            with self.subTest(label=label):
+                text = f"{label} 1020101012\n\nNIP: 1010101016"
+                self.assertEqual(parse_receipt(text)["raw_nip"], "1010101016")
+
+    def test_paired_empty_seller_and_buyer_headings_trust_the_seller_column_first(self):
+        text = "Sprzedawca: Nabywca:\nSklep Testowy\nNIP: 1010101016\nKlient Testowy\nNIP: 1020101012"
+        self.assertEqual(parse_receipt(text)["raw_nip"], "1010101016")
+
+    def test_redacting_a_buyer_heading_preserves_its_nip_context(self):
+        text = "Sklep Testowy\nNabywca: Klient Testowy, karta 5351 0055 5555 5555\nNIP: 1020101012"
+        self.assertEqual(redact_pan(text), "Sklep Testowy\n[usunięto]\nNIP: 1020101012")
+        self.assertIsNone(parse_receipt(text)["raw_nip"])
+
     def test_parse_validation_and_defensive_text_checks(self):
         from hestia.budget.receipt_parser import chain_for, merchant_match_groups, merchant_score_groups
 
@@ -169,7 +253,7 @@ class ParserEdgeTests(unittest.TestCase):
         items = "\n".join(f"TOWAR{index} 1 x 1,00 1,00 A" for index in range(MAX_RECEIPT_LINES + 1))
         with self.assertRaises(ReceiptError):
             parse_receipt("SKLEP\n" + items + "\n")
-        with mock.patch.object(receipt_parser, "redact_pan", return_value="\n" * MAX_TEXT_LINES):
+        with mock.patch.object(receipt_parser, "_redact_normalized", return_value="\n" * MAX_TEXT_LINES):
             with self.assertRaises(ReceiptError):
                 parse_receipt("ok")
         for value in (None, b"text", "\ud800"):
