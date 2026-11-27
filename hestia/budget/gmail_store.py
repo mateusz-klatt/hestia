@@ -330,13 +330,12 @@ class GmailStore(BudgetStore):
     def fence(self, owner, generation):
         self._active(self.state(owner), generation)
 
-    def begin_sync_attempt(self, owner, generation, now):
-        """Consume the previous run's abort marker as this run begins."""
+    def consume_parser_abort(self, owner, generation):
+        """Take the previous abort marker once this run selects its first message."""
         with self.transaction() as session:
             BudgetHTTPStore._owner(session, owner)
             row = self._state(session, owner)
             self._active(row, generation)
-            row.last_attempt_at, row.run_requested = now, 1
             marker = session.get(AppMeta, _PARSER_ABORT_PREFIX + owner)
             if marker is not None:
                 session.delete(marker)
@@ -1015,12 +1014,12 @@ class GmailStore(BudgetStore):
                         meta.value = encoded
                 elif meta is not None:
                     session.delete(meta)
+            if parser_abort is not None:
+                session.merge(AppMeta(key=_PARSER_ABORT_PREFIX + owner, value=parser_abort))
             if drained:
                 was_recovery = row.sync_phase != "incremental"
                 for key, value in changes.items():
                     setattr(row, key, value)
-                if parser_abort is not None:
-                    session.merge(AppMeta(key=_PARSER_ABORT_PREFIX + owner, value=parser_abort))
                 if changes.get("sync_phase") == "idle":
                     # A force request may arrive after the worker chose what to scan.
                     row.run_requested = int(bool(row.force_full_resync))

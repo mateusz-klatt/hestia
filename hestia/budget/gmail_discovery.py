@@ -82,18 +82,23 @@ def discover_document(processor, message, pending, *, inline_outer=None, attachm
            or _body_reversal(str(subject))
            for subject in subjects):
         return replace(pending, outcome="skipped_non_receipt")
-    parts = _document_parts(message)
+    parts = ((kind, part, message) for kind, part in _document_parts(message))
     if inline_outer is not None:
-        parts = chain(parts, (("pdf", part) for part in mime_parts(inline_outer) if _is_pdf_part(part)))
+        parts = chain(parts, (("pdf", part, inline_outer) for part in mime_parts(inline_outer) if _is_pdf_part(part)))
     parts = list(islice(parts, _MAX_PARTS + 1))
-    if len(parts) > _MAX_PARTS or (attachments_only and not any(kind == "pdf" for kind, _ in parts)):
+    if len(parts) > _MAX_PARTS:
         return None
     # Check the decoded PDFs before sending any part of an untrusted discovery hit to the worker.
-    pdf_payloads = {part: part.get_payload(decode=True) or b"" for kind, part in parts if kind == "pdf"}
-    if any(len(payload) > _MAX_DISCOVERY_PDF_BYTES for payload in pdf_payloads.values()):
-        settings = processor.settings
+    pdf_payloads = {part: part.get_payload(decode=True) or b"" for kind, part, _ in parts if kind == "pdf"}
+    if attachments_only and not pdf_payloads:
+        return None
+    oversized_envelopes = {envelope for kind, part, envelope in parts
+                           if kind == "pdf" and len(pdf_payloads[part]) > _MAX_DISCOVERY_PDF_BYTES}
+    settings = processor.settings
+    for envelope in oversized_envelopes:
         if attachments_only or classify_sender(
-            message.raw_items(), settings.sender_allowlist, (),
+            envelope.raw_items(), settings.sender_allowlist, settings.spouse_forward_senders,
+            getattr(settings, "owner_mailbox", None),
             document_senders=getattr(settings, "document_senders", ()),
             require_authentication=processor.require_auth,
         ) != "direct_allowlist":
@@ -101,7 +106,7 @@ def discover_document(processor, message, pending, *, inline_outer=None, attachm
     selected = None
     source_kind = "email"
     payment_lines = []
-    for kind, part in parts:
+    for kind, part, _ in parts:
         try:
             payload = _document_payload(kind, part, decoded=pdf_payloads.get(part))
             if not payload:

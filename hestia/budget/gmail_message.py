@@ -80,11 +80,12 @@ class _Rejected(WorkerRejected):
 
 
 class MessageParserUnavailable(GmailError):
-    """Parser outage detected while processing a particular message."""
+    """A failed message exchange and the supervisor's response to a health probe."""
 
-    def __init__(self, failed_message: PendingMessage):
+    def __init__(self, failed_message: PendingMessage, *, worker_ready: bool):
         super().__init__("parser_unavailable")
         self.failed_message = failed_message
+        self.worker_ready = worker_ready
 
 
 def _worker_reason(error):
@@ -689,10 +690,9 @@ class GmailMessageProcessor:
         except UnicodeError:
             result = _parse_failed(pending, "unicode_error")
         except WorkerUnavailable:
-            # Keep worker failures in the existing status bucket.
-            result = _parse_failed(pending, "worker_rejected")
-            if not self.ready():
-                raise MessageParserUnavailable(result) from None
+            raise MessageParserUnavailable(
+                _parse_failed(pending, "worker_rejected"), worker_ready=self.ready(),
+            ) from None
         if result.outcome == _PARSE_FAILED:
             log.warning("gmail parse_failed reason=%s", result.parse_failed_reason)
         return result

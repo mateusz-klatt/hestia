@@ -637,26 +637,28 @@ class GmailSyncTests(TestCase):
 
     def _use_poison_pdf(self, *, strict=False):
         settings = replace(SETTINGS, require_sender_authentication=strict, sender_allowlist=(MERCHANT,))
-        payload = b"%PDF-1.4 synthetic PDF"
-        poison = _email(MERCHANT if strict else "invoices@unlisted.example", text="")
-        poison.set_content(b"", maintype="text", subtype="plain")
-        poison.add_attachment(payload, maintype="application", subtype="pdf")
         worker = mock.Mock()
         worker.ready.return_value = True
 
         def parse(kind, part):
-            if kind == "pdf" and part == payload:
+            if kind == "pdf":
                 raise WorkerUnavailable("synthetic parse exchange failed")
             return part.decode("utf-8")
 
         worker.parse.side_effect = parse
         self.service.settings = settings
         self.service.processor = gmail_message.GmailMessageProcessor(settings, worker, discover_documents=True)
-        self._route_mime("poison", poison)
+        self._route_crashing_pdf("poison", sender=MERCHANT if strict else "invoices@unlisted.example")
         self._route_mime("good", _email())
         self.transport.routes[("/messages", None)] = response(page("poison", "good"))
         self.enable()
         return worker
+
+    def _route_crashing_pdf(self, message_id, *, sender="invoices@unlisted.example"):
+        message = _email(sender, text="")
+        message.set_content(b"", maintype="text", subtype="plain")
+        message.add_attachment(b"%PDF-1.4 synthetic PDF", maintype="application", subtype="pdf")
+        self._route_mime(message_id, message)
 
     def _route_mime(self, message_id, message):
         responses = {"raw": _raw(message), "metadata": _metadata(message)}
@@ -666,7 +668,9 @@ class GmailSyncTests(TestCase):
 
     def test_failed_pdf_with_healthy_probe_is_skipped_and_can_be_retried(self):
         worker = self._use_poison_pdf()
-        with self.assertLogs("hestia.budget.gmail_message", level="WARNING") as logs:
+        self.transport.routes[("/messages", None)] = response(page("poison", token="next"))
+        self.transport.routes[("/messages", "next")] = response(page("good"))
+        with self.assertLogs("hestia.budget.gmail_sync", level="WARNING") as logs:
             result = self.sync()
         self.assertIn("reason=worker_rejected", logs.output[0])
         self.assertEqual((result["imported_count"], result["skipped_count"], result["has_more"]), (1, 1, False))
@@ -687,11 +691,11 @@ class GmailSyncTests(TestCase):
         outcomes = {row.gmail_id_hmac: row.outcome for row in self.rows(db.BudgetGmailMessage)}
         self.assertEqual(outcomes[failed_hash], "skipped_non_receipt")
 
-    def test_failed_probe_aborts_and_startup_outage_breaks_the_message_streak(self):
+    def test_startup_outage_preserves_the_message_abort_marker(self):
         worker = self._use_poison_pdf()
         # The second attempt never reaches the message because the worker is still down.
         worker.ready.side_effect = [True, False, False, True, False]
-        for delay in (60, 120, 240):
+        for delay in (60, 120):
             with self.assertRaisesRegex(GmailError, "^parser_unavailable$"):
                 self.sync()
             status = self.store.status(OWNER)
@@ -701,7 +705,122 @@ class GmailSyncTests(TestCase):
             self.assertEqual(self.rows(db.BudgetGmailMessage), [])
             self.assertEqual(self.transport.requests("/messages/good"), [])
             self.tick(delay)
+        self.assertEqual(worker.parse.call_count, 1)
+        with self.assertRaisesRegex(GmailError, "^parser_unavailable$"):
+            self.sync()
+        quarantined, = self.rows(db.BudgetGmailMessage)
+        self.assertEqual(quarantined.outcome, "parse_failed")
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"worker_rejected": 1})
+
+    def test_probe_healthy_crashes_in_consecutive_messages_abort_without_marking_mail(self):
+        worker = self._use_poison_pdf()
+        self._route_crashing_pdf("second-pdf")
+        self.transport.routes[("/messages", None)] = response(page("poison", token="next"))
+        self.transport.routes[("/messages", "next")] = response(page("poison", "second-pdf", "good"))
+        with self.assertRaisesRegex(GmailError, "^parser_unavailable$"):
+            self.sync()
         self.assertEqual(worker.parse.call_count, 2)
+        self.assertEqual(worker.ready.call_count, 3)
+        self.assertEqual(self.transport.requests("/messages/good"), [])
+        self.assertEqual(self.rows(db.BudgetGmailMessage), [])
+        state = self.store.state(OWNER)
+        self.assertEqual((state.last_error, state.failures, state.resume_page_token), ("parser_unavailable", 1, None))
+
+    def test_worker_crash_total_cap_applies_to_explicit_retry_with_text_between_crashes(self):
+        worker = self._use_poison_pdf()
+        for message_id in ("second-pdf", "third-pdf"):
+            self._route_crashing_pdf(message_id)
+        self._route_mime("second-text", _email(rfc_id="<second@synthetic.example>"))
+        self.transport.routes[("/messages", None)] = response(
+            page("poison", "good", "second-pdf", "second-text", "third-pdf", "after"),
+        )
+        failed_hash = digest(SETTINGS.hmac_secret, GMAIL_MESSAGE_DOMAIN, "poison")
+        self.store.commit(OWNER, 1, {}, (
+            PendingMessage(failed_hash, NOW, "untrusted", "parse_failed", parse_failed_reason="worker_rejected"),
+        ))
+        self.service.schedule(OWNER, retry_parse_failed=True)
+        self.assertFalse(self.store.known(OWNER, failed_hash))
+        with self.assertRaisesRegex(GmailError, "^parser_unavailable$"):
+            self.sync(poll=True)
+        self.assertEqual([call.args[0] for call in worker.parse.call_args_list], ["pdf", "text", "pdf", "text", "pdf"])
+        self.assertEqual(self.transport.requests("/messages/after"), [])
+        outcomes = {message.gmail_id_hmac: message.outcome for message in self.rows(db.BudgetGmailMessage)}
+        self.assertEqual(list(outcomes.values()).count("imported"), 2)
+        self.assertEqual(list(outcomes.values()).count("parse_failed"), 2)
+        self.assertNotIn(digest(SETTINGS.hmac_secret, GMAIL_MESSAGE_DOMAIN, "third-pdf"), outcomes)
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"worker_rejected": 2})
+        self.assertEqual(self.store.state(OWNER).last_error, "parser_unavailable")
+
+    def test_different_messages_aborting_consecutive_runs_are_not_quarantined(self):
+        self._use_poison_pdf()
+        self._route_crashing_pdf("second-pdf")
+        for message_id in ("poison", "second-pdf"):
+            self.transport.routes[("/messages", None)] = response(page(message_id))
+            with self.assertRaisesRegex(GmailError, "^parser_unavailable$"):
+                self.sync()
+            self.assertEqual(self.rows(db.BudgetGmailMessage), [])
+            self.tick()
+        self.assertEqual(self.store.consume_parser_abort(OWNER, 1),
+                         digest(SETTINGS.hmac_secret, GMAIL_MESSAGE_DOMAIN, "second-pdf"))
+
+    def test_unconfirmed_crash_at_end_or_attempt_cap_preserves_checkpoint(self):
+        worker = self._use_poison_pdf()
+        self.transport.routes[("/messages", None)] = response(page("poison"))
+        with self.assertRaisesRegex(GmailError, "^parser_unavailable$"):
+            self.sync()
+        self.assertEqual(self.rows(db.BudgetGmailMessage), [])
+        self.assertIsNone(self.store.state(OWNER).history_id)
+
+        self.tick()
+        self._route_crashing_pdf("different")
+        self.transport.routes[("/messages", None)] = response(page("different", "good"))
+        with mock.patch.object(sync_module, "MAX_SYNC_MESSAGES_PER_RUN", 1):
+            with self.assertRaisesRegex(GmailError, "^parser_unavailable$"):
+                self.sync()
+        self.assertEqual(self.rows(db.BudgetGmailMessage), [])
+        self.assertEqual(worker.parse.call_count, 2)
+        self.assertEqual(self.store.state(OWNER).last_error, "parser_unavailable")
+
+    def test_incremental_crash_confirmation_saves_matching_history_and_scope_tokens(self):
+        self._use_poison_pdf()
+        self.transport.routes[("/messages", None)] = response(page())
+        self.sync()
+        self.tick()
+        self.transport.profile["historyId"] = "120"
+        self.transport.routes[("/history", None)] = response(history("poison", token="h2"))
+        self.transport.routes[("/history", "h2")] = response(history("good", "later"))
+        self.transport.routes[("/messages", None)] = response(page("poison", "good", token="s2"))
+        self.transport.routes[("/messages", "s2")] = response({}, 503)
+        with self.assertRaisesRegex(GmailError, "^provider_http$"):
+            self.sync()
+        state = self.store.state(OWNER)
+        self.assertEqual((state.history_page_token, state.scope_scan_page_token), ("h2", "s2"))
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"worker_rejected": 1})
+
+    def test_expired_history_during_a_held_crash_leaves_the_previous_checkpoint(self):
+        self._use_poison_pdf()
+        self.transport.routes[("/messages", None)] = response(page())
+        self.sync()
+        self.tick()
+        self.transport.profile["historyId"] = "120"
+        self.transport.routes[("/messages", None)] = response(page("poison"))
+        self.transport.routes[("/history", None)] = response(history("poison", token="h2"))
+        self.transport.routes[("/history", "h2")] = response({}, 404)
+        with self.assertRaisesRegex(GmailError, "^parser_unavailable$"):
+            self.sync()
+        state = self.store.state(OWNER)
+        self.assertEqual((state.sync_phase, state.history_id, state.history_page_token), ("incremental", "100", None))
+        self.assertEqual(self.rows(db.BudgetGmailMessage), [])
+
+    def test_parser_abort_marker_survives_a_short_commit_without_advancing_the_page(self):
+        self.enable()
+        message_hash = "a" * 64
+        pending = PendingMessage("b" * 64, NOW, "direct_allowlist", "imported", invoice=INVOICE)
+        with mock.patch("hestia.budget.gmail_store.MAX_PENDING_IMPORTS", 0):
+            self.assertEqual(self.store.commit(OWNER, 1, {"resume_page_token": "next"}, (pending,),
+                                               parser_abort=message_hash), (0, 0, False))
+        self.assertIsNone(self.store.state(OWNER).resume_page_token)
+        self.assertEqual(self.store.consume_parser_abort(OWNER, 1), message_hash)
 
     def test_two_consecutive_probe_failures_quarantine_the_same_message(self):
         worker = self._use_poison_pdf()

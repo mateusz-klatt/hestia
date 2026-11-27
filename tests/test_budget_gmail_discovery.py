@@ -281,6 +281,17 @@ class GmailDocumentDiscoveryTests(TestCase):
         self.assertEqual(self.process(message).outcome, "skipped_oversized")
         self.worker.parse.assert_not_called()
 
+    def test_allowlisted_inline_origin_does_not_exempt_outer_pdf(self):
+        issuer = "bills@respectenergy.pl"
+        self.processor = GmailMessageProcessor(replace(self.settings, sender_allowlist=(issuer,)), self.worker,
+                                               discover_documents=True)
+        message = _email(SPOUSE, f"Forwarded message:\nFrom: {issuer}\nMessage-ID: {RFC_ID}\n\nSee attached.")
+        pdf = b"%PDF-1.4".ljust(_MAX_DISCOVERY_PDF_BYTES + 1, b" ")
+        message.add_attachment(pdf, maintype="application", subtype="pdf")
+        result = self.process(message)
+        self.assertEqual((result.outcome, result.parse_failed_reason), ("parse_failed", "other"))
+        self.assertNotIn("pdf", [call.args[0] for call in self.worker.parse.call_args_list])
+
     def test_two_pdfs_of_same_document_keep_matching_and_drop_differing_positions(self):
         base_text = _settlement_text()
         base_pdf = _polish_pdf(base_text)
