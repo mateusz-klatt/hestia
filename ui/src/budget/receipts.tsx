@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { t } from "../i18n";
 import type { BudgetResult } from "./api";
 import { labelOf } from "./analytics/model";
-import { formatAmount } from "./model";
+import { currencySymbol, formatAmount } from "./model";
 import type { BudgetAccount, BudgetConnection } from "./model";
 import { receiptsApi as defaultReceiptsApi } from "./receipts_api";
 import type { ReceiptsApi } from "./receipts_api";
@@ -3546,10 +3546,8 @@ function ReceiptDetailDrawer({
             ? null
             : computeLinesDelta(activeDraft.lines, activeDraft.totalAmount);
           const deltaCurrency = (activeDraft?.currency.trim() || detail.currency) ?? "PLN";
-          const adjustmentCurrency = lineAdjustment?.kind === "remainder" && /^[A-Z]{3}$/i.test(deltaCurrency)
-            ? new Intl.NumberFormat(locale, { style: "currency", currency: deltaCurrency })
-                .formatToParts(0).find((part) => part.type === "currency")?.value ?? deltaCurrency
-            : deltaCurrency;
+          const adjustmentCurrency = lineAdjustment?.kind === "remainder"
+            ? currencySymbol(deltaCurrency, locale) : deltaCurrency;
           const lineDeltaDisplay = lineDelta !== null && lineDelta !== "0"
             ? formatAmount(lineDelta, deltaCurrency, locale)
             : null;

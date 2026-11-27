@@ -83,6 +83,12 @@ export function defaultCreditLimitCurrency(account: BudgetAccount): string {
 
 const DECIMAL = /^(-?)(\d+)(?:\.(\d+))?$/;
 
+export function currencySymbol(currency: string, locale: string): string {
+  if (!/^[A-Z]{3}$/i.test(currency)) return currency;
+  return new Intl.NumberFormat(locale, { style: "currency", currency })
+    .formatToParts(0).find((part) => part.type === "currency")?.value ?? currency;
+}
+
 function separators(locale: string): { group: string; decimal: string } {
   const parts = new Intl.NumberFormat(locale).formatToParts(11111.1);
   return {

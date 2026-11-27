@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { t } from "../i18n";
 import { formatScaledBigInt, parseScaledInt, validIsoDate } from "./analytics/model";
 import type { BudgetResult } from "./api";
-import { formatAmount } from "./model";
+import { currencySymbol, formatAmount } from "./model";
 import type { BudgetAccount, BudgetConnection } from "./model";
 import { addDecimals, receiptAccountLabel } from "./receipts_model";
 import type {
@@ -55,7 +55,7 @@ export function transactionPickerDescription(item: ReceiptTransactionSearchItem,
 
 function transactionAmountDelta(item: ReceiptTransactionSearchItem, locale: string): string {
   if (item.amount_delta === null) return "Δ —";
-  const currency = item.currency === "PLN" && locale.startsWith("pl") ? "zł" : item.currency;
+  const currency = currencySymbol(item.currency, locale);
   const sign = item.amount_delta === "0" || item.amount_delta.startsWith("-") ? "" : "+";
   return sign + formatAmount(item.amount_delta, currency, locale);
 }
