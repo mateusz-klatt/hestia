@@ -1099,7 +1099,7 @@ function normalizeConfirmMoney(raw: string): string | null {
   const amount = normalizeDecimalInput(raw);
   if (amount === null) return null;
   // The server rejects money fields that look like private identifiers, including a valid PESEL.
-  const digits = [...amount.replace(/[-.]/g, "")].map(Number);
+  const digits = Array.from(amount.replace(/[-.]/g, ""), Number);
   if (digits.length >= 12) return null;
   if (digits.length === 11) {
     const weights = [1, 3, 7, 9, 1, 3, 7, 9, 1, 3];
@@ -1124,8 +1124,8 @@ function cleanConfirmLine(input: ReceiptLineInput): ReceiptLineInput | ConfirmLi
   const nameKey = rawName.normalize("NFD").replace(/\p{Mn}/gu, "").trim();
   const quantity = normalizeConfirmMoney(input.quantity);
   const unitPrice = input.unit_price_raw === null ? null : normalizeConfirmMoney(input.unit_price_raw);
-  if (nameKey === "" || [...rawName].length > 128 || [...nameKey].length > 128 || !validConfirmLineText(input.raw_name)
-    || (rawUnit !== null && [...rawUnit].length > 16)
+  if (nameKey === "" || Array.from(rawName).length > 128 || Array.from(nameKey).length > 128
+    || !validConfirmLineText(input.raw_name) || (rawUnit !== null && Array.from(rawUnit).length > 16)
     || (input.raw_unit !== null && !validConfirmLineText(input.raw_unit))
     || (input.ptu_code !== null && !RECEIPT_PTU_CODES.includes(input.ptu_code))
     || quantity === null || (input.unit_price_raw !== null && unitPrice === null)) {
