@@ -57,6 +57,7 @@ _GROUP_STRENGTH_ORDER = {"id": 0, "nip": 1, "distinctive": 2, "generic": 3, "non
 _CUR3 = re.compile(r"[A-Z]{3}\Z", re.ASCII)
 _OCR_SOURCES = ("local_ocr", "photo", "cloud_ai")
 _SHOP_NAME_CONFIRMED = "shop_name_confirmed"
+_RECEIPT_STATUSES = ("draft", "confirmed", "needs_review", "imported")
 
 
 class ReceiptGroupError(ReceiptError):
@@ -1616,7 +1617,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
     @staticmethod
     def _filters(values, *, search):
         allowed = ({"query", "limit", "cursor"} if search
-                   else {"month", "status", "linked", "document_kind", "evidence", "limit", "cursor"})
+                   else {"month", "status", "statuses", "linked", "document_kind", "evidence", "limit", "cursor"})
         if not isinstance(values, dict) or set(values) - allowed:
             raise ReceiptError()
         limit = values.get("limit", 50)
@@ -1630,8 +1631,15 @@ class BudgetReceiptStore(BudgetHTTPStore):
             except ValueError:
                 raise ReceiptError() from None
         status = values.get("status")
-        if status is not None and status not in ("draft", "confirmed", "needs_review", "imported"):
+        if status is not None and status not in _RECEIPT_STATUSES:
             raise ReceiptError()
+        statuses = None
+        if "statuses" in values:
+            raw_statuses = values["statuses"]
+            if ("status" in values or not isinstance(raw_statuses, list) or not raw_statuses
+                    or any(item not in _RECEIPT_STATUSES for item in raw_statuses)):
+                raise ReceiptError()
+            statuses = sorted(set(raw_statuses))
         kind = values.get("document_kind")
         if kind is not None and kind not in ("receipt", "invoice", "payment_confirmation"):
             raise ReceiptError()
@@ -1647,16 +1655,18 @@ class BudgetReceiptStore(BudgetHTTPStore):
         context_values = {"query": fold_for_match(query.strip())} if search else {
             "month": month, "status": status, "linked": linked,
         }
+        if statuses is not None:
+            context_values["statuses"] = statuses
         if kind is not None:
             context_values["document_kind"] = kind
         if evidence != "exclude":
             context_values["evidence"] = evidence
         context = hashlib.sha256(json.dumps(context_values, sort_keys=True, ensure_ascii=True,
                                             separators=(",", ":")).encode("ascii")).hexdigest()
-        return limit, month, status, linked, query, kind, evidence, context
+        return limit, month, status, statuses, linked, query, kind, evidence, context
 
     def _list(self, owner, values, *, search, include_linked_transaction, include_display_shop_name):
-        limit, month, status, linked, query, kind, evidence, context = self._filters(values, search=search)
+        limit, month, status, statuses, linked, query, kind, evidence, context = self._filters(values, search=search)
         with self.transaction() as session:
             owner = self._owner(session, owner, "budget.receipts.view")
             now = self._now()
@@ -1667,6 +1677,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 query_obj = query_obj.where(Receipt.receipt_date >= month + "-01", Receipt.receipt_date <= month + "-31")
             if status is not None:
                 query_obj = query_obj.where(Receipt.status == status)
+            if statuses is not None:
+                query_obj = query_obj.where(Receipt.status.in_(statuses))
             if kind is not None:
                 query_obj = query_obj.where(Receipt.document_kind == kind)
             if not search:

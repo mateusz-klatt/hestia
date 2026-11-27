@@ -37,6 +37,7 @@ const RECEIPT_GROUP_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.59.0" } a
 const LINK_INDICATORS_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.60.0" } as const;
 const RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.61.0" } as const;
 const MORTGAGE_REFERENCES_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.64.0" } as const;
+const RECEIPT_MULTI_STATUS_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.65.0" } as const;
 
 export interface ReceiptDevice {
   token_id: string;
@@ -379,7 +380,9 @@ export function createBudgetApi(expectedActor: string | null = null) {
     post<{ ok: true }>("receipts/device-token/revoke", { token_id: tokenId }),
   /** Keyset-paged owner receipts and documents (POST JSON). A 404 means the receipts flag is off. */
   receiptsList: (body: ReceiptListRequest = {}) =>
-    readReceipts<ReceiptListResult>(url("receipts/list"), body),
+    body.statuses === undefined
+      ? readReceipts<ReceiptListResult>(url("receipts/list"), body)
+      : post<ReceiptListResult>("receipts/list", body, RECEIPT_MULTI_STATUS_CONTRACT_HEADERS, false),
   /** Searches owner receipts and line items via POST JSON (never GET query strings). */
   receiptsSearch: (body: ReceiptSearchRequest) =>
     readReceipts<ReceiptListResult>(url("receipts/search"), body),

@@ -98,6 +98,7 @@ import type {
   ReceiptSettledEvent,
   ReceiptSourceKind,
   ReceiptStatus,
+  ReceiptStatusFilter,
   ReceiptSummary,
 } from "./receipts_model";
 
@@ -341,6 +342,25 @@ function releaseGroupParticipantLocks(
 
 const SEARCH_DEBOUNCE_MS = 300;
 const AUTO_ADVANCE_STORAGE_KEY = "hestia.receipts.autoAdvance";
+const STATUS_FILTER_STORAGE_KEY = "hestia.receipts.statusFilter";
+
+function readStatusFilterPreference(): ReceiptStatusFilter {
+  try {
+    const value = localStorage.getItem(STATUS_FILTER_STORAGE_KEY);
+    if (value === "") return value;
+    return RECEIPT_STATUSES.find((status) => status === value) ?? "needs_action";
+  } catch {
+    return "needs_action";
+  }
+}
+
+function writeStatusFilterPreference(status: ReceiptStatusFilter): void {
+  try {
+    localStorage.setItem(STATUS_FILTER_STORAGE_KEY, status);
+  } catch {
+    // Keep the current filter in memory if storage is unavailable.
+  }
+}
 
 function readAutoAdvancePreference(): boolean {
   try {
@@ -402,6 +422,11 @@ interface ActiveRefreshState {
   reconcileOptionsById: Map<string, PendingDrawerReconcile>;
 }
 
+interface ReceiptScrollAnchor {
+  receiptId: string;
+  top: number;
+}
+
 function findRowElement(container: HTMLElement | null, receiptId: string): HTMLElement | null {
   if (container === null) return null;
   for (const el of container.querySelectorAll<HTMLElement>("li[data-receipt-id]")) {
@@ -422,8 +447,11 @@ export function ReceiptsView({
 }: ReceiptsViewProps) {
   const store = pendingStore ?? getFallbackPendingStore(receiptsApi);
 
-  const [draft, setDraft] = useState<ReceiptFilter>(EMPTY_RECEIPT_FILTER);
-  const [filter, setFilter] = useState<ReceiptFilter>(EMPTY_RECEIPT_FILTER);
+  const [draft, setDraft] = useState<ReceiptFilter>(() => ({
+    ...EMPTY_RECEIPT_FILTER,
+    status: readStatusFilterPreference(),
+  }));
+  const [filter, setFilter] = useState<ReceiptFilter>(draft);
   const [listState, setListState] = useState<ListState>({ kind: "loading" });
   const [listRefresh, setListRefresh] = useState(0);
   const [disabledAtRevision, setDisabledAtRevision] = useState<number | null>(null);
@@ -494,8 +522,7 @@ export function ReceiptsView({
   const pendingScrollRestoreRef = useRef<{
     scrollX: number;
     scrollY: number;
-    anchorRowId: string | null;
-    anchorTop: number | null;
+    anchors: ReceiptScrollAnchor[];
   } | null>(null);
   const latestDetailVersionRef = useRef<{ receiptId: string; version: number } | null>(null);
   const openReceiptIndexRef = useRef<number>(0);
@@ -538,20 +565,19 @@ export function ReceiptsView({
     const pending = pendingScrollRestoreRef.current;
     if (pending === null || listState.kind !== "ready") return;
     pendingScrollRestoreRef.current = null;
-    if (pending.anchorRowId !== null && pending.anchorTop !== null) {
-      const anchorEl = findRowElement(listContainerRef.current, pending.anchorRowId);
-      if (anchorEl !== null) {
-        const delta = anchorEl.getBoundingClientRect().top - pending.anchorTop;
-        if (Math.abs(delta) >= 1) {
-          const targetY = Math.max(0, window.scrollY + delta);
-          try {
-            window.scrollTo(window.scrollX, targetY);
-          } catch {
-            // Scroll API unavailable in minimal DOM environments.
-          }
+    for (const anchor of pending.anchors) {
+      const anchorEl = findRowElement(listContainerRef.current, anchor.receiptId);
+      if (anchorEl === null) continue;
+      const delta = anchorEl.getBoundingClientRect().top - anchor.top;
+      if (Math.abs(delta) >= 1) {
+        const targetY = Math.max(0, window.scrollY + delta);
+        try {
+          window.scrollTo(window.scrollX, targetY);
+        } catch {
+          // Scroll API unavailable in minimal DOM environments.
         }
-        return;
       }
+      return;
     }
     if (window.scrollY !== pending.scrollY) {
       try {
@@ -672,11 +698,12 @@ export function ReceiptsView({
     setSelectedForBulk(new Set());
     setBulkConfirmPlan(null);
     setBulkProgress(null);
-    draftRef.current = EMPTY_RECEIPT_FILTER;
-    filterRef.current = EMPTY_RECEIPT_FILTER;
+    const resetFilter = { ...EMPTY_RECEIPT_FILTER, status: draftRef.current.status };
+    draftRef.current = resetFilter;
+    filterRef.current = resetFilter;
     searchModeRef.current = false;
-    setDraft(EMPTY_RECEIPT_FILTER);
-    setFilter(EMPTY_RECEIPT_FILTER);
+    setDraft(resetFilter);
+    setFilter((current) => (sameReceiptFilter(current, resetFilter) ? current : resetFilter));
     setNotice(null);
     setDisabledAtRevision(disabled ? disabledRevision : null);
     updateListState(() => (disabled ? { kind: "disabled" } : { kind: "error" }));
@@ -1067,18 +1094,24 @@ export function ReceiptsView({
 
         const savedScrollX = window.scrollX;
         const savedScrollY = window.scrollY;
-        let anchorRowId = openReceiptIdRef.current;
-        let anchorTop: number | null = null;
+        const openIdAtStart = openReceiptIdRef.current;
+        const anchors: ReceiptScrollAnchor[] = [];
         if (cur.kind === "ready") {
-          if (anchorRowId !== null) {
-            const anchorEl = findRowElement(listContainerRef.current, anchorRowId);
-            if (anchorEl !== null) anchorTop = anchorEl.getBoundingClientRect().top;
-          } else if (listContainerRef.current !== null) {
+          if (openIdAtStart !== null) {
+            const anchorEl = findRowElement(listContainerRef.current, openIdAtStart);
+            if (anchorEl !== null) {
+              anchors.push({ receiptId: openIdAtStart, top: anchorEl.getBoundingClientRect().top });
+            }
+          }
+          // Confirmation can remove the open receipt from the filtered list.
+          if (listContainerRef.current !== null
+            && (openIdAtStart === null || state.deferredReconcileIds.has(openIdAtStart))) {
             for (const el of listContainerRef.current.querySelectorAll<HTMLElement>("li[data-receipt-id]")) {
+              const receiptId = el.dataset.receiptId;
+              if (receiptId === undefined || receiptId === openIdAtStart) continue;
               const rect = el.getBoundingClientRect();
-              if (rect.bottom > 0 && el.dataset.receiptId !== undefined) {
-                anchorRowId = el.dataset.receiptId;
-                anchorTop = rect.top;
+              if (rect.bottom > 0) {
+                anchors.push({ receiptId, top: rect.top });
                 break;
               }
             }
@@ -1162,8 +1195,7 @@ export function ReceiptsView({
           pendingScrollRestoreRef.current = {
             scrollX: savedScrollX,
             scrollY: savedScrollY,
-            anchorRowId,
-            anchorTop,
+            anchors,
           };
         }
         updateListState(() => ({
@@ -1857,6 +1889,11 @@ export function ReceiptsView({
     commitFilter(nextDraft);
   }, [commitFilter]);
 
+  const updateStatusFilter = (status: ReceiptStatusFilter): void => {
+    writeStatusFilterPreference(status);
+    updateImmediateFilter({ status });
+  };
+
   const updateSearchQuery = useCallback((query: string) => {
     const nextDraft: ReceiptFilter = { ...draftRef.current, query };
     draftRef.current = nextDraft;
@@ -1886,6 +1923,7 @@ export function ReceiptsView({
     setDraft(EMPTY_RECEIPT_FILTER);
     setFilter(EMPTY_RECEIPT_FILTER);
     setNotice(null);
+    writeStatusFilterPreference(EMPTY_RECEIPT_FILTER.status);
   }, [cancelSearchDebounce]);
 
   const title = t("budget.receipts.title");
@@ -1990,8 +2028,9 @@ export function ReceiptsView({
           <select
             name="status"
             value={draft.status}
-            onChange={(event) => { updateImmediateFilter({ status: event.currentTarget.value as "" | ReceiptStatus }); }}
+            onChange={(event) => { updateStatusFilter(event.currentTarget.value as ReceiptStatusFilter); }}
           >
+            <option value="needs_action">{t("budget.receipts.statusFilter.needsAction")}</option>
             <option value="">{t("budget.receipts.all")}</option>
             {RECEIPT_STATUSES.map((item) => (
               <option key={item} value={item}>{labelOf(RECEIPT_STATUS_KEYS, item)}</option>
@@ -2067,6 +2106,14 @@ export function ReceiptsView({
         ) : null}
       </form>
 
+      {filter.status !== "" && filter.status !== "confirmed" ? (
+        <p className="budget-muted">
+          {t("budget.receipts.statusFilter.confirmedHidden")}{" · "}
+          <button type="button" className="budget-link" onClick={() => { updateStatusFilter(""); }}>
+            {t("budget.receipts.statusFilter.showAll")}
+          </button>
+        </p>
+      ) : null}
       {validReceiptDateRange(draft) ? null : <p className="budget-notice" role="alert">{t("budget.main.badRange")}</p>}
       {notice === null ? null : <p className="budget-notice" role="status">{notice}</p>}
 

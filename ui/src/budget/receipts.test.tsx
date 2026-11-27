@@ -208,11 +208,14 @@ function fakeClients(rows: ReceiptSummary[] = [receiptSummary()], detail?: Recei
 
 let host: HTMLElement;
 let root: Root;
+const STATUS_FILTER_KEY = "hestia.receipts.statusFilter";
+const NEEDS_ACTION_STATUSES: ReceiptSummary["status"][] = ["imported", "needs_review", "draft"];
 
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   try {
     localStorage.removeItem("hestia.receipts.autoAdvance");
+    localStorage.removeItem(STATUS_FILTER_KEY);
   } catch {
     // Ignore when localStorage is unavailable in this test environment.
   }
@@ -230,6 +233,7 @@ afterEach(async () => {
   host.remove();
   try {
     localStorage.removeItem("hestia.receipts.autoAdvance");
+    localStorage.removeItem(STATUS_FILTER_KEY);
   } catch {
     // Ignore when localStorage is unavailable in this test environment.
   }
@@ -444,6 +448,7 @@ describe("ReceiptsView", () => {
   });
 
   it("lists receipts and documents, labels actual searchable fields, and localizes in Polish", async () => {
+    localStorage.setItem(STATUS_FILTER_KEY, "");
     const clients = fakeClients([
       receiptSummary({
         receipt_id: "rec-1",
@@ -505,6 +510,95 @@ describe("ReceiptsView", () => {
     expect(host.textContent).toContain("Do przeglądu");
     expect(host.textContent).toContain("Potwierdzenie płatności");
     expect(host.textContent).toContain("Powiązany");
+  });
+
+  it("defaults to unconfirmed receipts and persists Show all across remounts", async () => {
+    const rows = [
+      receiptSummary({ receipt_id: "filter-imported", status: "imported" }),
+      receiptSummary({ receipt_id: "filter-confirmed", status: "confirmed" }),
+      receiptSummary({ receipt_id: "filter-review", status: "needs_review" }),
+      receiptSummary({ receipt_id: "filter-draft", status: "draft" }),
+    ];
+    const clients = fakeClients();
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => ok({
+      receipts: rows.filter((row) => req?.statuses?.includes(row.status) ?? true),
+      next_cursor: null,
+    }));
+
+    await renderReceipts(clients, { locale: "pl" });
+    const status = selectByName("status");
+    expect(status.value).toBe("needs_action");
+    expect(status.selectedOptions[0]?.textContent).toBe("Wymaga działania");
+    expect([...status.options].map((option) => option.value).sort()).toEqual(
+      ["", "confirmed", "draft", "imported", "needs_action", "needs_review"],
+    );
+    expect(clients.rApi.receiptsList).toHaveBeenCalledExactlyOnceWith({
+      limit: 50,
+      statuses: NEEDS_ACTION_STATUSES,
+    });
+    expect([...host.querySelectorAll<HTMLElement>("li[data-receipt-id]")].map((row) => row.dataset.receiptId))
+      .toEqual(["filter-imported", "filter-review", "filter-draft"]);
+    expect(host.textContent).toContain("Zatwierdzone są ukryte · Pokaż wszystkie");
+
+    await click(button("Pokaż wszystkie"));
+    expect(selectByName("status").selectedOptions[0]?.textContent).toBe("Wszystkie");
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50 });
+    expect(host.querySelector('[data-receipt-id="filter-confirmed"]')).not.toBeNull();
+    expect(host.textContent).not.toContain("Zatwierdzone są ukryte");
+    expect(localStorage.getItem(STATUS_FILTER_KEY)).toBe("");
+
+    await act(async () => {
+      root.unmount();
+      root = createRoot(host);
+    });
+    await renderReceipts(clients);
+    expect(selectByName("status").value).toBe("");
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50 });
+    expect(host.querySelector('[data-receipt-id="filter-confirmed"]')).not.toBeNull();
+  });
+
+  it("restores individual and needs-action status choices and ignores an invalid saved status", async () => {
+    localStorage.setItem(STATUS_FILTER_KEY, "obsolete-status");
+    const clients = fakeClients();
+
+    await renderReceipts(clients);
+    expect(selectByName("status").value).toBe("needs_action");
+    await choose(selectByName("status"), "draft");
+    expect(localStorage.getItem(STATUS_FILTER_KEY)).toBe("draft");
+
+    await act(async () => {
+      root.unmount();
+      root = createRoot(host);
+    });
+    await renderReceipts(clients);
+    expect(selectByName("status").value).toBe("draft");
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50, status: "draft" });
+    expect(host.textContent).toContain("Confirmed receipts are hidden");
+
+    await choose(selectByName("status"), "needs_action");
+    expect(localStorage.getItem(STATUS_FILTER_KEY)).toBe("needs_action");
+    await act(async () => {
+      root.unmount();
+      root = createRoot(host);
+    });
+    await renderReceipts(clients);
+    expect(selectByName("status").value).toBe("needs_action");
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50, statuses: NEEDS_ACTION_STATUSES });
+  });
+
+  it("still switches status filters when reading and writing localStorage throw", async () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked read"); });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked write"); });
+    const clients = fakeClients();
+
+    await renderReceipts(clients);
+    expect(selectByName("status").value).toBe("needs_action");
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50, statuses: NEEDS_ACTION_STATUSES });
+
+    await click(button("Show all"));
+    expect(selectByName("status").value).toBe("");
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50 });
+    expect(host.textContent).not.toContain("Confirmed receipts are hidden");
   });
 
   it("displays the OCR issuer from the server while keeping the raw name in the editor", async () => {
@@ -712,7 +806,9 @@ describe("ReceiptsView", () => {
     expect(img?.getAttribute("src")).toBe("blob:synthetic-receipt");
     await click(button("Close", dialog()));
     expect(revokeUrlSpy).toHaveBeenCalledWith("blob:synthetic-receipt");
-    expect(storageGetSpy.mock.calls.every(([key]) => key === "hestia.receipts.autoAdvance")).toBe(true);
+    expect(new Set(storageGetSpy.mock.calls.map(([key]) => key))).toEqual(
+      new Set(["hestia.receipts.autoAdvance", STATUS_FILTER_KEY]),
+    );
     expect(storageSetSpy).not.toHaveBeenCalled();
   });
 
@@ -1053,7 +1149,7 @@ describe("ReceiptsView", () => {
     vi.mocked(clients.rApi.receiptsList).mockImplementationOnce(() => ok<ReceiptListResult>({ receipts: [], next_cursor: null }));
     await renderReceipts(clients, { revision: 3 });
     expect(inputByName("query").value).toBe("");
-    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50 });
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50, statuses: NEEDS_ACTION_STATUSES });
 
     const unmountedRead = deferred<ReceiptListResult>();
     const accessLossUnmount = vi.fn(() => true);
@@ -2632,6 +2728,7 @@ describe("ReceiptsView", () => {
 
     await choose(selectByName("status"), "confirmed");
     expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50, status: "confirmed" });
+    expect(host.textContent).not.toContain("Confirmed receipts are hidden");
 
     await act(async () => {
       fastStatusResp.resolve({
@@ -2717,6 +2814,7 @@ describe("ReceiptsView", () => {
   });
 
   it("quietly refreshes the loaded range after edit or delete, keeping loaded pages and scroll without full loading state", async () => {
+    localStorage.setItem(STATUS_FILTER_KEY, "");
     const singleLine = receiptDetail().lines.slice(0, 1);
     let page1Rows: ReceiptSummary[] = [
       receiptSummary({ receipt_id: "p1-a", status: "needs_review", raw_shop_name: "Page One Shop A", total_amount: "12.50", version: 1 }),
@@ -2874,6 +2972,7 @@ describe("ReceiptsView", () => {
   });
 
   it("ignores stale list/search/refresh generations and coalesces concurrent refreshes via dirty flag", async () => {
+    localStorage.setItem(STATUS_FILTER_KEY, "");
     const singleLine = receiptDetail().lines.slice(0, 1);
     const d1 = receiptSummary({ receipt_id: "d1", status: "needs_review", raw_shop_name: "Lidl First", total_amount: "12.50", version: 1 });
     const d2 = receiptSummary({ receipt_id: "d2", status: "needs_review", raw_shop_name: "Lidl Second", total_amount: "12.50", version: 1 });
@@ -2989,7 +3088,11 @@ describe("ReceiptsView", () => {
 
     // Reaching the end of page 1 with next_cursor present auto-loads page 2 and navigates to r3.
     await click(button("Next", dialog()));
-    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({ limit: 50, cursor: "nav-cursor-2" });
+    expect(clients.rApi.receiptsList).toHaveBeenLastCalledWith({
+      limit: 50,
+      statuses: NEEDS_ACTION_STATUSES,
+      cursor: "nav-cursor-2",
+    });
     expect(dialog().textContent).toContain("Third Page-2 Receipt");
     expect(button("Next", dialog()).disabled).toBe(true);
     expect(button("Previous", dialog()).disabled).toBe(false);
@@ -3021,8 +3124,73 @@ describe("ReceiptsView", () => {
     expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(0);
   });
 
+  it("quietly removes a confirmed row under Needs action, advances the drawer, and preserves the scroll anchor", async () => {
+    const earlier = receiptSummary({ receipt_id: "action-earlier", status: "draft", raw_shop_name: "Synthetic Earlier" });
+    const current = receiptSummary({ receipt_id: "action-current", status: "imported", raw_shop_name: "Synthetic Current" });
+    const next = receiptSummary({ receipt_id: "action-next", status: "needs_review", raw_shop_name: "Synthetic Next" });
+    const rows = [earlier, current, next];
+    const clients = fakeClients(rows);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => ok({
+      receipt: receiptDetail(rows.find((row) => row.receipt_id === id)),
+      candidates: [],
+    }));
+    const refresh = deferred<ReceiptListResult>();
+    let simulatedScrollY = 400;
+    let nextDocTop = 580;
+    const originalScrollY = Object.getOwnPropertyDescriptor(window, "scrollY");
+    Object.defineProperty(window, "scrollY", { configurable: true, get: () => simulatedScrollY });
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation((...args: unknown[]) => {
+      if (typeof args[1] === "number") simulatedScrollY = args[1];
+    });
+
+    try {
+      await renderReceipts(clients, { locale: "pl" });
+      const list = host.querySelector("ul.budget-entry-list");
+      const rowPositions = [
+        [earlier.receipt_id, () => 300],
+        [current.receipt_id, () => 520],
+        [next.receipt_id, () => nextDocTop],
+      ] as const;
+      for (const [id, docTop] of rowPositions) {
+        const row = openDetailById(id, "Szczegóły").closest("li");
+        if (row === null) throw new Error(`expected receipt row ${id}`);
+        vi.spyOn(row, "getBoundingClientRect").mockImplementation(
+          () => new DOMRect(0, docTop() - simulatedScrollY, 200, 40),
+        );
+      }
+      const nextRow = openDetailById(next.receipt_id, "Szczegóły").closest("li");
+      await click(openDetailById(current.receipt_id, "Szczegóły"));
+      expect(inputByName("auto_advance_on_confirm", dialog()).checked).toBe(true);
+
+      vi.mocked(clients.rApi.receiptsList).mockImplementationOnce(() => refresh.promise);
+      await click(button("Zatwierdź dokument", dialog()));
+      expect(clients.rApi.confirmReceipt).toHaveBeenCalledWith(expect.objectContaining({ receipt_id: current.receipt_id }));
+      expect(clients.rApi.receiptsList).toHaveBeenNthCalledWith(2, { limit: 50, statuses: NEEDS_ACTION_STATUSES });
+      expect(host.querySelector("ul.budget-entry-list")).toBe(list);
+      expect(host.querySelector('[data-receipt-id="action-current"]')).not.toBeNull();
+      expect(dialog().textContent).toContain("Synthetic Current");
+
+      nextDocTop = 520;
+      simulatedScrollY = 100;
+      await act(async () => {
+        refresh.resolve({ ok: true, data: { receipts: [earlier, next], next_cursor: null } });
+      });
+      await settle();
+
+      expect(host.querySelector("ul.budget-entry-list")).toBe(list);
+      expect(host.querySelector('[data-receipt-id="action-current"]')).toBeNull();
+      expect(dialog().textContent).toContain("Synthetic Next");
+      expect(clients.rApi.receiptDetail).toHaveBeenLastCalledWith(next.receipt_id);
+      expect(clients.rApi.receiptsList).toHaveBeenCalledTimes(2);
+      expect(scrollTo.mock.calls).toEqual([[0, 340]]);
+      expect(nextRow?.getBoundingClientRect().top).toBe(180);
+    } finally {
+      Object.defineProperty(window, "scrollY", originalScrollY ?? { configurable: true, value: 0 });
+    }
+  });
+
   it("auto-advances after refresh, persists the toggle, closes with All confirmed when none remain, and never loops on unchanged statuses", async () => {
-    const storeMap = new Map<string, string>();
+    const storeMap = new Map<string, string>([[STATUS_FILTER_KEY, ""]]);
     vi.stubGlobal("localStorage", {
       getItem: (key: string) => storeMap.get(key) ?? null,
       setItem: (key: string, value: string) => { storeMap.set(key, value); },
@@ -3105,6 +3273,7 @@ describe("ReceiptsView", () => {
       await Promise.resolve();
     });
     await renderReceipts(clients, { locale: "en" });
+    await click(button("Show all"));
     await click(openDetailById("adv-1"));
     expect(inputByName("auto_advance_on_confirm", dialog()).checked).toBe(true);
     await click(button("Close", dialog()));
