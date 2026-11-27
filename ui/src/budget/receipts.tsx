@@ -4051,9 +4051,13 @@ function ReceiptDetailDrawer({
                       </p>
                     )}
                     {activeDraft.lines.map((line, idx) => (
-                      <div key={idx} className="budget-receipt-line-edit">
-                        <label>
-                          {t("budget.receipts.lineName")}
+                      <div
+                        key={idx}
+                        className="budget-receipt-line-edit"
+                        data-has-discount={line.line_kind === "item" ? "true" : "false"}
+                      >
+                        <label className="budget-receipt-line-field-name">
+                          <span className="budget-receipt-line-label">{t("budget.receipts.lineName")}</span>
                           <input
                             name="line_name"
                             type="text"
@@ -4063,8 +4067,8 @@ function ReceiptDetailDrawer({
                             onChange={(event) => { updateLine(detail, candidates, activeDraft, idx, "raw_name", event.currentTarget.value); }}
                           />
                         </label>
-                        <label>
-                          {t("budget.receipts.lineGross")}
+                        <label className="budget-receipt-line-field-amount">
+                          <span className="budget-receipt-line-label">{t("budget.receipts.lineGross")}</span>
                           <input
                             name="line_gross"
                             type="text"
@@ -4075,8 +4079,8 @@ function ReceiptDetailDrawer({
                           />
                         </label>
                         {line.line_kind === "item" ? (
-                          <label>
-                            {t("budget.receipts.lineDiscount")}
+                          <label className="budget-receipt-line-field-amount">
+                            <span className="budget-receipt-line-label">{t("budget.receipts.lineDiscount")}</span>
                             <input
                               name="line_discount"
                               type="text"
@@ -4087,8 +4091,8 @@ function ReceiptDetailDrawer({
                             />
                           </label>
                         ) : null}
-                        <label>
-                          {t("budget.receipts.lineAmount")}
+                        <label className="budget-receipt-line-field-amount">
+                          <span className="budget-receipt-line-label">{t("budget.receipts.lineAmount")}</span>
                           <input
                             name="line_net"
                             type="text"
@@ -4100,6 +4104,7 @@ function ReceiptDetailDrawer({
                         </label>
                         <button
                           type="button"
+                          className="budget-receipt-line-remove"
                           disabled={actionBusy !== null || hasRedactedLines}
                           onClick={() => { removeLine(detail, candidates, activeDraft, idx); }}
                         >

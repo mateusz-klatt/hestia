@@ -4344,4 +4344,153 @@ describe("ReceiptsView", () => {
     expect(dialog().textContent).toContain("Version 2");
     expect(dialog().textContent).not.toContain("Version 1");
   });
+
+  it("lays out receipt line-item editor rows as a CSS grid with labels above inputs, full-width description on desktop, and single-column stacking at <=480px", async () => {
+    const detail = receiptDetail({
+      receipt_id: "rec-line-layout",
+      status: "needs_review",
+      total_amount: "25.00",
+      linked: false,
+      lines: [
+        {
+          line_no: 1,
+          line_kind: "item",
+          raw_name: "Kawa ziarnista",
+          raw_name_key: "kawa ziarnista",
+          ptu_code: "A",
+          quantity: "1",
+          raw_unit: "szt",
+          unit_price_raw: "15.00",
+          gross_line_total: "15.00",
+          discount_amount: "2.00",
+          net_line_total: "13.00",
+        },
+        {
+          line_no: 2,
+          line_kind: "other",
+          raw_name: "Dostawa",
+          raw_name_key: "dostawa",
+          ptu_code: "A",
+          quantity: "1",
+          raw_unit: null,
+          unit_price_raw: "12.00",
+          gross_line_total: "12.00",
+          discount_amount: "0",
+          net_line_total: "12.00",
+        },
+      ],
+    });
+    const clients = fakeClients([detail], detail);
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailButton(0, "Szczegóły"));
+    const drawer = dialog();
+
+    const rows = [...drawer.querySelectorAll<HTMLElement>(".budget-receipt-line-edit")];
+    expect(rows).toHaveLength(2);
+    const itemRow = rows[0];
+    const otherRow = rows[1];
+    if (itemRow === undefined || otherRow === undefined) throw new Error("expected two line editor rows");
+
+    expect(itemRow.getAttribute("data-has-discount")).toBe("true");
+    expect(otherRow.getAttribute("data-has-discount")).toBe("false");
+
+    const itemNameInput = inputByName("line_name", itemRow);
+    const itemGrossInput = inputByName("line_gross", itemRow);
+    const itemDiscountInput = inputByName("line_discount", itemRow);
+    const itemNetInput = inputByName("line_net", itemRow);
+    expect(itemNameInput.closest("label")?.classList.contains("budget-receipt-line-field-name")).toBe(true);
+
+    for (const [input, expectedLabel] of [
+      [itemNameInput, "Opis pozycji"],
+      [itemGrossInput, "Kwota brutto"],
+      [itemDiscountInput, "Rabat"],
+      [itemNetInput, "Kwota netto"],
+    ] as const) {
+      const label = input.closest("label");
+      expect(label).not.toBeNull();
+      expect(label?.control).toBe(input);
+      expect(label?.firstElementChild?.classList.contains("budget-receipt-line-label")).toBe(true);
+      expect(label?.firstElementChild?.textContent).toBe(expectedLabel);
+      expect(label?.lastElementChild).toBe(input);
+    }
+
+    const otherNameInput = inputByName("line_name", otherRow);
+    const otherGrossInput = inputByName("line_gross", otherRow);
+    const otherNetInput = inputByName("line_net", otherRow);
+    expect(otherRow.querySelector('input[name="line_discount"]')).toBeNull();
+    expect(otherNameInput.closest("label")?.classList.contains("budget-receipt-line-field-name")).toBe(true);
+    expect(otherNameInput.closest("label")?.control).toBe(otherNameInput);
+    expect(otherGrossInput.closest("label")?.control).toBe(otherGrossInput);
+    expect(otherNetInput.closest("label")?.control).toBe(otherNetInput);
+
+    const fsModule = "node:fs";
+    const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as {
+      readFileSync: (path: string, encoding: "utf8") => string;
+    };
+    const css = readFileSync("src/budget/budget.css", "utf8");
+    expect(css).not.toMatch(/\.budget-receipt-edit-line\b/);
+    expect(css).toMatch(/\.budget-receipt-line-edit\s+\.budget-receipt-line-field-name\s*\{[^}]*grid-column:\s*1\s*\/\s*-1;/);
+    expect(css).toMatch(/\.budget-receipt-line-edit\s*\{[^}]*align-items:\s*end;/);
+
+    const lineEditStart = css.indexOf(".budget-receipt-line-edit");
+    expect(lineEditStart).toBeGreaterThan(-1);
+    const narrowStart = css.indexOf("@media (max-width: 480px)", lineEditStart);
+    expect(narrowStart).toBeGreaterThan(lineEditStart);
+    const reducedStart = css.indexOf("@media (prefers-reduced-motion", narrowStart);
+    expect(reducedStart).toBeGreaterThan(narrowStart);
+    const narrowBlock = css.slice(narrowStart, reducedStart);
+    expect(narrowBlock).toMatch(
+      /\.budget-receipt-line-edit,\s*\.budget-receipt-line-edit\[data-has-discount="false"\]\s*\{[^}]*grid-template-columns:\s*minmax\(0(?:px)?,\s*1fr\);/,
+    );
+
+    const styleEl = document.createElement("style");
+    styleEl.textContent = css;
+    document.head.append(styleEl);
+    try {
+      const normalizeZero = (value: string): string => value.replace(/\b0px\b/g, "0");
+
+      const itemRowStyle = getComputedStyle(itemRow);
+      expect(itemRowStyle.display).toBe("grid");
+      expect(itemRowStyle.minWidth).toMatch(/^0(px)?$/);
+      expect(itemRowStyle.maxWidth).toBe("100%");
+      expect(normalizeZero(itemRowStyle.gridTemplateColumns)).toBe(
+        "minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto",
+      );
+
+      const otherRowStyle = getComputedStyle(otherRow);
+      expect(otherRowStyle.display).toBe("grid");
+      expect(normalizeZero(otherRowStyle.gridTemplateColumns)).toBe(
+        "minmax(0, 1fr) minmax(0, 1fr) auto",
+      );
+
+      for (const row of rows) {
+        const labels = [...row.querySelectorAll<HTMLLabelElement>("label")];
+        expect(labels.length).toBeGreaterThanOrEqual(3);
+        for (const label of labels) {
+          const labelStyle = getComputedStyle(label);
+          expect(labelStyle.display).toBe("grid");
+          expect(labelStyle.minWidth).toMatch(/^0(px)?$/);
+          expect(normalizeZero(labelStyle.gridTemplateColumns)).toBe("minmax(0, 1fr)");
+          const labelText = label.querySelector<HTMLElement>(".budget-receipt-line-label");
+          expect(labelText).not.toBeNull();
+          if (labelText !== null) {
+            expect(getComputedStyle(labelText).whiteSpace).toBe("nowrap");
+          }
+        }
+        for (const input of row.querySelectorAll<HTMLInputElement>("input")) {
+          const inputStyle = getComputedStyle(input);
+          expect(inputStyle.width).toBe("100%");
+          expect(inputStyle.minWidth).toMatch(/^0(px)?$/);
+          expect(inputStyle.maxWidth).toBe("100%");
+        }
+        const removeBtn = row.querySelector<HTMLButtonElement>(".budget-receipt-line-remove");
+        expect(removeBtn).not.toBeNull();
+        if (removeBtn !== null) {
+          expect(getComputedStyle(removeBtn).whiteSpace).toBe("nowrap");
+        }
+      }
+    } finally {
+      styleEl.remove();
+    }
+  });
 });
