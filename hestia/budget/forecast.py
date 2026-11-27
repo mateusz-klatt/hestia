@@ -316,7 +316,8 @@ def _hint_identity(hint):
         amount = canonical_money(hint.amount)
     except AnalyticsError:
         raise ForecastDataError() from None
-    return (hint.currency, hint.normalized_label, hint.label_source, amount, hint.first_date, hint.last_date)
+    return (hint.currency, hint.normalized_label, hint.label_source, amount,
+            hint.first_date, hint.last_date, hint.account_ids)
 
 
 def _evidence_key(item):
@@ -716,7 +717,7 @@ def _project_category_baselines(projected, horizon, baselines, estimator, evalua
 @dataclass(frozen=True, repr=False)
 class _ActiveHint:
     hint: RecurringHint
-    key: tuple[str, str, str, str, str, str]
+    key: tuple[str, str, str, str, str, str, tuple[str, ...]]
     amount: str
     last_date: date
     account_stale: bool
@@ -778,7 +779,8 @@ def _partition_hints(hints, evaluation, stale_accounts):
         if len(active) >= MAX_FORECAST_HINTS:
             raise ForecastLimitError()
         amount = canonical_money(hint.amount)
-        key = (hint.currency, hint.normalized_label, hint.label_source, amount, hint.first_date, hint.last_date)
+        key = (hint.currency, hint.normalized_label, hint.label_source, amount,
+               hint.first_date, hint.last_date, hint.account_ids)
         active.append(_ActiveHint(hint, key, amount, last_date, account_stale))
     return active, lapsed_count, stale_count
 
@@ -848,7 +850,7 @@ def _project_month(month, evaluation_date, schedules, hints):
             continue
         expected = date(year, month_number, min(active.last_date.day, last_day)).isoformat()
         high_confidence = hint.occurrence_count >= 6 and hint.max_gap_days - hint.min_gap_days <= 7
-        tie_breaker = (hint.normalized_label, hint.label_source, hint.first_date, hint.last_date)
+        tie_breaker = (hint.normalized_label, hint.label_source, hint.first_date, hint.last_date, hint.account_ids)
         items.append(({
             "source": "recurring", "schedule_id": None, "label": hint.label, "amount": active.amount,
             "currency": hint.currency, "expected_date": expected, "confidence": "high" if high_confidence else "medium",

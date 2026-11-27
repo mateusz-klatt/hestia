@@ -999,7 +999,7 @@ class RuleBatchTests(AnalyticsCase):
         with self.sessions.begin() as session:
             snapshot = projection_snapshot(session, "owner")
         rule = {**self.candidate(kind="excluded"), "id": "proposed-1"}
-        stripped = [{key: value for key, value in row.items() if key != "_match_texts"}
+        stripped = [{key: value for key, value in row.items() if key not in ("_match_texts", "_default_kind")}
                     for row in snapshot["transactions"]]
         expected = BudgetAnalyticsStore._proposed(snapshot["transactions"], [rule], watch=[rule])
         self.assertGreater(expected[0], 0)
@@ -1195,3 +1195,64 @@ class SpendingLimitStoreTests(AnalyticsCase):
         saved_row = self.rows(db.BudgetCategoryLimit)[0]
         self.assertEqual((saved_row.version, saved_row.monthly_limit), (2, update_winners[0]["monthly_limit"]))
         self.assertEqual(len(self.rows(db.BudgetAnalyticsAudit)), audit_before + 1)
+
+    def test_rule_preview_and_save_override_bank_evidenced_card_repayment_and_revert_on_disable(self):
+        from hestia.budget.analytics_views import BudgetAnalyticsViews
+
+        cat = self.store.create_category("owner", "Manual Card Bill")
+        with self.sessions.begin() as session:
+            session.query(db.BudgetTransaction).delete()
+            session.get(db.BudgetAccount, self.accounts["a"]).kind = "current"
+            session.get(db.BudgetAccount, self.accounts["a"]).kind_confirmed_at = self.now
+            session.get(db.BudgetAccount, self.accounts["b"]).kind = "savings"
+            session.get(db.BudgetAccount, self.accounts["b"]).kind_confirmed_at = self.now
+            session.get(db.BudgetAccount, self.accounts["c"]).enabled = False
+            session.get(db.BudgetAccount, self.accounts["c"]).kind = "credit_card"
+            session.get(db.BudgetAccount, self.accounts["c"]).kind_confirmed_at = self.now
+        self.add_transaction("b", "card-shop", amount="1000", booking_date="2026-11-05",
+                             remittance_information=["Zakup kartą - Sklep"])
+        self.add_transaction("a", "card-repay", amount="1000", booking_date="2026-11-10",
+                             remittance_information=["Spłata karty kredytowej"])
+
+        views = BudgetAnalyticsViews(self.sessions, clock=lambda: self.now, cursor_secret=b"synthetic-only",
+                                     rule_key_file=str(self.rule_key_file))
+        # While card "c" is deselected and "a"/"b" are current/savings, repayment is NOT silently excluded.
+        before_card = views.transactions("owner", "2026-11")["transactions"]
+        self.assertEqual(next(r for r in before_card if r["entry_reference"] == "card-repay")["effective"]["kind"], "expense")
+        self.assertEqual(views.overview("owner", "2026-11")["currencies"][0]["expenses"], "2000")
+
+        # Confirming selected counterpart "b" as the single credit card enables auto-transfer and rule override/disable.
+        with self.sessions.begin() as session:
+            session.get(db.BudgetAccount, self.accounts["c"]).kind = "other"
+            session.get(db.BudgetAccount, self.accounts["b"]).kind = "credit_card"
+        initial = views.transactions("owner", "2026-11")["transactions"]
+        repay = next(row for row in initial if row["entry_reference"] == "card-repay")
+        self.assertEqual(repay["effective"], {"kind": "transfer", "category_id": None, "source": "default", "rule_id": None})
+        self.assertEqual(views.overview("owner", "2026-11")["currencies"][0]["expenses"], "1000")
+
+        # Post-hoc rule override counts and applies cleanly on top of auto-transfer default.
+        preview_exp = self.store.preview_rule("owner", {
+            "rule_id": None, "expected_version": 0, "field": "description", "operator": "contains",
+            "value": "Spłata karty kredytowej", "category_id": cat["id"], "kind": "expense", "priority": 1, "enabled": True,
+        })
+        self.assertEqual((preview_exp["affected_count"], len(preview_exp["examples"])), (1, 1))
+        self.assertEqual(preview_exp["examples"][0]["entry_reference"], "card-repay")
+        saved_exp = self.store.save_rule("owner", preview_exp["preview_id"])
+        rule_id = saved_exp["id"]
+
+        overridden = next(row for row in views.transactions("owner", "2026-11")["transactions"]
+                          if row["entry_reference"] == "card-repay")
+        self.assertEqual(overridden["effective"], {"kind": "expense", "category_id": cat["id"], "source": "rule", "rule_id": rule_id})
+        self.assertEqual(views.overview("owner", "2026-11")["currencies"][0]["expenses"], "2000")
+
+        # Disabling the override reverts preview & projection back to transfer rather than double-counting.
+        preview_off = self.store.preview_rule("owner", {
+            "rule_id": rule_id, "expected_version": 1, "field": "description", "operator": "contains",
+            "value": "Spłata karty kredytowej", "category_id": cat["id"], "kind": "expense", "priority": 1, "enabled": False,
+        })
+        self.assertEqual(preview_off["affected_count"], 1)
+        self.store.save_rule("owner", preview_off["preview_id"])
+        reverted = next(row for row in views.transactions("owner", "2026-11")["transactions"]
+                        if row["entry_reference"] == "card-repay")
+        self.assertEqual(reverted["effective"], {"kind": "transfer", "category_id": None, "source": "default", "rule_id": None})
+        self.assertEqual(views.overview("owner", "2026-11")["currencies"][0]["expenses"], "1000")

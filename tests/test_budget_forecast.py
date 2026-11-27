@@ -67,6 +67,126 @@ class BudgetForecastTests(unittest.TestCase):
                 self.assertEqual([month["items"][0]["amount"] for month in result["months"]],
                                  [expected_amount, expected_amount])
 
+    def test_parallel_same_merchant_lanes_and_alternating_accounts_do_not_doublecount_or_fabricate_cycles(self):
+        # Report (1): same-name lane day 10 changes 93->107, separate 50 PLN lane day 20 -> stale projects 157, not 250.
+        for same_account in (True, False):
+            with self.subTest(same_account=same_account):
+                entries = []
+                second_account = "source" if same_account else "other"
+                accounts = {"source"} if same_account else {"source", "other"}
+                for month in range(1, 7):
+                    entries.append(RecurringEntry(
+                        "test-owner", "source", f"d10-{month}", "93" if month <= 3 else "107",
+                        "PLN", "DBIT", "expense", f"2026-{month:02d}-10", "f" * 64,
+                        counterparty_name="Synthetic Stream",
+                    ))
+                    entries.append(RecurringEntry(
+                        "test-owner", second_account, f"d20-{month}", "50",
+                        "PLN", "DBIT", "expense", f"2026-{month:02d}-20", "f" * 64,
+                        counterparty_name="Synthetic Stream",
+                    ))
+                hints = detect_recurring_charges("test-owner", entries, accounts)
+                self.assertEqual([(h.amount, h.occurrence_count) for h in hints], [("107", 6), ("50", 6)])
+                timestamps = {account: (None, None) for account in accounts}
+                result = _forecast(evaluation_date="2026-07-01", months=2, hints=hints, account_timestamps=timestamps)
+                self.assertEqual(result["totals"], [
+                    {"currency": "PLN", "total": "314", "scheduled_total": "0", "estimated_total": "314"},
+                ])
+                self.assertEqual([(item["amount"], item["expected_date"], item["confidence"])
+                                  for item in result["months"][0]["items"]], [
+                    ("107", "2026-07-10", "high"),
+                    ("50", "2026-07-20", "high"),
+                ])
+
+        # Variable utility bill on day 10 + 50 PLN lane on day 20 on stale account preserves latest actual amount.
+        utility_entries = [
+            RecurringEntry("test-owner", "source", "u1", "773.42", "PLN", "DBIT", "expense", "2026-01-10", "f" * 64,
+                           counterparty_name="Synthetic Energy"),
+            RecurringEntry("test-owner", "source", "u2", "829.68", "PLN", "DBIT", "expense", "2026-02-10", "f" * 64,
+                           counterparty_name="Synthetic Energy"),
+            RecurringEntry("test-owner", "source", "u3", "815.00", "PLN", "DBIT", "expense", "2026-03-10", "f" * 64,
+                           counterparty_name="Synthetic Energy"),
+            RecurringEntry("test-owner", "source", "f1", "50", "PLN", "DBIT", "expense", "2026-01-20", "f" * 64,
+                           counterparty_name="Synthetic Energy"),
+            RecurringEntry("test-owner", "source", "f2", "50", "PLN", "DBIT", "expense", "2026-02-20", "f" * 64,
+                           counterparty_name="Synthetic Energy"),
+            RecurringEntry("test-owner", "source", "f3", "50", "PLN", "DBIT", "expense", "2026-03-20", "f" * 64,
+                           counterparty_name="Synthetic Energy"),
+        ]
+        utility_hints = detect_recurring_charges("test-owner", utility_entries, {"source"})
+        utility_result = _forecast(evaluation_date="2026-04-01", months=1, hints=utility_hints,
+                                   account_timestamps={"source": (None, None)})
+        self.assertEqual(utility_result["totals"], [
+            {"currency": "PLN", "total": "865", "scheduled_total": "0", "estimated_total": "865"},
+        ])
+
+        # Report (2): alternating months across two accounts must not fabricate a monthly high-confidence hint.
+        for amounts in (("93", "93", "107", "107", "107", "107"), ("107",) * 6):
+            with self.subTest(alternating=amounts):
+                alt_entries = [
+                    RecurringEntry("test-owner", "acc-1" if month % 2 == 1 else "acc-2", f"alt-{month}",
+                                   amount, "PLN", "DBIT", "expense", f"2026-{month:02d}-10", "f" * 64,
+                                   counterparty_name="Synthetic Stream")
+                    for month, amount in enumerate(amounts, 1)
+                ]
+                alt_hints = detect_recurring_charges("test-owner", alt_entries, {"acc-1", "acc-2"})
+                self.assertEqual(alt_hints, ())
+                alt_result = _forecast(evaluation_date="2026-07-01", months=1, hints=alt_hints,
+                                       account_timestamps={"acc-1": (_stamp("2026-07-01"), None),
+                                                           "acc-2": (_stamp("2026-07-01"), None)})
+                self.assertEqual(alt_result["totals"], [])
+                self.assertEqual(alt_result["months"][0]["items"], [])
+
+    def test_identical_hints_on_distinct_accounts_stay_order_invariant_and_dedup_independently(self):
+        entries = [
+            RecurringEntry("test-owner", account, f"{account}-{month}", "107", "PLN", "DBIT", "expense",
+                           f"2026-{month:02d}-10", "f" * 64, counterparty_name="Synthetic Stream")
+            for account in ("acc-1", "acc-2") for month in range(1, 7)
+        ]
+        hints = detect_recurring_charges("test-owner", entries, {"acc-1", "acc-2"})
+        self.assertEqual(len(hints), 2)
+        timestamps = {"acc-1": (None, None), "acc-2": (_stamp("2026-07-01"), None)}
+
+        both = _forecast(evaluation_date="2026-07-01", months=1, hints=hints, account_timestamps=timestamps)
+        self.assertEqual(both, _forecast(evaluation_date="2026-07-01", months=1, hints=hints[::-1], account_timestamps=timestamps))
+        self.assertEqual([(item["amount"], item["account_stale"], item["confidence"])
+                          for item in both["months"][0]["items"]], [
+            ("107", True, "high"),
+            ("107", False, "high"),
+        ])
+        self.assertEqual(both["totals"], [
+            {"currency": "PLN", "total": "214", "scheduled_total": "0", "estimated_total": "214"},
+        ])
+
+        # One matching mortgage schedule suppresses only one account's hint, preserving the other.
+        schedule = _schedule("loan", amount="107", due_day=10, start_date="2026-01-01")
+        deduped = _forecast(evaluation_date="2026-07-01", months=1, schedules=[schedule],
+                            hints=hints, account_timestamps=timestamps)
+        self.assertEqual(deduped, _forecast(evaluation_date="2026-07-01", months=1, schedules=[schedule],
+                                            hints=hints[::-1], account_timestamps=timestamps))
+        self.assertEqual(deduped["summary"]["deduped_recurring_count"], 1)
+        self.assertEqual([(item["source"], item["amount"], item["account_stale"])
+                          for item in deduped["months"][0]["items"]], [
+            ("mortgage", "107", False),
+            ("recurring", "107", False),
+        ])
+        self.assertEqual(deduped["totals"], [
+            {"currency": "PLN", "total": "214", "scheduled_total": "107", "estimated_total": "107"},
+        ])
+
+        # Category conflict assignment keeps identical hints on distinct accounts separate.
+        evidence = {
+            ("acc-1", "acc-1-6"): "cat-a",
+            ("acc-2", "acc-2-6"): "cat-b",
+        }
+        self.assertEqual(
+            forecast._hint_categories(hints, evidence, {"cat-a", "cat-b"}),
+            {
+                forecast._hint_identity(hints[0]): frozenset({"cat-a"}),
+                forecast._hint_identity(hints[1]): frozenset({"cat-b"}),
+            },
+        )
+
     def test_query_defaults_and_exact_syntax(self):
         self.assertEqual(forecast.validate_forecast_query(None, None), (3, None))
         self.assertEqual(forecast.validate_forecast_query("01", "PLN"), (1, "PLN"))
