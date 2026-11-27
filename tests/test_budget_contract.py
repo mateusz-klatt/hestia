@@ -866,10 +866,13 @@ class BudgetOpenApiTests(unittest.TestCase):
         document = contract.build_openapi()
         cand_schema = document["components"]["schemas"]["BudgetReceiptCandidate"]
         self.assertIn("match_strength", cand_schema["required"])
+        strengths = ["id", "nip", "distinctive", "generic", "none", "medium", "strong"]
         self.assertEqual(
             cand_schema["properties"]["match_strength"]["enum"],
-            ["id", "nip", "distinctive", "generic", "none"],
+            strengths,
         )
+        self.assertNotIn("match_rule", cand_schema["required"])
+        self.assertNotIn("rounding_delta", cand_schema["required"])
         base = {
             "account_id": "acc-1",
             "entry_reference": "a" * 64,
@@ -883,15 +886,15 @@ class BudgetOpenApiTests(unittest.TestCase):
             "merchant_token_hit": True,
             "candidate_token": "tok-1",
         }
-        for valid_strength in ("id", "nip", "distinctive", "generic", "none"):
+        for valid_strength in strengths:
             model = contract.BudgetReceiptCandidate.model_validate({**base, "match_strength": valid_strength})
             self.assertEqual(model.match_strength, valid_strength)
-        for bad_strength in ("strong", "", None, 123):
+        for bad_strength in ("unknown", "", None, 123):
             with self.subTest(bad_strength=bad_strength), self.assertRaises(ValueError):
                 contract.BudgetReceiptCandidate.model_validate({**base, "match_strength": bad_strength})
         ts_path = Path(__file__).resolve().parent.parent / "ui" / "src" / "api" / "openapi.ts"
         cand_ts = ts_path.read_text(encoding="utf-8").split("BudgetReceiptCandidate: {", 1)[1].split("\n        };", 1)[0]
-        self.assertIn('match_strength: "id" | "nip" | "distinctive" | "generic" | "none";', cand_ts)
+        self.assertIn("match_strength: " + " | ".join(f'"{strength}"' for strength in strengths) + ";", cand_ts)
 
 
 class BudgetProviderBindingTests(unittest.TestCase):

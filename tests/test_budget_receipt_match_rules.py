@@ -270,9 +270,30 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
             self.receipts.confirm("owner", {**request, "receipt_date": "2026-11-20"})
         self.assertEqual(error.exception.code, "budget_receipt_stale_source")
 
+    def test_round_up_link_rechecks_exact_priority_at_confirm(self):
+        identifier = self.add_receipt()
+        self.add_card()
+        candidate, = self.candidates(identifier)
+        request = self.confirmation(identifier, candidate)
+        self.add_card("exact-charge", amount="42.91")
+        with self.assertRaises(ReceiptError) as error:
+            self.receipts.confirm("owner", request)
+        self.assertEqual(error.exception.code, "budget_receipt_stale_source")
+
+    def test_an_occupied_card_charge_counts_toward_round_up_ambiguity(self):
+        rounded_receipt = self.add_receipt()
+        exact_receipt = self.add_receipt(total_amount="43")
+        self.add_card()
+        candidate, = self.candidates(exact_receipt)
+        self.receipts.confirm("owner", self.confirmation(exact_receipt, candidate))
+        self.add_card("second-charge", day=_CARD_DATE)
+        self.assertEqual(self.candidates(rounded_receipt), [])
+
     def test_round_up_skips_a_corrupt_competing_receipt_amount(self):
         identifier = self.add_receipt()
         peer = self.add_receipt()
+        self.add_receipt(total_amount="41")
+        self.add_receipt(raw_shop_name="Fikcyjny Targ")
         with self.sessions.begin() as session:
             session.get(db.BudgetReceipt, peer).total_amount = "invalid"
         self.add_card()
