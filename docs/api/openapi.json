@@ -12484,7 +12484,9 @@
                 "multiple_documents",
                 "recursion",
                 "unicode_error",
-                "worker_rejected"
+                "worker_rejected",
+                "worker_crash",
+                "discovery_pdf_too_large"
               ]
             },
             "title": "Parse Failed Reasons",
@@ -28491,7 +28493,7 @@
         "operationId": "getBudgetReceiptGmailStatus",
         "parameters": [
           {
-            "description": "Request Gmail PDF diagnostics starting at 0.56.0. Earlier versions or an omitted header receive those counts under other.",
+            "description": "Request Gmail PDF diagnostics starting at 0.56.0. Earlier versions or an omitted header receive those counts under other. Starting at 0.66.0, worker_crash and discovery_pdf_too_large are reported separately. Earlier versions or an omitted header receive those counts under worker_rejected and other, respectively.",
             "in": "header",
             "name": "X-Hestia-Contract-Version",
             "required": false,

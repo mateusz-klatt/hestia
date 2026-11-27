@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 import fcntl
 import hmac
 import json
+import logging
 from pathlib import Path
 import random
 import re
@@ -14,15 +15,18 @@ from types import MappingProxyType
 
 from .gmail_address import canonical_mailbox
 from .gmail_client import GmailCredentials, GmailError, RunLimit, has_spam_or_trash_label
+from .gmail_message import MessageParserUnavailable
 from .gmail_store import DAY, GMAIL_MESSAGE_DOMAIN, MAILBOX_DOMAIN, SCOPE_DOMAIN, _PHASE_RESET, digest
 from .gmail_trust import PaymentSender
 from .rate_limit import parse_retry_after
 
 BATCH_COMMIT_SIZE = 25
 MAX_SYNC_MESSAGES_PER_RUN = 100
+MAX_WORKER_CRASHES_PER_RUN = 3
 MANUAL_COOLDOWN = 60
 _ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z", re.ASCII)
 _HISTORY_ID = re.compile(r"[0-9]{1,64}\Z", re.ASCII)
+log = logging.getLogger("hestia.budget.gmail_sync")
 # Bare terms search subject and body. Gmail braces combine them with sender rules as alternatives.
 _DOCUMENT_TERMS = (
     "filename:pdf", "faktura", "fakturę", "faktury", "paragon", "e-paragon", "invoice", "receipt",
@@ -145,6 +149,9 @@ class _Progress:
     terms: tuple = field(default_factory=tuple)
     label_id: str | None = None
     retry_skipped_before: float | None = None
+    previous_parser_abort: str | None = None
+    held_worker_failure: MessageParserUnavailable | None = None
+    worker_crashes: int = 0
 
 
 class GmailSync:
@@ -196,13 +203,15 @@ class GmailSync:
             self.store.transition(owner, expected_version, status, mailbox_hmac, queue_sync=defer_profile)
             return self.store.status(owner)
 
-    def _commit(self, owner, progress, changes, pending=(), *, starting_recovery=False, starting_incremental=False):
+    def _commit(self, owner, progress, changes, pending=(), *, starting_recovery=False, starting_incremental=False,
+                parser_abort=None):
         imported, skipped, drained = self.store.commit(
             owner, progress.generation, changes, pending,
             starting_recovery=starting_recovery, starting_incremental=starting_incremental,
             settle_cards=not self.settings.require_sender_authentication and changes.get("sync_phase") == "idle",
             enforce_pending_cap=self.settings.require_sender_authentication,
             retry_skipped_before=progress.retry_skipped_before,
+            parser_abort=parser_abort,
         )
         progress.imported += imported
         progress.skipped += skipped
@@ -253,32 +262,67 @@ class GmailSync:
         try:
             for message_id in dict.fromkeys(ids):
                 msg_hash = digest(self.settings.hmac_secret, GMAIL_MESSAGE_DOMAIN, message_id)
+                held = progress.held_worker_failure
+                if held is not None and held.failed_message.gmail_id_hmac == msg_hash:
+                    continue
                 if self.store.known(owner, msg_hash, retry_skipped_before=progress.retry_skipped_before):
                     continue
                 if progress.attempted >= MAX_SYNC_MESSAGES_PER_RUN:
                     raise RunLimit()
-                if seen is not None and seen >= self.settings.backfill_max_messages:
+                if seen is not None and seen + int(held is not None) >= self.settings.backfill_max_messages:
                     raise RunLimit()
                 if self.settings.require_sender_authentication and not pending and self.store.at_pending_cap(owner):
                     raise RunLimit()
                 progress.run.require_message_budget()
+                if progress.attempted == 0:
+                    progress.previous_parser_abort = self.store.consume_parser_abort(owner, progress.generation)
                 progress.attempted += 1
-                item = self.processor.process(progress.run, message_id, msg_hash)
+                try:
+                    item = self.processor.process(progress.run, message_id, msg_hash)
+                except MessageParserUnavailable as error:
+                    if not error.worker_ready:
+                        raise
+                    # The supervisor can answer while every parser child crashes.
+                    progress.worker_crashes += 1
+                    if held is not None:
+                        raise held from None
+                    if progress.worker_crashes >= MAX_WORKER_CRASHES_PER_RUN:
+                        raise
+                    progress.held_worker_failure = error
+                    continue
                 if item is None:
                     continue
+                if held is not None:
+                    failed = held.failed_message
+                    pending.append(failed)
+                    progress.held_worker_failure = None
+                    log.warning("gmail parse_failed reason=%s after parser resumed", failed.parse_failed_reason)
+                    if seen is not None:
+                        seen += 1
                 pending.append(item)
                 if seen is not None:
                     seen += 1
                 if len(pending) >= BATCH_COMMIT_SIZE:
-                    chunk, pending = pending, []
+                    chunk, pending = pending[:BATCH_COMMIT_SIZE], pending[BATCH_COMMIT_SIZE:]
                     self._commit(owner, progress, {}, chunk)
+            # With no later message to confirm that parsing resumed, replay from this checkpoint.
+            if progress.held_worker_failure is not None and changes.get("sync_phase") == "idle":
+                raise progress.held_worker_failure
             if seen is not None and seen >= self.settings.backfill_max_messages:
                 raise RunLimit()
+        except MessageParserUnavailable:
+            if pending:
+                # A full import queue must not mask an outage detected during parsing.
+                with suppress(RunLimit):
+                    self._commit(owner, progress, {}, pending)
+            raise
         except (GmailError, RunLimit):
             if pending:
                 self._commit(owner, progress, {}, pending)
             raise
-        self._commit(owner, progress, changes, pending)
+        # Keep the failed message replayable while looking for confirmation on later pages.
+        checkpoint = changes if progress.held_worker_failure is None else {}
+        self._commit(owner, progress, checkpoint, pending)
 
     def _recover_token(self, owner, progress, error, token, *keys):
         if error.http_status != 400:
@@ -290,17 +334,19 @@ class GmailSync:
 
     def _backfill(self, owner, progress):
         scope_hmac = self._scope_hmac(progress)
+        state = self.store.state(owner)
+        token = state.resume_page_token
+        if state.scope_scan_query_hmac != scope_hmac:
+            self._commit(owner, progress, {"resume_page_token": None, "scope_scan_query_hmac": scope_hmac})
+            token = None
         while True:
             state = self.store.state(owner)
-            token = state.resume_page_token
-            if state.scope_scan_query_hmac != scope_hmac:
-                self._commit(owner, progress, {"resume_page_token": None, "scope_scan_query_hmac": scope_hmac})
-                token = None
             query = _query(self.settings, progress.terms, cutoff=state.resume_cutoff_ts)
             try:
                 page = progress.run.messages(query, token)
             except GmailError as error:
                 self._recover_token(owner, progress, error, token, "resume_page_token")
+                token = None
                 continue
             next_token = _page_token(page, token)
             candidates = [_message_id(item.get("id")) for item in _objects(page, "messages")]
@@ -313,13 +359,13 @@ class GmailSync:
                 raise
             if next_token is None:
                 return
+            token = next_token
 
-    def _scope_scan(self, owner, progress, state, ids, history_changes):
+    def _scope_scan(self, owner, progress, history_token, token, ids, history_changes):
         if not ids:
-            self._commit(owner, progress, history_changes)
+            self._drain(owner, progress, (), history_changes)
             return
         query = _query(self.settings, progress.terms)
-        token = state.scope_scan_page_token
         while True:
             try:
                 page = progress.run.messages(query, token)
@@ -333,7 +379,8 @@ class GmailSync:
             ids.difference_update(matches)
             if not ids:
                 next_token = None
-            changes = {"scope_scan_page_token": next_token} if next_token is not None else history_changes
+            changes = ({"history_page_token": history_token, "scope_scan_page_token": next_token}
+                       if next_token is not None else history_changes)
             self._drain(owner, progress, matches, changes)
             if next_token is None:
                 return
@@ -348,24 +395,28 @@ class GmailSync:
         if state.scope_scan_query_hmac != scope_hmac:
             self._commit(owner, progress, {"history_page_token": None, "scope_scan_page_token": None,
                                           "scope_scan_query_hmac": scope_hmac})
+        state = self.store.state(owner)
+        token, scope_token = state.history_page_token, state.scope_scan_page_token
         while True:
-            state = self.store.state(owner)
-            token = state.history_page_token
             try:
                 page = progress.run.history(state.history_id, token, progress.label_id)
             except GmailError as error:
                 if error.http_status == 404:
+                    if progress.held_worker_failure is not None:
+                        raise progress.held_worker_failure from None
                     self._start_recovery(owner, progress, profile_history, state, full=True)
                     self._backfill(owner, progress)
                     return
                 self._recover_token(owner, progress, error, token, "history_page_token", "scope_scan_page_token")
+                token = scope_token = None
                 continue
             next_token = _page_token(page, token)
             changes = ({"history_page_token": next_token, "scope_scan_page_token": None}
                        if next_token is not None else self._completion(state))
-            self._scope_scan(owner, progress, state, _history_messages(page), changes)
+            self._scope_scan(owner, progress, token, scope_token, _history_messages(page), changes)
             if next_token is None:
                 return
+            token, scope_token = next_token, None
 
     def _failed(self, owner, progress, error):
         state = self.store.state(owner)
@@ -377,10 +428,21 @@ class GmailSync:
         attention = error.attention
         if error.code == "daily_quota" or hint.suspended:
             attention = "quota"
+        pending = ()
+        parser_abort = None
+        if isinstance(error, MessageParserUnavailable):
+            item = error.failed_message
+            if item.gmail_id_hmac == progress.previous_parser_abort:
+                # Quarantine this message while still reporting the current outage.
+                pending = (item,)
+            else:
+                parser_abort = item.gmail_id_hmac
         self._commit(owner, progress, {"failures": failures, "backoff_until": deadline, "run_requested": 0,
                                       "next_sync_at": max(deadline, now + self.settings.sync_interval_seconds),
                                       "attention": attention, "last_http_status": error.http_status,
-                                      "last_error": error.code})
+                                      "last_error": error.code}, pending, parser_abort=parser_abort)
+        if pending:
+            log.warning("gmail parse_failed reason=%s after consecutive parser aborts", pending[0].parse_failed_reason)
 
     def sync(self, owner, *, force_full_resync=False, poll=False):
         self._require_owner(owner)
@@ -429,6 +491,9 @@ class GmailSync:
                         break
                     force = True
             except RunLimit:
+                if progress.held_worker_failure is not None:
+                    self._failed(owner, progress, progress.held_worker_failure)
+                    raise progress.held_worker_failure from None
                 self._commit(owner, progress, {"next_sync_at": self.store.clock() + self.settings.sync_interval_seconds,
                                               "backoff_until": 0, "failures": 0, "attention": None, "run_requested": 0,
                                               "last_http_status": None, "last_error": None})

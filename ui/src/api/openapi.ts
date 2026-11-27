@@ -16760,7 +16760,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Request Gmail PDF diagnostics starting at 0.56.0. Earlier versions or an omitted header receive those counts under other. */
+                /** @description Request Gmail PDF diagnostics starting at 0.56.0. Earlier versions or an omitted header receive those counts under other. Starting at 0.66.0, worker_crash and discovery_pdf_too_large are reported separately. Earlier versions or an omitted header receive those counts under worker_rejected and other, respectively. */
                 "X-Hestia-Contract-Version"?: string;
             };
             path?: never;

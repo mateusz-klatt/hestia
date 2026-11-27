@@ -79,6 +79,15 @@ class _Rejected(WorkerRejected):
         self.reason = reason
 
 
+class MessageParserUnavailable(GmailError):
+    """A failed message exchange and the supervisor's response to a health probe."""
+
+    def __init__(self, failed_message: PendingMessage, *, worker_ready: bool):
+        super().__init__("parser_unavailable")
+        self.failed_message = failed_message
+        self.worker_ready = worker_ready
+
+
 def _worker_reason(error):
     if isinstance(error, PDFUnsupported):
         return "pdf_unsupported"
@@ -169,9 +178,9 @@ def _document_parts(message):
             yield "pdf", part
 
 
-def _document_payload(kind, part):
+def _document_payload(kind, part, *, decoded=None):
     limit = MAX_PDF_BYTES if kind == "pdf" else MAX_HTML_BYTES
-    payload = part.get_payload(decode=True) or b""
+    payload = (part.get_payload(decode=True) or b"") if decoded is None else decoded
     if part.defects:
         raise _Rejected("part_defects")
     if len(payload) > limit:
@@ -681,7 +690,11 @@ class GmailMessageProcessor:
         except UnicodeError:
             result = _parse_failed(pending, "unicode_error")
         except WorkerUnavailable:
-            raise GmailError("parser_unavailable") from None
+            worker_ready = self.ready()
+            reason = "worker_crash" if worker_ready else "worker_rejected"
+            raise MessageParserUnavailable(
+                _parse_failed(pending, reason), worker_ready=worker_ready,
+            ) from None
         if result.outcome == _PARSE_FAILED:
             log.warning("gmail parse_failed reason=%s", result.parse_failed_reason)
         return result

@@ -24,6 +24,10 @@ FLAG = "HESTIA_BUDGET_GMAIL_IMPORT_ENABLED"
 PREFIX = receipt_api.PREFIX
 MAX_BODY_BYTES = 4096
 _POLL_CHECK_SECONDS = 60
+_DIAGNOSTIC_FALLBACKS = (
+    ((0, 56, 0), (("pdf_no_text", "other"), ("multiple_documents", "other"))),
+    ((0, 66, 0), (("worker_crash", "worker_rejected"), ("discovery_pdf_too_large", "other"))),
+)
 _WRITES = {
     "gmail-grant": api_contract.BudgetReceiptGmailGrantRequest,
     "gmail-revoke": api_contract.BudgetReceiptGmailRevokeRequest,
@@ -154,12 +158,15 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             version = receipt_api._receipt_contract(request, operation)
             active_runtime = service_runtime()
             result = await api._settled_thread(lambda: active_runtime.run(owner, operation, values, secret))
-            if operation == "gmail-status" and version < (0, 56, 0):
+            if operation == "gmail-status":
                 reasons = result["parse_failed_reasons"]
-                for reason in ("pdf_no_text", "multiple_documents"):
-                    count = reasons.pop(reason, 0)
-                    if count:
-                        reasons["other"] = reasons.get("other", 0) + count
+                for introduced, fallbacks in _DIAGNOSTIC_FALLBACKS:
+                    if version >= introduced:
+                        continue
+                    for reason, fallback in fallbacks:
+                        count = reasons.pop(reason, 0)
+                        if count:
+                            reasons[fallback] = reasons.get(fallback, 0) + count
             status = 202 if operation == "gmail-sync" else 200
             return web.json_response(result, status=status, headers=api.PRIVATE_HEADERS)
         except GmailError as error:

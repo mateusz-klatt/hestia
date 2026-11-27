@@ -132,6 +132,7 @@ from .budget.loan_references import MAX_MATCH_REFERENCES
 # 0.63.0: owner dismissal of offline import quarantine items and batches, with import_key and unresolved_count.
 # 0.64.0: opt-in mortgage payment references and forecast matching audit (migration 0036).
 # 0.65.0: optional multi-status filter on receipt lists (zero migration).
+# 0.66.0: Gmail worker_crash and discovery_pdf_too_large parse diagnostics.
 # 0.67.0: owner-private receipt transaction search and a manual selection on receipt confirmation.
 CONTRACT_VERSION = "0.67.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
@@ -5372,7 +5373,9 @@ def _gmail_receipt_paths():
         "parameters": [{
             "name": "X-Hestia-Contract-Version", "in": "header", "required": False,
             "description": "Request Gmail PDF diagnostics starting at 0.56.0. Earlier versions or an omitted header "
-                           "receive those counts under other.",
+                           "receive those counts under other. Starting at 0.66.0, worker_crash and "
+                           "discovery_pdf_too_large are reported separately. Earlier versions or an omitted header "
+                           "receive those counts under worker_rejected and other, respectively.",
             "schema": {"type": "string", "pattern": r"^0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$"},
         }],
         "responses": responses,

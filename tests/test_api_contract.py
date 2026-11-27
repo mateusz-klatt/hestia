@@ -60,6 +60,7 @@ class OpenApiArtifactTests(unittest.TestCase):
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
         self.assertEqual(document["info"]["version"], "0.67.0")
+        # 0.67.0 additive manual receipt transaction picker.
         picker = document["paths"].pop("/api/budget/receipts/transaction-search")["post"]
         self.assertEqual(picker["x-required-permission"], "budget.receipts.match")
         self.assertTrue(picker["parameters"][0]["required"])
@@ -71,6 +72,22 @@ class OpenApiArtifactTests(unittest.TestCase):
         for schema in ("BudgetReceiptManualLinkRequest", "BudgetReceiptTransactionSearchRequest",
                        "BudgetReceiptTransactionSearchItem", "BudgetReceiptTransactionSearchResult"):
             schemas.pop(schema)
+        document["info"]["version"] = "0.66.0"
+        canonical_0_66 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_66).hexdigest(),
+                         "5026f79eb6a390f9aa7a1483c1868da0a678ff6feda03ed41247b86b2897cdbd")
+
+        # 0.66.0 additive Gmail parse failure reasons.
+        status = document["paths"]["/api/budget/receipts/gmail-status"]["get"]
+        gmail_header, = status["parameters"]
+        self.assertIn("0.66.0", gmail_header["description"])
+        gmail_header["description"] = (
+            "Request Gmail PDF diagnostics starting at 0.56.0. Earlier versions or an omitted header "
+            "receive those counts under other."
+        )
+        reasons = schemas["BudgetReceiptGmailStatus"]["properties"]["parse_failed_reasons"]["propertyNames"]["enum"]
+        reasons.remove("worker_crash")
+        reasons.remove("discovery_pdf_too_large")
         document["info"]["version"] = "0.65.0"
         canonical_0_65 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.assertEqual(hashlib.sha256(canonical_0_65).hexdigest(),
@@ -238,14 +255,12 @@ class OpenApiArtifactTests(unittest.TestCase):
         ]
         document["info"]["version"] = "0.56.0"
         # 0.56.0 additive PDF diagnostics and compatibility header.
-        status = document["paths"]["/api/budget/receipts/gmail-status"]["get"]
         header, = status.pop("parameters")
         self.assertEqual((header["name"], header["in"], header["required"]),
                          ("X-Hestia-Contract-Version", "header", False))
         ts_path = Path(__file__).resolve().parent.parent / "ui" / "src" / "api" / "openapi.ts"
         status_ts = ts_path.read_text(encoding="utf-8").split("getBudgetReceiptGmailStatus: {", 1)[1]
         self.assertIn('"X-Hestia-Contract-Version"?: string;', status_ts.split("requestBody", 1)[0])
-        reasons = schemas["BudgetReceiptGmailStatus"]["properties"]["parse_failed_reasons"]["propertyNames"]["enum"]
         reasons.remove("pdf_no_text")
         reasons.remove("multiple_documents")
         document["info"]["version"] = "0.55.0"
