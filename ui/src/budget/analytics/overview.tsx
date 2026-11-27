@@ -208,18 +208,27 @@ function CurrencyCard({ total, categories, links, partial, locale }: CardProps) 
               const open = id === null || !collapsed.has(id);
               return (
                 <tr key={id ?? "uncategorised"} data-depth={item.depth}
-                  className={id === null ? "is-uncategorised" : undefined}>
+                  className={[
+                    `budget-tree-depth-${String(item.depth)}`,
+                    id === null ? "is-uncategorised" : "",
+                  ].filter(Boolean).join(" ")}>
                   <th scope="row">
-                    {item.has_children && id !== null ? (
-                      <button type="button" className="budget-tree-toggle" aria-expanded={open}
-                        aria-label={open ? t("budget.overview.collapseCategory", { name: label }) : t("budget.overview.expandCategory", { name: label })}
-                        onClick={() => { toggle(id); }}>
-                        {open ? "▾" : "▸"}
-                      </button>
-                    ) : null}
-                    <CategorySwatch color={categoryColors.get(id)} />
-                    {label}
-                    {item.archived ? <small> ({t("budget.overview.archived")})</small> : null}
+                    <span className="budget-tree-cell">
+                      {item.has_children && id !== null ? (
+                        <button type="button" className="budget-tree-toggle" aria-expanded={open}
+                          aria-label={open ? t("budget.overview.collapseCategory", { name: label }) : t("budget.overview.expandCategory", { name: label })}
+                          onClick={() => { toggle(id); }}>
+                          {open ? "▾" : "▸"}
+                        </button>
+                      ) : (
+                        <span className="budget-tree-spacer" aria-hidden="true" />
+                      )}
+                      <CategorySwatch color={categoryColors.get(id)} />
+                      <span className="budget-tree-label">
+                        {label}
+                        {item.archived ? <small> ({t("budget.overview.archived")})</small> : null}
+                      </span>
+                    </span>
                   </th>
                   <td>{money(item.net_spending)}</td>
                 </tr>

@@ -638,23 +638,20 @@ td.seen.fresh {
   font-weight: bold;
 }
 
-/* On a phone (operator: iPhone 15 Pro = 393 px), keep the three view tabs on ONE row: they share the
-   width as equal thirds with a slightly smaller font + tighter padding, so "🏠 Pokoje · 📜 Dziennik ·
-   🔧 Zaawansowane" fits without wrapping to a second line. Ellipsis is the safety net for an extreme
-   translation; the active tab stays bold. */
+/* On a phone (operator: iPhone 15 Pro = 393 px), wrap the app tabs cleanly onto rows so every label
+   stays readable without truncating to "P…", "Dz…", "B…". */
 @media (max-width: 640px) {
   .view-switch {
-    flex-wrap: nowrap;
-    gap: 0.3rem;
+    flex-wrap: wrap;
+    gap: 0.35rem;
   }
   .view-tab {
-    flex: 0 1 auto; /* content-sized: the long "Zaawansowane" gets the room it needs, short tabs don't waste it */
-    min-width: 0;
-    padding: 0.4rem 0.45rem;
-    font-size: 0.78rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex: 0 1 auto;
+    max-width: 100%;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.875rem;
+    white-space: normal;
+    overflow-wrap: break-word;
   }
 }
 

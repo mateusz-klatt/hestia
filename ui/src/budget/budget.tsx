@@ -114,6 +114,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   const [capabilities, setCapabilities] = useState<BudgetCapabilities | null>(null);
   const [authorization, setAuthorization] = useState<AuthorizationCapabilities | null>(null);
   const [authorizationLocked, setAuthorizationLocked] = useState(true);
+  const authorizationLockedRef = useRef(true);
   const [deviceAccess, setDeviceAccess] = useState(true);
   const [deviceUnavailable, setDeviceUnavailable] = useState(false);
   const deviceCapabilityKey = useRef("");
@@ -132,6 +133,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   const [pending, setPending] = useState<BudgetConsentFlow[]>([]);
   const [detail, setDetail] = useState<string | null>(null);
   const [view, setView] = useState<View>("monthly_budget");
+  const [pendingView, setPendingView] = useState<View | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const [devicesFocus, setDevicesFocus] = useState(0);
   // A month chosen in the monthly budget or year view; the month view opens on it.
@@ -152,6 +154,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   // out, other principal, disabled), so no response started before that may bring the data back.
   const alive = useRef(true);
   const generation = useRef(0);
+  const navGeneration = useRef(0);
   const epoch = useRef(0);
   const [sessionEpoch, setSessionEpoch] = useState(0);
   const [revision, setRevision] = useState(0);
@@ -168,12 +171,19 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     setReceiptEpoch(receiptEpochRef.current);
   }, []);
 
+  const setAuthLock = useCallback((locked: boolean) => {
+    api.setAuthorizationLocked(locked);
+    authorizationLockedRef.current = locked;
+    setAuthorizationLocked(locked);
+  }, [api]);
+
   useLayoutEffect(() => {
     activeRef.current = active;
     if (principalRef.current !== principal) {
       principalRef.current = principal;
       epoch.current += 1;
       generation.current += 1;
+      navGeneration.current += 1;
       receiptEpochRef.current += 1;
       receiptAccessRef.current = true;
       receiptUnavailableRef.current = false;
@@ -182,11 +192,13 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       setCommittedPrincipal(principal);
       setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
       api.setAuthorizationLocked(true);
+      authorizationLockedRef.current = true;
       setAuthorization(null); setAuthorizationLocked(true);
       setReceiptAccess(true); setReceiptUnavailable(false);
       setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
       setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined);
       setView("accounts");
+      setPendingView(null);
       setMoreOpen(false);
       setDevicesFocus(0);
       setSessionUpgrade(false);
@@ -198,7 +210,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   const [pollTick, setPollTick] = useState(0);
   useEffect(() => {
     alive.current = true;
-    return () => { alive.current = false; generation.current += 1; };
+    return () => { alive.current = false; generation.current += 1; navGeneration.current += 1; };
   }, []);
   useEffect(() => {
     const next = authorization === null ? "" : [
@@ -216,23 +228,25 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   const invalidate = useCallback((disabled: boolean, next?: Load) => {
     epoch.current += 1;
     generation.current += 1;
+    navGeneration.current += 1;
     bumpReceiptEpoch();
     receiptAccessRef.current = true;
     receiptUnavailableRef.current = false;
     setSessionEpoch((current) => current + 1);
     setConnections([]); setAccounts([]); setJobs([]); setDetail(null); setCapabilities(null); setBusy(new Set());
-    api.setAuthorizationLocked(true);
-    setAuthorization(null); setAuthorizationLocked(true); setDeviceAccess(true); setDeviceUnavailable(false);
+    setAuthLock(true);
+    setAuthorization(null); setDeviceAccess(true); setDeviceUnavailable(false);
     setReceiptAccess(true); setReceiptUnavailable(false);
     setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
     setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined); setView("accounts");
+    setPendingView(null);
     setMoreOpen(false);
     setDevicesFocus(0);
     const target = next ?? (disabled ? "disabled" : "denied");
     setSessionUpgrade(target === "sessionUpgrade");
     setReloggingIn(false);
     setLoad(target);
-  }, [api]);
+  }, [bumpReceiptEpoch, setAuthLock]);
   const barrier = useCallback((result: { ok: boolean; status?: number; error?: string }): boolean => {
     if (isSessionUpgradeRequired(result)) {
       if (alive.current) setSessionUpgrade(true);
@@ -258,8 +272,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       if (me.status === 404) invalidate(false, "serverChanged");
       else if (isSessionUpgradeRequired(me)) invalidate(false, "sessionUpgrade");
       else {
-        api.setAuthorizationLocked(true);
-        setAuthorizationLocked(true);
+        setAuthLock(true);
         setLoad("error");
       }
       return;
@@ -269,8 +282,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       return;
     }
     setAuthorization(me.data);
-    api.setAuthorizationLocked(false);
-    setAuthorizationLocked(false);
+    setAuthLock(false);
     setDeviceAccess(me.data.own_budget.can_manage_devices);
     const nextReceiptAccess = me.data.own_budget.can_use_receipts;
     if (nextReceiptAccess) {
@@ -311,8 +323,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       if (result.status === 404) invalidate(false, "serverChanged");
       else if (isSessionUpgradeRequired(result)) invalidate(false, "sessionUpgrade");
       else {
-        api.setAuthorizationLocked(true);
-        setAuthorizationLocked(true);
+        setAuthLock(true);
       }
       return false;
     }
@@ -322,8 +333,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       return false;
     }
     setAuthorization(result.data);
-    api.setAuthorizationLocked(false);
-    setAuthorizationLocked(false);
+    setAuthLock(false);
     setDeviceAccess(result.data.own_budget.can_manage_devices);
     const nextReceiptAccess = result.data.own_budget.can_use_receipts;
     if (nextReceiptAccess && !keepUnavailable) {
@@ -334,7 +344,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     receiptAccessRef.current = nextReceiptAccess;
     setReceiptAccess(nextReceiptAccess);
     return true;
-  }, [api, principal, barrier, invalidate, bumpReceiptEpoch]);
+  }, [api, principal, barrier, invalidate, bumpReceiptEpoch, setAuthLock]);
 
   const authorizeView = useCallback((action: () => void) => {
     void refreshAuthorization().then((allowed) => { if (allowed) action(); });
@@ -399,7 +409,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       if (isMutation ? !activeEpoch() : !currentReceiptPanel()) {
         return { ok: false, status: 0, error: "budget_stale_epoch" };
       }
-      if (isMutation && (authorizationLocked || api.isAuthorizationLocked() || (effectiveReceiptsApi.isAuthorizationLocked?.() ?? false))) {
+      if (isMutation && (authorizationLockedRef.current || api.isAuthorizationLocked() || (effectiveReceiptsApi.isAuthorizationLocked?.() ?? false))) {
         return { ok: false, status: 503, error: "budget_server_changed" };
       }
       const result = await callFn();
@@ -442,9 +452,9 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       receiptImage: (receiptId) => runWithGate(() => effectiveReceiptsApi.receiptImage(receiptId), false, false),
       confirmReceipt: (request) => runWithGate(() => effectiveReceiptsApi.confirmReceipt(request), true, false),
       deleteReceipt: (request) => runWithGate(() => effectiveReceiptsApi.deleteReceipt(request), true, false),
-      isAuthorizationLocked: () => authorizationLocked || api.isAuthorizationLocked() || (effectiveReceiptsApi.isAuthorizationLocked?.() ?? false),
+      isAuthorizationLocked: () => authorizationLockedRef.current || api.isAuthorizationLocked() || (effectiveReceiptsApi.isAuthorizationLocked?.() ?? false),
     };
-  }, [effectiveReceiptsApi, principal, receiptBarrier, authorizationLocked, api]);
+  }, [effectiveReceiptsApi, principal, receiptBarrier, api]);
   const canManageDevices = deviceAccess && !deviceUnavailable && authorization?.own_budget?.can_manage_devices === true;
 
   // Poll only while a job is queued/running and the view is visible; reload stored data once it settles.
@@ -592,12 +602,19 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   }, [onLogout]);
 
   const openAuthorizedView = useCallback((nextView: View, beforeShow?: () => void) => {
+    const navToken = ++navGeneration.current;
+    const startEpoch = epoch.current;
     setMoreOpen(false);
-    authorizeView(() => {
-      beforeShow?.();
-      setView(nextView);
+    setPendingView(nextView);
+    void refreshAuthorization().then((allowed) => {
+      if (!alive.current || startEpoch !== epoch.current || navToken !== navGeneration.current) return;
+      setPendingView(null);
+      if (allowed) {
+        beforeShow?.();
+        setView(nextView);
+      }
     });
-  }, [authorizeView]);
+  }, [refreshAuthorization]);
 
   const selectNavView = useCallback((item: View) => {
     openAuthorizedView(item, () => {
@@ -642,6 +659,12 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   const shownView: View = view === "receipts"
     ? (receiptsAllowed ? "receipts" : "accounts")
     : (!analysis ? "accounts" : view);
+  const pendingNavView: View | null = pendingView === null
+    ? null
+    : (pendingView === "receipts"
+      ? (receiptsAllowed ? "receipts" : "accounts")
+      : (!analysis ? "accounts" : pendingView));
+  const pendingTarget: View | null = pendingNavView !== null && pendingNavView !== shownView ? pendingNavView : null;
   const header = (
     <header className="budget-header">
       <div><h2>{t("budget.main.title")}</h2><p>{t("budget.main.subtitle")}</p></div>
@@ -659,7 +682,8 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
         ) : null}
         {shownLoad === "ready" && !analysis && receiptsAllowed ? (
           <button type="button" aria-pressed={shownView === "receipts"}
-            onClick={() => { authorizeView(() => { setView((current) => (current === "receipts" ? "accounts" : "receipts")); }); }}>
+            aria-busy={pendingTarget === "receipts" ? "true" : undefined}
+            onClick={() => { openAuthorizedView(shownView === "receipts" ? "accounts" : "receipts"); }}>
             {t("budget.main.views.receipts")}
           </button>
         ) : null}
@@ -718,7 +742,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
         </section>
       )}
       {analysis ? (
-        <BudgetNavigation shownView={shownView} receiptsAllowed={receiptsAllowed}
+        <BudgetNavigation shownView={shownView} pendingView={pendingTarget} receiptsAllowed={receiptsAllowed}
           moreOpen={moreOpen} onOpenChange={setMoreOpen} onSelectView={selectNavView} />
       ) : null}
       {shownView === "monthly_budget" ? (
@@ -863,6 +887,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
 
 interface BudgetNavigationProps {
   shownView: View;
+  pendingView: View | null;
   receiptsAllowed: boolean;
   moreOpen: boolean;
   onOpenChange: (next: boolean) => void;
@@ -871,7 +896,7 @@ interface BudgetNavigationProps {
 
 /** Everyday navigation keeping four primary views visible and placing secondary tools behind More. */
 function BudgetNavigation({
-  shownView, receiptsAllowed, moreOpen, onOpenChange, onSelectView,
+  shownView, pendingView, receiptsAllowed, moreOpen, onOpenChange, onSelectView,
 }: BudgetNavigationProps) {
   const navRef = useRef<HTMLElement>(null);
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
@@ -879,6 +904,7 @@ function BudgetNavigation({
   const focusFirstMoreRef = useRef(false);
   const morePanelId = useId();
   const secondaryActive = SECONDARY_VIEW_SET.has(shownView);
+  const pendingSecondary = pendingView !== null && SECONDARY_VIEW_SET.has(pendingView) ? pendingView : null;
   const primaryViews: readonly View[] = receiptsAllowed ? [...PRIMARY_VIEWS, "receipts"] : PRIMARY_VIEWS;
 
   const closeMore = useCallback((restoreFocus: boolean) => {
@@ -957,6 +983,7 @@ function BudgetNavigation({
       <div className="budget-nav-bar">
         {primaryViews.map((item) => (
           <button type="button" key={item} aria-pressed={shownView === item}
+            aria-busy={pendingView === item ? "true" : undefined}
             onClick={() => { onSelectView(item); }}>
             {labelOf(MAIN_VIEW_KEYS, item)}
           </button>
@@ -984,12 +1011,19 @@ function BudgetNavigation({
             {labelOf(MAIN_VIEW_KEYS, shownView)}
           </button>
         ) : null}
+        {!moreOpen && pendingSecondary !== null ? (
+          <button type="button" className="budget-nav-pending" aria-pressed="false" aria-busy="true"
+            onClick={() => { onSelectView(pendingSecondary); }}>
+            {labelOf(MAIN_VIEW_KEYS, pendingSecondary)}
+          </button>
+        ) : null}
       </div>
       {moreOpen ? (
         <div ref={morePanelRef} id={morePanelId} className="budget-nav-more" role="group"
           aria-label={t("budget.main.moreOptions")} onKeyDown={handleMorePanelKeyDown}>
           {SECONDARY_VIEWS.map((item) => (
             <button type="button" key={item} aria-pressed={shownView === item}
+              aria-busy={pendingView === item ? "true" : undefined}
               onClick={(event) => {
                 const activeEl = document.activeElement;
                 const keyboardFromPanel = event.detail === 0

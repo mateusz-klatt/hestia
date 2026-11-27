@@ -1753,4 +1753,159 @@ describe("MonthBudgetView", () => {
     expect(host.textContent).toContain("Synthetic Salary Name");
     expect(host.textContent).toContain("Synthetic Spend Name");
   });
+
+  it("wraps all three chart data tables in scrollable min-width-safe containers with sticky first column only on chart tables and scalable SVGs", async () => {
+    const api = fakeApi();
+    await show(api, { locale: "pl-PL" });
+
+    const fsModule = "node:fs";
+    const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as {
+      readFileSync: (path: string, encoding: "utf8") => string;
+    };
+    const css = readFileSync("src/budget/budget.css", "utf8");
+    const styleEl = document.createElement("style");
+    styleEl.textContent = css;
+    document.head.append(styleEl);
+    try {
+      const charts = [...host.querySelectorAll<HTMLElement>(".budget-month-chart")];
+      expect(charts).toHaveLength(3);
+      for (const chart of charts) {
+        const svg = chart.querySelector("svg");
+        expect(svg).not.toBeNull();
+        expect(svg?.getAttribute("viewBox")).toBe("0 0 360 210");
+        expect(svg?.hasAttribute("width")).toBe(false);
+        expect(svg?.hasAttribute("height")).toBe(false);
+
+        const details = chart.querySelector<HTMLDetailsElement>("details.budget-recurring-evidence");
+        expect(details).not.toBeNull();
+        if (details !== null) details.open = true;
+        const wrap = details?.querySelector<HTMLElement>(".budget-table-wrap.budget-chart-data-wrap");
+        expect(wrap).not.toBeNull();
+        expect(wrap?.getAttribute("role")).toBe("region");
+        expect(wrap?.getAttribute("tabindex")).toBe("0");
+
+        const table = wrap?.querySelector<HTMLTableElement>("table.budget-month-dashboard-table.budget-chart-data-table");
+        expect(table).not.toBeNull();
+        const theadFirst = table?.querySelector<HTMLElement>("thead th:first-child");
+        const tbodyFirst = table?.querySelector<HTMLElement>('tbody th[scope="row"]');
+        expect(theadFirst).not.toBeNull();
+        expect(tbodyFirst).not.toBeNull();
+
+        // Computed styles confirm min-width safety, scrollability, SVG containment, and sticky col 1 on chart tables.
+        const chartStyle = getComputedStyle(chart);
+        expect(chartStyle.minWidth).toMatch(/^0(px)?$/);
+        expect(chartStyle.maxWidth).toBe("100%");
+        expect(chartStyle.gridTemplateColumns.replace(/\b0px\b/g, "0")).toBe("minmax(0, 1fr)");
+        if (details !== null) {
+          expect(getComputedStyle(details).minWidth).toMatch(/^0(px)?$/);
+          expect(getComputedStyle(details).maxWidth).toBe("100%");
+        }
+        if (wrap !== null && wrap !== undefined) {
+          expect(getComputedStyle(wrap).overflowX).toBe("auto");
+          expect(getComputedStyle(wrap).maxWidth).toBe("100%");
+        }
+        if (svg !== null) {
+          expect(getComputedStyle(svg).width).toBe("100%");
+          expect(getComputedStyle(svg).height).toBe("auto");
+        }
+        if (theadFirst !== null && theadFirst !== undefined) {
+          expect(getComputedStyle(theadFirst).position).toBe("sticky");
+        }
+        if (tbodyFirst !== null && tbodyFirst !== undefined) {
+          expect(getComputedStyle(tbodyFirst).position).toBe("sticky");
+        }
+      }
+
+      // Sticky first column must NOT apply to the "Wydatki i limity" table.
+      const limitsTable = host.querySelector<HTMLTableElement>('section[aria-label="Wydatki i limity"] table');
+      expect(limitsTable).not.toBeNull();
+      expect(limitsTable?.classList.contains("budget-chart-data-table")).toBe(false);
+      const limitsHeadFirst = limitsTable?.querySelector<HTMLElement>("thead th:first-child");
+      const limitsRowFirst = limitsTable?.querySelector<HTMLElement>('tbody th[scope="row"]');
+      expect(limitsHeadFirst).not.toBeNull();
+      expect(limitsRowFirst).not.toBeNull();
+      if (limitsHeadFirst !== null && limitsHeadFirst !== undefined) {
+        expect(getComputedStyle(limitsHeadFirst).position).toBe("static");
+      }
+      if (limitsRowFirst !== null && limitsRowFirst !== undefined) {
+        expect(getComputedStyle(limitsRowFirst).position).toBe("static");
+      }
+    } finally {
+      styleEl.remove();
+    }
+  });
+
+  it("assigns tree depth classes and aligns parent vs sibling top-level rows in Wydatki i limity without colour or tint overrides", async () => {
+    const api = fakeApi();
+    api.categories.mockResolvedValue(ok({ categories: [
+      { id: "personal", name: "Wydatki osobiste", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "wardrobe", name: "Ubrania", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: "personal" },
+      { id: "shoes", name: "Buty", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: "wardrobe" },
+      { id: "shop-card", name: "Zakupy (karta/BLIK)", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+      { id: "health", name: "Zdrowie", archived: false, version: 1, created_at: 1, updated_at: 1, parent_id: null },
+    ] }));
+    api.monthlyBudgetCharts.mockResolvedValue(ok(monthlyBudgetChartsOf({
+      category_spend: [
+        monthlyBudgetCategorySpend({ category_id: "shoes", name: "Buty", expenses: "120", refunds: "0", net_spending: "120", limit: null }),
+        monthlyBudgetCategorySpend({ category_id: "shop-card", name: "Zakupy (karta/BLIK)", expenses: "200", refunds: "0", net_spending: "200", limit: null }),
+        monthlyBudgetCategorySpend({ category_id: "health", name: "Zdrowie", expenses: "90", refunds: "0", net_spending: "90", limit: null }),
+        monthlyBudgetCategorySpend({ category_id: null, name: null, expenses: "30", refunds: "0", net_spending: "30", limit: null }),
+      ],
+    })));
+    await show(api, { locale: "pl-PL" });
+
+    const rows = [...host.querySelectorAll<HTMLTableRowElement>('section[aria-label="Wydatki i limity"] tbody tr')];
+    expect(rows.map((row) => [
+      row.querySelector(".budget-tree-label")?.textContent,
+      row.getAttribute("data-depth"),
+      [...row.classList].filter((cls) => cls.startsWith("budget-tree-depth-") || cls === "is-uncategorised"),
+    ])).toEqual([
+      ["Wydatki osobiste", "0", ["budget-tree-depth-0"]],
+      ["Ubrania", "1", ["budget-tree-depth-1"]],
+      ["Buty", "2", ["budget-tree-depth-2"]],
+      ["Zakupy (karta/BLIK)", "0", ["budget-tree-depth-0"]],
+      ["Zdrowie", "0", ["budget-tree-depth-0"]],
+      ["Bez kategorii", "0", ["budget-tree-depth-0", "is-uncategorised"]],
+    ]);
+
+    expect(rows[0]?.querySelector(".budget-tree-toggle")).not.toBeNull();
+    expect(rows[1]?.querySelector(".budget-tree-toggle")).not.toBeNull();
+    expect(rows[2]?.querySelector(".budget-tree-spacer")).not.toBeNull();
+    expect(rows[3]?.querySelector(".budget-tree-spacer")).not.toBeNull();
+    expect(rows[4]?.querySelector(".budget-tree-spacer")).not.toBeNull();
+
+    const fsModule = "node:fs";
+    const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as {
+      readFileSync: (path: string, encoding: "utf8") => string;
+    };
+    const css = readFileSync("src/budget/budget.css", "utf8");
+    const styleEl = document.createElement("style");
+    styleEl.textContent = css;
+    document.head.append(styleEl);
+    try {
+      const th0 = rows[0]?.querySelector<HTMLElement>('th[scope="row"]');
+      const th1 = rows[1]?.querySelector<HTMLElement>('th[scope="row"]');
+      const th2 = rows[2]?.querySelector<HTMLElement>('th[scope="row"]');
+      const thSibling0 = rows[3]?.querySelector<HTMLElement>('th[scope="row"]');
+      if (th0 == null || th1 == null || th2 == null || thSibling0 == null) throw new Error("missing tree row header");
+
+      const toPx = (value: string): number => (
+        value.endsWith("rem") ? Number.parseFloat(value) * 16 : Number.parseFloat(value)
+      );
+      expect(getComputedStyle(th0).fontWeight).toBe("650");
+      expect(getComputedStyle(thSibling0).fontWeight).toBe("650");
+      expect(getComputedStyle(th1).fontWeight).toBe("400");
+      expect(getComputedStyle(th2).fontWeight).toBe("400");
+      expect(toPx(getComputedStyle(th1).paddingInlineStart)).toBeCloseTo(1.85 * 16, 2);
+      expect(toPx(getComputedStyle(th2).paddingInlineStart)).toBeCloseTo(3.1 * 16, 2);
+
+      // Hierarchy uses indentation and font weight only — no depth-0 tint or border colour override.
+      expect(getComputedStyle(rows[0] as HTMLElement).backgroundColor).toBe(
+        getComputedStyle(rows[1] as HTMLElement).backgroundColor,
+      );
+      expect(getComputedStyle(th0).backgroundColor).toBe(getComputedStyle(th1).backgroundColor);
+    } finally {
+      styleEl.remove();
+    }
+  });
 });

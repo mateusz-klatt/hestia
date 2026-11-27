@@ -217,6 +217,11 @@ describe("period overview", () => {
     const table = host.querySelector('[aria-label="Spending by category PLN"]');
     const rows = [...table?.querySelectorAll("tbody tr") ?? []];
     expect(rows.map((row) => row.getAttribute("data-depth"))).toEqual(["0", "1", "0"]);
+    expect(rows.map((row) => [...row.classList].filter((cls) => cls.startsWith("budget-tree-depth-")))).toEqual([
+      ["budget-tree-depth-0"],
+      ["budget-tree-depth-1"],
+      ["budget-tree-depth-0"],
+    ]);
     const swatches = rows.map((row) => row.querySelector<HTMLElement>(".budget-cat-swatch")?.style.backgroundColor ?? "");
     const expectedColors = buildCategoryColors(links);
     const toHex = (css: string) => {

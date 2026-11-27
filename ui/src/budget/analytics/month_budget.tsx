@@ -736,23 +736,34 @@ function ReadyDashboard({ data, series, paceSchedule, categoryMap, categories, l
                           : (row.name ?? categoryMap.get(row.category_id) ?? unknownCategoryLabel);
                       const categoryId = row.category_id;
                       const closed = categoryId !== null && collapsed.has(categoryId);
+                      const rowClass = [
+                        row.tree ? `budget-tree-depth-${String(row.depth)}` : "",
+                        oneOff ? "budget-one-off" : categoryId === null ? "is-uncategorised" : "",
+                      ].filter(Boolean).join(" ") || undefined;
                       return (
-                        <tr key={row.key} data-depth={row.tree ? row.depth : undefined}
-                          className={oneOff ? "budget-one-off" : categoryId === null ? "is-uncategorised" : undefined}>
+                        <tr key={row.key} data-depth={row.tree ? row.depth : undefined} className={rowClass}>
                           <th scope="row">
-                            {row.tree && row.has_children && categoryId !== null ? (
-                              <button type="button" className="budget-tree-toggle" aria-expanded={!closed}
-                                aria-label={closed
-                                  ? t("budget.monthBudget.expandCategory", { name: label })
-                                  : t("budget.monthBudget.collapseCategory", { name: label })}
-                                onClick={() => { toggleCategory(categoryId); }}>
-                                {closed ? "▸" : "▾"}
-                              </button>
-                            ) : null}
-                            <CategorySwatch color={oneOff ? oneOffCategoryColor(categoryColors, categoryId) : categoryColors.get(categoryId)} />
-                            {label}
-                            {oneOff ? <small className="budget-one-off-tag">{oneOffTagText}</small> : null}
-                            {row.archived ? <small className="budget-muted"> ({archivedText})</small> : null}
+                            <span className="budget-tree-cell">
+                              {row.tree ? (
+                                row.has_children && categoryId !== null ? (
+                                  <button type="button" className="budget-tree-toggle" aria-expanded={!closed}
+                                    aria-label={closed
+                                      ? t("budget.monthBudget.expandCategory", { name: label })
+                                      : t("budget.monthBudget.collapseCategory", { name: label })}
+                                    onClick={() => { toggleCategory(categoryId); }}>
+                                    {closed ? "▸" : "▾"}
+                                  </button>
+                                ) : (
+                                  <span className="budget-tree-spacer" aria-hidden="true" />
+                                )
+                              ) : null}
+                              <CategorySwatch color={oneOff ? oneOffCategoryColor(categoryColors, categoryId) : categoryColors.get(categoryId)} />
+                              <span className="budget-tree-label">
+                                {label}
+                                {oneOff ? <small className="budget-one-off-tag">{oneOffTagText}</small> : null}
+                                {row.archived ? <small className="budget-muted"> ({archivedText})</small> : null}
+                              </span>
+                            </span>
                           </th>
                           <td>{money(row.expenses)}</td>
                           <td>{money(row.refunds)}</td>
