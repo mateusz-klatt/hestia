@@ -192,6 +192,9 @@ _PATH_SETTINGS = "/api/settings"
 _PATH_ROOM_ICONS = "/api/rooms/icons"
 _PATH_AUTOMATIONS = "/api/automations"
 _PATH_USERS = "/api/users"
+_PATH_RECEIPT_GROUP_DETAIL = "/api/budget/receipts/group/detail"
+_PATH_RECEIPT_GROUP_LINK = "/api/budget/receipts/group/link"
+_PATH_RECEIPT_GROUP_UNLINK = "/api/budget/receipts/group/unlink"
 _PATH_USER_GRANTS = "/api/users/grants"
 _PATH_WHOLE_HOME = "/api/whole-home"
 _AUTH_API_PREFIX = "/api/auth/"
@@ -257,6 +260,10 @@ _ROUTE_MIN_ROLE = {
     ("POST", "/api/budget/receipts/list"): _ADMIN,
     ("POST", "/api/budget/receipts/search"): _ADMIN,
     ("GET", "/api/budget/receipts/detail"): _ADMIN,
+    ("GET", _PATH_RECEIPT_GROUP_DETAIL): _ADMIN,
+    ("POST", device_token.GROUP_CANDIDATES_PATH): _ADMIN,
+    ("POST", _PATH_RECEIPT_GROUP_LINK): _ADMIN,
+    ("POST", _PATH_RECEIPT_GROUP_UNLINK): _ADMIN,
     ("GET", "/api/budget/receipts/image"): _ADMIN,
     ("POST", "/api/budget/receipts/delete"): _ADMIN,
     ("POST", device_token.PAIR_PATH): _ADMIN,
@@ -337,6 +344,10 @@ _RECEIPT_DATA_ROUTES = frozenset({
     ("POST", device_token.LIST_RECEIPTS_PATH),
     ("POST", device_token.SEARCH_PATH),
     ("GET", device_token.DETAIL_PATH),
+    ("GET", _PATH_RECEIPT_GROUP_DETAIL),
+    ("POST", device_token.GROUP_CANDIDATES_PATH),
+    ("POST", _PATH_RECEIPT_GROUP_LINK),
+    ("POST", _PATH_RECEIPT_GROUP_UNLINK),
     ("GET", device_token.IMAGE_PATH),
     ("POST", device_token.DELETE_PATH),
 })

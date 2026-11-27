@@ -20,12 +20,20 @@ import type {
   ReceiptDeleteRequest,
   ReceiptDeleteResult,
   ReceiptDetailResult,
+  ReceiptGroupCandidatesResult,
+  ReceiptGroupDetailResult,
+  ReceiptGroupLinkRequest,
+  ReceiptGroupLinkResult,
+  ReceiptGroupUnlinkRequest,
+  ReceiptGroupUnlinkResult,
   ReceiptListRequest,
   ReceiptListResult,
   ReceiptSearchRequest,
 } from "./receipts_model";
 
-export const RECEIPT_CONTRACT_HEADERS = { "X-Hestia-Contract-Version": "0.57.0" } as const;
+const RECEIPT_CONTRACT_HEADER = "X-Hestia-Contract-Version";
+export const RECEIPT_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.57.0" } as const;
+const RECEIPT_GROUP_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.59.0" } as const;
 
 export interface ReceiptDevice {
   token_id: string;
@@ -182,6 +190,25 @@ export function createBudgetApi(expectedActor: string | null = null) {
     return runGated<T>(target, init, mutation, request);
   }
 
+  function readReceipts<T>(target: URL, body?: object): Promise<BudgetResult<T>> {
+    const init: RequestInit = body === undefined
+      ? { headers: RECEIPT_GROUP_CONTRACT_HEADERS }
+      : {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...RECEIPT_GROUP_CONTRACT_HEADERS },
+        body: JSON.stringify(body),
+      };
+    return runGated<T>(target, init, false, async (finalTarget, finalInit) => {
+      const result = await request<T>(finalTarget, finalInit);
+      if (result.ok || result.status !== 400 || result.error !== "budget_receipt_contract_version_invalid"
+        || finalInit.signal?.aborted) return result;
+      // Older servers reject the new version before handling these read-only requests.
+      const headers = new Headers(finalInit.headers);
+      headers.set(RECEIPT_CONTRACT_HEADER, RECEIPT_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER]);
+      return request<T>(finalTarget, { ...finalInit, headers });
+    });
+  }
+
   function callBinary(target: URL, fallbackType: string): Promise<BudgetResult<Blob>> {
     return runGated<Blob>(target, {}, false, async (finalTarget, finalInit) => {
       let response: Response;
@@ -317,21 +344,36 @@ export function createBudgetApi(expectedActor: string | null = null) {
     post<{ ok: true }>("receipts/device-token/revoke", { token_id: tokenId }),
   /** Keyset-paged owner receipts and documents (POST JSON). A 404 means the receipts flag is off. */
   receiptsList: (body: ReceiptListRequest = {}) =>
-    post<ReceiptListResult>("receipts/list", body, RECEIPT_CONTRACT_HEADERS, false),
+    readReceipts<ReceiptListResult>(url("receipts/list"), body),
   /** Searches owner receipts and line items via POST JSON (never GET query strings). */
   receiptsSearch: (body: ReceiptSearchRequest) =>
-    post<ReceiptListResult>("receipts/search", body, RECEIPT_CONTRACT_HEADERS, false),
+    readReceipts<ReceiptListResult>(url("receipts/search"), body),
   /** Reads one owned receipt, its line items, and needs_review link candidates when available. */
   receiptDetail: (receiptId: string) =>
-    call<ReceiptDetailResult>(url("receipts/detail", { receipt_id: receiptId }), { headers: RECEIPT_CONTRACT_HEADERS }),
+    readReceipts<ReceiptDetailResult>(url("receipts/detail", { receipt_id: receiptId })),
+  /** Reads the stored members and evidence of an owned receipt group. */
+  fetchReceiptLinkGroupDetail: (groupId: string) =>
+    call<ReceiptGroupDetailResult>(url("receipts/group/detail", { group_id: groupId }),
+      { headers: RECEIPT_GROUP_CONTRACT_HEADERS }),
+  /** Queries receipt-anchored M:1 group transaction candidates and eligible members via POST JSON (no legacy downgrade). */
+  receiptGroupCandidates: (receiptId: string) =>
+    post<ReceiptGroupCandidatesResult>("receipts/group/candidates", { receipt_id: receiptId },
+      RECEIPT_GROUP_CONTRACT_HEADERS, false),
+  /** Links 2..8 confirmed receipts (and optional standalone gateway evidence) to one bank transaction. */
+  linkReceiptGroup: (body: ReceiptGroupLinkRequest) =>
+    post<ReceiptGroupLinkResult>("receipts/group/link", body, RECEIPT_GROUP_CONTRACT_HEADERS, true),
+  /** Unlinks an M:1 receipt group with group expected_version CAS, restoring members to confirmed unlinked. */
+  unlinkReceiptGroup: (body: ReceiptGroupUnlinkRequest) =>
+    post<ReceiptGroupUnlinkResult>("receipts/group/unlink", body, RECEIPT_GROUP_CONTRACT_HEADERS, true),
   /** Fetches the owner-private WebP receipt image only when image_available is true. */
   receiptImage: (receiptId: string) => callBinary(url("receipts/image", { receipt_id: receiptId }), "image/webp"),
   /** Confirms receipt metadata, line items, and optional transaction link with expected_version CAS. */
   confirmReceipt: (body: ReceiptConfirmRequest) =>
     post<ReceiptConfirmResult>("receipts/confirm", body, RECEIPT_CONTRACT_HEADERS, true),
-  /** Deletes an owned receipt with expected_version CAS. */
+  /** Deletes an owned receipt with expected_version CAS (and optional group dissolution CAS). */
   deleteReceipt: (body: ReceiptDeleteRequest) =>
-    post<ReceiptDeleteResult>("receipts/delete", body, {}, true),
+    post<ReceiptDeleteResult>("receipts/delete", body,
+      body.dissolve_group ? RECEIPT_GROUP_CONTRACT_HEADERS : {}, true),
   setSelected: (account: BudgetAccount, selected: boolean) =>
     post<{ account: BudgetAccount }>("account-selection",
       { account_id: account.id, selected, expected_version: account.control_version }),
@@ -366,5 +408,12 @@ export function createBudgetApi(expectedActor: string | null = null) {
   };
 }
 
+export interface ReceiptGroupWriteApi {
+  receiptGroupCandidates: (receiptId: string) => Promise<BudgetResult<ReceiptGroupCandidatesResult>>;
+  linkReceiptGroup: (body: ReceiptGroupLinkRequest) => Promise<BudgetResult<ReceiptGroupLinkResult>>;
+  unlinkReceiptGroup: (body: ReceiptGroupUnlinkRequest) => Promise<BudgetResult<ReceiptGroupUnlinkResult>>;
+}
+
 export const budgetApi = createBudgetApi();
-export type BudgetApi = ReturnType<typeof createBudgetApi>;
+export type BudgetGroupCapableApi = ReturnType<typeof createBudgetApi>;
+export type BudgetApi = Omit<BudgetGroupCapableApi, keyof ReceiptGroupWriteApi> & Partial<ReceiptGroupWriteApi>;

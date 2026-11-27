@@ -117,6 +117,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     receiptsList: vi.fn<BudgetApi["receiptsList"]>(() => ok({ receipts: [], next_cursor: null })),
     receiptsSearch: vi.fn<BudgetApi["receiptsSearch"]>(() => ok({ receipts: [], next_cursor: null })),
     receiptDetail: vi.fn<BudgetApi["receiptDetail"]>(),
+    fetchReceiptLinkGroupDetail: vi.fn<BudgetApi["fetchReceiptLinkGroupDetail"]>(),
     receiptImage: vi.fn<BudgetApi["receiptImage"]>(),
     confirmReceipt: vi.fn<BudgetApi["confirmReceipt"]>(),
     deleteReceipt: vi.fn<BudgetApi["deleteReceipt"]>(),
@@ -1787,6 +1788,98 @@ describe("receipts tab & capability gate", () => {
     expect(host.querySelector(".budget-views")).not.toBeNull();
     await click(button("Receipts and documents"));
     expect(host.textContent).toContain("Tab Integration Market");
+  });
+
+  it("loads a receipt group and submits its unlink request through the Budget receipt adapter", async () => {
+    const api = { ...fakeApi(), unlinkReceiptGroup: vi.fn<Required<BudgetApi>["unlinkReceiptGroup"]>() };
+    const receiptId = "11111111-1111-4111-8111-111111111111";
+    const seed = await fakeReceiptsApi().receiptDetail(receiptId);
+    if (!seed.ok) throw new Error("receipt fixture unavailable");
+    const group = {
+      group_id: "22222222-2222-4222-8222-222222222222",
+      group_status: "confirmed",
+      group_version: 3,
+      member_count: 2,
+      fee_amount: null,
+      evidence_receipt_id: null,
+    } as const;
+    const receipt = { ...seed.data.receipt, status: "confirmed", linked: true, link_group: group } as const;
+    const sibling = { ...receipt, receipt_id: "33333333-3333-4333-8333-333333333333", raw_shop_name: "Synthetic Group Peer" };
+    api.receiptsList.mockResolvedValue({ ok: true, data: { receipts: [receipt], next_cursor: null } });
+    api.receiptDetail.mockResolvedValue({ ok: true, data: { receipt, candidates: [] } });
+    api.fetchReceiptLinkGroupDetail.mockResolvedValue({
+      ok: true,
+      data: { group, members: [receipt, sibling], evidence: null, linked_account_id: null, linked_entry_ref: null },
+    });
+    api.unlinkReceiptGroup.mockImplementation(() => fail(409, "budget_receipt_conflict"));
+
+    await render(api, true, "owner");
+    await click(button("Receipts and documents"));
+    expect(host.textContent).toContain("Grouped (2)");
+    expect(api.fetchReceiptLinkGroupDetail).not.toHaveBeenCalled();
+    await click(button("Details"));
+    expect(api.fetchReceiptLinkGroupDetail).toHaveBeenCalledExactlyOnceWith(group.group_id);
+    expect(host.querySelector('[aria-label="Documents in group"]')?.textContent).toContain("Synthetic Group Peer");
+    await click(button("Unlink group"));
+    expect(api.unlinkReceiptGroup).toHaveBeenCalledExactlyOnceWith({ group_id: group.group_id, expected_version: 3 });
+    expect(host.textContent).toContain("This document was modified elsewhere.");
+  });
+
+  it("opens and submits the receipt group builder from the allowed Budget receipts screen", async () => {
+    const api = {
+      ...fakeApi(),
+      receiptGroupCandidates: vi.fn<Required<BudgetApi>["receiptGroupCandidates"]>(),
+      linkReceiptGroup: vi.fn<Required<BudgetApi>["linkReceiptGroup"]>(),
+    };
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+    const receiptId = "11111111-1111-4111-8111-111111111111";
+    const seed = await fakeReceiptsApi().receiptDetail(receiptId);
+    if (!seed.ok) throw new Error("receipt fixture unavailable");
+    const receipt = { ...seed.data.receipt, status: "confirmed" } as const;
+    const sibling = { ...receipt, receipt_id: "22222222-2222-4222-8222-222222222222", raw_shop_name: "Synthetic Group Peer" };
+    const transaction = {
+      account_id: "local-a", entry_reference: "b".repeat(64), candidate_token: "synthetic-token",
+      amount: "39.00", currency: "PLN", credit_debit_indicator: "DBIT",
+      booking_date: receipt.receipt_date, value_date: null, transaction_date: null,
+      merchant_token_hit: false, match_strength: "none", date_distance: 0, evidence_fingerprint: "synthetic-fingerprint",
+    } as const;
+    api.receiptsList.mockResolvedValue({ ok: true, data: { receipts: [receipt, sibling], next_cursor: null } });
+    api.receiptDetail.mockResolvedValue({ ok: true, data: { receipt, candidates: [] } });
+    api.receiptGroupCandidates.mockImplementation(() => ok({
+      anchor_receipt_id: receiptId, transactions: [transaction], proposals: [],
+      eligible_receipts: [receipt, sibling], eligible_evidence: [],
+    }));
+    api.linkReceiptGroup.mockImplementation(() => ok({
+      ok: true,
+      group: { group_id: "33333333-3333-4333-8333-333333333333", group_version: 1, group_status: "confirmed",
+        member_count: 2, fee_amount: null, evidence_receipt_id: null },
+      members: [receipt, sibling], evidence: null,
+      linked_account_id: transaction.account_id, linked_entry_ref: transaction.entry_reference,
+    }));
+
+    await render(api, true, "owner");
+    await click(button("Receipts and documents"));
+    await click(button("Details"));
+    await click(button("Group with other receipts"));
+    expect(api.receiptGroupCandidates).toHaveBeenCalledExactlyOnceWith(receiptId);
+
+    const builder = host.querySelector('[role="dialog"].budget-receipt-group-modal');
+    const choice = builder?.querySelector<HTMLInputElement>('input[name="group_tx_choice"]');
+    if (builder == null || choice == null) throw new Error("receipt group transaction choice missing");
+    await click(choice);
+    const members = [...builder.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+    expect(members).toHaveLength(2);
+    for (const member of members) await click(member);
+    await click(button("Confirm group link"));
+    expect(api.linkReceiptGroup).toHaveBeenCalledExactlyOnceWith({
+      link: { account_id: transaction.account_id, entry_reference: transaction.entry_reference,
+        candidate_token: transaction.candidate_token },
+      members: [
+        { receipt_id: receiptId, expected_version: receipt.version },
+        { receipt_id: sibling.receipt_id, expected_version: sibling.version },
+      ],
+    });
+    expect(host.textContent).toContain("Receipt group linked.");
   });
 
   it("keeps Budget intact on 404 disabled, but clears all Budget on unmounted 401/403 from a receipt read", async () => {

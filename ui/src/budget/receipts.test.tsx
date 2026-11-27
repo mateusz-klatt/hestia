@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { components } from "../api/openapi";
 import { loadLocale } from "../i18n";
 import type { BudgetResult } from "./api";
 import { account, connection } from "./fixtures";
@@ -13,6 +14,9 @@ import type {
   ReceiptCandidate,
   ReceiptDetail,
   ReceiptDetailResult,
+  ReceiptGroupCandidate,
+  ReceiptGroupCandidatesResult,
+  ReceiptGroupLinkResult,
   ReceiptListResult,
   ReceiptSummary,
 } from "./receipts_model";
@@ -122,6 +126,38 @@ function receiptCandidate(overrides: Partial<ReceiptCandidate> = {}): ReceiptCan
     match_strength: "none",
     candidate_token: "cand-token-1",
     ...overrides,
+  };
+}
+
+type ReceiptGroupDetail = components["schemas"]["BudgetReceiptGroupDetailResult"];
+
+function receiptGroupDetail(): ReceiptGroupDetail {
+  const group: ReceiptGroupDetail["group"] = {
+    group_id: "44444444-4444-4444-8444-444444444444",
+    group_version: 3,
+    group_status: "needs_review",
+    member_count: 2,
+    evidence_receipt_id: "33333333-3333-4333-8333-333333333333",
+    fee_amount: "0.50",
+  };
+  return {
+    group,
+    members: [
+      receiptSummary({ link_group: group, linked: true, raw_shop_name: "Synthetic first shop", total_amount: "25.00" }),
+      receiptSummary({ link_group: group, linked: true, receipt_id: "22222222-2222-4222-8222-222222222222",
+        raw_shop_name: "Synthetic second shop", total_amount: "17.00" }),
+    ],
+    evidence: receiptSummary({
+      link_group: group,
+      linked: true,
+      receipt_id: group.evidence_receipt_id ?? "",
+      document_kind: "payment_confirmation",
+      gateway: "Synthetic gateway",
+      raw_shop_name: null,
+      total_amount: "42.50",
+    }),
+    linked_account_id: null,
+    linked_entry_ref: null,
   };
 }
 
@@ -307,6 +343,90 @@ async function submit(form: HTMLFormElement | null): Promise<void> {
 }
 
 describe("ReceiptsView", () => {
+  it("shows grouped members and gateway evidence in the same drawer without legacy write actions", async () => {
+    const groupDetail = receiptGroupDetail();
+    const rows = [...groupDetail.members, ...(groupDetail.evidence === null ? [] : [groupDetail.evidence])];
+    const clients = fakeClients(rows);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => ok({
+      receipt: receiptDetail(rows.find((row) => row.receipt_id === id)),
+      candidates: [receiptCandidate()],
+    }));
+    const loadGroup = vi.fn(() => ok(groupDetail));
+    clients.rApi.fetchReceiptLinkGroupDetail = loadGroup;
+
+    await renderReceipts(clients);
+    expect([...host.querySelectorAll(".budget-receipt-row")].map((row) => row.textContent)).toEqual([
+      expect.stringContaining("Grouped (2)"),
+      expect.stringContaining("Grouped (2)"),
+      expect.stringContaining("Grouped (2)"),
+    ]);
+    const opener = openDetailButton(0);
+    await click(opener);
+    expect(loadGroup).toHaveBeenCalledWith(groupDetail.group.group_id);
+    const group = dialog().querySelector<HTMLElement>('[aria-label="Linked group"]');
+    if (group === null) throw new Error("group missing");
+    expect(group.querySelector('[aria-label="Documents in group"]')?.textContent).toContain("Synthetic first shop");
+    expect(group.querySelector('[aria-current="true"]')?.textContent).toContain("25.00 PLN");
+    expect(group.querySelector('[aria-label="Payment evidence"]')?.textContent).toContain("Synthetic gateway");
+    expect(group.textContent).toContain("fee 0.50 PLN");
+    expect(group.textContent).toContain("Needs review");
+    expect(group.textContent).not.toContain("Account:");
+    expect(dialog().querySelector('[aria-label="Linked bank transaction"]')).toBeNull();
+    expect(dialog().querySelector('[name="link_choice"]')).toBeNull();
+    expect(dialog().textContent).not.toContain("Confirm receipt");
+    expect(dialog().textContent).not.toContain("Delete document");
+
+    await click(button("Synthetic second shop", group));
+    expect(clients.rApi.receiptDetail).toHaveBeenLastCalledWith(rows[1]?.receipt_id);
+    expect(dialog().querySelector('[aria-current="true"]')?.textContent).toContain("Synthetic second shop");
+    expect(document.activeElement).toBe(button("Close", dialog()));
+    await click(button("Close", dialog()));
+    expect(document.activeElement).toBe(opener);
+    expect(clients.rApi.confirmReceipt).not.toHaveBeenCalled();
+    expect(clients.rApi.deleteReceipt).not.toHaveBeenCalled();
+  });
+
+  it("keeps the receipt open when a group read is unavailable and retries the group alone", async () => {
+    const groupDetail = receiptGroupDetail();
+    const firstRow = groupDetail.members[0];
+    if (firstRow === undefined) throw new Error("member missing");
+    const clients = fakeClients([firstRow], receiptDetail(firstRow));
+    clients.rApi.fetchReceiptLinkGroupDetail = vi.fn<NonNullable<ReceiptsApi["fetchReceiptLinkGroupDetail"]>>()
+      .mockResolvedValueOnce({ ok: false, status: 404, error: "budget_http_404" })
+      .mockImplementation(() => ok(groupDetail));
+
+    await renderReceipts(clients);
+    await click(openDetailButton(0));
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("Document details could not be loaded.");
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(1);
+    await click(button("Retry", dialog()));
+    expect(dialog().textContent).toContain("Synthetic second shop");
+    expect(clients.rApi.receiptDetail).toHaveBeenCalledTimes(1);
+    expect(clients.rApi.fetchReceiptLinkGroupDetail).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops an unfinished group response when the active receipt session changes", async () => {
+    const groupDetail = receiptGroupDetail();
+    const firstRow = groupDetail.members[0];
+    if (firstRow === undefined) throw new Error("member missing");
+    const clients = fakeClients([firstRow], receiptDetail(firstRow));
+    const response = deferred<ReceiptGroupDetail>();
+    clients.rApi.fetchReceiptLinkGroupDetail = vi.fn(() => response.promise);
+
+    await renderReceipts(clients);
+    await click(openDetailButton(0));
+    expect(dialog().textContent).toContain("Loading document details…");
+    await renderReceipts(fakeClients(), { actorKey: "new-owner" });
+    await click(openDetailButton(0));
+    await act(async () => {
+      response.resolve({ ok: true, data: groupDetail });
+      await response.promise;
+    });
+    expect(dialog().querySelector('[aria-label="Linked group"]')).toBeNull();
+    expect(dialog().textContent).not.toContain("Synthetic second shop");
+    expect(dialog().textContent).toContain("Confirm receipt");
+  });
+
   it("lists receipts and documents, labels actual searchable fields, and localizes in Polish", async () => {
     const clients = fakeClients([
       receiptSummary({
@@ -2105,5 +2225,231 @@ describe("ReceiptsView", () => {
       receipt_id: gapId,
       link: null,
     }));
+  });
+
+  it("supports M:1 grouping from drawer button, neutral proposal Review group, 1:1 precedence, and bulk bar", async () => {
+    const shop1 = receiptSummary({
+      receipt_id: "g-1", status: "confirmed", source_kind: "local_ocr", raw_shop_name: "Grouped Shop A", total_amount: "20.00", version: 2,
+    });
+    const shop2 = receiptSummary({
+      receipt_id: "g-2", status: "imported", source_kind: "email", document_kind: "invoice",
+      raw_shop_name: "Grouped Shop B", total_amount: "30.00", version: 1,
+    });
+    const usdRow = receiptSummary({
+      receipt_id: "g-usd", status: "confirmed", raw_shop_name: "Foreign Shop", total_amount: "10.00", currency: "USD", version: 1,
+    });
+    const groupTx = {
+      account_id: "local-a",
+      entry_reference: "b".repeat(64),
+      amount: "50.00",
+      currency: "PLN",
+      credit_debit_indicator: "DBIT" as const,
+      booking_date: "2026-11-15",
+      value_date: "2026-11-15",
+      transaction_date: "2026-11-14",
+      merchant_token_hit: false,
+      match_strength: "none" as const,
+      date_distance: 0,
+      evidence_fingerprint: "fp-internal-1",
+      candidate_token: "tok-internal-1",
+    };
+    const proposal: ReceiptGroupCandidate = {
+      ...groupTx,
+      fee_amount: null,
+      evidence_receipt_id: null,
+      members_sum: "50.00",
+      member_receipt_ids: ["g-1", "g-2"],
+      member_receipts: [shop1, shop2],
+      evidence: null,
+    };
+
+    const clients = fakeClients([shop1, shop2, usdRow]);
+    let shop2State: ReceiptSummary = shop2;
+    const baseConfirm = clients.rApi.confirmReceipt;
+    clients.rApi.confirmReceipt = vi.fn<ReceiptsApi["confirmReceipt"]>((req) => {
+      if (req.receipt_id === "g-2") {
+        shop2State = { ...shop2, status: "confirmed", version: 2 };
+      }
+      return baseConfirm(req);
+    });
+    clients.rApi.receiptGroupCandidates = vi.fn<NonNullable<ReceiptsApi["receiptGroupCandidates"]>>(() => ok<ReceiptGroupCandidatesResult>({
+      anchor_receipt_id: "g-1",
+      transactions: [groupTx],
+      proposals: [proposal],
+      eligible_receipts: [shop1, shop2State],
+      eligible_evidence: [],
+      no_bank_data: false,
+    }));
+    clients.rApi.linkReceiptGroup = vi.fn<NonNullable<ReceiptsApi["linkReceiptGroup"]>>(() => ok<ReceiptGroupLinkResult>({
+      ok: true,
+      group: { group_id: "grp-new", group_version: 1, group_status: "confirmed", member_count: 2, evidence_receipt_id: null, fee_amount: null },
+      members: [shop1, { ...shop2, status: "confirmed", version: 2 }],
+      evidence: null,
+      linked_account_id: "local-a",
+      linked_entry_ref: "b".repeat(64),
+    }));
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      if (id === "g-2") {
+        return ok<ReceiptDetailResult>({
+          receipt: receiptDetail({ ...shop2, lines: [] }),
+          candidates: [receiptCandidate({ match_strength: "id", amount: "30.00", candidate_token: "tok-strong-1to1" })],
+          group_candidates: [proposal],
+          no_bank_data: false,
+        });
+      }
+      if (id === "g-1") {
+        return ok<ReceiptDetailResult>({
+          receipt: receiptDetail({ ...shop1 }),
+          candidates: [],
+          group_candidates: [proposal],
+          no_bank_data: false,
+        });
+      }
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...usdRow }), candidates: [] });
+    });
+
+    await renderReceipts(clients);
+
+    // 1) Strong 1:1 ID candidate takes precedence over neutral M:1 proposal banner, while manual Group button stays available.
+    await click(openDetailButton(1));
+    const dStrong = dialog();
+    expect(dStrong.textContent).toContain("Suggested match");
+    expect(dStrong.textContent).not.toContain("Combined charge match");
+    expect(button("Group with other receipts", dStrong).disabled).toBe(false);
+    await click(button("Close", dStrong));
+
+    // 2) Receipt without strong 1:1 match surfaces neutral Combined charge match banner & Review group + Group with other receipts.
+    await click(openDetailButton(0));
+    const dGroup = dialog();
+    expect(dGroup.textContent).toContain("Combined charge match: 2 receipts =");
+    expect(dGroup.innerHTML).not.toContain("tok-internal-1");
+    expect(dGroup.innerHTML).not.toContain("fp-internal-1");
+    await click(button("Review group", dGroup));
+    const modal = [...host.querySelectorAll<HTMLElement>('[role="dialog"]')].at(-1);
+    if (modal === undefined) throw new Error("Expected group controller modal");
+    expect(modal.textContent).toContain("Build receipt group");
+    expect([...modal.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].every((el) => !el.checked)).toBe(true);
+    await click(button("Close", modal));
+    await click(button("Close", dialog()));
+
+    // 3) Bulk bar allows 2..8 same currency/kind including mixed confirmed + imported, and rejects mismatched currency.
+    const chkUsd = inputByName("select_receipt_g-usd");
+    const chk1 = inputByName("select_receipt_g-1");
+    const chk2 = inputByName("select_receipt_g-2");
+    expect(chk1.disabled).toBe(false);
+    await click(chk1);
+    await click(chkUsd);
+    expect(button("Link selected to one transaction").disabled).toBe(true);
+    await click(chkUsd);
+    await click(chk2);
+    expect(button("Link selected to one transaction").disabled).toBe(false);
+    await click(button("Link selected to one transaction"));
+
+    const bulkModal = dialog();
+    const txOpt = bulkModal.querySelector<HTMLInputElement>('input[name="group_tx_choice"][value="0"]');
+    if (txOpt === null) throw new Error("Expected transaction radio in bulk group modal");
+    expect(txOpt.checked).toBe(false);
+    await click(txOpt);
+    const boxes = [...bulkModal.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+    for (const box of boxes) await click(box);
+    await click(button("Confirm group link", bulkModal));
+
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      receipt_id: "g-2",
+      expected_version: 1,
+      link: null,
+    }));
+    expect(clients.rApi.linkReceiptGroup).toHaveBeenCalledWith({
+      link: { account_id: "local-a", entry_reference: "b".repeat(64), candidate_token: "tok-internal-1" },
+      members: [
+        { receipt_id: "g-1", expected_version: 2 },
+        { receipt_id: "g-2", expected_version: 2 },
+      ],
+    });
+    expect(host.textContent).toContain("Receipt group linked.");
+  });
+
+  it("handles CAS unlink for needs_review group recovery, dissolve_group delete, stale version conflict, and revoked access", async () => {
+    const groupDetail = receiptGroupDetail();
+    const groupedRow = groupDetail.members[0];
+    if (groupedRow === undefined) throw new Error("Expected grouped member row");
+    const recoveredRow: ReceiptDetail = receiptDetail({
+      ...groupedRow,
+      link_group: null,
+      linked: false,
+      linked_account_id: null,
+      linked_entry_ref: null,
+      status: "confirmed",
+      version: groupedRow.version + 1,
+    });
+
+    const clients = fakeClients([groupedRow]);
+    clients.rApi.fetchReceiptLinkGroupDetail = vi.fn<NonNullable<ReceiptsApi["fetchReceiptLinkGroupDetail"]>>(() => ok(groupDetail));
+    clients.rApi.unlinkReceiptGroup = vi.fn<NonNullable<ReceiptsApi["unlinkReceiptGroup"]>>()
+      .mockResolvedValueOnce({ ok: false, status: 409, error: "budget_receipt_conflict" })
+      .mockResolvedValueOnce({
+        ok: true,
+        data: { ok: true, unlinked: true, group_id: groupDetail.group.group_id, members: [recoveredRow], evidence: null },
+      });
+    clients.rApi.receiptGroupCandidates = vi.fn<NonNullable<ReceiptsApi["receiptGroupCandidates"]>>(() => ok({
+      anchor_receipt_id: groupedRow.receipt_id,
+      transactions: [],
+      proposals: [],
+      eligible_receipts: [recoveredRow],
+      eligible_evidence: [],
+      no_bank_data: true,
+    }));
+    clients.rApi.linkReceiptGroup = vi.fn<NonNullable<ReceiptsApi["linkReceiptGroup"]>>();
+
+    let currentReceipt = receiptDetail({ ...groupedRow, link_group: groupDetail.group, linked: true });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => ok({
+      receipt: currentReceipt,
+      candidates: [],
+      group_candidates: [],
+    }));
+
+    const onAccessLoss = vi.fn((res: { ok: boolean; status?: number }) => !res.ok && res.status === 401);
+    await renderReceipts(clients, { onAccessLoss });
+    await click(openDetailButton(0));
+
+    const d1 = dialog();
+    expect(d1.textContent).toContain("Bank transaction details changed for this group.");
+    // 409 conflict keeps error notice visible and refreshes detail cleanly.
+    await click(button("Unlink group", d1));
+    expect(clients.rApi.unlinkReceiptGroup).toHaveBeenCalledWith({
+      group_id: groupDetail.group.group_id,
+      expected_version: groupDetail.group.group_version,
+    });
+    expect(dialog().textContent).toContain("This document was modified elsewhere.");
+
+    // Second unlink succeeds and transitions member back to confirmed unlinked recovery with "Group with other receipts".
+    currentReceipt = recoveredRow;
+    await click(button("Unlink group", dialog()));
+    expect(host.textContent).toContain("Receipt group unlinked.");
+    expect(button("Group with other receipts", dialog()).disabled).toBe(false);
+    await click(button("Close", dialog()));
+
+    // Dissolve group & delete sends dissolve_group: true + expected_group_version.
+    currentReceipt = receiptDetail({ ...groupedRow, link_group: groupDetail.group, linked: true });
+    await click(openDetailButton(0));
+    await click(button("Unlink group & delete", dialog()));
+    const confirmDlg = alertBox();
+    await click(button("Unlink & delete", confirmDlg));
+    expect(clients.rApi.deleteReceipt).toHaveBeenCalledWith({
+      receipt_id: groupedRow.receipt_id,
+      expected_version: groupedRow.version,
+      dissolve_group: true,
+      expected_group_version: groupDetail.group.group_version,
+    });
+    expect(host.textContent).toContain("Group unlinked and document deleted.");
+
+    // Revoked access on unlink clears view via onAccessLoss barrier.
+    vi.mocked(clients.rApi.unlinkReceiptGroup).mockResolvedValueOnce({
+      ok: false, status: 401, error: "budget_unauthorized",
+    });
+    await click(openDetailButton(0));
+    await click(button("Unlink group", dialog()));
+    expect(onAccessLoss).toHaveBeenCalled();
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
 });
