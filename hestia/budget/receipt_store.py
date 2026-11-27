@@ -7,6 +7,7 @@ from decimal import Decimal
 import hashlib
 import hmac
 import json
+import logging
 import math
 import os
 import re
@@ -17,11 +18,13 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from sqlalchemy import delete, exists, func, literal_column, or_, select
+from sqlalchemy import and_, delete, exists, func, literal_column, or_, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from .. import authz
-from ..db import (AppMeta, BudgetAccount as Account, BudgetConnection as Connection, BudgetReceipt as Receipt,
+from ..db import (AppMeta, BudgetAccount as Account, BudgetAccountDisplay as AccountDisplay,
+                  BudgetConnection as Connection, BudgetReceipt as Receipt,
                   BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line,
                   BudgetReceiptLinkGroup as ReceiptLinkGroup, BudgetReceiptLinkMember as ReceiptLinkMember,
                   BudgetShop as Shop,
@@ -469,6 +472,93 @@ def _merchant_tx_match(payload, creditor, debtor, *, direction, raw_nip, chain, 
     }
 
 
+_UNSET = object()
+log = logging.getLogger("hestia.budget.receipt_store")
+
+
+def _short_account_label(bank_name, product, masked_suffix):
+    base = (
+        f"{bank_name} · {product}"
+        if product and bank_name.casefold() not in product.casefold()
+        else (product or bank_name)
+    )
+    return f"{base} ••{masked_suffix}" if masked_suffix else base
+
+
+def _linked_transaction_summary(bank_name, product, masked_suffix, payload_json, group_amount, group_currency):
+    if bank_name is None:
+        return None
+    try:
+        payload = _json(payload_json)
+        if not isinstance(payload, dict):
+            raise ValueError
+    except (ValueError, TypeError, RecursionError):
+        log.warning("budget_receipt_linked_tx_json_invalid")
+        return None
+    booking_date = next(
+        (value for key in ("booking_date", "value_date", "transaction_date")
+         if _valid_date(value := payload.get(key))),
+        None,
+    )
+    raw_amount = payload.get("amount")
+    amount = raw_amount if isinstance(raw_amount, str) and raw_amount else group_amount
+    raw_currency = payload.get("currency")
+    currency = raw_currency if isinstance(raw_currency, str) and _CUR3.fullmatch(raw_currency) else group_currency
+    return {
+        "account_label": _short_account_label(bank_name, product, masked_suffix),
+        "booking_date": booking_date,
+        "amount": amount,
+        "currency": currency,
+    }
+
+
+def _linked_transactions_for_receipts(session, owner, receipt_ids):
+    if not receipt_ids:
+        return {}
+    member = aliased(ReceiptLinkMember, name="m")
+    group_member = aliased(ReceiptLinkGroup, name="gm")
+    group_evidence = aliased(ReceiptLinkGroup, name="ge")
+    tx = aliased(Transaction, name="tx")
+    acct = aliased(Account, name="acct")
+    conn = aliased(Connection, name="conn")
+    display = aliased(AccountDisplay, name="disp")
+    tx_account_id = func.coalesce(Receipt.linked_account_id, group_member.account_id, group_evidence.account_id)
+    tx_entry_ref = func.coalesce(Receipt.linked_entry_ref, group_member.entry_reference, group_evidence.entry_reference)
+    stmt = (
+        select(
+            Receipt.id,
+            conn.bank_name,
+            display.product,
+            display.masked_suffix,
+            tx.payload_json,
+            func.coalesce(group_member.tx_amount, group_evidence.tx_amount),
+            func.coalesce(group_member.currency, group_evidence.currency),
+        )
+        .outerjoin(member, and_(member.receipt_id == Receipt.id, member.owner == Receipt.owner))
+        .outerjoin(group_member, and_(group_member.id == member.group_id, group_member.owner == Receipt.owner))
+        .outerjoin(
+            group_evidence,
+            and_(
+                group_evidence.evidence_receipt_id == Receipt.id,
+                group_evidence.owner == Receipt.owner,
+                group_evidence.evidence_receipt_id.is_not(None),
+            ),
+        )
+        .outerjoin(tx, and_(tx.account_id == tx_account_id, tx.entry_reference == tx_entry_ref))
+        .outerjoin(acct, and_(acct.id == tx.account_id, acct.owner == Receipt.owner))
+        .outerjoin(conn, and_(conn.id == acct.connection_id, conn.owner == Receipt.owner))
+        .outerjoin(display, display.account_id == acct.id)
+        .where(Receipt.owner == owner, Receipt.id.in_(receipt_ids))
+    )
+    return {
+        receipt_id: _linked_transaction_summary(
+            bank_name, product, masked_suffix, payload_json, group_amount, group_currency,
+        )
+        for receipt_id, bank_name, product, masked_suffix, payload_json, group_amount, group_currency
+        in session.execute(stmt)
+    }
+
+
 def _group_ref(group, member_count):
     return {
         "group_id": group.id, "group_status": group.status, "group_version": group.version,
@@ -650,6 +740,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         self._session_actor = actor
         self._actor = f"device:{device_id}" if device_id is not None else None
         self._match_allowed = False
+        self._tx_summary_allowed = False
         self._ref_hmac_secret = ref_hmac_secret
         self._card_accounts = (
             normalize_card_accounts(card_accounts, allow_tuples=True) if card_accounts is not None else {}
@@ -701,6 +792,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
             raise DeviceTokenError(403, "budget_forbidden")
         self._permissions = permissions
         self._match_allowed = "budget.receipts.match" in permissions
+        self._tx_summary_allowed = (
+            self._device_id is None
+            and self._match_allowed
+            and (phase == authz.POLICY_PHASE_LEGACY or "budget.view" in permissions)
+        )
         self._actor = f"device:{self._device_id}" if self._device_id is not None else (
             actor if actor != target else None
         )
@@ -743,7 +839,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             Line.receipt_id == row.id, Line.owner == row.owner)))
         return sum_money((net, negate_money(row.total_amount)))
 
-    def _summary(self, session, row, *, group_link=None):
+    def _summary(self, session, row, *, group_link=None, linked_transaction=_UNSET):
         shop = None if row.shop_id is None else session.get(Shop, row.shop_id)
         group = None if group_link is None else group_link[0]
         linked_account_id = row.linked_account_id if group is None else group.account_id
@@ -772,6 +868,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
         summary = {key: values[key] for key in _SUMMARY_FIELDS}
         if group_link is not None:
             summary["link_group"] = _group_ref(*group_link)
+        if linked_transaction is not _UNSET:
+            summary["linked_transaction"] = linked_transaction
         return summary
 
     def _detail(self, session, row):
@@ -1423,23 +1521,20 @@ class BudgetReceiptStore(BudgetHTTPStore):
             raise ReceiptError() from None
 
     @staticmethod
-    def _after_cursor(row, cursor):
-        """Rows strictly after the cursor under ``ORDER BY receipt_date DESC, id``.
+    def _cursor_clause(cursor):
+        """SQL predicate for rows strictly after ``cursor`` under ``ORDER BY receipt_date DESC, id``.
 
         SQLite sorts NULL dates last on DESC, then ``id`` ascending. A NULL cursor
         therefore excludes every dated row, and a dated cursor includes every NULL row.
         """
-        if cursor is None:
-            return True
         last_date, last_id = cursor
-        row_date = row.receipt_date
-        if row_date == last_date:
-            return row.id > last_id
-        if row_date is None:
-            return True
         if last_date is None:
-            return False
-        return row_date < last_date
+            return and_(Receipt.receipt_date.is_(None), Receipt.id > last_id)
+        return or_(
+            Receipt.receipt_date.is_(None),
+            Receipt.receipt_date < last_date,
+            and_(Receipt.receipt_date == last_date, Receipt.id > last_id),
+        )
 
     @staticmethod
     def _filters(values, *, search):
@@ -1483,7 +1578,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                                             separators=(",", ":")).encode("ascii")).hexdigest()
         return limit, month, status, linked, query, kind, evidence, context
 
-    def _list(self, owner, values, *, search):
+    def _list(self, owner, values, *, search, include_linked_transaction=False):
         limit, month, status, linked, query, kind, evidence, context = self._filters(values, search=search)
         with self.transaction() as session:
             owner = self._owner(session, owner, "budget.receipts.view")
@@ -1506,29 +1601,44 @@ class BudgetReceiptStore(BudgetHTTPStore):
             if linked is not None:
                 is_linked = or_(Receipt.linked_account_id.is_not(None), _receipt_grouped(owner, Receipt.id))
                 query_obj = query_obj.where(is_linked if linked else ~is_linked)
-            rows = session.scalars(query_obj.order_by(Receipt.receipt_date.desc(), Receipt.id)).all()
-            needle = fold_for_match(query.strip()) if search else None
-            selected = []
-            for row in rows:
-                if not self._after_cursor(row, cursor):
-                    continue
-                if search and not self._matches(session, row, needle):
-                    continue
-                selected.append(row)
-                if len(selected) > limit:
-                    break
+            if cursor is not None:
+                query_obj = query_obj.where(self._cursor_clause(cursor))
+            ordered = query_obj.order_by(Receipt.receipt_date.desc(), Receipt.id)
+            if search:
+                needle = fold_for_match(query.strip())
+                selected = []
+                for row in session.scalars(ordered):
+                    if not self._matches(session, row, needle):
+                        continue
+                    selected.append(row)
+                    if len(selected) > limit:
+                        break
+            else:
+                selected = list(session.scalars(ordered.limit(limit + 1)))
             more = len(selected) > limit
             selected = selected[:limit]
-            next_cursor = self._encode_cursor(owner, context, selected[-1]) if more and selected else None
-            links = _group_links_for_receipts(session, owner, [row.id for row in selected])
-            return {"receipts": [self._summary(session, row, group_link=links.get(row.id)) for row in selected],
-                    "next_cursor": next_cursor}
+            next_cursor = self._encode_cursor(owner, context, selected[-1]) if more else None
+            page_ids = [row.id for row in selected]
+            links = _group_links_for_receipts(session, owner, page_ids)
+            linked_txs = (
+                _linked_transactions_for_receipts(session, owner, page_ids)
+                if include_linked_transaction and self._tx_summary_allowed
+                else {}
+            )
+            receipts = [
+                self._summary(
+                    session, row, group_link=links.get(row.id),
+                    linked_transaction=linked_txs.get(row.id) if include_linked_transaction else _UNSET,
+                )
+                for row in selected
+            ]
+            return {"receipts": receipts, "next_cursor": next_cursor}
 
-    def list(self, owner, values):
-        return self._list(owner, values, search=False)
+    def list(self, owner, values, *, include_linked_transaction=False):
+        return self._list(owner, values, search=False, include_linked_transaction=include_linked_transaction)
 
-    def search(self, owner, values):
-        return self._list(owner, values, search=True)
+    def search(self, owner, values, *, include_linked_transaction=False):
+        return self._list(owner, values, search=True, include_linked_transaction=include_linked_transaction)
 
     @staticmethod
     def _matches(session, row, needle):

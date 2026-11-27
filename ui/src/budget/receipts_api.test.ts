@@ -57,7 +57,7 @@ describe("receipts api", () => {
     expect(init.credentials).toBe("same-origin");
     expect(init.cache).toBe("no-store");
     expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
-    expect(new Headers(init.headers).get(CONTRACT_HEADER)).toBe("0.59.0");
+    expect(new Headers(init.headers).get(CONTRACT_HEADER)).toBe("0.60.0");
     expect(new Headers(init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
     expect(JSON.parse(init.body as string)).toEqual({
       status: "needs_review",
@@ -78,7 +78,7 @@ describe("receipts api", () => {
     expect(url.pathname).toMatch(/\/api\/budget\/receipts\/search$/);
     expect(url.search).toBe("");
     expect(new Headers(init.headers).get("Content-Type")).toBe("application/json");
-    expect(new Headers(init.headers).get(CONTRACT_HEADER)).toBe("0.59.0");
+    expect(new Headers(init.headers).get(CONTRACT_HEADER)).toBe("0.60.0");
     expect(new Headers(init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
     expect(JSON.parse(init.body as string)).toEqual({ query: "Lidl", limit: 50, cursor: "cursor-1" });
   });
@@ -119,7 +119,7 @@ describe("receipts api", () => {
     const detail = sent(fetchMock, 1);
     expect(detail.url.pathname).toMatch(/\/api\/budget\/receipts\/detail$/);
     expect(Object.fromEntries(detail.url.searchParams)).toEqual({ receipt_id: "rec-42" });
-    expect(new Headers(detail.init.headers).get(CONTRACT_HEADER)).toBe("0.59.0");
+    expect(new Headers(detail.init.headers).get(CONTRACT_HEADER)).toBe("0.60.0");
     expect(new Headers(detail.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
     expect(detail.init.credentials).toBe("same-origin");
 
@@ -177,11 +177,31 @@ describe("receipts api", () => {
     expect(retry.init.signal).toBe(first.init.signal);
     expect(retry.init.credentials).toBe("same-origin");
     expect(retry.init.cache).toBe("no-store");
-    expect(new Headers(first.init.headers).get(CONTRACT_HEADER)).toBe("0.59.0");
+    expect(new Headers(first.init.headers).get(CONTRACT_HEADER)).toBe("0.60.0");
     const headers = new Headers(first.init.headers);
-    headers.set(CONTRACT_HEADER, "0.57.0");
+    headers.set(CONTRACT_HEADER, "0.59.0");
     expect(Object.fromEntries(new Headers(retry.init.headers))).toEqual(Object.fromEntries(headers));
     expect(new Headers(retry.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
+  });
+
+  it("falls back from 0.60.0 to 0.59.0 to 0.57.0 when talking to a 0.57.0 server", async () => {
+    const payload = { receipts: [], next_cursor: null };
+    const fetchMock = respond(200, payload);
+    const gate = createBudgetApi("owner");
+    await gate.capabilities();
+    fetchMock
+      .mockImplementationOnce(() => Promise.resolve(
+        new Response(JSON.stringify({ error: { code: VERSION_ERROR } }), { status: 400 }),
+      ))
+      .mockImplementationOnce(() => Promise.resolve(
+        new Response(JSON.stringify({ error: { code: VERSION_ERROR } }), { status: 400 }),
+      ));
+
+    expect(await createReceiptsApi(gate).receiptsList({ limit: 10 })).toEqual({ ok: true, data: payload });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(new Headers(sent(fetchMock, 1).init.headers).get(CONTRACT_HEADER)).toBe("0.60.0");
+    expect(new Headers(sent(fetchMock, 2).init.headers).get(CONTRACT_HEADER)).toBe("0.59.0");
+    expect(new Headers(sent(fetchMock, 3).init.headers).get(CONTRACT_HEADER)).toBe("0.57.0");
   });
 
   it("preserves unrelated receipt read errors and never retries unrelated reads", async () => {

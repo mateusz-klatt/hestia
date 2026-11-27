@@ -514,6 +514,25 @@ describe("budget api", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("sends X-Hestia-Contract-Version 0.60.0 on analytics transactions and retries once without it on older servers", async () => {
+    const payload = { period: "2026-11", start: "2026-11-01", end: "2026-11-30", snapshot_digest: "d", transactions: [], filtered_total: 0, next_cursor: null };
+    const fetchMock = respond(200, payload);
+    const filter = { currency: "", category: "", kind: "", query: "" };
+    fetchMock.mockImplementationOnce(() => Promise.resolve(
+      new Response(JSON.stringify({ error: "budget_analytics_contract_version_invalid" }), { status: 400 }),
+    ));
+    expect(await budgetApi.analyticsTransactions("2026-11", filter)).toEqual({ ok: true, data: payload });
+    expect(new Headers(sent(fetchMock, 0).init.headers).get("X-Hestia-Contract-Version")).toBe("0.60.0");
+    expect(new Headers(sent(fetchMock, 1).init.headers).has("X-Hestia-Contract-Version")).toBe(false);
+
+    fetchMock.mockImplementationOnce(() => Promise.resolve(
+      new Response(JSON.stringify({ error: "budget_analytics_contract_version_invalid" }), { status: 400 }),
+    ));
+    expect(await budgetApi.analyticsTransactionsByKeys({ row_keys: ["acc-1/r1"] })).toEqual({ ok: true, data: payload });
+    expect(new Headers(sent(fetchMock, 2).init.headers).get("X-Hestia-Contract-Version")).toBe("0.60.0");
+    expect(new Headers(sent(fetchMock, 3).init.headers).has("X-Hestia-Contract-Version")).toBe(false);
+  });
+
   it("maps refusals, empty middleware bodies and network loss without throwing", async () => {
     respond(409, { ok: false, error: "budget_version_conflict", current: { id: "bank" } });
     expect(await budgetApi.connections()).toEqual({ ok: false, status: 409, error: "budget_version_conflict", current: { id: "bank" } });

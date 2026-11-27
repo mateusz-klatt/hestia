@@ -124,7 +124,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.58.0: additive owner-private
 #         appointment_slot & appointment_attention items on BudgetAnalyticsInbox.
 # 0.59.0: group-linked receipt summaries and owner-private receipt group detail.
-CONTRACT_VERSION = "0.59.0"
+# 0.60.0: additive receipt link summary on analytics transactions and linked_transaction summary on receipt lists.
+CONTRACT_VERSION = "0.60.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2190,6 +2191,18 @@ class BudgetAnalyticsTransactionTransfer(BaseModel):
     ambiguous: bool
 
 
+BudgetReceiptId = Annotated[str, Field(pattern=r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")]
+
+
+class BudgetAnalyticsTransactionReceipt(BaseModel):
+    model_config = _READ
+    receipt_id: BudgetReceiptId
+    shop_name: str | None
+    total: str | None
+    currency: Annotated[str, Field(pattern=r"^[A-Z]{3}$")] | None
+    status: Literal["confirmed", "needs_review"]
+
+
 class BudgetAnalyticsTransaction(BudgetTransaction):
     account_id: str
     fingerprint: str
@@ -2200,6 +2213,7 @@ class BudgetAnalyticsTransaction(BudgetTransaction):
     counterparty_account_key: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$", json_schema_extra=_OMIT)] = None
     counterparty_account: Annotated[str | None, Field(json_schema_extra=_OMIT)] = None
     transfer: BudgetAnalyticsTransactionTransfer
+    receipt: Annotated[BudgetAnalyticsTransactionReceipt | None, Field(default=None, json_schema_extra=_OMIT)] = None
 
 
 class BudgetAnalyticsPeriod(BaseModel):
@@ -3060,7 +3074,6 @@ class BudgetAnalyticsMonthlyBudget(BaseModel):
     ] = None
 
 
-BudgetReceiptId = Annotated[str, Field(pattern=r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")]
 BudgetReceiptMoney = Annotated[str, Field(min_length=1, max_length=80, pattern=r"^-?[0-9]+(?:\.[0-9]+)?$")]
 BudgetReceiptCursor = Annotated[str, Field(min_length=1, max_length=8192)]
 BudgetReceiptDocumentKind = Literal["receipt", "invoice", "payment_confirmation"]
@@ -3210,6 +3223,15 @@ class BudgetReceiptLinkGroupRef(BaseModel):
     evidence_receipt_id: BudgetReceiptId | None
 
 
+class BudgetReceiptLinkedTransaction(BaseModel):
+    model_config = _READ
+    account_label: str
+    booking_date: Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                                       json_schema_extra={"format": "date"})] | None
+    amount: str | None
+    currency: Annotated[str, Field(pattern=r"^[A-Z]{3}$")] | None
+
+
 class BudgetReceiptSummary(BaseModel):
     model_config = _READ
     receipt_id: BudgetReceiptId
@@ -3250,6 +3272,9 @@ class BudgetReceiptSummary(BaseModel):
     has_document: bool = True
     card_last4: Annotated[str, Field(pattern=r"^[0-9]{4}$")] | None = None
     link_group: Annotated[BudgetReceiptLinkGroupRef | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    linked_transaction: Annotated[
+        BudgetReceiptLinkedTransaction | None, Field(default=None, json_schema_extra=_OMIT)
+    ] = None
 
 
 class BudgetReceiptPaymentEvidence(BaseModel):
@@ -5268,12 +5293,18 @@ def _analytics_paths():
         schema={"type": "string", "enum": ["6", "12"], "default": "6"},
         description="Optional monthly history window (6 or 12 months); defaults to 6.",
     )
+    tx_contract_version = {
+        "name": "X-Hestia-Contract-Version", "in": "header", "required": False,
+        "description": "Negotiate linked receipt summaries on transaction rows starting at 0.60.0. "
+                       "Earlier versions or an omitted header omit the receipt key entirely.",
+        "schema": {"type": "string", "pattern": r"^0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$"},
+    }
     reads = (
         ("overview", "getBudgetAnalyticsOverview", "BudgetAnalyticsOverview", [period, currency]),
         ("transactions", "getBudgetAnalyticsTransactions", "BudgetAnalyticsTransactions",
          [period, currency, _budget_query("category_id", description="Category ID, or uncategorised for no category."),
           _budget_query("kind"), _budget_query("query", schema={"type": "string", "minLength": 1, "maxLength": 256}),
-          *page]),
+          *page, tx_contract_version]),
         ("categories", "getBudgetAnalyticsCategories", "BudgetAnalyticsCategories", []),
         ("rules", "getBudgetAnalyticsRules", "BudgetAnalyticsRules", []),
         ("transfers", "getBudgetAnalyticsTransfers", "BudgetAnalyticsTransfers",
@@ -5459,6 +5490,7 @@ def _analytics_paths():
                        "1..500 exact <account_id>/<entry_reference> keys in the JSON body (<= 1 MiB) regardless of "
                        "period, preventing oversized GET query strings and key leakage in access logs. "
                        "Makes no bank requests and no database writes.",
+        "parameters": [tx_contract_version],
         "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref("BudgetAnalyticsTransactionsByKeysRequest")}}},
         "responses": _analytics_responses("BudgetAnalyticsTransactions"),
     }}

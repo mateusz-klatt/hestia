@@ -4563,6 +4563,7 @@ export interface components {
             metadata: components["schemas"]["BudgetAnalyticsMetadata"] | null;
             /** Observed At */
             observed_at: number;
+            receipt?: components["schemas"]["BudgetAnalyticsTransactionReceipt"] | null;
             /** Remittance Information */
             remittance_information: string[];
             /**
@@ -4582,6 +4583,22 @@ export interface components {
             transfer_fingerprint: string;
             /** Value Date */
             value_date: string | null;
+        };
+        /** BudgetAnalyticsTransactionReceipt */
+        BudgetAnalyticsTransactionReceipt: {
+            /** Currency */
+            currency: string | null;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Shop Name */
+            shop_name: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "confirmed" | "needs_review";
+            /** Total */
+            total: string | null;
         };
         /** BudgetAnalyticsTransactionTransfer */
         BudgetAnalyticsTransactionTransfer: {
@@ -6229,6 +6246,7 @@ export interface components {
             linked_account_id: string | null;
             /** Linked Entry Ref */
             linked_entry_ref: string | null;
+            linked_transaction?: components["schemas"]["BudgetReceiptLinkedTransaction"] | null;
             /** Math Delta */
             math_delta: string | null;
             /**
@@ -6744,6 +6762,17 @@ export interface components {
             /** Entry Reference */
             entry_reference: string;
         };
+        /** BudgetReceiptLinkedTransaction */
+        BudgetReceiptLinkedTransaction: {
+            /** Account Label */
+            account_label: string;
+            /** Amount */
+            amount: string | null;
+            /** Booking Date */
+            booking_date: string | null;
+            /** Currency */
+            currency: string | null;
+        };
         /** BudgetReceiptListRequest */
         BudgetReceiptListRequest: {
             /**
@@ -6925,6 +6954,7 @@ export interface components {
             linked_account_id: string | null;
             /** Linked Entry Ref */
             linked_entry_ref: string | null;
+            linked_transaction?: components["schemas"]["BudgetReceiptLinkedTransaction"] | null;
             /** Math Delta */
             math_delta: string | null;
             /**
@@ -11853,7 +11883,10 @@ export interface operations {
                 /** @description Opaque cursor bound to the current projection. A changed snapshot returns 409. */
                 cursor?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Negotiate linked receipt summaries on transaction rows starting at 0.60.0. Earlier versions or an omitted header omit the receipt key entirely. */
+                "X-Hestia-Contract-Version"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11945,7 +11978,10 @@ export interface operations {
     listBudgetAnalyticsTransactionsByKeys: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Negotiate linked receipt summaries on transaction rows starting at 0.60.0. Earlier versions or an omitted header omit the receipt key entirely. */
+                "X-Hestia-Contract-Version"?: string;
+            };
             path?: never;
             cookie?: never;
         };

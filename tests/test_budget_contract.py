@@ -644,7 +644,13 @@ class BudgetOpenApiTests(unittest.TestCase):
             param["name"]: param
             for param in contract.build_openapi()["paths"]["/api/budget/analytics/transactions"]["get"]["parameters"]
         }
-        self.assertEqual(set(tx_params), {"period", "currency", "category_id", "kind", "query", "limit", "cursor"})
+        self.assertEqual(set(tx_params), {
+            "period", "currency", "category_id", "kind", "query", "limit", "cursor", "X-Hestia-Contract-Version",
+        })
+        self.assertEqual(
+            (tx_params["X-Hestia-Contract-Version"]["in"], tx_params["X-Hestia-Contract-Version"]["required"]),
+            ("header", False),
+        )
         tx_by_keys = contract.build_openapi()["paths"]["/api/budget/analytics/transactions-by-keys"]["post"]
         self.assertEqual(
             tx_by_keys["requestBody"]["content"]["application/json"]["schema"],
