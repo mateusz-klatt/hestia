@@ -508,25 +508,28 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
     async def test_pdf_diagnostics_are_version_gated(self):
         os.environ[gmail_api.FLAG] = "1"
         original = gmail_api._Runtime._status
+        current_reasons = {"pdf_no_text": 1, "multiple_documents": 2, "other": 4, "worker_rejected": 5,
+                           "worker_crash": 6, "discovery_pdf_too_large": 8}
+
         def status(runtime, store, owner, secret):
             result = original(runtime, store, owner, secret)
-            result["parse_failed_reasons"] = {"pdf_no_text": 1, "multiple_documents": 2, "other": 4}
+            result["parse_failed_reasons"] = dict(current_reasons)
             return result
+
+        legacy = {"other": 15, "worker_rejected": 11}
+        pdf_diagnostics = {"pdf_no_text": 1, "multiple_documents": 2, "other": 12, "worker_rejected": 11}
         with mock.patch.object(gmail_api._Runtime, "_status", status):
-            old = await self.call("gmail-status")
-            self.assertEqual((await old.json())["parse_failed_reasons"], {"other": 7})
-            boundary = await self.call("gmail-status", headers=self.headers() | {
-                "X-Hestia-Contract-Version": "0.55.0",
-            })
-            self.assertEqual((await boundary.json())["parse_failed_reasons"], {"other": 7})
-            for version in ("0.56.0", "0.57.0"):
+            for version, expected in (
+                (None, legacy), ("0.55.0", legacy), ("0.56.0", pdf_diagnostics),
+                ("0.64.0", pdf_diagnostics), ("0.65.0", pdf_diagnostics), ("0.66.0", current_reasons),
+            ):
                 with self.subTest(version=version):
-                    current = await self.call("gmail-status", headers=self.headers() | {
-                        "X-Hestia-Contract-Version": version,
-                    })
-                    self.assertEqual((await current.json())["parse_failed_reasons"], {
-                        "pdf_no_text": 1, "multiple_documents": 2, "other": 4,
-                    })
+                    headers = self.headers()
+                    if version is not None:
+                        headers["X-Hestia-Contract-Version"] = version
+                    response = await self.call("gmail-status", headers=headers)
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual((await response.json())["parse_failed_reasons"], expected)
             invalid = await self.call("gmail-status", headers=self.headers() | {
                 "X-Hestia-Contract-Version": "invalid",
             })

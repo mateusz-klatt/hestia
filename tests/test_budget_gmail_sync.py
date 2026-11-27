@@ -672,10 +672,10 @@ class GmailSyncTests(TestCase):
         self.transport.routes[("/messages", "next")] = response(page("good"))
         with self.assertLogs("hestia.budget.gmail_sync", level="WARNING") as logs:
             result = self.sync()
-        self.assertIn("reason=worker_rejected", logs.output[0])
+        self.assertIn("reason=worker_crash", logs.output[0])
         self.assertEqual((result["imported_count"], result["skipped_count"], result["has_more"]), (1, 1, False))
         self.assertEqual(worker.ready.call_count, 2)
-        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"worker_rejected": 1})
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"worker_crash": 1})
         failed_hash = digest(SETTINGS.hmac_secret, GMAIL_MESSAGE_DOMAIN, "poison")
         outcomes = {row.gmail_id_hmac: row.outcome for row in self.rows(db.BudgetGmailMessage)}
         self.assertEqual(outcomes[failed_hash], "parse_failed")
@@ -736,7 +736,7 @@ class GmailSyncTests(TestCase):
         )
         failed_hash = digest(SETTINGS.hmac_secret, GMAIL_MESSAGE_DOMAIN, "poison")
         self.store.commit(OWNER, 1, {}, (
-            PendingMessage(failed_hash, NOW, "untrusted", "parse_failed", parse_failed_reason="worker_rejected"),
+            PendingMessage(failed_hash, NOW, "untrusted", "parse_failed", parse_failed_reason="worker_crash"),
         ))
         self.service.schedule(OWNER, retry_parse_failed=True)
         self.assertFalse(self.store.known(OWNER, failed_hash))
@@ -748,7 +748,7 @@ class GmailSyncTests(TestCase):
         self.assertEqual(list(outcomes.values()).count("imported"), 2)
         self.assertEqual(list(outcomes.values()).count("parse_failed"), 2)
         self.assertNotIn(digest(SETTINGS.hmac_secret, GMAIL_MESSAGE_DOMAIN, "third-pdf"), outcomes)
-        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"worker_rejected": 2})
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"worker_crash": 2})
         self.assertEqual(self.store.state(OWNER).last_error, "parser_unavailable")
 
     def test_different_messages_aborting_consecutive_runs_are_not_quarantined(self):
@@ -795,7 +795,7 @@ class GmailSyncTests(TestCase):
             self.sync()
         state = self.store.state(OWNER)
         self.assertEqual((state.history_page_token, state.scope_scan_page_token), ("h2", "s2"))
-        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"worker_rejected": 1})
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"worker_crash": 1})
 
     def test_expired_history_during_a_held_crash_leaves_the_previous_checkpoint(self):
         self._use_poison_pdf()

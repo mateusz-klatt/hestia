@@ -242,7 +242,7 @@ class GmailDocumentDiscoveryTests(TestCase):
                 message = _email(sender, DOCUMENT)
                 message.add_attachment(pdf, maintype="application", subtype=subtype, filename="invoice.pdf")
                 result = self.process(message)
-                self.assertEqual((result.outcome, result.parse_failed_reason), ("parse_failed", "other"))
+                self.assertEqual((result.outcome, result.parse_failed_reason), ("parse_failed", "discovery_pdf_too_large"))
                 self.worker.parse.assert_not_called()
 
         at_limit = _email(UNLISTED)
@@ -289,7 +289,7 @@ class GmailDocumentDiscoveryTests(TestCase):
         pdf = b"%PDF-1.4".ljust(_MAX_DISCOVERY_PDF_BYTES + 1, b" ")
         message.add_attachment(pdf, maintype="application", subtype="pdf")
         result = self.process(message)
-        self.assertEqual((result.outcome, result.parse_failed_reason), ("parse_failed", "other"))
+        self.assertEqual((result.outcome, result.parse_failed_reason), ("parse_failed", "discovery_pdf_too_large"))
         self.assertNotIn("pdf", [call.args[0] for call in self.worker.parse.call_args_list])
 
     def test_two_pdfs_of_same_document_keep_matching_and_drop_differing_positions(self):

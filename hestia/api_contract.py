@@ -130,7 +130,8 @@ from .budget.loan_references import MAX_MATCH_REFERENCES
 # 0.62.0: additive crib_humidity (display-only %RH) and crib_battery_ok (opt-in 433 low-battery flag) on
 #         Globals and GlobalsPatch, negotiated via X-Hestia-Contract-Version (and contract_version query on SSE).
 # 0.64.0: opt-in mortgage payment references and forecast matching audit (migration 0036).
-CONTRACT_VERSION = "0.64.0"
+# 0.66.0: Gmail worker_crash and discovery_pdf_too_large parse diagnostics.
+CONTRACT_VERSION = "0.66.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -5233,7 +5234,9 @@ def _gmail_receipt_paths():
         "parameters": [{
             "name": "X-Hestia-Contract-Version", "in": "header", "required": False,
             "description": "Request Gmail PDF diagnostics starting at 0.56.0. Earlier versions or an omitted header "
-                           "receive those counts under other.",
+                           "receive those counts under other. Starting at 0.66.0, worker_crash and "
+                           "discovery_pdf_too_large are reported separately. Earlier versions or an omitted header "
+                           "receive those counts under worker_rejected and other, respectively.",
             "schema": {"type": "string", "pattern": r"^0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$"},
         }],
         "responses": responses,

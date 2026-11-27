@@ -102,7 +102,7 @@ def discover_document(processor, message, pending, *, inline_outer=None, attachm
             document_senders=getattr(settings, "document_senders", ()),
             require_authentication=processor.require_auth,
         ) != "direct_allowlist":
-            return _parse_failed(pending, "other")
+            return _parse_failed(pending, "discovery_pdf_too_large")
     selected = None
     source_kind = "email"
     payment_lines = []

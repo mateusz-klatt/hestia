@@ -76,6 +76,8 @@ PARSE_FAILED_REASONS = (
     "recursion",
     "unicode_error",
     "worker_rejected",
+    "worker_crash",
+    "discovery_pdf_too_large",
 )
 _PARSE_FAILED_REASON_SET = frozenset(PARSE_FAILED_REASONS)
 log = logging.getLogger("hestia.budget.gmail_store")

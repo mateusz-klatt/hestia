@@ -690,8 +690,10 @@ class GmailMessageProcessor:
         except UnicodeError:
             result = _parse_failed(pending, "unicode_error")
         except WorkerUnavailable:
+            worker_ready = self.ready()
+            reason = "worker_crash" if worker_ready else "worker_rejected"
             raise MessageParserUnavailable(
-                _parse_failed(pending, "worker_rejected"), worker_ready=self.ready(),
+                _parse_failed(pending, reason), worker_ready=worker_ready,
             ) from None
         if result.outcome == _PARSE_FAILED:
             log.warning("gmail parse_failed reason=%s", result.parse_failed_reason)
