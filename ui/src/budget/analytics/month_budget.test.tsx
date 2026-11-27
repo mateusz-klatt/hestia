@@ -1795,7 +1795,7 @@ describe("MonthBudgetView", () => {
         const chartStyle = getComputedStyle(chart);
         expect(chartStyle.minWidth).toMatch(/^0(px)?$/);
         expect(chartStyle.maxWidth).toBe("100%");
-        expect(chartStyle.gridTemplateColumns).toBe("minmax(0, 1fr)");
+        expect(chartStyle.gridTemplateColumns.replace(/\b0px\b/g, "0")).toBe("minmax(0, 1fr)");
         if (details !== null) {
           expect(getComputedStyle(details).minWidth).toMatch(/^0(px)?$/);
           expect(getComputedStyle(details).maxWidth).toBe("100%");
@@ -1889,12 +1889,15 @@ describe("MonthBudgetView", () => {
       const thSibling0 = rows[3]?.querySelector<HTMLElement>('th[scope="row"]');
       if (th0 == null || th1 == null || th2 == null || thSibling0 == null) throw new Error("missing tree row header");
 
+      const toPx = (value: string): number => (
+        value.endsWith("rem") ? Number.parseFloat(value) * 16 : Number.parseFloat(value)
+      );
       expect(getComputedStyle(th0).fontWeight).toBe("650");
       expect(getComputedStyle(thSibling0).fontWeight).toBe("650");
       expect(getComputedStyle(th1).fontWeight).toBe("400");
       expect(getComputedStyle(th2).fontWeight).toBe("400");
-      expect(getComputedStyle(th1).paddingInlineStart).toBe("1.85rem");
-      expect(getComputedStyle(th2).paddingInlineStart).toBe("3.1rem");
+      expect(toPx(getComputedStyle(th1).paddingInlineStart)).toBeCloseTo(1.85 * 16, 2);
+      expect(toPx(getComputedStyle(th2).paddingInlineStart)).toBeCloseTo(3.1 * 16, 2);
 
       // Hierarchy uses indentation and font weight only — no depth-0 tint or border colour override.
       expect(getComputedStyle(rows[0] as HTMLElement).backgroundColor).toBe(
