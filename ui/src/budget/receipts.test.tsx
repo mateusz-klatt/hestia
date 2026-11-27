@@ -9,7 +9,7 @@ import type { BudgetResult } from "./api";
 import { account, connection } from "./fixtures";
 import { ReceiptsView } from "./receipts";
 import type { ReceiptsApi } from "./receipts_api";
-import { REDACTED_VALUE } from "./receipts_model";
+import { REDACTED_VALUE, createPendingReceiptStore } from "./receipts_model";
 import type {
   ReceiptCandidate,
   ReceiptDetail,
@@ -2732,7 +2732,8 @@ describe("ReceiptsView", () => {
       return ok({ ok: true, deleted: true });
     });
 
-    let simulatedScrollY = 420;
+    let simulatedScrollY = 400;
+    let p2aDocTop = 580;
     const origScrollY = Object.getOwnPropertyDescriptor(window, "scrollY");
     Object.defineProperty(window, "scrollY", {
       configurable: true,
@@ -2747,9 +2748,26 @@ describe("ReceiptsView", () => {
       await click(button("Load more"));
       expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(4);
       const listElementBefore = host.querySelector("ul.budget-entry-list");
+      const p2aEl = host.querySelector<HTMLElement>('li[data-receipt-id="p2-a"]');
+      if (p2aEl === null) throw new Error("expected p2-a row");
+      vi.spyOn(p2aEl, "getBoundingClientRect").mockImplementation(() => {
+        const top = p2aDocTop - simulatedScrollY;
+        return {
+          top,
+          bottom: top + 40,
+          left: 0,
+          right: 200,
+          width: 200,
+          height: 40,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        };
+      });
 
       // Edit & confirm a page-2 receipt -> quiet refresh keeps list mounted, shows subtle Refreshing…,
-      // refetches all loaded pages sequentially, reloads detail, and restores scroll position if drifted.
+      // refetches all loaded pages sequentially, and uses anchor-based scroll restore (keeping p2-a's
+      // viewport top constant at 180 without overcorrecting when both docTop and window.scrollY shift).
       await click(openDetailById("p2-a"));
       const drawer = dialog();
       await click(inputByName("auto_advance_on_confirm", drawer));
@@ -2766,8 +2784,10 @@ describe("ReceiptsView", () => {
       expect(host.textContent).toContain("Refreshing…");
       expect(host.textContent).not.toContain("Loading documents…");
 
-      // Simulate browser scroll drift before refresh completes -> layout effect must restore 420.
-      simulatedScrollY = 0;
+      // Simulate row above shrinking by 60px (docTop 580 -> 520) AND scroll drifting to 100.
+      // Live top is 420 (delta = +240 from saved anchorTop 180); target scrollY must be 100 + 240 = 340 (not 400 + 240 = 640).
+      p2aDocTop = 520;
+      simulatedScrollY = 100;
       await act(async () => {
         pendingRefreshPage1.resolve({ ok: true, data: { receipts: page1Rows, next_cursor: "cursor-2" } });
         await Promise.resolve();
@@ -2780,21 +2800,34 @@ describe("ReceiptsView", () => {
       expect(host.textContent).toContain("Page Two Shop A Edited");
       expect(host.textContent).toContain("Page Two Shop B");
       expect(button("Load more").disabled).toBe(false);
-      expect(scrollToSpy).toHaveBeenCalledWith(0, 420);
-      expect(simulatedScrollY).toBe(420);
+      expect(scrollToSpy).toHaveBeenCalledWith(0, 340);
+      expect(simulatedScrollY).toBe(340);
+      expect(p2aEl.getBoundingClientRect().top).toBe(180);
 
-      // Delete another page-2 receipt -> quiet refresh keeps loaded page 1 + surviving page 2 rows & scroll.
+      // Delete another page-2 receipt -> anchor row p2-b disappears, so fallback restores absolute scrollY (340).
       await click(button("Close", dialog()));
       await click(openDetailById("p2-b"));
+      const pendingDeleteRefresh = deferred<ReceiptListResult>();
+      vi.mocked(clients.rApi.receiptsList).mockImplementationOnce(() => pendingDeleteRefresh.promise);
       await click(button("Delete document", dialog()));
-      await click(button("Confirm deletion", dialog()));
+      await act(async () => {
+        button("Confirm deletion", dialog()).click();
+        await Promise.resolve();
+      });
+      await settle();
+      simulatedScrollY = 0;
+      await act(async () => {
+        pendingDeleteRefresh.resolve({ ok: true, data: { receipts: page1Rows, next_cursor: "cursor-2" } });
+        await Promise.resolve();
+      });
+      await settle();
 
       expect(host.querySelector("ul.budget-entry-list")).toBe(listElementBefore);
       expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(3);
       expect(host.textContent).toContain("Page One Shop A");
       expect(host.textContent).toContain("Page Two Shop A Edited");
       expect(host.textContent).not.toContain("Page Two Shop B");
-      expect(simulatedScrollY).toBe(420);
+      expect(simulatedScrollY).toBe(340);
     } finally {
       if (origScrollY !== undefined) {
         Object.defineProperty(window, "scrollY", origScrollY);
@@ -2804,7 +2837,7 @@ describe("ReceiptsView", () => {
     }
   });
 
-  it("ignores stale list/search/refresh generations so older responses never overwrite newer state", async () => {
+  it("ignores stale list/search/refresh generations and coalesces concurrent refreshes via dirty flag", async () => {
     const singleLine = receiptDetail().lines.slice(0, 1);
     const d1 = receiptSummary({ receipt_id: "d1", status: "needs_review", raw_shop_name: "Lidl First", total_amount: "12.50", version: 1 });
     const d2 = receiptSummary({ receipt_id: "d2", status: "needs_review", raw_shop_name: "Lidl Second", total_amount: "12.50", version: 1 });
@@ -2831,13 +2864,10 @@ describe("ReceiptsView", () => {
 
     await renderReceipts(clients);
 
-    // Start search (gen 1, pending), then delete d1 which bumps generation to gen 2 (pending),
-    // then confirm d2 which bumps generation to gen 3 (resolves with [d2Edited]).
     await typeInto(inputByName("query"), "Lidl");
     await submit(host.querySelector(".budget-range"));
     expect(searchCalls).toBe(1);
 
-    // Resolve an initial ready list first so delete triggers a quiet refetch generation bump.
     await act(async () => {
       staleSearchResp.resolve({ ok: true, data: { receipts: [d1, d2], next_cursor: null } });
       await Promise.resolve();
@@ -2851,21 +2881,24 @@ describe("ReceiptsView", () => {
     await click(button("Confirm deletion", dialog()));
     expect(searchCalls).toBe(2);
 
-    // While quiet refetch #1 is pending, edit & confirm d2 -> starts quiet refetch #2 (resolves immediately with [d2Edited]).
+    // While quiet refetch #1 is pending, edit & confirm d2 -> marks dirty instead of firing an overlapping request.
     await click(openDetailById("d2"));
     await click(inputByName("auto_advance_on_confirm", dialog()));
     await typeInto(inputByName("raw_shop_name", dialog()), "Lidl Fresh");
-    await click(button("Confirm receipt", dialog()));
-    expect(searchCalls).toBe(3);
-    expect(host.querySelector('[data-receipt-id="d1"]')).toBeNull();
-    expect(host.textContent).toContain("Lidl Fresh");
+    await act(async () => {
+      button("Confirm receipt", dialog()).click();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(searchCalls).toBe(2);
 
-    // Older generation quiet refetch #1 resolves late with stale [d1, d2] -> MUST BE IGNORED.
+    // Older refresh resolves with stale [d1, d2] -> discarded because dirty; runs exactly one follow-up refresh returning [d2Edited].
     await act(async () => {
       staleRefreshResp.resolve({ ok: true, data: { receipts: [d1, d2], next_cursor: null } });
       await Promise.resolve();
     });
     await settle();
+    expect(searchCalls).toBe(3);
     expect(host.querySelector('[data-receipt-id="d1"]')).toBeNull();
     expect(host.textContent).toContain("Lidl Fresh");
     expect(host.textContent).not.toContain("Lidl Second");
@@ -3116,5 +3149,221 @@ describe("ReceiptsView", () => {
     });
     await settle();
     expect(host.querySelector('[data-receipt-id="mount-1"]')?.textContent).toContain("Clean Mount Store");
+  });
+
+  it("closes group controller before refresh so grouping under Unlinked filter falls back cleanly to same-index survivor", async () => {
+    const g1 = receiptSummary({ receipt_id: "ug-1", status: "confirmed", linked: false, raw_shop_name: "First Unlinked", total_amount: "20.00", version: 2 });
+    const g2 = receiptSummary({ receipt_id: "ug-2", status: "confirmed", linked: false, raw_shop_name: "Second Unlinked", total_amount: "30.00", version: 2 });
+    const g3 = receiptSummary({ receipt_id: "ug-3", status: "confirmed", linked: false, raw_shop_name: "Third Surviving Unlinked", total_amount: "15.00", version: 1 });
+    const groupTx = {
+      account_id: "local-a",
+      entry_reference: "c".repeat(64),
+      amount: "50.00",
+      currency: "PLN",
+      credit_debit_indicator: "DBIT" as const,
+      transaction_date: "2026-11-14",
+      booking_date: "2026-11-14",
+      value_date: "2026-11-14",
+      merchant_token_hit: false,
+      match_strength: "none" as const,
+      date_distance: 0,
+      evidence_fingerprint: "fp-ug-1",
+      candidate_token: "tok-ug-1",
+    };
+
+    let unlinkedRows: ReceiptSummary[] = [g1, g2, g3];
+    const clients = fakeClients(unlinkedRows);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => ok<ReceiptListResult>({
+      receipts: req?.linked === false ? unlinkedRows : [g1, g2, g3],
+      next_cursor: null,
+    }));
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = [g1, g2, g3].find((row) => row.receipt_id === id) ?? g1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail(match), candidates: [], group_candidates: [] });
+    });
+    clients.rApi.receiptGroupCandidates = vi.fn<NonNullable<ReceiptsApi["receiptGroupCandidates"]>>(() => ok<ReceiptGroupCandidatesResult>({
+      anchor_receipt_id: "ug-1",
+      transactions: [groupTx],
+      proposals: [],
+      eligible_receipts: [g1, g2],
+      eligible_evidence: [],
+      no_bank_data: false,
+    }));
+    clients.rApi.linkReceiptGroup = vi.fn<NonNullable<ReceiptsApi["linkReceiptGroup"]>>(() => {
+      unlinkedRows = [g3];
+      return ok<ReceiptGroupLinkResult>({
+        ok: true,
+        group: { group_id: "grp-ug", group_version: 1, group_status: "confirmed", member_count: 2, evidence_receipt_id: null, fee_amount: null },
+        members: [{ ...g1, linked: true, version: 3 }, { ...g2, linked: true, version: 3 }],
+        evidence: null,
+        linked_account_id: "local-a",
+        linked_entry_ref: "c".repeat(64),
+      });
+    });
+
+    await renderReceipts(clients);
+    await choose(selectByName("linked"), "unlinked");
+    await settle();
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(3);
+
+    await click(openDetailById("ug-1"));
+    await click(button("Group with other receipts", dialog()));
+    const groupModal = [...host.querySelectorAll<HTMLElement>('[role="dialog"]')].at(-1);
+    if (groupModal === undefined) throw new Error("Expected group controller modal");
+    const txRadio = groupModal.querySelector<HTMLInputElement>('input[name="group_tx_choice"][value="0"]');
+    if (txRadio === null) throw new Error("Expected tx choice");
+    await click(txRadio);
+    for (const box of groupModal.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) {
+      if (!box.checked) await click(box);
+    }
+    await click(button("Confirm group link", groupModal));
+
+    // Group controller closed before refresh, ug-1 disappeared under Unlinked filter -> drawer switches to ug-3.
+    expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(dialog().textContent).toContain("Third Surviving Unlinked");
+    expect(dialog().textContent).not.toContain("First Unlinked");
+    expect(host.textContent).toContain("Receipt group linked.");
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(1);
+  });
+
+  it("applies the shared post-refresh fallback when confirming while a debounced search is loading or when search omits the open receipt", async () => {
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const r1 = receiptSummary({ receipt_id: "srch-1", status: "needs_review", raw_shop_name: "Lidl One", total_amount: "12.50", version: 1 });
+    const r2 = receiptSummary({ receipt_id: "srch-2", status: "needs_review", raw_shop_name: "Lidl Two", total_amount: "12.50", version: 1 });
+    const r3 = receiptSummary({ receipt_id: "srch-3", status: "needs_review", raw_shop_name: "Biedronka Three", total_amount: "12.50", version: 1 });
+
+    const pendingFirstSearch = deferred<ReceiptListResult>();
+    let searchCallCount = 0;
+    const clients = fakeClients([r1, r2, r3]);
+    vi.mocked(clients.rApi.receiptsSearch).mockImplementation((req) => {
+      searchCallCount += 1;
+      if (req.query === "EmptyQuery") {
+        return ok<ReceiptListResult>({ receipts: [], next_cursor: null });
+      }
+      if (searchCallCount === 1) return pendingFirstSearch.promise;
+      return ok<ReceiptListResult>({ receipts: [r3], next_cursor: null });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = [r1, r2, r3].find((row) => row.receipt_id === id) ?? r1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...match, lines: singleLine }), candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => ok({
+      ok: true,
+      receipt: receiptDetail({ ...r2, status: "confirmed", version: req.expected_version + 1, lines: singleLine }),
+    }));
+
+    await renderReceipts(clients);
+    await click(openDetailById("srch-2"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+
+    // Start a search that stays in loading state while confirming srch-2.
+    await typeInto(inputByName("query"), "Biedronka");
+    await submit(host.querySelector(".budget-range"));
+    expect(searchCallCount).toBe(1);
+
+    // Confirming while search is loading supersedes it with a post-confirm search returning [r3],
+    // and the shared post-refresh handler switches the drawer from omitted srch-2 to r3.
+    await click(button("Confirm receipt", dialog()));
+    expect(searchCallCount).toBe(2);
+    expect(dialog().textContent).toContain("Biedronka Three");
+    expect(dialog().textContent).not.toContain("Lidl Two");
+
+    // Late resolution of the superseded search is ignored.
+    await act(async () => {
+      pendingFirstSearch.resolve({ ok: true, data: { receipts: [r1, r2], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(dialog().textContent).toContain("Biedronka Three");
+
+    // A subsequent search returning empty results closes the drawer via the same shared fallback.
+    await typeInto(inputByName("query"), "EmptyQuery");
+    await submit(host.querySelector(".budget-range"));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("coalesces multi-participant settlement refetches into one in-flight plus at most one dirty follow-up and cancels on unmount", async () => {
+    const store = createPendingReceiptStore();
+    const m1 = receiptSummary({ receipt_id: "coal-1", raw_shop_name: "Group Member 1", version: 1 });
+    const m2 = receiptSummary({ receipt_id: "coal-2", raw_shop_name: "Group Member 2", version: 1 });
+    const ev1 = receiptSummary({ receipt_id: "coal-ev", raw_shop_name: "Group Evidence", version: 1 });
+    const freshRow = receiptSummary({ receipt_id: "coal-1", raw_shop_name: "Group Member 1 Unlinked", version: 2 });
+
+    const t1 = store.tryAcquire("coal-1", "group_unlink");
+    const t2 = store.tryAcquire("coal-2", "group_unlink");
+    const t3 = store.tryAcquire("coal-ev", "group_unlink");
+    if (t1 === null || t2 === null || t3 === null) throw new Error("expected locks");
+
+    const refresh1 = deferred<ReceiptListResult>();
+    let listCallCount = 0;
+    const clients = fakeClients([m1, m2, ev1]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation(() => {
+      listCallCount += 1;
+      if (listCallCount === 1) return ok<ReceiptListResult>({ receipts: [m1, m2, ev1], next_cursor: null });
+      if (listCallCount === 2) return refresh1.promise;
+      return ok<ReceiptListResult>({ receipts: [freshRow], next_cursor: null });
+    });
+
+    const onAccessLoss = vi.fn(() => false);
+    await act(async () => {
+      root.render(
+        <ReceiptsView
+          receiptsApi={clients.rApi}
+          pendingStore={store}
+          actorKey="owner-coalesce"
+          accounts={accounts}
+          connections={[connection]}
+          locale="en"
+          revision={0}
+          onAccessLoss={onAccessLoss}
+        />,
+      );
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listCallCount).toBe(1);
+
+    // Release all 3 participant locks synchronously -> only 1 refresh starts while the others mark dirty.
+    await act(async () => {
+      store.release("coal-1", t1, "group_unlinked");
+      store.release("coal-2", t2, "group_unlinked");
+      store.release("coal-ev", t3, "group_unlinked");
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listCallCount).toBe(2);
+
+    // Completing refresh #1 triggers exactly 1 dirty follow-up pass (#3) and renders the fresh row.
+    await act(async () => {
+      refresh1.resolve({ ok: true, data: { receipts: [m1, m2, ev1], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(listCallCount).toBe(3);
+    expect(host.textContent).toContain("Group Member 1 Unlinked");
+
+    // Unmounting while a dirty refresh is in flight cancels the follow-up pass completely.
+    const u1 = store.tryAcquire("coal-1", "group_unlink");
+    const u2 = store.tryAcquire("coal-2", "group_unlink");
+    if (u1 === null || u2 === null) throw new Error("expected locks");
+    const refreshBeforeUnmount = deferred<ReceiptListResult>();
+    vi.mocked(clients.rApi.receiptsList).mockImplementationOnce(() => refreshBeforeUnmount.promise);
+
+    await act(async () => {
+      store.release("coal-1", u1, "group_unlinked");
+      store.release("coal-2", u2, "group_unlinked");
+      await Promise.resolve();
+    });
+    expect(listCallCount).toBe(3); // mockImplementationOnce intercepted call #4
+    const callsBeforeUnmount = vi.mocked(clients.rApi.receiptsList).mock.calls.length;
+
+    await act(async () => {
+      root.unmount();
+      root = createRoot(host);
+      refreshBeforeUnmount.resolve({ ok: true, data: { receipts: [freshRow], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(vi.mocked(clients.rApi.receiptsList).mock.calls.length).toBe(callsBeforeUnmount);
   });
 });
