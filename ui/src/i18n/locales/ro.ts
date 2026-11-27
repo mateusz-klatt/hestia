@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Tranzacția bancară selectată este deja asociată altui document.",
   "budget.receipts.staleSource": "Tokenul candidatului nu mai este valabil (registru sau comerciant/NIP modificat). Detaliile au fost reîncărcate — verificați asocierea și confirmați din nou.",
   "budget.receipts.totalMismatch": "Suma pozițiilor trebuie să fie egală cu totalul documentului.",
+  "budget.receipts.partialLinesRemainder": "Doar o parte dintre poziții au fost recunoscute — diferența de {amount} va fi înregistrată ca alte poziții.",
+  "budget.receipts.partialLinesSummary": "Doar o parte dintre poziții au fost recunoscute — se va salva doar totalul.",
   "budget.receipts.invalidForm": "Verificați comerciantul, data validă, totalul pozitiv, moneda și NIP.",
   "budget.receipts.confirmError": "Confirmarea a eșuat. Verificați modificările și încercați din nou.",
   "budget.receipts.deleteAction": "Șterge documentul",

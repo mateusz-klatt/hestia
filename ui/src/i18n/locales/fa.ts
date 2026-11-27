@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "تراکنش بانکی انتخاب‌شده از قبل به سند دیگری متصل است.",
   "budget.receipts.staleSource": "توکن گزینه اتصال دیگر معتبر نیست (دفتر کل یا نام فروشنده/NIP تغییر کرده است). جزئیات بازخوانی شد — اتصال را بررسی و دوباره تأیید کنید.",
   "budget.receipts.totalMismatch": "مجموع ردیف‌ها باید برابر با جمع کل باشد.",
+  "budget.receipts.partialLinesRemainder": "اقلام به‌طور کامل شناسایی نشده‌اند — اختلاف {amount} به‌عنوان سایر اقلام ثبت می‌شود.",
+  "budget.receipts.partialLinesSummary": "اقلام به‌طور کامل شناسایی نشده‌اند — فقط مبلغ کل ذخیره می‌شود.",
   "budget.receipts.invalidForm": "نام فروشنده، تاریخ معتبر، مبلغ مثبت، ارز و NIP را بررسی کنید.",
   "budget.receipts.confirmError": "تأیید ناموفق بود. تغییرات خود را بررسی کنید و دوباره تلاش نمایید.",
   "budget.receipts.deleteAction": "حذف سند",

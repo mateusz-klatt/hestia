@@ -61,6 +61,31 @@
   max-width: 100%;
 }
 
+.budget-app .budget-nav button[aria-busy="true"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .4rem;
+  border-style: dashed;
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+.budget-app .budget-nav button[aria-busy="true"]::after {
+  content: "";
+  width: .75rem;
+  height: .75rem;
+  flex: 0 0 auto;
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 999px;
+  animation: budget-nav-spin .7s linear infinite;
+}
+
+@keyframes budget-nav-spin {
+  to { transform: rotate(360deg); }
+}
+
 .budget-app .budget-nav button:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 75%, #000);
   outline-offset: 2px;

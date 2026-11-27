@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Den valgte bankpostering er allerede koblet til et andet dokument.",
   "budget.receipts.staleSource": "Kandidattoken er ikke længere gyldig (postering ændret eller forhandler/NIP rettet). Detaljer genindlæst — vælg kobling og bekræft igen.",
   "budget.receipts.totalMismatch": "Summen af linjer skal svare til totalbeløbet.",
+  "budget.receipts.partialLinesRemainder": "Kun nogle af posterne blev genkendt — forskellen på {amount} registreres som øvrige poster.",
+  "budget.receipts.partialLinesSummary": "Kun nogle af posterne blev genkendt — kun totalbeløbet gemmes.",
   "budget.receipts.invalidForm": "Kontrollér forhandler, gyldig dato, positivt beløb, valuta og NIP.",
   "budget.receipts.confirmError": "Bekræftelse mislykkedes. Kontrollér dine ændringer og prøv igen.",
   "budget.receipts.deleteAction": "Slet dokument",

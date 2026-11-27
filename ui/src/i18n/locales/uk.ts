@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Вибрана банківська транзакція вже пов’язана з іншим документом.",
   "budget.receipts.staleSource": "Токен кандидата зв’язку більше не дійсний (змінився реєстр або продавець/NIP). Деталі перезавантажено — перевірте зв’язок і підтвердіть знову.",
   "budget.receipts.totalMismatch": "Сума позицій має дорівнювати загальній сумі документа.",
+  "budget.receipts.partialLinesRemainder": "Позиції розпізнано лише частково — різницю в розмірі {amount} буде записано як інші позиції.",
+  "budget.receipts.partialLinesSummary": "Позиції розпізнано лише частково — буде збережено тільки загальну суму.",
   "budget.receipts.invalidForm": "Перевірте продавця, дату, додатну суму, валюту та NIP.",
   "budget.receipts.confirmError": "Підтвердження не вдалося. Перевірте зміни й спробуйте ще раз.",
   "budget.receipts.deleteAction": "Видалити документ",

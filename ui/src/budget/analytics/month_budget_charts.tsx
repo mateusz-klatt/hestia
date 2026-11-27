@@ -2,6 +2,7 @@
 // and income vs. spending. Uses React inline SVG with bounded viewBox coordinates derived from BigInt scaling
 // plus keyboard-operable exact HTML data tables.
 import { useId } from "react";
+import type { ReactNode } from "react";
 import { t, tPlural } from "../../i18n";
 import { formatAmount, formatEstimate } from "../model";
 import { CategorySwatch } from "./category_badge";
@@ -149,6 +150,20 @@ function YAxisGrid({ scaleObj, scale, denom, locale }: {
         </text>
       ) : null}
     </g>
+  );
+}
+
+function ChartDataTable({ ariaLabel, children }: { ariaLabel: string; children: ReactNode }) {
+  return (
+    <details className="budget-recurring-evidence">
+      <summary>{t("budget.monthBudget.showData")}</summary>
+      <div className="budget-table-wrap budget-chart-data-wrap" role="region" aria-label={ariaLabel} tabIndex={0}>
+        <table className="budget-month-dashboard-table budget-chart-data-table">
+          <caption>{ariaLabel}</caption>
+          {children}
+        </table>
+      </div>
+    </details>
   );
 }
 
@@ -374,50 +389,44 @@ function CumulativeDailyChart({ budget, daily, paceProjection, schedulePending, 
           </li>
         ) : null}
       </ul>
-      <details className="budget-recurring-evidence">
-        <summary>{t("budget.monthBudget.showData")}</summary>
-        <div className="budget-table-wrap" role="region" aria-label={chartAria} tabIndex={0}>
-          <table className="budget-month-dashboard-table">
-            <caption>{chartAria}</caption>
-            <thead>
-              <tr>
-                <th scope="col">{t("budget.monthBudget.dateLabel")}</th>
-                <th scope="col">{cumulativeLabel}</th>
-                {showProjectedColumn ? <th scope="col">{paceLabel}</th> : null}
-                {showStepsColumn ? <th scope="col">{t("budget.monthBudget.scheduledStepsColumn")}</th> : null}
-              </tr>
-            </thead>
-            <tbody>
-              {allDates.map((date) => {
-                const actual = dailyByDate.get(date);
-                const projPoint = projectionByDate.get(date);
-                return (
-                  <tr key={date}>
-                    <th scope="row">{date}</th>
-                    <td>{actual !== undefined ? money(actual) : noValueText}</td>
-                    {showProjectedColumn ? (
-                      <td>{projPoint !== undefined ? formatRatioHalfEven(projPoint.value, currency, locale) : noValueText}</td>
-                    ) : null}
-                    {showStepsColumn ? (
-                      <td>
-                        {projPoint !== undefined && projPoint.items.length > 0 ? (
-                          <div className="budget-month-steps-cell">
-                            {projPoint.items.map((item, index) => (
-                              <div key={`${item.expectedDate}-${String(index)}`} className={item.overdue ? "budget-warn" : undefined}>
-                                {scheduledItemLabel(item, currency, locale)}
-                              </div>
-                            ))}
+      <ChartDataTable ariaLabel={chartAria}>
+        <thead>
+          <tr>
+            <th scope="col">{t("budget.monthBudget.dateLabel")}</th>
+            <th scope="col">{cumulativeLabel}</th>
+            {showProjectedColumn ? <th scope="col">{paceLabel}</th> : null}
+            {showStepsColumn ? <th scope="col">{t("budget.monthBudget.scheduledStepsColumn")}</th> : null}
+          </tr>
+        </thead>
+        <tbody>
+          {allDates.map((date) => {
+            const actual = dailyByDate.get(date);
+            const projPoint = projectionByDate.get(date);
+            return (
+              <tr key={date}>
+                <th scope="row">{date}</th>
+                <td>{actual !== undefined ? money(actual) : noValueText}</td>
+                {showProjectedColumn ? (
+                  <td>{projPoint !== undefined ? formatRatioHalfEven(projPoint.value, currency, locale) : noValueText}</td>
+                ) : null}
+                {showStepsColumn ? (
+                  <td>
+                    {projPoint !== undefined && projPoint.items.length > 0 ? (
+                      <div className="budget-month-steps-cell">
+                        {projPoint.items.map((item, index) => (
+                          <div key={`${item.expectedDate}-${String(index)}`} className={item.overdue ? "budget-warn" : undefined}>
+                            {scheduledItemLabel(item, currency, locale)}
                           </div>
-                        ) : noValueText}
-                      </td>
-                    ) : null}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </details>
+                        ))}
+                      </div>
+                    ) : noValueText}
+                  </td>
+                ) : null}
+              </tr>
+            );
+          })}
+        </tbody>
+      </ChartDataTable>
     </article>
   );
 }
@@ -828,50 +837,44 @@ function CategorySpendingChart({ series, currency, locale, categories }: {
         {hasCurrent ? <li><span>* {currentMonthText}</span></li> : null}
         {hasProvisional ? <li><span>~ {provisionalText}</span></li> : null}
       </ul>
-      <details className="budget-recurring-evidence">
-        <summary>{t("budget.monthBudget.showData")}</summary>
-        <div className="budget-table-wrap" role="region" aria-label={chartAria} tabIndex={0}>
-          <table className="budget-month-dashboard-table">
-            <caption>{chartAria}</caption>
-            <thead>
-              <tr>
-                <th scope="col">{t("budget.monthBudget.category")}</th>
-                {series.months.map((month) => (
-                  <th key={month.period} scope="col">
-                    <div>{shortMonthTick(month.period, locale, false)} ({month.period})</div>
-                    {month.is_current_month ? <div><small className="budget-muted">{currentMonthText}</small></div> : null}
-                    {month.provisional ? <div><small className="budget-warn">{provisionalText}</small></div> : null}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {[...model.allCategories, ...model.oneOffs].map((cat) => (
-                <tr key={cat.seriesKey} className={cat.oneOff ? "budget-one-off" : cat.id === null ? "is-uncategorised" : undefined}>
-                  <th scope="row">
-                    <CategorySwatch color={{ background: cat.color, hatched: cat.hatched }} />
-                    {cat.name}
-                    {cat.oneOff ? <small className="budget-one-off-tag">{oneOffTagText}</small> : null}
-                    {cat.archived ? <small className="budget-muted"> ({archivedText})</small> : null}
-                  </th>
-                  {series.months.map((month) => {
-                    const value = model.byMonthAndCategory.get(month.period)?.get(cat.oneOff ? cat.seriesKey : cat.id);
-                    return <td key={month.period}>{value === undefined ? t("budget.monthBudget.noValue") : money(value)}</td>;
-                  })}
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <th scope="row"><strong>{t("budget.monthBudget.totalLabel")}</strong></th>
-                {series.months.map((month) => (
-                  <td key={month.period}><strong>{money(month.spent)}</strong></td>
-                ))}
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      </details>
+      <ChartDataTable ariaLabel={chartAria}>
+        <thead>
+          <tr>
+            <th scope="col">{t("budget.monthBudget.category")}</th>
+            {series.months.map((month) => (
+              <th key={month.period} scope="col">
+                <div>{shortMonthTick(month.period, locale, false)} ({month.period})</div>
+                {month.is_current_month ? <div><small className="budget-muted">{currentMonthText}</small></div> : null}
+                {month.provisional ? <div><small className="budget-warn">{provisionalText}</small></div> : null}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {[...model.allCategories, ...model.oneOffs].map((cat) => (
+            <tr key={cat.seriesKey} className={cat.oneOff ? "budget-one-off" : cat.id === null ? "is-uncategorised" : undefined}>
+              <th scope="row">
+                <CategorySwatch color={{ background: cat.color, hatched: cat.hatched }} />
+                {cat.name}
+                {cat.oneOff ? <small className="budget-one-off-tag">{oneOffTagText}</small> : null}
+                {cat.archived ? <small className="budget-muted"> ({archivedText})</small> : null}
+              </th>
+              {series.months.map((month) => {
+                const value = model.byMonthAndCategory.get(month.period)?.get(cat.oneOff ? cat.seriesKey : cat.id);
+                return <td key={month.period}>{value === undefined ? t("budget.monthBudget.noValue") : money(value)}</td>;
+              })}
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr>
+            <th scope="row"><strong>{t("budget.monthBudget.totalLabel")}</strong></th>
+            {series.months.map((month) => (
+              <td key={month.period}><strong>{money(month.spent)}</strong></td>
+            ))}
+          </tr>
+        </tfoot>
+      </ChartDataTable>
     </article>
   );
 }
@@ -1037,43 +1040,37 @@ function IncomeVsSpendChart({ budget, months, locale }: {
         {hasPartialIncome ? <li><span>{partialIncomeText}</span></li> : null}
         {hasGaps ? <li><span>{noStoredDataText}</span></li> : null}
       </ul>
-      <details className="budget-recurring-evidence">
-        <summary>{t("budget.monthBudget.showData")}</summary>
-        <div className="budget-table-wrap" role="region" aria-label={chartAria} tabIndex={0}>
-          <table className="budget-month-dashboard-table">
-            <caption>{chartAria}</caption>
-            <thead>
-              <tr>
-                <th scope="col">{t("budget.monthBudget.monthColumn")}</th>
-                <th scope="col">{budgetReceivedText}</th>
-                {currentExpectedTotal !== null ? <th scope="col">{expectedIncomeLegendText}</th> : null}
-                <th scope="col">{netSpendingText}</th>
-                <th scope="col">{t("budget.monthBudget.statusColumn")}</th>
+      <ChartDataTable ariaLabel={chartAria}>
+        <thead>
+          <tr>
+            <th scope="col">{t("budget.monthBudget.monthColumn")}</th>
+            <th scope="col">{budgetReceivedText}</th>
+            {currentExpectedTotal !== null ? <th scope="col">{expectedIncomeLegendText}</th> : null}
+            <th scope="col">{netSpendingText}</th>
+            <th scope="col">{t("budget.monthBudget.statusColumn")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {monthBars.map(({ month, gap }) => {
+            const markers: string[] = [];
+            if (gap) markers.push(noStoredDataText);
+            if (month.is_current_month) markers.push(incompleteMonthText);
+            if (month.provisional) markers.push(provisionalText);
+            if (month.income_estimate_partial) markers.push(partialIncomeText);
+            return (
+              <tr key={month.period}>
+                <th scope="row">{fullMonthLabel(month.period, locale)}</th>
+                <td>{gap ? noValueText : money(month.start_budget)}</td>
+                {currentExpectedTotal !== null ? (
+                  <td>{month.is_current_month ? money(currentExpectedTotal) : noValueText}</td>
+                ) : null}
+                <td>{gap ? noValueText : money(month.spent)}</td>
+                <td>{markers.length === 0 ? noValueText : markers.join(" · ")}</td>
               </tr>
-            </thead>
-            <tbody>
-              {monthBars.map(({ month, gap }) => {
-                const markers: string[] = [];
-                if (gap) markers.push(noStoredDataText);
-                if (month.is_current_month) markers.push(incompleteMonthText);
-                if (month.provisional) markers.push(provisionalText);
-                if (month.income_estimate_partial) markers.push(partialIncomeText);
-                return (
-                  <tr key={month.period}>
-                    <th scope="row">{fullMonthLabel(month.period, locale)}</th>
-                    <td>{gap ? noValueText : money(month.start_budget)}</td>
-                    {currentExpectedTotal !== null ? (
-                      <td>{month.is_current_month ? money(currentExpectedTotal) : noValueText}</td>
-                    ) : null}
-                    <td>{gap ? noValueText : money(month.spent)}</td>
-                    <td>{markers.length === 0 ? noValueText : markers.join(" · ")}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </details>
+            );
+          })}
+        </tbody>
+      </ChartDataTable>
     </article>
   );
 }

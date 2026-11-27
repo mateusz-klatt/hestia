@@ -523,6 +523,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Ընտրված բանկային գործարքն արդեն կապված է մեկ այլ փաստաթղթի հետ։",
   "budget.receipts.staleSource": "Թեկնածուի կապի թոքենն այլևս վավեր չէ (մատյանը կամ վաճառողը/NIP-ը փոխվել է)։ Մանրամասները վերբեռնվել են — ստուգեք կապը և կրկին հաստատեք։",
   "budget.receipts.totalMismatch": "Տողերի գումարը պետք է հավասար լինի ընդհանուր գումարին։",
+  "budget.receipts.partialLinesRemainder": "Ապրանքները ճանաչվել են միայն մասամբ․ {amount} տարբերությունը կգրանցվի որպես այլ ապրանքներ։",
+  "budget.receipts.partialLinesSummary": "Ապրանքները ճանաչվել են միայն մասամբ․ կպահպանվի միայն ընդհանուր գումարը։",
   "budget.receipts.invalidForm": "Ստուգեք վաճառողին, վավեր ամսաթիվը, դրական գումարը, արժույթը և NIP-ը։",
   "budget.receipts.confirmError": "Հաստատումը չհաջողվեց։ Ստուգեք փոփոխությունները և փորձեք կրկին։",
   "budget.receipts.deleteAction": "Ջնջել փաստաթուղթը",

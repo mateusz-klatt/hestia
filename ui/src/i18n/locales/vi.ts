@@ -523,6 +523,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Giao dịch ngân hàng đã chọn hiện đang liên kết với chứng từ khác.",
   "budget.receipts.staleSource": "Mã ứng viên liên kết không còn hợp lệ (sổ cái hoặc cửa hàng/NIP đã đổi). Đã tải lại chi tiết — vui lòng xem lại liên kết và xác nhận lại.",
   "budget.receipts.totalMismatch": "Tổng các dòng phải bằng tổng số tiền của chứng từ.",
+  "budget.receipts.partialLinesRemainder": "Chỉ đọc được một phần các mục — khoản chênh lệch {amount} sẽ được ghi là các mục khác.",
+  "budget.receipts.partialLinesSummary": "Chỉ đọc được một phần các mục — chỉ lưu tổng số tiền.",
   "budget.receipts.invalidForm": "Kiểm tra tên cửa hàng, ngày hợp lệ, tổng dương, tiền tệ và NIP.",
   "budget.receipts.confirmError": "Xác nhận thất bại. Kiểm tra thay đổi của bạn và thử lại.",
   "budget.receipts.deleteAction": "Xóa chứng từ",

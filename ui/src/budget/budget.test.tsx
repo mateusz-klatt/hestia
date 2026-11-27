@@ -2573,6 +2573,104 @@ describe("receipts tab & capability gate", () => {
     expect(host.textContent).toContain("Only the budget's owner");
     expect(host.querySelector(".budget-views")).toBeNull();
   });
+
+  it("keeps current view mounted with filters and unsaved edits during failed or superseded view switches", async () => {
+    const api = fakeApi();
+    const rApi = fakeReceiptsApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: withAnalytics }));
+    await renderWithReceipts(api, rApi, "owner");
+
+    await click(button("Receipts and documents"));
+    expect(button("Receipts and documents").getAttribute("aria-pressed")).toBe("true");
+
+    // Set a filter query and open the review drawer with an unsaved merchant edit.
+    const filterInput = host.querySelector<HTMLInputElement>('input[name="query"]');
+    expect(filterInput).not.toBeNull();
+    if (!filterInput) throw new Error("missing query input");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(filterInput, "Tab");
+      filterInput.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    await settle();
+
+    await click(button("Details"));
+    const shopInput = host.querySelector<HTMLInputElement>('input[name="raw_shop_name"]');
+    expect(shopInput).not.toBeNull();
+    if (!shopInput) throw new Error("missing raw_shop_name input");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(shopInput, "Edited Unsaved Shop");
+      shopInput.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    // 1. Failed authorization switch (500): current tab stays active, target shows aria-busy, and edits survive failure.
+    const failedCap = deferred<Loaded<BudgetApi["capabilities"]>>();
+    api.capabilities.mockReturnValueOnce(failedCap.promise);
+    if (moreToggle().getAttribute("aria-expanded") !== "true") {
+      await click(moreToggle());
+    }
+    await act(async () => {
+      button("Recurring").click();
+      await Promise.resolve();
+    });
+
+    expect(button("Receipts and documents").getAttribute("aria-pressed")).toBe("true");
+    expect(button("Recurring").getAttribute("aria-pressed")).toBe("false");
+    expect(button("Recurring").getAttribute("aria-busy")).toBe("true");
+    expect(host.querySelector<HTMLInputElement>('input[name="query"]')?.value).toBe("Tab");
+    expect(host.querySelector<HTMLInputElement>('input[name="raw_shop_name"]')?.value).toBe("Edited Unsaved Shop");
+
+    await act(async () => {
+      failedCap.settle({ ok: false, status: 500, error: "budget_unavailable" });
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(button("Receipts and documents").getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector(".budget-nav button[aria-busy=\"true\"]")).toBeNull();
+    expect(host.querySelector<HTMLInputElement>('input[name="query"]')?.value).toBe("Tab");
+    expect(host.querySelector<HTMLInputElement>('input[name="raw_shop_name"]')?.value).toBe("Edited Unsaved Shop");
+
+    // 2. Superseded switch (start Recurring, supersede with Month that fails 500; stale Recurring ok response is ignored).
+    const staleCap = deferred<Loaded<BudgetApi["capabilities"]>>();
+    const supersedingFailCap = deferred<Loaded<BudgetApi["capabilities"]>>();
+    api.capabilities
+      .mockReturnValueOnce(staleCap.promise)
+      .mockReturnValueOnce(supersedingFailCap.promise);
+    if (moreToggle().getAttribute("aria-expanded") !== "true") {
+      await click(moreToggle());
+    }
+    await act(async () => {
+      button("Recurring").click();
+      await Promise.resolve();
+    });
+    expect(button("Recurring").getAttribute("aria-busy")).toBe("true");
+
+    await act(async () => {
+      button("Month").click();
+      await Promise.resolve();
+    });
+    expect(
+      [...host.querySelectorAll('.budget-nav button[aria-busy="true"]')].map((btn) => btn.textContent),
+    ).toEqual(["Month"]);
+
+    await act(async () => {
+      supersedingFailCap.settle({ ok: false, status: 500, error: "budget_unavailable" });
+      await Promise.resolve();
+    });
+    await settle();
+    await act(async () => {
+      staleCap.settle({ ok: true, data: authorization });
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(button("Receipts and documents").getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector(".budget-nav button[aria-busy=\"true\"]")).toBeNull();
+    expect(host.querySelector<HTMLInputElement>('input[name="query"]')?.value).toBe("Tab");
+    expect(host.querySelector<HTMLInputElement>('input[name="raw_shop_name"]')?.value).toBe("Edited Unsaved Shop");
+  });
 });
 
 describe("session upgrade prompt", () => {
@@ -3017,5 +3115,95 @@ describe("simple everyday navigation", () => {
     expect(css).toMatch(/@media\s*\(max-width:\s*360px\)/);
     expect(css).not.toMatch(/text-overflow:\s*ellipsis/);
     expect(css).not.toMatch(/white-space:\s*nowrap/);
+  });
+
+  it("keeps current tab active and marks pending target busy while switching to a More sub-view and during loading", async () => {
+    const api = fakeApi();
+    api.connections.mockImplementation(() => ok({ connections: [connection], capabilities: analysis }));
+    await loadLocale("pl");
+    await render(api, true, "owner");
+
+    const pressedTabs = () => [...host.querySelectorAll<HTMLButtonElement>(".budget-nav button")]
+      .filter((btn) => btn.getAttribute("aria-pressed") === "true");
+    const busyTabs = () => [...host.querySelectorAll<HTMLButtonElement>(".budget-nav button")]
+      .filter((btn) => btn.getAttribute("aria-busy") === "true");
+
+    await click(button("Paragony i dowody"));
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Paragony i dowody"]);
+
+    // Hold capabilities() and recurring() pending while selecting Cykliczne from Więcej.
+    const capPending = deferred<Awaited<ReturnType<BudgetApi["capabilities"]>> extends BudgetResult<infer T> ? T : never>();
+    const recPending = deferred<Awaited<ReturnType<BudgetApi["recurring"]>> extends BudgetResult<infer T> ? T : never>();
+    api.capabilities.mockReturnValueOnce(capPending.promise);
+    api.recurring.mockReturnValueOnce(recPending.promise);
+
+    await click(moreToggle());
+    await act(async () => {
+      button("Cykliczne").click();
+      await Promise.resolve();
+    });
+
+    // While authorization is pending, Paragony i dowody stays active/pressed and Cykliczne is busy (not pressed).
+    expect(button("Paragony i dowody").getAttribute("aria-pressed")).toBe("true");
+    expect(button("Cykliczne").getAttribute("aria-pressed")).toBe("false");
+    expect(button("Cykliczne").getAttribute("aria-busy")).toBe("true");
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Paragony i dowody"]);
+    expect(busyTabs().map((btn) => btn.textContent)).toEqual(["Cykliczne"]);
+
+    await act(async () => {
+      capPending.settle({ ok: true, data: authorization });
+      await Promise.resolve();
+    });
+    await settle();
+
+    // Once authorized, only Cykliczne is pressed (and no longer busy) while recurring data loads.
+    expect(button("Paragony i dowody").getAttribute("aria-pressed")).toBe("false");
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Cykliczne"]);
+    expect(busyTabs()).toEqual([]);
+    expect(host.querySelector('[role="status"]')?.textContent).toBe("Wczytywanie powtarzalnych wydatków…");
+
+    await act(async () => {
+      recPending.settle({ ok: true, data: recurringOf([recurringHint({ label: "Synthetic Fiber" })]) });
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Cykliczne"]);
+    expect(host.textContent).toContain("Synthetic Fiber");
+
+    // Clicking a newer tab before an older capabilities check finishes moves the busy marker and ignores the stale transition.
+    await click(button("Paragony i dowody"));
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Paragony i dowody"]);
+
+    const slowRecurringCap = deferred<Awaited<ReturnType<BudgetApi["capabilities"]>> extends BudgetResult<infer T> ? T : never>();
+    const fastMonthCap = deferred<Awaited<ReturnType<BudgetApi["capabilities"]>> extends BudgetResult<infer T> ? T : never>();
+    api.capabilities
+      .mockReturnValueOnce(slowRecurringCap.promise)
+      .mockReturnValueOnce(fastMonthCap.promise);
+    if (moreToggle().getAttribute("aria-expanded") !== "true") {
+      await click(moreToggle());
+    }
+    await act(async () => { button("Cykliczne").click(); await Promise.resolve(); });
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Paragony i dowody"]);
+    expect(busyTabs().map((btn) => btn.textContent)).toEqual(["Cykliczne"]);
+    await act(async () => { button("Miesiąc").click(); await Promise.resolve(); });
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Paragony i dowody"]);
+    expect(busyTabs().map((btn) => btn.textContent)).toEqual(["Miesiąc"]);
+    await act(async () => { fastMonthCap.settle({ ok: true, data: authorization }); await Promise.resolve(); });
+    await settle();
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Miesiąc"]);
+    expect(busyTabs()).toEqual([]);
+    await act(async () => { slowRecurringCap.settle({ ok: true, data: authorization }); await Promise.resolve(); });
+    await settle();
+    expect(pressedTabs().map((btn) => btn.textContent)).toEqual(["Miesiąc"]);
+    expect(busyTabs()).toEqual([]);
+
+    // Confirm More toggle itself has no secondary-active background fill competing with the active tab pill.
+    const fsModule = "node:fs";
+    const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as {
+      readFileSync: (path: string, encoding: "utf8") => string;
+    };
+    const budgetCss = readFileSync("src/budget/budget.css", "utf8");
+    expect(budgetCss).not.toMatch(/\.budget-nav-more-toggle\[data-secondary-active="true"\]/);
   });
 });

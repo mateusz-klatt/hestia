@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Izvēlētais bankas darījums jau ir sasaistīts ar citu dokumentu.",
   "budget.receipts.staleSource": "Kandidāta sasaistes marķieris vairs nav derīgs (mainījās virsgrāmata vai tirgotājs/NIP). Dati atkārtoti ielādēti — pārbaudiet sasaisti un apstipriniet vēlreiz.",
   "budget.receipts.totalMismatch": "Rindu summai jāatbilst kopsummai.",
+  "budget.receipts.partialLinesRemainder": "Atpazīta tikai daļa pozīciju — starpība {amount} tiks reģistrēta kā citas pozīcijas.",
+  "budget.receipts.partialLinesSummary": "Atpazīta tikai daļa pozīciju — tiks saglabāta tikai kopsumma.",
   "budget.receipts.invalidForm": "Pārbaudiet tirgotāju, derīgu datumu, pozitīvu kopsummu, valūtu un NIP.",
   "budget.receipts.confirmError": "Apstiprināšana neizdevās. Pārbaudiet izmaiņas un mēģiniet vēlreiz.",
   "budget.receipts.deleteAction": "Dzēst dokumentu",
