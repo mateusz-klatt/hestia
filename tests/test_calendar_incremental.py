@@ -512,7 +512,7 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
         self.assertFalse(any(c[0] == "REPORT" for c in shared_transport.calls))
 
     def test_overlapping_rounds_keep_separate_principal_caches_and_discard_after_round(self):
-        root_url = "https://caldav.icloud.com/"
+        root_url = "https://caldav.icloud.com"
         cal1_url = "https://caldav.icloud.com/1/calendars/home/"
         cal2_url = "https://caldav.icloud.com/1/calendars/work/"
         item1 = fixed_dav_item(http.PAYLOAD, uid="overlap-uid-1", href=cal1_url + "one.ics", etag='"v1"')
