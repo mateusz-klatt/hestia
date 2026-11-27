@@ -64,8 +64,8 @@ class OpenApiArtifactTests(unittest.TestCase):
         receipt_candidate = schemas["BudgetReceiptCandidate"]["properties"]
         receipt_candidate.pop("match_rule")
         receipt_candidate.pop("rounding_delta")
-        receipt_candidate["match_strength"]["enum"].remove("medium")
-        receipt_candidate["match_strength"]["enum"].remove("strong")
+        for strength in ("weak", "medium", "strong"):
+            receipt_candidate["match_strength"]["enum"].remove(strength)
         document["info"]["version"] = "0.65.0"
         canonical_0_65 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.assertEqual(hashlib.sha256(canonical_0_65).hexdigest(),
