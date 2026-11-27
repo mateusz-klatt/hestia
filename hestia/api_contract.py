@@ -4181,8 +4181,9 @@ def build_openapi() -> dict:
     }
     globals_contract_schema = {"type": "string", "pattern": r"^0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$"}
     globals_contract_desc = (
-        "Negotiate crib_humidity and crib_battery_ok on Globals / GlobalsPatch starting at 0.62.0. "
-        "Earlier versions or an omitted version omit those keys entirely."
+        "Negotiate crib_humidity and opt-in crib_battery_ok (present only when HESTIA_RTL433_BATTERY_WARN "
+        "is enabled) on Globals / GlobalsPatch starting at 0.62.0. Earlier versions or an omitted version "
+        "omit those keys entirely."
     )
     globals_contract_header = {
         "name": "X-Hestia-Contract-Version", "in": "header", "required": False,

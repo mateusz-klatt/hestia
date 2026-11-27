@@ -635,12 +635,16 @@ class ReadShapeContractTests(unittest.TestCase):
     """Each read DTO must accept the REAL handler output (drift gate — extra=forbid fails on a new field)."""
 
     def test_globals_matches_real_output(self):
-        _wire(api_contract.Globals, globals_snapshot(State()))  # all-null (pollers off)
+        _wire(api_contract.Globals, globals_snapshot(State()))  # all-null (pollers off, battery_warn off)
+        _wire(api_contract.Globals, globals_snapshot(State(), battery_warn=True))  # battery_warn on
         _wire(api_contract.Globals, globals_snapshot(State(), include_crib_extras=False))  # pre-0.62 shape
         st = State()
         st.crib_temp, st.crib_humidity, st.crib_battery_ok = 21.0, 48.0, True
         st.outdoor_temp, st.outdoor_humidity = 14.5, 56.0
-        g = _wire(api_contract.Globals, globals_snapshot(st))
+        g_no_batt = _wire(api_contract.Globals, globals_snapshot(st, battery_warn=False))
+        self.assertEqual((g_no_batt.crib_temp, g_no_batt.crib_humidity, g_no_batt.crib_battery_ok),
+                         (21.0, 48.0, None))
+        g = _wire(api_contract.Globals, globals_snapshot(st, battery_warn=True))
         self.assertEqual((g.crib_temp, g.crib_humidity, g.crib_battery_ok, g.outdoor_temp, g.outdoor_humidity),
                          (21.0, 48.0, True, 14.5, 56.0))
         g_old = _wire(api_contract.Globals, globals_snapshot(st, include_crib_extras=False))

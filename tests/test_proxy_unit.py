@@ -288,8 +288,8 @@ class StateSnapshotTests(unittest.TestCase):
         self.assertEqual(snap["switches"], {"0x0e": True})
         self.assertIn("temperature", snap)
         self.assertEqual(snap["gang"], {"0x07": {"1": True, "2": False}})   # both key levels stringified
-        self.assertEqual(snap["globals"],                  # node-less globals (+ freshness ts / battery flags)
-                         {"crib_temp": None, "crib_humidity": None, "crib_temp_ts": None, "crib_battery_ok": None,
+        self.assertEqual(snap["globals"],                  # TCP state has no contract negotiation -> omit 0.62+ crib extras
+                         {"crib_temp": None, "crib_temp_ts": None,
                           "outdoor_temp": None, "outdoor_humidity": None, "outdoor_temp_ts": None,
                           "outdoor_battery_ok": None})
 
@@ -297,15 +297,27 @@ class StateSnapshotTests(unittest.TestCase):
         rt = proxy.ProxyRuntime()
         rt.state.crib_temp = 22.0
         rt.state.crib_humidity = 48.0
-        snap = proxy.state_snapshot(rt.state)
-        self.assertEqual(snap["globals"], {"crib_temp": 22.0, "crib_humidity": 48.0, "crib_temp_ts": None,
-                                           "crib_battery_ok": None, "outdoor_temp": None,
-                                           "outdoor_humidity": None, "outdoor_temp_ts": None,
-                                           "outdoor_battery_ok": None})
+        rt.state.crib_battery_ok = False
+        with mock.patch.dict("os.environ", {"HESTIA_RTL433_BATTERY_WARN": "1"}):
+            snap = proxy.state_snapshot(rt.state)
+            ctl = proxy._control_state(rt, {"op": "state"})
+        expected = {"crib_temp": 22.0, "crib_temp_ts": None, "outdoor_temp": None,
+                    "outdoor_humidity": None, "outdoor_temp_ts": None,
+                    "outdoor_battery_ok": None}
+        self.assertEqual(snap["globals"], expected)
+        self.assertEqual(ctl["state"]["globals"], expected)
+        self.assertNotIn("crib_humidity", ctl["state"]["globals"])
+        self.assertNotIn("crib_battery_ok", ctl["state"]["globals"])
 
     def test_globals_snapshot_set_and_none(self):
         st = proxy.State()
+        # Default (HESTIA_RTL433_BATTERY_WARN unset): 0.62 snapshot includes crib_humidity and omits crib_battery_ok.
         self.assertEqual(proxy.globals_snapshot(st),
+                         {"crib_temp": None, "crib_humidity": None, "crib_temp_ts": None,
+                          "outdoor_temp": None, "outdoor_humidity": None, "outdoor_temp_ts": None,
+                          "outdoor_battery_ok": None})
+        self.assertNotIn("crib_battery_ok", proxy.globals_snapshot(st))
+        self.assertEqual(proxy.globals_snapshot(st, battery_warn=True),
                          {"crib_temp": None, "crib_humidity": None, "crib_temp_ts": None, "crib_battery_ok": None,
                           "outdoor_temp": None, "outdoor_humidity": None, "outdoor_temp_ts": None,
                           "outdoor_battery_ok": None})
@@ -315,15 +327,22 @@ class StateSnapshotTests(unittest.TestCase):
         st.crib_temp, st.crib_humidity, st.outdoor_temp, st.outdoor_humidity = 21.5, 48.0, -3.0, 44.0
         st.crib_temp_ts, st.crib_battery_ok = 1_700_000_000.0, True
         st.outdoor_temp_ts, st.outdoor_battery_ok = 1_700_000_000.0, False
-        self.assertEqual(proxy.globals_snapshot(st),
+        self.assertEqual(proxy.globals_snapshot(st, battery_warn=False),
                          {"crib_temp": 21.5, "crib_humidity": 48.0, "crib_temp_ts": "2023-11-14T22:13:20Z",
-                          "crib_battery_ok": True, "outdoor_temp": -3.0,
-                          "outdoor_humidity": 44.0, "outdoor_temp_ts": "2023-11-14T22:13:20Z",
-                          "outdoor_battery_ok": False})
-        self.assertEqual(proxy.globals_snapshot(st, include_crib_extras=False),
-                         {"crib_temp": 21.5, "crib_temp_ts": "2023-11-14T22:13:20Z", "outdoor_temp": -3.0,
-                          "outdoor_humidity": 44.0, "outdoor_temp_ts": "2023-11-14T22:13:20Z",
-                          "outdoor_battery_ok": False})
+                          "outdoor_temp": -3.0, "outdoor_humidity": 44.0,
+                          "outdoor_temp_ts": "2023-11-14T22:13:20Z", "outdoor_battery_ok": False})
+        with mock.patch.dict("os.environ", {"HESTIA_RTL433_BATTERY_WARN": "1"}):
+            self.assertEqual(proxy.globals_snapshot(st),
+                             {"crib_temp": 21.5, "crib_humidity": 48.0, "crib_temp_ts": "2023-11-14T22:13:20Z",
+                              "crib_battery_ok": True, "outdoor_temp": -3.0,
+                              "outdoor_humidity": 44.0, "outdoor_temp_ts": "2023-11-14T22:13:20Z",
+                              "outdoor_battery_ok": False})
+            self.assertEqual(proxy.globals_snapshot(st, include_crib_extras=False),
+                             {"crib_temp": 21.5, "crib_temp_ts": "2023-11-14T22:13:20Z", "outdoor_temp": -3.0,
+                              "outdoor_humidity": 44.0, "outdoor_temp_ts": "2023-11-14T22:13:20Z",
+                              "outdoor_battery_ok": False})
+        with mock.patch.dict("os.environ", {"HESTIA_RTL433_BATTERY_WARN": "0"}):
+            self.assertNotIn("crib_battery_ok", proxy.globals_snapshot(st))
 
 
 class ObserveTests(unittest.TestCase):
@@ -1744,6 +1763,28 @@ class NianiaPollerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(gl[0]["fields"]["crib_temp"], 25.6)
         self.assertRegex(gl[0]["fields"]["crib_temp_ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 
+    async def test_tuya_reading_clears_stale_rtl433_humidity_and_battery(self):
+        # Switching from rtl_433 back to Tuya must never leave stale 433 humidity/battery next to fresh Tuya temps.
+        rt, _ = self._rt()
+        rt.state.crib_temp = 21.3
+        rt.state.crib_humidity = 48.0
+        rt.state.crib_battery_ok = False
+        rt.state.dirty = False
+        sub = await rt.event_bus.try_subscribe()
+        dev = mock.Mock()
+        dev.status.return_value = {"238": 213}                    # same temp 21.3 °C from Tuya (no humidity)
+        await self._run(rt, make_device=lambda: dev)
+        self.assertEqual(rt.state.crib_temp, 21.3)
+        self.assertIsNone(rt.state.crib_humidity)
+        self.assertIsNone(rt.state.crib_battery_ok)
+        self.assertTrue(rt.state.dirty)                           # stale humidity cleared -> persisted
+        gl = [e["fields"] for e in _drain_events(sub) if e.get("type") == "globals"]
+        self.assertTrue(gl)
+        self.assertIsNone(gl[0]["crib_humidity"])                 # first delta clears live UI
+        self.assertIsNone(gl[0]["crib_battery_ok"])
+        if len(gl) > 1:
+            self.assertEqual(set(gl[1]), {"crib_temp", "crib_temp_ts"})
+
     async def test_retry_then_success(self):
         rt, sess = self._rt()
         dev = mock.Mock()
@@ -2281,10 +2322,10 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(crib_events), 1)
         self.assertEqual(
             list(crib_events[0].keys()),
-            ["crib_temp", "crib_humidity", "crib_temp_ts", "crib_battery_ok"],
+            ["crib_temp", "crib_humidity", "crib_temp_ts"],
         )
         self.assertEqual(crib_events[0]["crib_humidity"], 55.0)
-        self.assertIsNone(crib_events[0]["crib_battery_ok"])
+        self.assertNotIn("crib_battery_ok", crib_events[0])       # battery_warn off -> key omitted entirely
         self.assertRegex(crib_events[0]["crib_temp_ts"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 
     async def test_crib_synthetic_rtl433_json_sets_humidity_and_humidity_only_change_fires_no_rules(self):
@@ -2354,7 +2395,7 @@ class Sensor433PollerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(sess.sent), 1)                       # fired ONCE on 21.3->25.0, NEVER on humidity changes
         crib_events = [e["fields"] for e in _drain_events(sub) if e.get("type") == "globals"]
         self.assertEqual([e["crib_humidity"] for e in crib_events], [48.0, 62.0, 62.0, 70.0])
-        self.assertTrue(all(e["crib_battery_ok"] is None for e in crib_events))
+        self.assertTrue(all("crib_battery_ok" not in e for e in crib_events))
 
     async def test_crib_humidity_only_change_marks_dirty_without_firing_rules(self):
         rt = proxy.ProxyRuntime()
@@ -2897,6 +2938,24 @@ class AutosaveTests(unittest.IsolatedAsyncioTestCase):
             proxy.seed_device_state(rt)
         self.assertEqual(rt.state.switches, {14: True})
         self.assertEqual(rt.state.gang, {7: {1: False}})
+        self.assertFalse(rt.state.dirty)
+
+    def test_seed_device_state_clears_crib_humidity_when_rtl433_crib_inactive(self):
+        rt = proxy.ProxyRuntime()
+        snap = {"globals": {"crib_temp": 21.3, "crib_humidity": 48.0, "crib_temp_ts": 1_700_000_000.0}}
+        with mock.patch("hestia.store_sql.load_device_state", return_value=snap):
+            proxy.seed_device_state(rt, rtl_crib_model=None)
+        self.assertEqual(rt.state.crib_temp, 21.3)
+        self.assertIsNone(rt.state.crib_humidity)
+        self.assertTrue(rt.state.dirty)
+
+    def test_seed_device_state_preserves_crib_humidity_when_rtl433_crib_active(self):
+        rt = proxy.ProxyRuntime()
+        snap = {"globals": {"crib_temp": 21.3, "crib_humidity": 48.0, "crib_temp_ts": 1_700_000_000.0}}
+        with mock.patch("hestia.store_sql.load_device_state", return_value=snap):
+            proxy.seed_device_state(rt, rtl_crib_model="Prologue-TH")
+        self.assertEqual(rt.state.crib_temp, 21.3)
+        self.assertEqual(rt.state.crib_humidity, 48.0)
         self.assertFalse(rt.state.dirty)
 
     def test_seed_device_state_ignores_absent_blob(self):

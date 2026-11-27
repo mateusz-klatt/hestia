@@ -51,7 +51,8 @@ from .classifier import DeviceType
 from .db import AppMeta
 from .automations import rule_vocab
 from .proxy import (INJECT_GAP_SECS, IR_BUTTONS, KLIMA, _CLOSED_SENTINEL, _LOOPBACK, _audit,
-                    _merged_discovery, _num_env, _truthy_env, globals_snapshot, process_control_op)
+                    _battery_warn_enabled, _merged_discovery, _num_env, _truthy_env,
+                    globals_snapshot, process_control_op)
 
 log = logging.getLogger("hestia.web")
 
@@ -100,7 +101,8 @@ _CONTRACT_VERSION_RE = re.compile(r"0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\
 _CRIB_HUMIDITY_VERSION = (0, 62, 0)
 _CURRENT_CONTRACT_VERSION = tuple(int(part) for part in api_contract.CONTRACT_VERSION.split("."))
 _CONTRACT_VERSION_ERROR = "contract_version_invalid"
-_CRIB_EXTRA_GLOBAL_FIELDS = ("crib_humidity", "crib_battery_ok")
+_CRIB_BATTERY_FIELDS = ("crib_battery_ok",)
+_CRIB_EXTRA_GLOBAL_FIELDS = ("crib_humidity", *_CRIB_BATTERY_FIELDS)
 
 # App-level login (#43). OPT-IN: gating is enforced ONLY when HESTIA_SESSION_SECRET is set. With no secret
 # auth is OFF and routes stay OPEN (loopback/dev and pre-config deployments are unaffected; the reverse
@@ -1770,19 +1772,24 @@ def _contract_version(request, *, allow_query: bool = False):
     return header_version or query_version or (0, 0, 0)
 
 
-def _filter_sse_event(event, *, include_crib_extras: bool):
-    if include_crib_extras or event.get("type") != "globals":
+def _filter_sse_event(event, *, include_crib_extras: bool, include_crib_battery: bool):
+    if event.get("type") != "globals":
         return event
-    fields = {k: v for k, v in event["fields"].items() if k not in _CRIB_EXTRA_GLOBAL_FIELDS}
+    if include_crib_extras and include_crib_battery:
+        return event
+    omitted = _CRIB_BATTERY_FIELDS if include_crib_extras else _CRIB_EXTRA_GLOBAL_FIELDS
+    fields = {k: v for k, v in event["fields"].items() if k not in omitted}
     if not fields:
         return None
     return {**event, "fields": fields}
 
 
-def _sse_payload(event, *, include_crib_extras: bool) -> "bytes | None":
+def _sse_payload(event, *, include_crib_extras: bool, include_crib_battery: bool) -> "bytes | None":
     if event is None:
         return b":keepalive\n\n"
-    filtered = _filter_sse_event(event, include_crib_extras=include_crib_extras)
+    filtered = _filter_sse_event(
+        event, include_crib_extras=include_crib_extras, include_crib_battery=include_crib_battery,
+    )
     if filtered is None:
         return None
     return f"data: {json.dumps(filtered)}\n\n".encode("utf-8")
@@ -1816,6 +1823,7 @@ async def _events(request):
     except ValueError as exc:
         return _json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
     include_crib_extras = version >= _CRIB_HUMIDITY_VERSION
+    include_crib_battery = include_crib_extras and _battery_warn_enabled()
     sub = await _rt(request).event_bus.try_subscribe()
     if sub is None:                            # cap reached or bus closing
         return _empty(HTTPStatus.TOO_MANY_REQUESTS)
@@ -1843,7 +1851,9 @@ async def _events(request):
                 next_authz_check = _clock() + SSE_IDLE_TIMEOUT
             if event is _CLOSED_SENTINEL:
                 break                          # graceful shutdown
-            payload = _sse_payload(event, include_crib_extras=include_crib_extras)
+            payload = _sse_payload(
+                event, include_crib_extras=include_crib_extras, include_crib_battery=include_crib_battery,
+            )
             if payload is None:
                 continue
             try:
