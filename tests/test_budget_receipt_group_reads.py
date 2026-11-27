@@ -8,6 +8,7 @@ from sqlalchemy import event
 
 from hestia import api_contract, authz, db, store_sql
 from hestia.budget import receipt_api
+from hestia.budget.device_token import DeviceTokenError
 from hestia.budget.receipt_store import BudgetReceiptStore
 from tests import test_budget_api as fixture
 from tests.test_budget_analytics_store import AnalyticsCase
@@ -65,6 +66,32 @@ class ReceiptGroupStoreReadsTests(AnalyticsCase):
     def setUp(self):
         super().setUp()
         self.receipts = BudgetReceiptStore(self.sessions, clock=lambda: self.now, cursor_secret=b"synthetic-only")
+
+    def test_group_detail_forbids_device_tokens_at_the_store(self):
+        device_id = "synthetic-device"
+        with self.sessions.begin() as session:
+            _seed(session, "owner", self.accounts["a"], self.now)
+            session.add(db.BudgetReceiptDeviceToken(
+                id=device_id, owner="owner", device_name="Synthetic device", token_hmac="1" * 64,
+                created_at=self.now, expires_at=self.now + 30, hard_expires_at=self.now + 60,
+                sliding_written_at=self.now,
+            ))
+        store = BudgetReceiptStore(self.sessions, clock=lambda: self.now, cursor_secret=b"synthetic-only",
+                                   device_id=device_id)
+        with self.assertRaises(DeviceTokenError) as denied:
+            store.group_detail("owner", _GROUP)
+        self.assertEqual((denied.exception.status, denied.exception.code), (403, "budget_forbidden"))
+
+    def test_grouped_needs_review_detail_skips_one_to_one_candidates(self):
+        with self.sessions.begin() as session:
+            _seed(session, "owner", self.accounts["a"], self.now)
+        for receipt_id in (_MEMBER_A, _EVIDENCE):
+            with self.subTest(receipt_id=receipt_id), mock.patch.object(self.receipts, "_candidates") as scan:
+                detail = self.receipts.detail("owner", receipt_id)
+                scan.assert_not_called()
+                self.assertNotIn("candidates", detail)
+                self.assertNotIn("no_bank_data", detail)
+                self.assertEqual(detail["receipt"]["link_group"]["group_status"], "needs_review")
 
     def test_linked_keyset_filter_and_page_group_lookup(self):
         with self.sessions.begin() as session:

@@ -635,6 +635,13 @@ def _earliest_payload_date(raw_json):
     return min(dates) if dates else None
 
 
+def _enabled_account_filters(owner, *, require_enabled_connection):
+    filters = [Account.owner == owner, Connection.owner == owner, Account.enabled.is_(True)]
+    if require_enabled_connection:
+        filters.append(Connection.enabled.is_(True))
+    return filters
+
+
 class BudgetReceiptStore(BudgetHTTPStore):
     def __init__(self, sessions, *, clock, cursor_secret, device_id=None, actor=None,
                  ref_hmac_secret=None, card_accounts=None):
@@ -891,9 +898,9 @@ class BudgetReceiptStore(BudgetHTTPStore):
             no_bank_data = False if candidates else self._no_bank_data(session, owner, preview)
             return candidates, no_bank_data
 
-    def _scope_accounts_for_rows(self, session, owner, rows) -> tuple[set[str], bool]:
+    def _scope_accounts_for_rows(self, session, owner, rows, *, require_enabled_connection) -> tuple[set[str], bool]:
         enabled = set(session.scalars(select(Account.id).join(Connection).where(
-            Account.owner == owner, Connection.owner == owner, Account.enabled.is_(True),
+            *_enabled_account_filters(owner, require_enabled_connection=require_enabled_connection),
         )).all())
         scoped = enabled
         card_filtered = False
@@ -904,8 +911,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 card_filtered = True
         return scoped, card_filtered
 
-    def _scope_accounts(self, session, owner, row) -> tuple[set[str], bool]:
-        return self._scope_accounts_for_rows(session, owner, (row,))
+    def _scope_accounts(self, session, owner, row, *, require_enabled_connection=False) -> tuple[set[str], bool]:
+        return self._scope_accounts_for_rows(
+            session, owner, (row,), require_enabled_connection=require_enabled_connection,
+        )
 
     @staticmethod
     def _is_matchable(row) -> bool:
@@ -915,10 +924,12 @@ class BudgetReceiptStore(BudgetHTTPStore):
             or getattr(row, "evidence_for_receipt_id", None) is not None
         )
 
-    def _no_bank_data(self, session, owner, row) -> bool:
+    def _no_bank_data(self, session, owner, row, *, require_enabled_connection=False) -> bool:
         if not self._is_matchable(row):
             return False
-        scope_accounts, card_filtered = self._scope_accounts(session, owner, row)
+        scope_accounts, card_filtered = self._scope_accounts(
+            session, owner, row, require_enabled_connection=require_enabled_connection,
+        )
         if not scope_accounts:
             return False
         raw_payloads = session.scalars(select(Transaction.payload_json).where(
@@ -933,7 +944,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             return card_filtered
         return row.receipt_date < earliest
 
-    def _unique_id_matches(self, session, owner, row) -> set[tuple[str, str]]:
+    def _unique_id_matches(self, session, owner, row, *, require_enabled_connection=False) -> set[tuple[str, str]]:
         targets = _receipt_ref_targets(session, row)
         if self._ref_hmac_secret is None or not targets or not _valid_date(getattr(row, "receipt_date", None)):
             return set()
@@ -943,7 +954,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         )
         # Receipt-linked and grouped transactions still count when testing ID uniqueness.
         tx_rows = session.scalars(select(Transaction).join(Account).join(Connection).where(
-            Account.owner == owner, Connection.owner == owner, Account.enabled.is_(True),
+            *_enabled_account_filters(owner, require_enabled_connection=require_enabled_connection),
             Transaction.uncertain.is_(False), ~transfer_leg,
         )).all()
         matches_by_target: dict[tuple[str, str, bool], set[tuple[str, str]]] = {target: set() for target in targets}
@@ -991,7 +1002,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         return unique_primary
 
     @staticmethod
-    def _candidate_rows(session, owner, *, include_receipt_id=None):
+    def _candidate_rows(session, owner, *, include_receipt_id=None, require_enabled_connection=False):
         # Confirmed and needs_review rows reserve a transaction. Re-issuing for one
         # needs_review receipt must still see that receipt's own reservation.
         held = [
@@ -1009,7 +1020,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         )
         grouped = _group_reservation(owner, Transaction.account_id, Transaction.entry_reference)
         return session.execute(select(Transaction, _ROW_ID).join(Account).join(Connection).where(
-            Account.owner == owner, Connection.owner == owner, Account.enabled.is_(True),
+            *_enabled_account_filters(owner, require_enabled_connection=require_enabled_connection),
             Transaction.uncertain.is_(False), ~active_link, ~transfer_leg, ~grouped,
         )).all()
 
@@ -1101,13 +1112,15 @@ class BudgetReceiptStore(BudgetHTTPStore):
         return [item[-1] for item in ranked[:MAX_CANDIDATES]]
 
     @staticmethod
-    def _owned_account(session, owner, account_id):
+    def _owned_account(session, owner, account_id, *, require_enabled_connection=False):
         account = session.get(Account, account_id)
         if account is None or account.owner != owner or not account.enabled:
             raise ReceiptError()
         connection = session.get(Connection, account.connection_id)
         if connection is None or connection.owner != owner:
             raise ReceiptError()
+        if require_enabled_connection and not connection.enabled:
+            raise ReceiptError("budget_receipt_stale_source", 409)
         return account
 
     def _verify_link(self, session, owner, cleaned, link, receipt_id, *, row=None, issued_as_id=False):
@@ -1220,7 +1233,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         )
         if account_id != link["account_id"]:
             raise ReceiptError()
-        self._owned_account(session, owner, account_id)
+        self._owned_account(session, owner, account_id, require_enabled_connection=expect_group)
         transaction = self._named_transaction(session, owner, account_id, row_id)
         if transaction is None:
             raise ReceiptError("budget_receipt_stale_source", 409)
@@ -1529,13 +1542,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
             self._purge(session, owner, now)
             row = self._owned(session, owner, receipt_id)
             receipt = self._detail(session, row)
-            if not self._match_allowed:
+            if not self._match_allowed or "link_group" in receipt:
                 return {"receipt": receipt}
             want_one_to_one = row.status in ("imported", "draft", "needs_review")
-            want_group = (
-                _group_member_eligible(row, allow_imported=True)
-                and not _receipt_in_group(session, owner, row.id)
-            )
+            want_group = _group_member_eligible(row, allow_imported=True)
             if not want_one_to_one and not want_group:
                 return {"receipt": receipt}
             # Re-issue outside the writer lock. The token is bound to this receipt's
@@ -1544,9 +1554,9 @@ class BudgetReceiptStore(BudgetHTTPStore):
         with self._read(owner, permission=None) as session:
             self._owner(session, owner, "budget.receipts.view", require_same_target=True)
             row = self._owned(session, owner, receipt_id)
-            if not self._match_allowed:
-                return {"receipt": self._detail(session, row)}
             receipt = self._detail(session, row)
+            if not self._match_allowed or "link_group" in receipt:
+                return {"receipt": receipt}
             result = {"receipt": receipt}
             candidates = []
             if want_one_to_one:
@@ -1569,6 +1579,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
         return {"ok": True, **payload} if include_ok else payload
 
     def group_detail(self, owner, group_id):
+        if self._device_id is not None:
+            raise DeviceTokenError(403, "budget_forbidden")
         with self._read(owner, permission=None) as session:
             owner = self._owner(session, owner, "budget.receipts.view")
             if not isinstance(group_id, str) or not _UUID.fullmatch(group_id):
@@ -1628,7 +1640,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 "anchor_receipt_id": anchor.id, "transactions": [], "proposals": [],
                 "eligible_receipts": [], "eligible_evidence": [],
             }
-        scope_accounts, _ = self._scope_accounts(session, owner, anchor)
+        scope_accounts, _ = self._scope_accounts(session, owner, anchor, require_enabled_connection=True)
         if not scope_accounts:
             return {
                 "anchor_receipt_id": anchor.id, "transactions": [], "proposals": [],
@@ -1640,7 +1652,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
         anchor_chain = chain_for(anchor.raw_shop_name, anchor.raw_nip)
         anchor_payee_key = _opt_payee_key(anchor.raw_shop_name)
         anchor_groups, anchor_generic = merchant_score_groups(anchor.raw_shop_name, anchor.raw_nip)
-        anchor_id_txs = self._unique_id_matches(session, owner, anchor)
+        anchor_id_txs = self._unique_id_matches(session, owner, anchor, require_enabled_connection=True)
         raw_peers = list(session.scalars(select(Receipt).where(
             Receipt.owner == owner, Receipt.id != anchor.id,
             Receipt.status.in_(("confirmed", "imported")),
@@ -1662,19 +1674,19 @@ class BudgetReceiptStore(BudgetHTTPStore):
             else:
                 evidence_pool_all.append(candidate)
         ev_id_txs_map = {
-            ev_row.id: self._unique_id_matches(session, owner, ev_row)
+            ev_row.id: self._unique_id_matches(session, owner, ev_row, require_enabled_connection=True)
             for ev_row in evidence_pool_all
         }
         ev_scopes = {
-            ev_row.id: self._scope_accounts(session, owner, ev_row)[0]
+            ev_row.id: self._scope_accounts(session, owner, ev_row, require_enabled_connection=True)[0]
             for ev_row in evidence_pool_all
         }
         peer_scopes = {
-            peer.id: self._scope_accounts(session, owner, peer)[0]
+            peer.id: self._scope_accounts(session, owner, peer, require_enabled_connection=True)[0]
             for peer in peer_pool_all
         }
         ranked_txs = []
-        for transaction, tx_row_id in self._candidate_rows(session, owner):
+        for transaction, tx_row_id in self._candidate_rows(session, owner, require_enabled_connection=True):
             if transaction.account_id not in scope_accounts:
                 continue
             try:
@@ -1820,6 +1832,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 (None, False),
             )
             passes = [(best_zero_fee_ev[0], best_zero_fee_ev[1], None, tx_info["tx_amount"])]
+            if best_zero_fee_ev[0] is not None:
+                passes.append((None, False, None, tx_info["tx_amount"]))
             for ev_row, ev_id_hit, _ in matching_ev:
                 ev_ok, ev_fee = _parse_fee(ev_row.fee_amount)
                 if not ev_ok or ev_fee is None:
@@ -1827,8 +1841,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 adj = _fee_adjusted_total(ev_row.total_amount, ev_fee)
                 if adj is not None and compare_money(adj, anchor_total) > 0:
                     passes.append((ev_row, ev_id_hit, ev_fee, adj))
+            zero_fee_groups = set()
             for ev_row, ev_id_hit, fee_amt, target_amount in passes:
                 def is_group_valid(group_ids, *, _ev=ev_row, _fee=fee_amt):
+                    if _fee is None and group_ids in zero_fee_groups:
+                        return False
                     rows = [by_id[gid] for gid in group_ids]
                     all_rows = (*rows, *(() if _ev is None else (_ev,)))
                     if not _date_span_ok(all_rows):
@@ -1842,6 +1859,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
                     (anchor.id, anchor_total), peer_tuples, target_amount,
                     same_day_merchant_ids=same_day_merchant_ids, eligible=is_group_valid,
                 )
+                if fee_amt is None:
+                    zero_fee_groups.update(found)
                 strength = "id" if (tx_info["anchor_id_hit"] or ev_id_hit) else tx_info["tx_match"]["strength"]
                 for group_ids in found:
                     member_rows = sorted(
@@ -1902,7 +1921,9 @@ class BudgetReceiptStore(BudgetHTTPStore):
             if result["transactions"]:
                 result["no_bank_data"] = False
             elif _group_member_eligible(row, allow_imported=True) and not _receipt_in_group(session, owner, row.id):
-                result["no_bank_data"] = self._no_bank_data(session, owner, _receipt_preview(row))
+                result["no_bank_data"] = self._no_bank_data(
+                    session, owner, _receipt_preview(row), require_enabled_connection=True,
+                )
             else:
                 result["no_bank_data"] = False
             return result
@@ -1966,7 +1987,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                     raise ReceiptError("budget_receipt_invalid_request", 400)
             if not _date_span_ok(all_rows):
                 raise ReceiptError("budget_receipt_invalid_request", 400)
-            scoped, _ = self._scope_accounts_for_rows(session, owner, all_rows)
+            scoped, _ = self._scope_accounts_for_rows(session, owner, all_rows, require_enabled_connection=True)
             if account_id not in scoped:
                 raise ReceiptError("budget_receipt_stale_source", 409)
             if ev_row is None:

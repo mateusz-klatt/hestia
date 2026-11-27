@@ -135,6 +135,81 @@ class ReceiptGroupWriteTests(AnalyticsCase):
             "candidate_token": candidate["candidate_token"],
         }
 
+    def test_group_matching_excludes_disabled_connections(self):
+        connection_id = "synthetic-second-bank"
+        with self.sessions.begin() as session:
+            session.add(db.BudgetConnection(
+                id=connection_id, owner="owner", application_id="app", bank_name="Synthetic Bank",
+                country="PL", enabled=True, next_attempt=0, failures=0,
+            ))
+            session.get(db.BudgetAccount, self.acc_2).connection_id = connection_id
+
+        remittance = ["Płatność BLIK Nr transakcji 77788899900"]
+        self._add_tx("active-debit", account_id=self.acc_a, remittance=remittance)
+        self._add_tx("second-debit", account_id=self.acc_2, remittance=remittance)
+        anchor = self._add_receipt(total_amount="40", blik_ref="77788899900")
+        peer = self._add_receipt(total_amount="60")
+        members = [{"receipt_id": rid, "expected_version": 1} for rid in (anchor, peer)]
+        request = {"receipt_id": anchor}
+        before = self.receipts.group_candidates("owner", request)
+        self.assertEqual({tx["account_id"] for tx in before["transactions"]}, {self.acc_a, self.acc_2})
+        self.assertTrue(all(tx["match_strength"] != "id" for tx in before["transactions"]))
+        stale_tx = next(tx for tx in before["transactions"] if tx["account_id"] == self.acc_2)
+
+        older_receipt = self._add_receipt(receipt_date="2026-11-01", card_last4="2222")
+        scoped_store = self._make_receipt_store(card_accounts={"2222": (self.acc_2,)})
+        self.assertTrue(scoped_store.group_candidates("owner", {"receipt_id": older_receipt})["no_bank_data"])
+        with self.sessions.begin() as session:
+            session.get(db.BudgetConnection, connection_id).enabled = False
+            self.assertTrue(session.get(db.BudgetAccount, self.acc_2).enabled)
+
+        after = self.receipts.group_candidates("owner", request)
+        self.assertEqual([(tx["account_id"], tx["match_strength"]) for tx in after["transactions"]],
+                         [(self.acc_a, "id")])
+        self.assertEqual([(p["account_id"], p["match_strength"]) for p in after["proposals"]],
+                         [(self.acc_a, "id")])
+        self.assertFalse(scoped_store.group_candidates("owner", {"receipt_id": older_receipt})["no_bank_data"])
+        with self.assertRaises(ReceiptError) as rejected:
+            self.receipts.group_link("owner", {"link": self._link_from_candidate(stale_tx), "members": members})
+        self.assertEqual((rejected.exception.status, rejected.exception.code), (409, "budget_receipt_stale_source"))
+        self.assertEqual(self.rows(db.BudgetReceiptLinkGroup), [])
+
+        linked = self.receipts.group_link("owner", {
+            "link": self._link_from_candidate(after["proposals"][0]), "members": members,
+        })
+        group_id = linked["group"]["group_id"]
+        with self.sessions.begin() as session:
+            account = session.get(db.BudgetAccount, self.acc_a)
+            session.get(db.BudgetConnection, account.connection_id).enabled = False
+            reconcile_receipt_links(session, "owner", self.now + 1)
+        self.assertEqual(self.receipts.group_detail("owner", group_id)["group"]["group_status"], "needs_review")
+        self.assertTrue(self.receipts.group_unlink("owner", {"group_id": group_id, "expected_version": 2})["unlinked"])
+
+    def test_group_candidates_fall_back_when_zero_fee_evidence_exceeds_date_span(self):
+        self._add_tx("split-debit", booking_date="2026-11-22",
+                     remittance=["PAYU SA ALLEGRO ID 9988776611"], creditor="PayU S.A.")
+        anchor = self._add_receipt(total_amount="40")
+        nearby = self._add_receipt(total_amount="60", receipt_date="2026-11-22")
+        older = self._add_receipt(total_amount="60", receipt_date="2026-11-07", document_kind="invoice",
+                                  due_date="2026-11-25")
+        evidence = self._add_receipt(shop_name="PayU", total_amount="100", receipt_date="2026-11-22",
+                                     gateway="payu", fee_amount="0", gateway_ref="9988776611")
+
+        proposals = self.receipts.group_candidates("owner", {"receipt_id": anchor})["proposals"]
+        self.assertEqual(len(proposals), 2)
+        self.assertEqual({frozenset(p["member_receipt_ids"]): p["evidence_receipt_id"] for p in proposals}, {
+            frozenset((anchor, nearby)): evidence,
+            frozenset((anchor, older)): None,
+        })
+        self.assertEqual(proposals[0]["match_strength"], "id")
+        member_only = next(p for p in proposals if p["evidence_receipt_id"] is None)
+        self.assertIsNone(member_only["fee_amount"])
+        linked = self.receipts.group_link("owner", {
+            "link": self._link_from_candidate(member_only),
+            "members": [{"receipt_id": rid, "expected_version": 1} for rid in (anchor, older)],
+        })
+        self.assertIsNone(linked["evidence"])
+
     def test_apple_consolidated_debit_exclusion_and_atomic_group_link(self):
         shop_id = self._add_shop(name="Apple Distribution", chain_key="apple")
         self._add_tx(
