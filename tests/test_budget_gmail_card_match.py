@@ -190,9 +190,34 @@ class CardPurchaseTests(AnalyticsCase):
         self.ledger("play", lines=["Card purchase", "GOOGLE *PLAY"], amount="9.99")
         self.assertIsNone(self.match(google))
 
-    def test_google_issuer_variants_do_not_match_an_unrelated_youtube_debit(self):
+    def test_google_poland_requires_a_unique_first_party_debit_with_the_same_amount(self):
+        self.ledger("developer", lines=["Card purchase", "GOOGLE*Indie Developer"], amount="9.99")
+        issuers = ("Google Poland", "Google Poland Sp. z o.o.")
+        for issuer in issuers:
+            with self.subTest(issuer=issuer):
+                self.assertIsNone(self.match(replace(DOCUMENT, issuer=issuer, amount="9.99")))
+
+        with self.sessions.begin() as session:
+            session.delete(session.get(db.BudgetTransaction, (self.accounts["a"], "developer")))
         self.ledger("youtube", lines=["Card purchase", "GOOGLE*YouTube"], amount="9.99")
-        for issuer in ("Google Poland", "Google Poland Sp. z o.o.", "Google Pay", "Google One"):
+        for issuer in issuers:
+            with self.subTest(issuer=issuer):
+                document = replace(DOCUMENT, issuer=issuer, amount="9.99")
+                self.assertEqual(self.match(document).entry_reference, "youtube")
+                self.assertIsNone(self.match(replace(document, amount="14.99")))
+
+        self.ledger("play", lines=["Card purchase", "GOOGLE*Play"], amount="14.99")
+        for issuer in issuers:
+            with self.subTest(issuer=issuer):
+                self.assertIsNone(self.match(replace(DOCUMENT, issuer=issuer, amount="9.99")))
+
+    def test_google_pay_is_a_payment_method_without_merchant_evidence(self):
+        self.ledger("youtube", lines=["Card purchase", "GOOGLE*YouTube"], amount="9.99")
+        self.assertIsNone(self.match(replace(DOCUMENT, issuer="Google Pay", amount="9.99")))
+
+    def test_google_product_issuers_do_not_match_an_unrelated_youtube_debit(self):
+        self.ledger("youtube", lines=["Card purchase", "GOOGLE*YouTube"], amount="9.99")
+        for issuer in ("Google One", "Google Cloud", "Google Workspace"):
             with self.subTest(issuer=issuer):
                 self.assertIsNone(self.match(replace(DOCUMENT, issuer=issuer, amount="9.99")))
 

@@ -48,7 +48,7 @@ _GOOGLE_BILLING = re.compile(
     r"(?:\s+g\.co/helppay#?)?(?:\s+[a-z]{2})?"
 )
 _GOOGLE_ISSUERS = {("google",), ("google", "commerce"), ("google", "ireland"), ("google", "llc"),
-                   ("google", "payment"), ("google", "payments")}
+                   ("google", "payment"), ("google", "payments"), ("google", "poland")}
 _BILLING_DESCRIPTORS = {
     ("apple", "distribution", "international"): re.compile(r"apple\.com/bill(?:\s+cork)?(?:\s+[a-z]{2})?"),
 }
