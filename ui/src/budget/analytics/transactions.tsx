@@ -735,6 +735,7 @@ function TransactionReceiptLink({ receipt, locale }: {
   receipt: AnalyticsTransactionReceipt;
   locale: string;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const shopText = receipt.shop_name === null || receipt.shop_name === ""
     ? t("budget.receipts.unknownMerchant")
     : isRedactedValue(receipt.shop_name)
@@ -746,15 +747,18 @@ function TransactionReceiptLink({ receipt, locale }: {
   const details = amountText === null ? shopText : `${shopText} · ${amountText}`;
   const label = t("budget.transactions.linkedReceipt", { details });
   return (
-    <span
+    <button
+      type="button"
       className="budget-chip budget-link-indicator budget-tx-receipt-link"
       data-receipt-status={receipt.status}
+      aria-expanded={expanded}
       title={label}
       aria-label={label}
+      onClick={() => { setExpanded((current) => !current); }}
     >
       <span className="budget-link-icon" aria-hidden="true">🧾</span>
-      <span className="budget-link-detail">{shopText}</span>
-    </span>
+      <span className="budget-link-detail">{expanded ? details : shopText}</span>
+    </button>
   );
 }
 

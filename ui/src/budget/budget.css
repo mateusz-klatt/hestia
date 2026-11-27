@@ -367,9 +367,20 @@
   max-width: 100%;
   overflow-wrap: break-word;
 }
+.budget-app button.budget-link-indicator,
 .budget-link-indicator {
   min-width: 0;
+  min-height: 0;
+  padding: .14rem .55rem;
+  border-radius: 999px;
+  font-size: .8rem;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--fg-soft);
+  background: color-mix(in srgb, var(--border) 30%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--border-strong) 55%, transparent);
   white-space: nowrap;
+  cursor: pointer;
 }
 .budget-link-icon {
   flex: 0 0 auto;
@@ -383,8 +394,18 @@
   white-space: nowrap;
 }
 @media (max-width: 480px) {
-  .budget-link-detail {
+  .budget-app button.budget-link-indicator,
+  .budget-link-indicator {
+    min-height: 2.75rem;
+    min-width: 2.75rem;
+    justify-content: center;
+  }
+  .budget-link-indicator[aria-expanded="false"] .budget-link-detail {
     display: none;
+  }
+  .budget-link-indicator[aria-expanded="true"] .budget-link-detail {
+    display: inline;
+    max-width: 12rem;
   }
 }
 .budget-one-off { font-style: italic; }

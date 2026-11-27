@@ -7,6 +7,7 @@ from decimal import Decimal
 import hashlib
 import hmac
 import json
+import logging
 import math
 import os
 import re
@@ -472,6 +473,7 @@ def _merchant_tx_match(payload, creditor, debtor, *, direction, raw_nip, chain, 
 
 
 _UNSET = object()
+log = logging.getLogger("hestia.budget.receipt_store")
 
 
 def _short_account_label(bank_name, product, masked_suffix):
@@ -481,6 +483,33 @@ def _short_account_label(bank_name, product, masked_suffix):
         else (product or bank_name)
     )
     return f"{base} ••{masked_suffix}" if masked_suffix else base
+
+
+def _linked_transaction_summary(bank_name, product, masked_suffix, payload_json, group_amount, group_currency):
+    if bank_name is None:
+        return None
+    try:
+        payload = _json(payload_json)
+        if not isinstance(payload, dict):
+            raise ValueError
+    except (ValueError, TypeError, RecursionError):
+        log.warning("budget_receipt_linked_tx_json_invalid")
+        return None
+    booking_date = next(
+        (value for key in ("booking_date", "value_date", "transaction_date")
+         if _valid_date(value := payload.get(key))),
+        None,
+    )
+    raw_amount = payload.get("amount")
+    amount = raw_amount if isinstance(raw_amount, str) and raw_amount else group_amount
+    raw_currency = payload.get("currency")
+    currency = raw_currency if isinstance(raw_currency, str) and _CUR3.fullmatch(raw_currency) else group_currency
+    return {
+        "account_label": _short_account_label(bank_name, product, masked_suffix),
+        "booking_date": booking_date,
+        "amount": amount,
+        "currency": currency,
+    }
 
 
 def _group_ref(group, member_count):
@@ -1505,60 +1534,52 @@ class BudgetReceiptStore(BudgetHTTPStore):
                                             separators=(",", ":")).encode("ascii")).hexdigest()
         return limit, month, status, linked, query, kind, evidence, context
 
-    def _list(self, owner, values, *, search):
+    def _list(self, owner, values, *, search, include_linked_transaction=False):
         limit, month, status, linked, query, kind, evidence, context = self._filters(values, search=search)
         with self.transaction() as session:
             owner = self._owner(session, owner, "budget.receipts.view")
             now = self._now()
             self._purge(session, owner, now)
             cursor = self._decode_cursor(owner, context, values.get("cursor"))
-            member = aliased(ReceiptLinkMember, name="m")
-            group_member = aliased(ReceiptLinkGroup, name="gm")
-            group_evidence = aliased(ReceiptLinkGroup, name="ge")
-            tx = aliased(Transaction, name="tx")
-            acct = aliased(Account, name="acct")
-            conn = aliased(Connection, name="conn")
-            display = aliased(AccountDisplay, name="disp")
-            tx_account_id = func.coalesce(Receipt.linked_account_id, group_member.account_id, group_evidence.account_id)
-            tx_entry_ref = func.coalesce(Receipt.linked_entry_ref, group_member.entry_reference, group_evidence.entry_reference)
-            query_obj = (
-                select(
-                    Receipt,
-                    conn.bank_name,
-                    display.product,
-                    display.masked_suffix,
-                    func.coalesce(
-                        func.json_extract(tx.payload_json, "$.booking_date"),
-                        func.json_extract(tx.payload_json, "$.value_date"),
-                        func.json_extract(tx.payload_json, "$.transaction_date"),
-                    ),
-                    func.coalesce(
-                        func.json_extract(tx.payload_json, "$.amount"),
-                        group_member.tx_amount,
-                        group_evidence.tx_amount,
-                    ),
-                    func.coalesce(
-                        func.json_extract(tx.payload_json, "$.currency"),
-                        group_member.currency,
-                        group_evidence.currency,
-                    ),
+            join_tx = include_linked_transaction and self._tx_summary_allowed
+            if join_tx:
+                member = aliased(ReceiptLinkMember, name="m")
+                group_member = aliased(ReceiptLinkGroup, name="gm")
+                group_evidence = aliased(ReceiptLinkGroup, name="ge")
+                tx = aliased(Transaction, name="tx")
+                acct = aliased(Account, name="acct")
+                conn = aliased(Connection, name="conn")
+                display = aliased(AccountDisplay, name="disp")
+                tx_account_id = func.coalesce(Receipt.linked_account_id, group_member.account_id, group_evidence.account_id)
+                tx_entry_ref = func.coalesce(Receipt.linked_entry_ref, group_member.entry_reference, group_evidence.entry_reference)
+                query_obj = (
+                    select(
+                        Receipt,
+                        conn.bank_name,
+                        display.product,
+                        display.masked_suffix,
+                        tx.payload_json,
+                        func.coalesce(group_member.tx_amount, group_evidence.tx_amount),
+                        func.coalesce(group_member.currency, group_evidence.currency),
+                    )
+                    .outerjoin(member, and_(member.receipt_id == Receipt.id, member.owner == Receipt.owner))
+                    .outerjoin(group_member, and_(group_member.id == member.group_id, group_member.owner == Receipt.owner))
+                    .outerjoin(
+                        group_evidence,
+                        and_(
+                            group_evidence.evidence_receipt_id == Receipt.id,
+                            group_evidence.owner == Receipt.owner,
+                            group_evidence.evidence_receipt_id.is_not(None),
+                        ),
+                    )
+                    .outerjoin(tx, and_(tx.account_id == tx_account_id, tx.entry_reference == tx_entry_ref))
+                    .outerjoin(acct, and_(acct.id == tx.account_id, acct.owner == Receipt.owner))
+                    .outerjoin(conn, and_(conn.id == acct.connection_id, conn.owner == Receipt.owner))
+                    .outerjoin(display, display.account_id == acct.id)
+                    .where(Receipt.owner == owner)
                 )
-                .outerjoin(member, and_(member.receipt_id == Receipt.id, member.owner == Receipt.owner))
-                .outerjoin(group_member, and_(group_member.id == member.group_id, group_member.owner == Receipt.owner))
-                .outerjoin(
-                    group_evidence,
-                    and_(
-                        group_evidence.evidence_receipt_id == Receipt.id,
-                        group_evidence.owner == Receipt.owner,
-                        group_evidence.evidence_receipt_id.is_not(None),
-                    ),
-                )
-                .outerjoin(tx, and_(tx.account_id == tx_account_id, tx.entry_reference == tx_entry_ref))
-                .outerjoin(acct, and_(acct.id == tx.account_id, acct.owner == Receipt.owner))
-                .outerjoin(conn, and_(conn.id == acct.connection_id, conn.owner == Receipt.owner))
-                .outerjoin(display, display.account_id == acct.id)
-                .where(Receipt.owner == owner)
-            )
+            else:
+                query_obj = select(Receipt).where(Receipt.owner == owner)
             if month is not None:
                 query_obj = query_obj.where(Receipt.receipt_date >= month + "-01", Receipt.receipt_date <= month + "-31")
             if status is not None:
@@ -1591,25 +1612,22 @@ class BudgetReceiptStore(BudgetHTTPStore):
             next_cursor = self._encode_cursor(owner, context, selected[-1][0]) if more and selected else None
             links = _group_links_for_receipts(session, owner, [item[0].id for item in selected])
             receipts = []
-            for row, bank_name, product, masked_suffix, booking_date, tx_amount, tx_currency in selected:
-                linked_tx = (
-                    {
-                        "account_label": _short_account_label(bank_name, product, masked_suffix),
-                        "booking_date": booking_date,
-                        "amount": tx_amount,
-                        "currency": tx_currency,
-                    }
-                    if self._tx_summary_allowed and bank_name is not None
-                    else None
-                )
+            for item in selected:
+                row = item[0]
+                if not include_linked_transaction:
+                    linked_tx = _UNSET
+                elif not join_tx:
+                    linked_tx = None
+                else:
+                    linked_tx = _linked_transaction_summary(*item[1:])
                 receipts.append(self._summary(session, row, group_link=links.get(row.id), linked_transaction=linked_tx))
             return {"receipts": receipts, "next_cursor": next_cursor}
 
-    def list(self, owner, values):
-        return self._list(owner, values, search=False)
+    def list(self, owner, values, *, include_linked_transaction=False):
+        return self._list(owner, values, search=False, include_linked_transaction=include_linked_transaction)
 
-    def search(self, owner, values):
-        return self._list(owner, values, search=True)
+    def search(self, owner, values, *, include_linked_transaction=False):
+        return self._list(owner, values, search=True, include_linked_transaction=include_linked_transaction)
 
     @staticmethod
     def _matches(session, row, needle):

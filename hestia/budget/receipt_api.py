@@ -91,10 +91,12 @@ def _receipt_id(request, *, field="receipt_id"):
     return request.query[field]
 
 
-def _run(owner, operation, values, secret, device_id, actor=None):
+def _run(owner, operation, values, secret, device_id, actor=None, *, include_linked_transaction=False):
     store = _store(secret, device_id, actor)
     if operation == "parse-text":
         return store.parse_text(owner, values["text"], source_kind=values["source_kind"])
+    if operation in ("list", "search"):
+        return getattr(store, operation)(owner, values, include_linked_transaction=include_linked_transaction)
     return getattr(store, operation.replace("/", "_"))(owner, values)
 
 
@@ -209,7 +211,11 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
             if not enabled():
                 raise api._Rejected(404, "budget_receipts_disabled")
             actor = request.get(device_token.ACTOR_REQUEST_KEY, owner) if device_id is not None else owner
-            result = await api._settled_thread(lambda: _run(owner, operation, values, secret, device_id, actor))
+            include_linked_tx = version >= _LINK_INDICATORS_VERSION
+            result = await api._settled_thread(
+                lambda: _run(owner, operation, values, secret, device_id, actor,
+                             include_linked_transaction=include_linked_tx),
+            )
             return _response(operation, result, version)
         except (ReceiptError, device_token.DeviceTokenError) as exc:
             return api._error(exc.status, exc.code)

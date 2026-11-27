@@ -24,7 +24,7 @@ import re
 import threading
 
 from cryptography.exceptions import InvalidTag
-from sqlalchemy import and_, case, func, or_, select, tuple_
+from sqlalchemy import and_, case, func, or_, select, text, tuple_
 from sqlalchemy.orm import aliased
 
 from .. import authz, db
@@ -673,16 +673,23 @@ def _receipt_shop_name(raw_shop_name, shop_name, forwarded_sender_domain):
     return redact_digit_field(candidate) if candidate else forwarded_sender_domain
 
 
-def _can_view_receipts(session, owner, device_id=None):
-    phase = authz.policy_phase(session)
-    if phase != authz.POLICY_PHASE_LEGACY and not authz.authorize(
-        session, owner, "budget.receipts.view", owner=owner,
+def _can_view_receipt_links(session, owner, device_id=None):
+    if not device_token.receipts_enabled():
+        return False
+    if authz.policy_phase(session) != authz.POLICY_PHASE_LEGACY and not authz.authorize(
+        session, owner, "budget.receipts.match", owner=owner,
     ):
         return False
     if device_id is None:
         return True
     token = session.get(db.BudgetReceiptDeviceToken, device_id)
-    return token is not None and "budget.receipts.view" in device_token._issued_mask(token)
+    return (
+        token is not None
+        and token.owner == owner
+        and (token.actor or token.owner) == owner
+        and token.revoked_at is None
+        and "budget.receipts.match" in device_token._issued_mask(token)
+    )
 
 
 def _linked_receipts_for_transactions(session, owner, keys):
@@ -732,13 +739,14 @@ def _linked_receipts_for_transactions(session, owner, keys):
             first_ms.name,
             first_mr.forwarded_sender_domain,
         )
+        .select_from(t)
         .outerjoin(
             r1,
             and_(
                 r1.linked_account_id == t.account_id,
                 r1.linked_entry_ref == t.entry_reference,
                 r1.owner == owner,
-                r1.status.in_(("confirmed", "needs_review")),
+                text("r1.status IN ('confirmed', 'needs_review')"),
                 r1.linked_account_id.is_not(None),
                 r1.linked_entry_ref.is_not(None),
             ),
@@ -1033,12 +1041,12 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                       reverse=True)
             page, next_cursor = self._page(rows, cursor, filters, snapshot["digest"])
             wired = deepcopy([_wire_transaction(row) for row in page])
-            if include_receipts:
+            if include_receipts and _can_view_receipt_links(session, owner, device_id):
                 receipts_by_key = (
                     _linked_receipts_for_transactions(
                         session, owner, [(row["account_id"], row["entry_reference"]) for row in page],
                     )
-                    if page and _can_view_receipts(session, owner, device_id)
+                    if page
                     else {}
                 )
                 for item in wired:

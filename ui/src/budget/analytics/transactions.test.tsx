@@ -1530,14 +1530,26 @@ describe("manual own-transfer pairing", () => {
     const rows = [...host.querySelectorAll(".budget-transaction-table tbody tr")];
     expect(rows).toHaveLength(3);
 
-    const firstBadge = rows[0]?.querySelector(".budget-tx-receipt-link");
+    const firstBadge = rows[0]?.querySelector<HTMLButtonElement>("button.budget-tx-receipt-link");
+    expect(firstBadge).not.toBeNull();
+    expect(firstBadge?.type).toBe("button");
+    expect(firstBadge?.getAttribute("aria-expanded")).toBe("false");
     expect(firstBadge?.textContent).toContain("🧾");
     expect(firstBadge?.textContent).toContain("Biedronka");
     expect(firstBadge?.getAttribute("title")).toContain("Biedronka");
     expect(firstBadge?.getAttribute("aria-label")).toContain("Biedronka");
     expect(firstBadge?.getAttribute("data-receipt-status")).toBe("confirmed");
 
-    const secondBadge = rows[1]?.querySelector(".budget-tx-receipt-link");
+    // Tapping the indicator button expands details inline (for touch viewports) without opening the row drawer.
+    await click(firstBadge as HTMLButtonElement);
+    expect(firstBadge?.getAttribute("aria-expanded")).toBe("true");
+    expect(firstBadge?.querySelector(".budget-link-detail")?.textContent).toContain("42.50 PLN");
+    expect(host.querySelector(".budget-entry-drawer")).toBeNull();
+    await click(firstBadge as HTMLButtonElement);
+    expect(firstBadge?.getAttribute("aria-expanded")).toBe("false");
+
+    const secondBadge = rows[1]?.querySelector<HTMLButtonElement>("button.budget-tx-receipt-link");
+    expect(secondBadge).not.toBeNull();
     expect(secondBadge?.textContent).toContain("🧾");
     expect(secondBadge?.textContent).toContain("Apple +2");
     expect(secondBadge?.getAttribute("title")).toContain("Apple +2");

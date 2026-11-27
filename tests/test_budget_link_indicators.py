@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import unittest
 from unittest import mock
 
@@ -185,6 +186,9 @@ def _seed_links(session, owner, account_a, account_b, now):
 class LinkIndicatorsStoreTests(AnalyticsCase):
     def setUp(self):
         super().setUp()
+        flag_patch = mock.patch.dict(os.environ, {receipt_api.FLAG: "1"})
+        flag_patch.start()
+        self.addCleanup(flag_patch.stop)
         self.views = BudgetAnalyticsViews(self.sessions, cursor_secret=b"synthetic-secret")
         self.receipts = BudgetReceiptStore(self.sessions, clock=lambda: self.now, cursor_secret=b"synthetic-secret")
         with self.sessions.begin() as session:
@@ -268,7 +272,14 @@ class LinkIndicatorsStoreTests(AnalyticsCase):
         event.listen(self.engine, "before_cursor_execute", on_sql)
         self.addCleanup(event.remove, self.engine, "before_cursor_execute", on_sql)
 
-        listed = self.receipts.list("owner", {"evidence": "include"})
+        # Default (pre-0.60): skips budget_transactions join entirely and omits linked_transaction.
+        pre60 = self.receipts.list("owner", {"evidence": "include"})
+        self.assertEqual(tx_queries, [])
+        self.assertTrue(pre60["receipts"])
+        for row in pre60["receipts"]:
+            self.assertNotIn("linked_transaction", row)
+
+        listed = self.receipts.list("owner", {"evidence": "include"}, include_linked_transaction=True)
         api_contract.BudgetReceiptListResult.model_validate(listed)
         self.assertEqual(len(tx_queries), 1)
         by_id = {row["receipt_id"]: row["linked_transaction"] for row in listed["receipts"]}
@@ -294,22 +305,70 @@ class LinkIndicatorsStoreTests(AnalyticsCase):
             })
         self.assertIsNone(by_id[_R_UNLINKED])
 
-        # Account with no BudgetAccountDisplay falls back to bank_name alone.
+        # Account with no BudgetAccountDisplay falls back to bank_name alone; missing JSON fields fall back to group metadata.
         with self.sessions.begin() as session:
             session.delete(session.get(db.BudgetAccountDisplay, self.accounts["b"]))
-        searched = self.receipts.search("owner", {"query": "Apteka"})
+            session.get(db.BudgetTransaction, (self.accounts["a"], "tx-grp-solo")).payload_json = "{}"
+        searched = self.receipts.search("owner", {"query": "Apteka"}, include_linked_transaction=True)
         # Search matches raw_shop_name/raw_nip/lines; verify search returns linked_transaction on Biedronka.
-        searched_b = self.receipts.search("owner", {"query": "Biedronka"})
+        searched_b = self.receipts.search("owner", {"query": "Biedronka"}, include_linked_transaction=True)
         api_contract.BudgetReceiptListResult.model_validate(searched_b)
         self.assertEqual(searched_b["receipts"][0]["linked_transaction"]["account_label"], "Bank A · eKonto ••1234")
-        listed_no_disp = self.receipts.list("owner", {})
+        listed_no_disp = self.receipts.list("owner", {}, include_linked_transaction=True)
         by_id2 = {row["receipt_id"]: row["linked_transaction"] for row in listed_no_disp["receipts"]}
         self.assertEqual(by_id2[_R_SHOP_ONLY]["account_label"], "Bank B")
+        self.assertEqual(by_id2[_R_GRP_SOLO], {
+            "account_label": "Bank A · eKonto ••1234",
+            "booking_date": None,
+            "amount": "12.00",
+            "currency": "PLN",
+        })
         self.assertEqual(searched["receipts"], [])
 
         wire = json.dumps(listed) + json.dumps(searched_b)
         self.assertNotIn(_SECRET_CREDITOR, wire)
         self.assertNotIn(_SECRET_REMITTANCE, wire)
+
+    def test_receipts_malformed_tx_json_defensive_and_pre060_skips_join(self):
+        with self.sessions.begin() as session:
+            session.get(db.BudgetTransaction, (self.accounts["a"], "tx-1to1")).payload_json = "{not-valid-json"
+            session.get(db.BudgetTransaction, (self.accounts["a"], "tx-domain")).payload_json = "[]"
+
+        tx_queries = []
+
+        def on_sql(_conn, _cursor, statement, _params, *_args):
+            if "budget_transactions" in statement:
+                tx_queries.append(statement)
+
+        event.listen(self.engine, "before_cursor_execute", on_sql)
+        self.addCleanup(event.remove, self.engine, "before_cursor_execute", on_sql)
+
+        # Pre-0.60 skips the transaction join and parse completely: zero queries, zero logs, keys omitted.
+        with self.assertNoLogs("hestia.budget.receipt_store", level="WARNING"):
+            pre_list = self.receipts.list("owner", {})
+            pre_search = self.receipts.search("owner", {"query": "Biedronka"})
+        self.assertEqual(tx_queries, [])
+        self.assertTrue(pre_list["receipts"])
+        self.assertTrue(pre_search["receipts"])
+        for row in pre_list["receipts"] + pre_search["receipts"]:
+            self.assertNotIn("linked_transaction", row)
+
+        # 0.60 parses defensively: malformed/non-object JSON yields linked_transaction=None and logs code only.
+        with self.assertLogs("hestia.budget.receipt_store", level="WARNING") as logs:
+            listed = self.receipts.list("owner", {}, include_linked_transaction=True)
+            searched = self.receipts.search("owner", {"query": "Biedronka"}, include_linked_transaction=True)
+        api_contract.BudgetReceiptListResult.model_validate(listed)
+        api_contract.BudgetReceiptListResult.model_validate(searched)
+        by_id = {row["receipt_id"]: row["linked_transaction"] for row in listed["receipts"]}
+        self.assertIsNone(by_id[_R_1TO1])
+        self.assertIsNone(by_id[_R_DOMAIN_ONLY])
+        self.assertEqual(by_id[_R_SHOP_ONLY]["booking_date"], "2026-11-08")
+        self.assertEqual(by_id[_R_GRP_1]["booking_date"], "2026-11-11")
+        self.assertIsNone(searched["receipts"][0]["linked_transaction"])
+        joined_logs = "\n".join(logs.output)
+        self.assertIn("budget_receipt_linked_tx_json_invalid", joined_logs)
+        for forbidden in ("{not-valid-json", _R_1TO1, "tx-1to1", self.accounts["a"], _SECRET_CREDITOR, _SECRET_REMITTANCE):
+            self.assertNotIn(forbidden, joined_logs)
 
     def test_explain_query_plan_uses_indexes_on_both_sides(self):
         captured = {"tx": None, "rcpt": None}
@@ -323,7 +382,7 @@ class LinkIndicatorsStoreTests(AnalyticsCase):
         event.listen(self.engine, "before_cursor_execute", listener)
         try:
             self.views.transactions("owner", "2026-11", include_receipts=True)
-            self.receipts.list("owner", {})
+            self.receipts.list("owner", {}, include_linked_transaction=True)
         finally:
             event.remove(self.engine, "before_cursor_execute", listener)
 
@@ -334,14 +393,16 @@ class LinkIndicatorsStoreTests(AnalyticsCase):
             rcpt_plan = conn.exec_driver_sql("EXPLAIN QUERY PLAN " + captured["rcpt"][0], captured["rcpt"][1]).fetchall()
         tx_details = "\n".join(row[3] for row in tx_plan)
         rcpt_details = "\n".join(row[3] for row in rcpt_plan)
-        self.assertIn("uq_budget_receipts_tx_link", tx_details)
+        self.assertIn("uq_budget_receipts_tx_link (linked_account_id=? AND linked_entry_ref=?)", tx_details)
+        self.assertNotIn("ix_budget_receipts_owner_date", tx_details)
         self.assertIn("ix_budget_receipt_link_members_group", tx_details)
         self.assertNotIn("SCAN budget_", tx_details)
         self.assertIn("ix_budget_receipts_owner_date", rcpt_details)
         self.assertIn("uq_budget_receipt_link_groups_evidence", rcpt_details)
+        self.assertIn("sqlite_autoindex_budget_transactions_1", rcpt_details)
         self.assertNotIn("SCAN budget_", rcpt_details)
 
-    def test_capability_and_device_token_gating_in_stores(self):
+    def test_capability_device_token_and_flag_gating_in_stores(self):
         store_sql.activate_catalog_compat(path=self.path)
         with self.sessions.begin() as session:
             session.get(db.AppMeta, authz.POLICY_PHASE_KEY).value = authz.POLICY_PHASE_CUSTOM
@@ -354,6 +415,19 @@ class LinkIndicatorsStoreTests(AnalyticsCase):
                     token_hmac="1" * 64, issued_permissions=json.dumps(["budget.view"]),
                     created_at=self.now, expires_at=self.now + 60, hard_expires_at=self.now + 120,
                     sliding_written_at=self.now,
+                ),
+                db.BudgetReceiptDeviceToken(
+                    id="dev-view-rcpt-no-match", owner="owner", actor="owner", device_name="ViewRcptOnly",
+                    token_hmac="4" * 64, issued_permissions=json.dumps(["budget.view", "budget.receipts.view"]),
+                    created_at=self.now, expires_at=self.now + 60, hard_expires_at=self.now + 120,
+                    sliding_written_at=self.now,
+                ),
+                db.BudgetReceiptDeviceToken(
+                    id="dev-revoked", owner="owner", actor="owner", device_name="Revoked",
+                    token_hmac="5" * 64,
+                    issued_permissions=json.dumps(["budget.view", "budget.receipts.view", "budget.receipts.match"]),
+                    created_at=self.now, expires_at=self.now + 60, hard_expires_at=self.now + 120,
+                    sliding_written_at=self.now, revoked_at=self.now,
                 ),
                 db.BudgetReceiptDeviceToken(
                     id="dev-full", owner="owner", actor="owner", device_name="Full",
@@ -370,32 +444,64 @@ class LinkIndicatorsStoreTests(AnalyticsCase):
                 ),
             ))
 
-        # Device token with budget.view only -> receipt is None; with budget.receipts.view -> populated; unknown device -> None.
-        for dev_id, expect_linked in (("dev-view-only", False), ("dev-missing", False), ("dev-full", True), (None, True)):
+        # Device tokens without budget.receipts.match (or revoked/missing) omit `receipt`; full token & owner include it.
+        for dev_id in ("dev-view-only", "dev-view-rcpt-no-match", "dev-revoked", "dev-missing"):
+            resp = self.views.transactions("owner", "2026-11", include_receipts=True, device_id=dev_id)
+            self.assertTrue(resp["transactions"])
+            for row in resp["transactions"]:
+                self.assertNotIn("receipt", row)
+        for dev_id in ("dev-full", None):
             resp = self.views.transactions("owner", "2026-11", include_receipts=True, device_id=dev_id)
             by_ref = {row["entry_reference"]: row["receipt"] for row in resp["transactions"]}
-            if expect_linked:
-                self.assertEqual(by_ref["tx-1to1"]["shop_name"], "Biedronka")
-            else:
-                self.assertIsNone(by_ref["tx-1to1"])
+            self.assertEqual(by_ref["tx-1to1"]["shop_name"], "Biedronka")
+            self.assertIsNone(by_ref["tx-unlinked"])
 
-        # Receipt store: delegate and any device token (legacy or modern) receive linked_transaction=None.
+        # Receipts disabled via feature flag -> omit `receipt` on both transactions and transactions_by_keys, no receipt query.
+        rcpt_queries = []
+
+        def on_rcpt_sql(_conn, _cursor, statement, _params, *_args):
+            if "budget_receipts" in statement:
+                rcpt_queries.append(statement)
+
+        event.listen(self.engine, "before_cursor_execute", on_rcpt_sql)
+        self.addCleanup(event.remove, self.engine, "before_cursor_execute", on_rcpt_sql)
+        with mock.patch.dict(os.environ, {receipt_api.FLAG: "0"}):
+            disabled_tx = self.views.transactions("owner", "2026-11", include_receipts=True)
+            disabled_keys = self.views.transactions_by_keys(
+                "owner", row_keys=[f"{self.accounts['a']}/tx-1to1"], include_receipts=True,
+            )
+        self.assertEqual(rcpt_queries, [])
+        for row in disabled_tx["transactions"] + disabled_keys["transactions"]:
+            self.assertNotIn("receipt", row)
+
+        # Receipt store: delegate and any device token (legacy or modern) skip tx join and receive linked_transaction=None.
+        tx_queries = []
+
+        def on_tx_sql(_conn, _cursor, statement, _params, *_args):
+            if "budget_transactions" in statement:
+                tx_queries.append(statement)
+
+        event.listen(self.engine, "before_cursor_execute", on_tx_sql)
+        self.addCleanup(event.remove, self.engine, "before_cursor_execute", on_tx_sql)
         for actor, dev_id in (("delegate", None), ("owner", "dev-legacy"), ("owner", "dev-full")):
             store = BudgetReceiptStore(self.sessions, clock=lambda: self.now, cursor_secret=b"synthetic-secret",
                                        device_id=dev_id, actor=actor)
-            rows = store.list("owner", {})["receipts"]
+            rows = store.list("owner", {}, include_linked_transaction=True)["receipts"]
             self.assertTrue(rows)
             for row in rows:
                 self.assertIsNone(row["linked_transaction"])
+        self.assertEqual(tx_queries, [])
 
-        # Owner in custom phase without budget.receipts.view -> analytics transactions returns receipt=None.
+        # Owner in custom phase with budget.receipts.view but WITHOUT budget.receipts.match -> analytics omits `receipt`.
         with self.sessions.begin() as session:
             session.execute(db.PermissionGrant.__table__.delete().where(
                 db.PermissionGrant.username == "owner",
-                db.PermissionGrant.permission_id.in_(("budget.receipts.view", "budget.receipts.edit", "budget.receipts.match")),
+                db.PermissionGrant.permission_id == "budget.receipts.match",
             ))
-        no_rcpt_perm = self.views.transactions("owner", "2026-11", include_receipts=True)
-        self.assertTrue(all(row["receipt"] is None for row in no_rcpt_perm["transactions"]))
+        no_match_perm = self.views.transactions("owner", "2026-11", include_receipts=True)
+        self.assertTrue(no_match_perm["transactions"])
+        for row in no_match_perm["transactions"]:
+            self.assertNotIn("receipt", row)
 
         # Owner with budget.receipts.match but WITHOUT budget.view -> receipts list returns linked_transaction=None.
         with self.sessions.begin() as session:
@@ -404,7 +510,7 @@ class LinkIndicatorsStoreTests(AnalyticsCase):
                 db.PermissionGrant.permission_id.in_(("budget.view", "budget.edit")),
             ))
             session.add(db.PermissionGrant(username="owner", permission_id="budget.receipts.match", target_owner="owner"))
-        no_view_rows = self.receipts.list("owner", {})["receipts"]
+        no_view_rows = self.receipts.list("owner", {}, include_linked_transaction=True)["receipts"]
         self.assertTrue(all(row["linked_transaction"] is None for row in no_view_rows))
 
 
@@ -571,3 +677,105 @@ class LinkIndicatorsHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dev_list_59.status, 200, await dev_list_59.text())
         for row in (await dev_list_59.json())["receipts"]:
             self.assertNotIn("linked_transaction", row)
+
+    async def test_receipts_disabled_omits_receipt_on_060_analytics(self):
+        with mock.patch.dict(os.environ, {receipt_api.FLAG: "0"}):
+            resp = await self.client.get(analytics_api.PREFIX + "/transactions",
+                                         params={"period": "2026-11"},
+                                         headers=self.headers() | {_HEADER: _V60})
+            self.assertEqual(resp.status, 200, await resp.text())
+            body = await resp.json()
+            api_contract.BudgetAnalyticsTransactions.model_validate(body)
+            self.assertTrue(body["transactions"])
+            for row in body["transactions"]:
+                self.assertNotIn("receipt", row)
+            wire = json.dumps(body)
+            self.assertNotIn(_R_1TO1, wire)
+            self.assertNotIn("Biedronka", wire)
+
+            post_resp = await self.client.post(analytics_api.PREFIX + "/transactions-by-keys",
+                                               json={"row_keys": [f"{self.alice_id}/tx-1to1"]},
+                                               headers=self.headers(origin=True) | {_HEADER: _V60})
+            self.assertEqual(post_resp.status, 200, await post_resp.text())
+            post_body = await post_resp.json()
+            api_contract.BudgetAnalyticsTransactions.model_validate(post_body)
+            self.assertNotIn("receipt", post_body["transactions"][0])
+
+    async def test_analytics_device_token_requires_match_permission_for_receipt_links(self):
+        store_sql.activate_catalog_compat(path=self.path)
+        store_sql.activate_sessions_v2(path=self.path)
+        token_store = device_token.DeviceTokenStore(
+            self.sessions, clock=time.time, session_secret=fixture.SECRET,
+        )
+        full = token_store.exchange("alice", "VestaFull", generation=0)
+        view_only = token_store.exchange("alice", "VestaViewOnly", generation=0)
+        with self.sessions.begin() as session:
+            session.get(db.BudgetReceiptDeviceToken, view_only["token_id"]).issued_permissions = json.dumps([
+                "budget.view", "budget.receipts.view",
+            ])
+
+        no_match_hdrs = {"Authorization": "Bearer " + view_only["token"], _HEADER: _V60}
+        # Receipts API masks links for view-only device token.
+        rcpt_resp = await self.client.post(receipt_api.PREFIX + "/list", json={}, headers=no_match_hdrs)
+        self.assertEqual(rcpt_resp.status, 200, await rcpt_resp.text())
+        for row in (await rcpt_resp.json())["receipts"]:
+            self.assertIsNone(row["linked_account_id"])
+            self.assertIsNone(row["linked_entry_ref"])
+            self.assertIsNone(row["linked_transaction"])
+
+        # Analytics API applies the same authorization and omits `receipt`.
+        tx_no_match = await self.client.get(analytics_api.PREFIX + "/transactions",
+                                            params={"period": "2026-11"}, headers=no_match_hdrs)
+        self.assertEqual(tx_no_match.status, 200, await tx_no_match.text())
+        no_match_body = await tx_no_match.json()
+        api_contract.BudgetAnalyticsTransactions.model_validate(no_match_body)
+        self.assertTrue(no_match_body["transactions"])
+        for row in no_match_body["transactions"]:
+            self.assertNotIn("receipt", row)
+
+        # Device token granted budget.receipts.match receives `receipt` on 0.60 analytics.
+        full_hdrs = {"Authorization": "Bearer " + full["token"], _HEADER: _V60}
+        tx_full = await self.client.get(analytics_api.PREFIX + "/transactions",
+                                        params={"period": "2026-11"}, headers=full_hdrs)
+        self.assertEqual(tx_full.status, 200, await tx_full.text())
+        full_body = await tx_full.json()
+        api_contract.BudgetAnalyticsTransactions.model_validate(full_body)
+        by_ref = {row["entry_reference"]: row["receipt"] for row in full_body["transactions"]}
+        self.assertEqual(by_ref["tx-1to1"]["shop_name"], "Biedronka")
+        self.assertIsNone(by_ref["tx-unlinked"])
+
+    async def test_receipts_http_malformed_tx_json_never_500_and_pre060_skips_parse(self):
+        with self.sessions.begin() as session:
+            session.get(db.BudgetTransaction, (self.alice_id, "tx-1to1")).payload_json = "{corrupt-json"
+
+        # Pre-0.60 clients succeed without touching or logging malformed transaction JSON.
+        with self.assertNoLogs("hestia.budget.receipt_store", level="WARNING"):
+            for version in (None, _V59):
+                extra = {} if version is None else {_HEADER: version}
+                for path, payload in (("/list", {}), ("/search", {"query": "Biedronka"})):
+                    resp = await self.client.post(receipt_api.PREFIX + path, json=payload,
+                                                  headers=self.headers(origin=True) | extra)
+                    self.assertEqual(resp.status, 200, await resp.text())
+                    for row in (await resp.json())["receipts"]:
+                        self.assertNotIn("linked_transaction", row)
+
+        # 0.60 clients never 500: malformed entry yields linked_transaction=None and logs code without data.
+        with self.assertLogs("hestia.budget.receipt_store", level="WARNING") as logs:
+            list_60 = await self.client.post(receipt_api.PREFIX + "/list", json={},
+                                             headers=self.headers(origin=True) | {_HEADER: _V60})
+            search_60 = await self.client.post(receipt_api.PREFIX + "/search", json={"query": "Biedronka"},
+                                               headers=self.headers(origin=True) | {_HEADER: _V60})
+        self.assertEqual(list_60.status, 200, await list_60.text())
+        self.assertEqual(search_60.status, 200, await search_60.text())
+        list_body = await list_60.json()
+        search_body = await search_60.json()
+        api_contract.BudgetReceiptListResult.model_validate(list_body)
+        api_contract.BudgetReceiptListResult.model_validate(search_body)
+        by_id = {row["receipt_id"]: row["linked_transaction"] for row in list_body["receipts"]}
+        self.assertIsNone(by_id[_R_1TO1])
+        self.assertEqual(by_id[_R_GRP_1]["booking_date"], "2026-11-11")
+        self.assertIsNone(search_body["receipts"][0]["linked_transaction"])
+        joined_logs = "\n".join(logs.output)
+        self.assertIn("budget_receipt_linked_tx_json_invalid", joined_logs)
+        self.assertNotIn("{corrupt-json", joined_logs)
+        self.assertNotIn(_SECRET_CREDITOR, joined_logs)

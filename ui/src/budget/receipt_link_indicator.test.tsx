@@ -93,13 +93,29 @@ describe("LinkedTransactionIndicator and ReceiptsView bank link indicators", () 
       await Promise.resolve();
     });
 
-    const badge = host.querySelector(".budget-receipt-tx-link");
+    const badge = host.querySelector<HTMLButtonElement>("button.budget-receipt-tx-link");
+    expect(badge).not.toBeNull();
+    expect(badge?.type).toBe("button");
+    expect(badge?.getAttribute("aria-expanded")).toBe("false");
     expect(badge?.textContent).toContain("🏦");
     expect(badge?.textContent).toContain("mBank · eKonto ••1234 · 2026-11-10");
     expect(badge?.getAttribute("title")).toContain("Linked bank transaction:");
     expect(badge?.getAttribute("title")).toContain("mBank · eKonto ••1234");
     expect(badge?.getAttribute("title")).toContain("2026-11-10");
     expect(badge?.getAttribute("aria-label")).toBe(badge?.getAttribute("title"));
+
+    await act(async () => {
+      badge?.click();
+      await Promise.resolve();
+    });
+    expect(badge?.getAttribute("aria-expanded")).toBe("true");
+    expect(badge?.querySelector(".budget-link-detail")?.textContent).toContain("42.50 PLN");
+
+    await act(async () => {
+      badge?.click();
+      await Promise.resolve();
+    });
+    expect(badge?.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("renders inline bank link indicator on linked receipts in Paragony i dowody and omits it when unlinked", async () => {
