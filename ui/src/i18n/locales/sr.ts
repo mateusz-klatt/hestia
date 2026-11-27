@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "пре {n} с",
   "time.minutesAgo": "пре {n} мин",
   "time.hoursAgo": "пре {n} ч",
+  "globals.cribHumidity": "Влажност код кревеца: {humidity}",
 
   "type.light": "светло",
   "type.blind": "ролетна",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Примени",
   "budget.transactions.provisionalOnly": "Само непотврђене или привремене",
   "budget.transactions.all": "Све",
+  "budget.transactions.excludeSkipped": "Без изузетих",
+  "budget.transactions.hiddenSkipped": "Сакривено {count} (сопствени преноси / отплате картица)",
+  "budget.transactions.showAll": "Прикажи",
   "budget.transactions.uncategorised": "Без категорије",
   "budget.transactions.automatic": "Аутоматски (правила)",
   "budget.transactions.kinds.auto": "Аутоматски",

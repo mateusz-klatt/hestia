@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "vor {n}s",
   "time.minutesAgo": "vor {n}min",
   "time.hoursAgo": "vor {n}h",
+  "globals.cribHumidity": "Luftfeuchtigkeit am Kinderbett: {humidity}",
 
   "type.light": "Licht",
   "type.blind": "Jalousie",
@@ -846,6 +847,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Anwenden",
   "budget.transactions.provisionalOnly": "Nur unbestätigte oder vorläufige",
   "budget.transactions.all": "Alle",
+  "budget.transactions.excludeSkipped": "Ohne ausgeschlossene",
+  "budget.transactions.hiddenSkipped": "{count} ausgeblendet (eigene Umbuchungen / Kreditkartenrückzahlungen)",
+  "budget.transactions.showAll": "Anzeigen",
   "budget.transactions.uncategorised": "Ohne Kategorie",
   "budget.transactions.automatic": "Automatisch (Regeln)",
   "budget.transactions.kinds.auto": "Automatisch",

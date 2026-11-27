@@ -26,6 +26,8 @@ _BANK_REFERENCE = "private-bank-reference-for-the-synthetic-group"
 _BANK_EVIDENCE = "private-evidence-must-not-be-in-the-response"
 _HEADER = "X-Hestia-Contract-Version"
 _VERSION = "0.59.0"
+_MAJOR, _MINOR, _ = (int(part) for part in api_contract.CONTRACT_VERSION.split("."))
+_FUTURE_VERSION = f"{_MAJOR}.{_MINOR + 1}.0"
 _GROUP_PATH = receipt_api.PREFIX + "/group/detail"
 
 
@@ -207,8 +209,7 @@ class ReceiptGroupHTTPReadsTests(unittest.IsolatedAsyncioTestCase):
         for version in (None, "0.57.0", "0.58.0"):
             with self.subTest(version=version):
                 self.assertEqual((await self.group(version=version)).status, 404)
-        major, minor, _patch = (int(part) for part in api_contract.CONTRACT_VERSION.split("."))
-        for version in (f"{major}.{minor + 1}.0", "0.59x"):
+        for version in (_FUTURE_VERSION, "0.59x"):
             response = await self.group(version=version)
             self.assertEqual(response.status, 400)
             self.assertEqual((await response.json())["error"], "budget_receipt_contract_version_invalid")

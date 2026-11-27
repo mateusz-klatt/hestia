@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n}초 전",
   "time.minutesAgo": "{n}분 전",
   "time.hoursAgo": "{n}시간 전",
+  "globals.cribHumidity": "아기 침대 습도: {humidity}",
 
   "type.light": "조명",
   "type.blind": "블라인드",
@@ -848,6 +849,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "적용",
   "budget.transactions.provisionalOnly": "미확인 또는 잠정 항목만",
   "budget.transactions.all": "전체",
+  "budget.transactions.excludeSkipped": "제외 항목 숨기기",
+  "budget.transactions.hiddenSkipped": "{count}건 숨김 (본인 이체 / 카드 상환)",
+  "budget.transactions.showAll": "표시",
   "budget.transactions.uncategorised": "미분류",
   "budget.transactions.automatic": "자동(규칙)",
   "budget.transactions.kinds.auto": "자동",

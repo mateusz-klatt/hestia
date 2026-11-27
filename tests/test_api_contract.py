@@ -60,6 +60,7 @@ class OpenApiArtifactTests(unittest.TestCase):
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
         self.assertEqual(document["info"]["version"], "0.63.0")
+        # 0.63.0 additive quarantine dismissals and per-batch dismissal metadata.
         analytics_prefix = "/api/budget/analytics/quarantine"
         document["paths"][analytics_prefix]["get"]["parameters"].pop()
         for suffix in ("-dismiss", "-dismiss-batch"):
@@ -68,6 +69,36 @@ class OpenApiArtifactTests(unittest.TestCase):
             schemas.pop("BudgetAnalyticsQuarantine" + suffix)
         for field in ("import_key", "unresolved_count"):
             schemas["BudgetAnalyticsQuarantineItem"]["properties"].pop(field)
+        document["info"]["version"] = "0.62.0"
+        canonical_0_62 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_62).hexdigest(),
+                         "c4c7ed9797ccee23330bcb69d89862c230d3a33dfabac6f2bb4b4b490ad966bc")
+
+        # 0.62.0 additive crib_humidity and crib_battery_ok on Globals / GlobalsPatch with contract negotiation.
+        disco_get = document["paths"]["/api/discovery"]["get"]
+        disco_header, = disco_get.pop("parameters")
+        self.assertEqual((disco_header["name"], disco_header["in"], disco_header["required"]),
+                         ("X-Hestia-Contract-Version", "header", False))
+        disco_get["responses"].pop("400")
+        events_get = document["paths"]["/api/events"]["get"]
+        self.assertEqual([(p["name"], p["in"], p["required"]) for p in events_get.pop("parameters")], [
+            ("X-Hestia-Contract-Version", "header", False),
+            ("contract_version", "query", False),
+        ])
+        events_get["responses"].pop("400")
+        for schema in ("Globals", "GlobalsPatch"):
+            for field in ("crib_humidity", "crib_battery_ok"):
+                schemas[schema]["properties"].pop(field)
+        ts_path = Path(__file__).resolve().parent.parent / "ui" / "src" / "api" / "openapi.ts"
+        ts_text = ts_path.read_text(encoding="utf-8")
+        globals_ts = ts_text.split("Globals: {", 1)[1].split("\n        };", 1)[0]
+        self.assertIn("crib_humidity?: number | null;", globals_ts)
+        self.assertIn("crib_battery_ok?: boolean | null;", globals_ts)
+        discovery_ts = ts_text.split("    discovery: {", 1)[1].split("\n    events: {", 1)[0]
+        self.assertIn('"X-Hestia-Contract-Version"?: string;', discovery_ts)
+        events_ts = ts_text.split("    events: {", 1)[1].split("\n    ir: {", 1)[0]
+        self.assertIn("contract_version?: string;", events_ts)
+        self.assertIn('"X-Hestia-Contract-Version"?: string;', events_ts)
         document["info"]["version"] = "0.61.0"
         canonical_0_61 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.assertEqual(hashlib.sha256(canonical_0_61).hexdigest(),
@@ -621,11 +652,21 @@ class ReadShapeContractTests(unittest.TestCase):
     """Each read DTO must accept the REAL handler output (drift gate — extra=forbid fails on a new field)."""
 
     def test_globals_matches_real_output(self):
-        _wire(api_contract.Globals, globals_snapshot(State()))  # all-null (pollers off)
+        _wire(api_contract.Globals, globals_snapshot(State()))  # all-null (pollers off, battery_warn off)
+        _wire(api_contract.Globals, globals_snapshot(State(), battery_warn=True))  # battery_warn on
+        _wire(api_contract.Globals, globals_snapshot(State(), include_crib_extras=False))  # pre-0.62 shape
         st = State()
-        st.crib_temp, st.outdoor_temp, st.outdoor_humidity = 21.0, 14.5, 56.0
-        g = _wire(api_contract.Globals, globals_snapshot(st))
-        self.assertEqual((g.crib_temp, g.outdoor_temp, g.outdoor_humidity), (21.0, 14.5, 56.0))
+        st.crib_temp, st.crib_humidity, st.crib_battery_ok = 21.0, 48.0, True
+        st.outdoor_temp, st.outdoor_humidity = 14.5, 56.0
+        g_no_batt = _wire(api_contract.Globals, globals_snapshot(st, battery_warn=False))
+        self.assertEqual((g_no_batt.crib_temp, g_no_batt.crib_humidity, g_no_batt.crib_battery_ok),
+                         (21.0, 48.0, None))
+        g = _wire(api_contract.Globals, globals_snapshot(st, battery_warn=True))
+        self.assertEqual((g.crib_temp, g.crib_humidity, g.crib_battery_ok, g.outdoor_temp, g.outdoor_humidity),
+                         (21.0, 48.0, True, 14.5, 56.0))
+        g_old = _wire(api_contract.Globals, globals_snapshot(st, include_crib_extras=False))
+        self.assertIsNone(g_old.crib_humidity)
+        self.assertIsNone(g_old.crib_battery_ok)
 
     def test_summary_matches_real_output(self):
         s = _summary({"1": {"confidence": "confirmed", "type": "light"},
@@ -1094,6 +1135,7 @@ class AuditEventsContractTests(unittest.TestCase):
             {"type": "activity", "node": 2, "ts": 1749200000.1, "scene": {"id": 3, "kind": "scene"}},
             {"type": "activity", "node": 2, "ts": 1749200000.1, "scene": {"id": 5, "kind": "central"}},
             {"type": "globals", "fields": {"crib_temp": 21.5}},
+            {"type": "globals", "fields": {"crib_temp": 21.3, "crib_humidity": 48.0, "crib_battery_ok": True}},
             {"type": "globals", "fields": {"outdoor_temp": 14.0, "outdoor_humidity": 56}},  # 433 two-key
             {"type": "klima", "klima": {"power": True, "mode": "cool", "temp": 22}},
         ):

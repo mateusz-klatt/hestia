@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "pirms {n} s",
   "time.minutesAgo": "pirms {n} min",
   "time.hoursAgo": "pirms {n} h",
+  "globals.cribHumidity": "Mitrums pie gultiņas: {humidity}",
 
   "type.light": "gaisma",
   "type.blind": "žalūzija",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Lietot",
   "budget.transactions.provisionalOnly": "Tikai neapstiprinātie vai provizoriskie",
   "budget.transactions.all": "Visi",
+  "budget.transactions.excludeSkipped": "Bez izslēgtajiem",
+  "budget.transactions.hiddenSkipped": "Paslēpti {count} (paša pārskaitījumi / karšu atmaksa)",
+  "budget.transactions.showAll": "Rādīt",
   "budget.transactions.uncategorised": "Bez kategorijas",
   "budget.transactions.automatic": "Automātiski (noteikumi)",
   "budget.transactions.kinds.auto": "Automātiski",

@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n}s fa",
   "time.minutesAgo": "{n}min fa",
   "time.hoursAgo": "{n}h fa",
+  "globals.cribHumidity": "Umidità culla: {humidity}",
 
   "type.light": "luce",
   "type.blind": "tapparella",
@@ -846,6 +847,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Applica",
   "budget.transactions.provisionalOnly": "Solo non confermate o provvisorie",
   "budget.transactions.all": "Tutte",
+  "budget.transactions.excludeSkipped": "Senza escluse",
+  "budget.transactions.hiddenSkipped": "{count} nascoste (giroconti / saldi carta)",
+  "budget.transactions.showAll": "Mostra",
   "budget.transactions.uncategorised": "Senza categoria",
   "budget.transactions.automatic": "Automatico (regole)",
   "budget.transactions.kinds.auto": "Automatico",

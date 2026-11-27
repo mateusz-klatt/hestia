@@ -183,6 +183,18 @@ class ReceiptDisplayNameStoreTests(AnalyticsCase):
         found = self.receipts.search("owner", {"query": "Unrelated buyer"}, include_display_shop_name=True)
         self.assertNotIn(target, {row["receipt_id"] for row in found["receipts"]})
 
+    def test_confirmed_ocr_receipt_does_not_supply_a_name_for_its_buyer_nip(self):
+        buyer_page = _receipt_text(_CANONICAL).replace(f"NIP {_NIP}", f"NABYWCA:\nKlient Testowy\nNIP {_NIP}")
+        draft = self.receipts.parse_text("owner", buyer_page, source_kind="local_ocr")
+        confirmed = self.receipts.confirm("owner", receipt_fixture.confirm_values(draft))["receipt"]
+        self.assertEqual(confirmed["status"], "confirmed")
+
+        target = self.receipts.parse_text("owner", _receipt_text(_RAW), source_kind="local_ocr")
+        detail = self.receipts.detail("owner", target["receipt_id"], include_display_shop_name=True)["receipt"]
+        self.assertNotIn("display_shop_name", detail)
+        self.assertEqual(detail["raw_nip"], _NIP)
+        self.assertIsNone(confirmed["raw_nip"])
+
     def test_group_writes_and_link_only_confirm_keep_latest_shop_name(self):
         single_ref = "synthetic-seller-name-single"
         for reference, amount in ((single_ref, "10"), ("synthetic-seller-name-group", "20")):

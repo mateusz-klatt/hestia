@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} সেক আগে",
   "time.minutesAgo": "{n} মি আগে",
   "time.hoursAgo": "{n} ঘ আগে",
+  "globals.cribHumidity": "শিশুর খাটের আর্দ্রতা: {humidity}",
 
   "type.light": "আলো",
   "type.blind": "ব্লাইন্ড",
@@ -848,6 +849,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "প্রয়োগ করুন",
   "budget.transactions.provisionalOnly": "শুধু অনিশ্চিত বা সাময়িক",
   "budget.transactions.all": "সব",
+  "budget.transactions.excludeSkipped": "বাদ দেওয়াগুলো ছাড়া",
+  "budget.transactions.hiddenSkipped": "{count}টি লুকানো (নিজের স্থানান্তর / কার্ড পরিশোধ)",
+  "budget.transactions.showAll": "দেখান",
   "budget.transactions.uncategorised": "বিভাগহীন",
   "budget.transactions.automatic": "স্বয়ংক্রিয় (নিয়ম)",
   "budget.transactions.kinds.auto": "স্বয়ংক্রিয়",

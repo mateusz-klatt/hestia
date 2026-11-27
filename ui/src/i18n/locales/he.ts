@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "לפני {n} שנ׳",
   "time.minutesAgo": "לפני {n} דק׳",
   "time.hoursAgo": "לפני {n} שע׳",
+  "globals.cribHumidity": "לחות בעריסה: {humidity}",
 
   "type.light": "אור",
   "type.blind": "תריס",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "החלה",
   "budget.transactions.provisionalOnly": "רק לא מאושרות או זמניות",
   "budget.transactions.all": "הכול",
+  "budget.transactions.excludeSkipped": "ללא מוחרגים",
+  "budget.transactions.hiddenSkipped": "הוסתרו {count} (העברות עצמיות / פירעון כרטיסים)",
+  "budget.transactions.showAll": "הצג",
   "budget.transactions.uncategorised": "ללא קטגוריה",
   "budget.transactions.automatic": "אוטומטי (כללים)",
   "budget.transactions.kinds.auto": "אוטומטי",

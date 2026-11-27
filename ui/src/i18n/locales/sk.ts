@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "pred {n} s",
   "time.minutesAgo": "pred {n} min",
   "time.hoursAgo": "pred {n} h",
+  "globals.cribHumidity": "Vlhkosť pri postieľke: {humidity}",
 
   "type.light": "svetlo",
   "type.blind": "žalúzia",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Použiť",
   "budget.transactions.provisionalOnly": "Iba nepotvrdené alebo predbežné",
   "budget.transactions.all": "Všetko",
+  "budget.transactions.excludeSkipped": "Bez vynechaných",
+  "budget.transactions.hiddenSkipped": "Skryté {count} (vlastné prevody / splátky kariet)",
+  "budget.transactions.showAll": "Zobraziť",
   "budget.transactions.uncategorised": "Bez kategórie",
   "budget.transactions.automatic": "Automaticky (pravidlá)",
   "budget.transactions.kinds.auto": "Automaticky",

@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} soic ó shin",
   "time.minutesAgo": "{n} nóim ó shin",
   "time.hoursAgo": "{n}u ó shin",
+  "globals.cribHumidity": "Taise an chliabháin: {humidity}",
 
   "type.light": "solas",
   "type.blind": "dallóg",
@@ -848,6 +849,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Cuir i bhfeidhm",
   "budget.transactions.provisionalOnly": "Neamhdheimhnithe nó sealadach amháin",
   "budget.transactions.all": "Uile",
+  "budget.transactions.excludeSkipped": "Gan cinn eisiata",
+  "budget.transactions.hiddenSkipped": "{count} i bhfolach (aistrithe idir do chuntais / aisíocaíochtaí cárta)",
+  "budget.transactions.showAll": "Taispeáin",
   "budget.transactions.uncategorised": "Gan chatagóir",
   "budget.transactions.automatic": "Uathoibríoch (rialacha)",
   "budget.transactions.kinds.auto": "Uathoibríoch",

@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} ث پیش",
   "time.minutesAgo": "{n} د پیش",
   "time.hoursAgo": "{n} س پیش",
+  "globals.cribHumidity": "رطوبت تخت نوزاد: {humidity}",
 
   "type.light": "چراغ",
   "type.blind": "پرده",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "اعمال",
   "budget.transactions.provisionalOnly": "فقط تأییدنشده یا موقت",
   "budget.transactions.all": "همه",
+  "budget.transactions.excludeSkipped": "بدون موارد مستثنا",
+  "budget.transactions.hiddenSkipped": "{count} مورد پنهان شد (انتقال‌های خود / بازپرداخت کارت)",
+  "budget.transactions.showAll": "نمایش",
   "budget.transactions.uncategorised": "بدون دسته",
   "budget.transactions.automatic": "خودکار (قواعد)",
   "budget.transactions.kinds.auto": "خودکار",

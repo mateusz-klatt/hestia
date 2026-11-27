@@ -126,6 +126,9 @@ class GmailCardImportTests(AnalyticsCase):
         self.add_card()
         self.commit(item)
         receipt_id = self.assert_linked_once(None)
+        confirm_audit, = (row for row in self.rows(db.BudgetAnalyticsAudit)
+                          if row.subject_id == receipt_id and row.action == "confirm")
+        self.assertIs(json.loads(confirm_audit.after_json)["shop_name_confirmed"], False)
         self.commit(self.message("resend", body=body, rfc_id="<plain-receipt@example.test>"))
         self.assertEqual(self.assert_linked_once(None), receipt_id)
         for title in ("Invoice", "Delivery note"):

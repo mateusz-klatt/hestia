@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} sek më parë",
   "time.minutesAgo": "{n} min më parë",
   "time.hoursAgo": "{n} orë më parë",
+  "globals.cribHumidity": "Lagështia te djepi: {humidity}",
 
   "type.light": "dritë",
   "type.blind": "grilë",
@@ -848,6 +849,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Zbato",
   "budget.transactions.provisionalOnly": "Vetëm të pakonfirmuarat ose parapraket",
   "budget.transactions.all": "Të gjitha",
+  "budget.transactions.excludeSkipped": "Pa të përjashtuarat",
+  "budget.transactions.hiddenSkipped": "Fshehur {count} (transferta mes llogarive tuaja / shlyerje kartash)",
+  "budget.transactions.showAll": "Shfaq",
   "budget.transactions.uncategorised": "Pa kategori",
   "budget.transactions.automatic": "Automatikisht (rregullat)",
   "budget.transactions.kinds.auto": "Automatikisht",

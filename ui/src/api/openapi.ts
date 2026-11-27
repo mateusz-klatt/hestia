@@ -7830,6 +7830,10 @@ export interface components {
          *     battery flag (false = low) — null when HESTIA_RTL433_BATTERY_WARN is off (the default).
          */
         Globals: {
+            /** Crib Battery Ok */
+            crib_battery_ok?: boolean | null;
+            /** Crib Humidity */
+            crib_humidity?: number | null;
             /** Crib Temp */
             crib_temp: number | null;
             /** Crib Temp Ts */
@@ -7858,6 +7862,10 @@ export interface components {
          *     Open-Meteo poll: value + its `*_ts`; up to 4 for a 433 reading: temp, humidity, ts, battery).
          */
         GlobalsPatch: {
+            /** Crib Battery Ok */
+            crib_battery_ok?: boolean | null;
+            /** Crib Humidity */
+            crib_humidity?: number | null;
             /** Crib Temp */
             crib_temp?: number | null;
             /** Crib Temp Ts */
@@ -18061,7 +18069,10 @@ export interface operations {
     discovery: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Negotiate crib_humidity and opt-in crib_battery_ok (present only when HESTIA_RTL433_BATTERY_WARN is enabled) on Globals / GlobalsPatch starting at 0.62.0. Earlier versions or an omitted version omit those keys entirely. */
+                "X-Hestia-Contract-Version"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -18076,12 +18087,27 @@ export interface operations {
                     "application/json": components["schemas"]["Discovery"];
                 };
             };
+            /** @description invalid contract version */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControlError"];
+                };
+            };
         };
     };
     events: {
         parameters: {
-            query?: never;
-            header?: never;
+            query?: {
+                /** @description Negotiate crib_humidity and opt-in crib_battery_ok (present only when HESTIA_RTL433_BATTERY_WARN is enabled) on Globals / GlobalsPatch starting at 0.62.0. Earlier versions or an omitted version omit those keys entirely. */
+                contract_version?: string;
+            };
+            header?: {
+                /** @description Negotiate crib_humidity and opt-in crib_battery_ok (present only when HESTIA_RTL433_BATTERY_WARN is enabled) on Globals / GlobalsPatch starting at 0.62.0. Earlier versions or an omitted version omit those keys entirely. */
+                "X-Hestia-Contract-Version"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -18094,6 +18120,15 @@ export interface operations {
                 };
                 content: {
                     "text/event-stream": components["schemas"]["LiveEvent"];
+                };
+            };
+            /** @description invalid contract version */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControlError"];
                 };
             };
         };

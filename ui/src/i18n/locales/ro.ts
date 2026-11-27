@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "acum {n}s",
   "time.minutesAgo": "acum {n}min",
   "time.hoursAgo": "acum {n}h",
+  "globals.cribHumidity": "Umiditatea la pătuț: {humidity}",
 
   "type.light": "lumină",
   "type.blind": "jaluzea",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Aplică",
   "budget.transactions.provisionalOnly": "Doar neconfirmate sau provizorii",
   "budget.transactions.all": "Toate",
+  "budget.transactions.excludeSkipped": "Fără cele omise",
+  "budget.transactions.hiddenSkipped": "Ascunse {count} (transferuri proprii / rambursări de card)",
+  "budget.transactions.showAll": "Arată",
   "budget.transactions.uncategorised": "Fără categorie",
   "budget.transactions.automatic": "Automat (reguli)",
   "budget.transactions.kinds.auto": "Automat",

@@ -126,7 +126,9 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.59.0: group-linked receipt summaries and owner-private receipt group detail.
 # 0.60.0: additive receipt link summary on analytics transactions and linked_transaction summary on receipt lists.
 # 0.61.0: additive OCR issuer display name on receipt list, search and detail.
-# 0.63.0: owner dismissal of offline import quarantine items and batches.
+# 0.62.0: additive crib_humidity (display-only %RH) and crib_battery_ok (opt-in 433 low-battery flag) on
+#         Globals and GlobalsPatch, negotiated via X-Hestia-Contract-Version (and contract_version query on SSE).
+# 0.63.0: owner dismissal of offline import quarantine items and batches, with import_key and unresolved_count.
 CONTRACT_VERSION = "0.63.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
@@ -555,7 +557,9 @@ class Globals(BaseModel):
 
     model_config = _READ
     crib_temp: float | None
+    crib_humidity: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
     crib_temp_ts: str | None
+    crib_battery_ok: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
     outdoor_temp: float | None
     outdoor_humidity: float | None
     outdoor_temp_ts: str | None
@@ -726,7 +730,9 @@ class GlobalsPatch(BaseModel):
 
     model_config = _READ
     crib_temp: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    crib_humidity: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
     crib_temp_ts: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
+    crib_battery_ok: Annotated[bool | None, Field(default=None, json_schema_extra=_OMIT)] = None
     outdoor_temp: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
     outdoor_humidity: Annotated[float | None, Field(default=None, json_schema_extra=_OMIT)] = None
     outdoor_temp_ts: Annotated[str | None, Field(default=None, json_schema_extra=_OMIT)] = None
@@ -4208,6 +4214,23 @@ def build_openapi() -> dict:
         "413": {"description": "request body exceeds the byte limit", **auth_err},
         "415": {"description": "Content-Type must be application/json", **auth_err},
     }
+    globals_contract_schema = {"type": "string", "pattern": r"^0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$"}
+    globals_contract_desc = (
+        "Negotiate crib_humidity and opt-in crib_battery_ok (present only when HESTIA_RTL433_BATTERY_WARN "
+        "is enabled) on Globals / GlobalsPatch starting at 0.62.0. Earlier versions or an omitted version "
+        "omit those keys entirely."
+    )
+    globals_contract_header = {
+        "name": "X-Hestia-Contract-Version", "in": "header", "required": False,
+        "description": globals_contract_desc,
+        "schema": globals_contract_schema,
+    }
+    globals_contract_query = {
+        "name": "contract_version", "in": "query", "required": False,
+        "description": globals_contract_desc,
+        "schema": globals_contract_schema,
+    }
+    invalid_contract_err = {"description": "invalid contract version", **err}
     doc = {
         "openapi": "3.1.0",
         "info": {
@@ -4377,11 +4400,13 @@ def build_openapi() -> dict:
                     "description": "Requires the viewer role. An unbounded text/event-stream; each `data:` "
                     "frame is one LiveEvent. `:`-comment keepalives carry no data. Browser/native clients "
                     "auto-reconnect (the stream closes on a max-lifetime deadline).",
+                    "parameters": [globals_contract_header, globals_contract_query],
                     "responses": {
                         "200": {
                             "description": "the event stream (one LiveEvent per data frame)",
                             "content": {"text/event-stream": {"schema": _ref("LiveEvent")}},
                         },
+                        "400": invalid_contract_err,
                     },
                 }
             },
@@ -4530,11 +4555,13 @@ def build_openapi() -> dict:
                     "operationId": "discovery",
                     "summary": "The full dashboard snapshot (devices + globals + klima + rule grammar)",
                     "description": "Requires the viewer role. The primary read a client polls/refetches.",
+                    "parameters": [globals_contract_header],
                     "responses": {
                         "200": {
                             "description": "the current snapshot",
                             "content": {_APP_JSON: {"schema": _ref("Discovery")}},
-                        }
+                        },
+                        "400": invalid_contract_err,
                     },
                 }
             },

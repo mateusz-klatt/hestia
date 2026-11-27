@@ -196,6 +196,7 @@ describe("renderDeviceRows", () => {
 describe("renderGlobals", () => {
   const view = (): import("./devices").GlobalsView => ({
     crib: document.createElement("span"),
+    cribHumidity: document.createElement("span"),
     cribMeta: document.createElement("span"),
     outdoor: document.createElement("span"),
     outdoorHumidity: document.createElement("span"),
@@ -203,20 +204,62 @@ describe("renderGlobals", () => {
   });
   const NOW = Date.parse("2026-06-22T08:05:00Z");
 
-  it("writes temp + humidity into each cell, including null → em dash", () => {
+  it("writes temp + humidity into each cell, hiding crib humidity when absent or null", () => {
     const v = view();
-    // Always writes every cell (the contract guarantees the keys, null when a
+    // Always writes every cell (the contract guarantees the base keys, null when a
     // poller is off) — unlike the legacy `if ('crib_temp' in g)` guard.
     renderGlobals(v, {
       crib_temp: 25.2, crib_temp_ts: null, outdoor_temp: 19.8, outdoor_humidity: 56,
       outdoor_temp_ts: null, outdoor_battery_ok: null,
     });
     expect(v.crib.textContent).toBe("25.2°");
+    expect(v.cribHumidity.textContent).toBe("");
+    expect(v.cribHumidity.hidden).toBe(true);
+    expect(v.cribHumidity.title).toBe("");
+    expect(v.cribHumidity.getAttribute("aria-label")).toBeNull();
     expect(v.outdoor.textContent).toBe("19.8°");
     expect(v.outdoorHumidity.textContent).toBe("56%");
     expect(v.outdoorMeta.textContent).toBe(""); // no sample ts → no freshness line
     expect(v.cribMeta.textContent).toBe("");
     expect(v.outdoorMeta.title).toBe("");
+  });
+
+  it("renders crib temp · humidity next to the freshness badge and hides humidity when null", () => {
+    const v = view();
+    renderGlobals(v, {
+      crib_temp: 21.3, crib_humidity: 48, crib_temp_ts: "2026-06-22T08:03:00Z", crib_battery_ok: null,
+      outdoor_temp: null, outdoor_humidity: null, outdoor_temp_ts: null, outdoor_battery_ok: null,
+    }, NOW);
+    expect(v.crib.textContent).toBe("21.3°");
+    expect(v.cribHumidity.textContent).toBe(" · 48%");
+    expect(`${v.crib.textContent}${v.cribHumidity.textContent}`).toBe("21.3° · 48%");
+    expect(v.cribHumidity.hidden).toBe(false);
+    expect(v.cribHumidity.title).toBe("Crib humidity: 48%");
+    expect(v.cribHumidity.getAttribute("aria-label")).toBe("Crib humidity: 48%");
+    expect(v.cribMeta.textContent).toBe("2m ago");
+    expect(v.cribMeta.classList.contains("warn")).toBe(false);
+
+    // 0% is a real reading, not null → still visible.
+    renderGlobals(v, {
+      crib_temp: 21.3, crib_humidity: 0, crib_temp_ts: "2026-06-22T08:03:00Z", crib_battery_ok: false,
+      outdoor_temp: null, outdoor_humidity: null, outdoor_temp_ts: null, outdoor_battery_ok: null,
+    }, NOW);
+    expect(`${v.crib.textContent}${v.cribHumidity.textContent}`).toBe("21.3° · 0%");
+    expect(v.cribHumidity.hidden).toBe(false);
+    expect(v.cribMeta.textContent).toContain("🪫");
+    expect(v.cribMeta.classList.contains("warn")).toBe(true);
+
+    // Humidity returning to null clears and hides the humidity span again.
+    renderGlobals(v, {
+      crib_temp: 21.3, crib_humidity: null, crib_temp_ts: "2026-06-22T08:03:00Z", crib_battery_ok: null,
+      outdoor_temp: null, outdoor_humidity: null, outdoor_temp_ts: null, outdoor_battery_ok: null,
+    }, NOW);
+    expect(`${v.crib.textContent}${v.cribHumidity.textContent}`).toBe("21.3°");
+    expect(v.cribHumidity.hidden).toBe(true);
+    expect(v.cribHumidity.title).toBe("");
+    expect(v.cribHumidity.getAttribute("aria-label")).toBeNull();
+    expect(v.cribMeta.textContent).toBe("2m ago");
+    expect(v.cribMeta.classList.contains("warn")).toBe(false);
   });
 
   it("renders em dashes when pollers are off / humidity absent", () => {
@@ -280,6 +323,7 @@ describe("renderDiscovery", () => {
     const view = {
       hdrText: document.createElement("span"),
       crib: document.createElement("span"),
+      cribHumidity: document.createElement("span"),
       cribMeta: document.createElement("span"),
       outdoor: document.createElement("span"),
       outdoorHumidity: document.createElement("span"),
@@ -290,12 +334,14 @@ describe("renderDiscovery", () => {
       { "7": device({ type: "plug", confidence: "confirmed", switch: true }) },
       {
         summary: { total: 1, confirmed: 1, unknown: 0 },
-        globals: { crib_temp: 22, outdoor_temp: 14.5, outdoor_humidity: 61 },
+        globals: { crib_temp: 22, crib_humidity: 48, outdoor_temp: 14.5, outdoor_humidity: 61 },
       },
     );
     renderDiscovery(view, data);
     expect(view.hdrText.textContent).toBe("hestia"); // all confirmed, 0 unknown → no parenthetical
     expect(view.crib.textContent).toBe("22.0°");
+    expect(view.cribHumidity.textContent).toBe(" · 48%");
+    expect(view.cribHumidity.hidden).toBe(false);
     expect(view.outdoor.textContent).toBe("14.5°");
     expect(view.outdoorHumidity.textContent).toBe("61%");
     expect(view.rows.querySelectorAll("tr")).toHaveLength(1);

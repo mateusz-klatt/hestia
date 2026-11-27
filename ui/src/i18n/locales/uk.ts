@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} с тому",
   "time.minutesAgo": "{n} хв тому",
   "time.hoursAgo": "{n} год тому",
+  "globals.cribHumidity": "Вологість біля ліжечка: {humidity}",
 
   "type.light": "світло",
   "type.blind": "ролета",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Застосувати",
   "budget.transactions.provisionalOnly": "Лише непідтверджені чи попередні",
   "budget.transactions.all": "Усі",
+  "budget.transactions.excludeSkipped": "Без вилучених",
+  "budget.transactions.hiddenSkipped": "Приховано {count} (власні перекази / погашення карток)",
+  "budget.transactions.showAll": "Показати",
   "budget.transactions.uncategorised": "Без категорії",
   "budget.transactions.automatic": "Автоматично (правила)",
   "budget.transactions.kinds.auto": "Автоматично",

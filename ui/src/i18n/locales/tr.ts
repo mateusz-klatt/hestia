@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} sn önce",
   "time.minutesAgo": "{n} dk önce",
   "time.hoursAgo": "{n} sa önce",
+  "globals.cribHumidity": "Beşik nem oranı: {humidity}",
 
   "type.light": "ışık",
   "type.blind": "panjur",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Uygula",
   "budget.transactions.provisionalOnly": "Yalnızca onaylanmamış veya geçici olanlar",
   "budget.transactions.all": "Tümü",
+  "budget.transactions.excludeSkipped": "Hariç tutulanlar olmadan",
+  "budget.transactions.hiddenSkipped": "{count} gizlendi (kendi aktarımları / kart ödemeleri)",
+  "budget.transactions.showAll": "Göster",
   "budget.transactions.uncategorised": "Kategorisiz",
   "budget.transactions.automatic": "Otomatik (kurallar)",
   "budget.transactions.kinds.auto": "Otomatik",

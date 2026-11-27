@@ -63,8 +63,9 @@ export function discovery(
     env_override: null,
     ...rest,
     globals: {
-      crib_temp: null, crib_temp_ts: null, outdoor_temp: null, outdoor_humidity: null,
-      outdoor_temp_ts: null, outdoor_battery_ok: null, ...globals,
+      crib_temp: null, crib_humidity: null, crib_temp_ts: null, crib_battery_ok: null,
+      outdoor_temp: null, outdoor_humidity: null, outdoor_temp_ts: null, outdoor_battery_ok: null,
+      ...globals,
     },
   };
 }

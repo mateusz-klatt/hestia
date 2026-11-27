@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "πριν {n}δ",
   "time.minutesAgo": "πριν {n}λ",
   "time.hoursAgo": "πριν {n}ώ",
+  "globals.cribHumidity": "Υγρασία κούνιας: {humidity}",
 
   "type.light": "φως",
   "type.blind": "περσίδα",
@@ -848,6 +849,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Εφαρμογή",
   "budget.transactions.provisionalOnly": "Μόνο ανεπιβεβαίωτες ή προσωρινές",
   "budget.transactions.all": "Όλα",
+  "budget.transactions.excludeSkipped": "Χωρίς εξαιρούμενα",
+  "budget.transactions.hiddenSkipped": "Κρυμμένα {count} (ίδιες μεταφορές / εξοφλήσεις καρτών)",
+  "budget.transactions.showAll": "Εμφάνιση",
   "budget.transactions.uncategorised": "Χωρίς κατηγορία",
   "budget.transactions.automatic": "Αυτόματα (κανόνες)",
   "budget.transactions.kinds.auto": "Αυτόματα",

@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "for {n}s siden",
   "time.minutesAgo": "for {n}min siden",
   "time.hoursAgo": "for {n}t siden",
+  "globals.cribHumidity": "Luftfugtighed ved tremmesengen: {humidity}",
 
   "type.light": "lys",
   "type.blind": "persienne",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Anvend",
   "budget.transactions.provisionalOnly": "Kun ubekræftede eller foreløbige",
   "budget.transactions.all": "Alle",
+  "budget.transactions.excludeSkipped": "Uden udeladte",
+  "budget.transactions.hiddenSkipped": "Skjult {count} (egne overførsler / korttilbagebetalinger)",
+  "budget.transactions.showAll": "Vis",
   "budget.transactions.uncategorised": "Uden kategori",
   "budget.transactions.automatic": "Automatisk (regler)",
   "budget.transactions.kinds.auto": "Automatisk",
