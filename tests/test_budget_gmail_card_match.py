@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 from datetime import date
 from unittest.mock import patch
+from uuid import uuid4
 
 from hestia import db
 from hestia.budget import analytics_views, bank_metadata
@@ -12,6 +13,7 @@ from hestia.budget.gmail_card_match import match_card_purchase
 from hestia.budget.gmail_config import CARD_ACCOUNTS_ENV
 from hestia.budget.gmail_document import ImportedDocument
 from hestia.budget.receipt_reconcile import evidence_json, reconcile_receipt_links
+from hestia.budget.receipt_store import BudgetReceiptStore
 from tests.test_budget_analytics_store import AnalyticsCase
 
 DOCUMENT = ImportedDocument(
@@ -64,6 +66,43 @@ class CardPurchaseTests(AnalyticsCase):
                     linked_evidence=evidence_json(evidence),
                 )
             )
+
+    def group_purchase(self):
+        self.ledger("group-charge")
+        anchor = str(uuid4())
+        members = {anchor: "20", str(uuid4()): "23.2"}
+        with self.sessions.begin() as session:
+            for receipt_id, amount in members.items():
+                session.add(db.BudgetReceipt(
+                    id=receipt_id, owner="owner", status="confirmed", source_kind="attachment",
+                    document_kind="invoice", receipt_kind="purchase", raw_shop_name=DOCUMENT.issuer,
+                    receipt_date=DOCUMENT.issue_date, total_amount=amount, currency=DOCUMENT.currency,
+                    payment_method="card", version=1, created_at=self.now, updated_at=self.now,
+                ))
+        store = BudgetReceiptStore(self.sessions, clock=lambda: self.now, cursor_secret=b"card-group-test")
+        proposal, = store.group_candidates("owner", {"receipt_id": anchor})["proposals"]
+        linked = store.group_link("owner", {
+            "link": {key: proposal[key] for key in ("account_id", "entry_reference", "candidate_token")},
+            "members": [{"receipt_id": receipt_id, "expected_version": 1} for receipt_id in members],
+        })
+        return linked["group"]["group_id"], anchor
+
+    def test_group_reservation_blocks_card_matching_and_preserves_ambiguity(self):
+        group_id, _ = self.group_purchase()
+        self.assertIsNone(self.match())
+        self.ledger("another-charge", account="d")
+        self.assertIsNone(self.match())
+
+        with self.sessions.begin() as session:
+            session.get(db.BudgetReceiptLinkGroup, group_id).status = "needs_review"
+        self.assertIsNone(self.match())
+
+    def test_group_member_cannot_match_a_separate_card_debit(self):
+        _, anchor = self.group_purchase()
+        self.ledger("separate-charge", amount="20")
+        member_document = replace(DOCUMENT, amount="20")
+        self.assertEqual(self.match(member_document).entry_reference, "separate-charge")
+        self.assertIsNone(self.match(member_document, include_receipt_id=anchor))
 
     def test_match_is_owner_scoped_unique_and_reconcilable(self):
         self.ledger(account="foreign")

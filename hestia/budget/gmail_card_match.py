@@ -18,7 +18,7 @@ from .receipt_parser import (
     merchant_word_tokens,
 )
 from .receipt_reconcile import _bound_date, _json, link_evidence, resolved_party_names
-from .receipt_store import BudgetReceiptStore, _nip_match, _shift_clamped
+from .receipt_store import BudgetReceiptStore, _nip_match, _receipt_in_group, _shift_clamped
 
 _CARD_PURCHASE = re.compile(
     r"^(?:(?:platnosc|transakcja|zakup|operacja)(?: bezgotowkowa)? karta\b|zakup przy uzyciu karty\b"
@@ -154,12 +154,14 @@ def _card_row(session, owner, invoice, transaction, account_kind, amount, receip
 
 
 def match_card_purchase(session, owner, invoice, *, received_date=None, include_receipt_id=None):
-    """Caller holds the write transaction that will claim the match; known manual links stay reserved."""
+    """Caller holds the write transaction that will claim the match; other links stay reserved."""
     if isinstance(received_date, date):
         received_date = received_date.isoformat()
     receipt_date = _bound_date(invoice.issue_date or received_date)
     if (not receipt_date or getattr(invoice, "document_kind", "invoice") not in ("invoice", "receipt")
             or getattr(invoice, "payment_method", None) in ("cash", "mixed")):
+        return None
+    if include_receipt_id is not None and _receipt_in_group(session, owner, include_receipt_id):
         return None
     try:
         amount = canonical_money(invoice.amount)

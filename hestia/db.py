@@ -1045,6 +1045,67 @@ class BudgetReceipt(Base):
     updated_at: Mapped[float]
 
 
+class BudgetReceiptLinkGroup(Base):
+    """One bank transaction reserved for multiple receipts owned by the same user."""
+
+    __tablename__ = "budget_receipt_link_groups"
+    __table_args__ = (
+        UniqueConstraint("id", "owner", name="uq_budget_receipt_link_groups_id_owner"),
+        UniqueConstraint("account_id", "entry_reference", name="uq_budget_receipt_link_groups_tx"),
+        ForeignKeyConstraint(["account_id", "entry_reference"],
+                             ["budget_transactions.account_id", "budget_transactions.entry_reference"],
+                             name="fk_budget_receipt_link_groups_tx"),
+        ForeignKeyConstraint(["account_id", "owner"], ["budget_accounts.id", "budget_accounts.owner"],
+                             name="fk_budget_receipt_link_groups_account_owner"),
+        ForeignKeyConstraint(["evidence_receipt_id", "owner"], ["budget_receipts.id", "budget_receipts.owner"],
+                             name="fk_budget_receipt_link_groups_evidence_owner"),
+        CheckConstraint("length(currency) = 3 AND currency GLOB '[A-Z][A-Z][A-Z]'",
+                        name="ck_budget_receipt_link_groups_currency"),
+        CheckConstraint("length(tx_amount) BETWEEN 1 AND 80", name="ck_budget_receipt_link_groups_amount"),
+        CheckConstraint("credit_debit_indicator IN ('DBIT', 'CRDT')", name="ck_budget_receipt_link_groups_direction"),
+        CheckConstraint("fee_amount IS NULL OR (length(fee_amount) BETWEEN 1 AND 80 AND fee_amount NOT GLOB '-*')",
+                        name="ck_budget_receipt_link_groups_fee"),
+        CheckConstraint("status IN ('confirmed', 'needs_review')", name="ck_budget_receipt_link_groups_status"),
+        CheckConstraint("length(linked_evidence) BETWEEN 1 AND 4096", name="ck_budget_receipt_link_groups_evidence"),
+        CheckConstraint("version >= 1", name="ck_budget_receipt_link_groups_version"),
+        Index("uq_budget_receipt_link_groups_evidence", "evidence_receipt_id", unique=True,
+              sqlite_where=text("evidence_receipt_id IS NOT NULL")),
+        Index("ix_budget_receipt_link_groups_owner_status", "owner", "status", "id"),
+    )
+    id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(ForeignKey("users.username"))
+    account_id: Mapped[str]
+    entry_reference: Mapped[str]
+    currency: Mapped[str]
+    tx_amount: Mapped[str]
+    credit_debit_indicator: Mapped[str]
+    fee_amount: Mapped[str | None]
+    evidence_receipt_id: Mapped[str | None]
+    status: Mapped[str]
+    linked_fingerprint: Mapped[str]
+    linked_evidence: Mapped[str] = mapped_column(Text)
+    version: Mapped[int]
+    created_at: Mapped[float]
+    updated_at: Mapped[float]
+
+
+class BudgetReceiptLinkMember(Base):
+    """A receipt may be a summed member of one transaction link group."""
+
+    __tablename__ = "budget_receipt_link_members"
+    __table_args__ = (
+        ForeignKeyConstraint(["group_id", "owner"],
+                             ["budget_receipt_link_groups.id", "budget_receipt_link_groups.owner"],
+                             name="fk_budget_receipt_link_members_group_owner"),
+        ForeignKeyConstraint(["receipt_id", "owner"], ["budget_receipts.id", "budget_receipts.owner"],
+                             name="fk_budget_receipt_link_members_receipt_owner"),
+        Index("ix_budget_receipt_link_members_group", "group_id"),
+    )
+    group_id: Mapped[str]
+    receipt_id: Mapped[str] = mapped_column(primary_key=True)
+    owner: Mapped[str]
+
+
 class BudgetReceiptLine(Base):
     __tablename__ = "budget_receipt_lines"
     __table_args__ = (

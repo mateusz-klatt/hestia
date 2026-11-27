@@ -8,9 +8,10 @@ import math
 from sqlalchemy import delete, select, tuple_
 
 from ..db import (BudgetAccount as Account, BudgetAnalyticsAudit as Audit, BudgetConnection as Connection,
-                  BudgetReceipt as Receipt, BudgetTransaction as Transaction,
+                  BudgetReceipt as Receipt, BudgetReceiptLinkGroup as ReceiptLinkGroup,
+                  BudgetReceiptLinkMember as ReceiptLinkMember, BudgetTransaction as Transaction,
                   BudgetTransactionMetadata as Metadata, BudgetTransferLeg as Leg)
-from .analytics_core import AnalyticsError, financial_fingerprint
+from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint
 from .receipt_parser import normalize_shop_name
 
 _CHUNK = 400
@@ -56,14 +57,17 @@ def _json(raw):
     return json.loads(raw, object_pairs_hook=unique, parse_constant=constant)
 
 
-def _linked_transactions(session, owner, keys):
+def _linked_transactions(session, owner, keys, *, require_enabled=False):
     result = {}
     for offset in range(0, len(keys), _CHUNK):
         chunk = keys[offset:offset + _CHUNK]
-        rows = session.scalars(select(Transaction).join(Account).join(Connection).where(
+        query = select(Transaction).join(Account).join(Connection).where(
             Account.owner == owner, Connection.owner == owner,
             tuple_(Transaction.account_id, Transaction.entry_reference).in_(chunk),
-        ))
+        )
+        if require_enabled:
+            query = query.where(Account.enabled.is_(True), Connection.enabled.is_(True))
+        rows = session.scalars(query)
         result.update({(row.account_id, row.entry_reference): row for row in rows})
     return result
 
@@ -184,6 +188,56 @@ def link_evidence(owner, account_id, entry_reference, payload, shop_name, nip, c
     return evidence
 
 
+def group_link_evidence(owner, account_id, entry_reference, payload, creditor, fingerprint, members, fee_amount,
+                        evidence_receipt_id, *, debtor=None):
+    """Build bounded canonical group evidence over bank digests and sorted member digests."""
+    bank = link_evidence(owner, account_id, entry_reference, payload, None, None,
+                         creditor, fingerprint, debtor=debtor)
+    member_items = sorted(
+        [
+            row.id,
+            canonical_money(row.total_amount),
+            normalize_shop_name(row.raw_shop_name),
+            row.raw_nip,
+        ]
+        for row in members
+    )
+    members_raw = json.dumps(member_items, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+    members_digest = hashlib.sha256(members_raw.encode("ascii")).hexdigest()
+    normalized_fee = None if fee_amount is None or canonical_money(fee_amount) == "0" else canonical_money(fee_amount)
+    return {
+        "bank": bank,
+        "members_digest": members_digest,
+        "fee_amount": normalized_fee,
+        "evidence_receipt_id": evidence_receipt_id,
+    }
+
+
+def group_audit_payload(group, action, member_count, actor=None):
+    """Build a sanitized audit payload for one receipt link group without bank or shop text."""
+    payload = {
+        "group_id": group.id,
+        "action": action,
+        "status": group.status,
+        "version": group.version,
+        "member_count": member_count,
+        "evidence_receipt_id": group.evidence_receipt_id,
+    }
+    if actor is not None:
+        payload["actor"] = actor
+    return payload
+
+
+def write_group_audit(session, owner, group_id, action, before, after, changed_at):
+    """Persist a sanitized audit record for a receipt link group."""
+    session.add(Audit(
+        owner=owner, subject_type="receipt_group", subject_id=group_id, action=action,
+        before_json=json.dumps(before, sort_keys=True, ensure_ascii=True, separators=(",", ":")),
+        after_json=json.dumps(after, sort_keys=True, ensure_ascii=True, separators=(",", ":")),
+        changed_at=changed_at,
+    ))
+
+
 def evidence_json(evidence):
     try:
         raw = json.dumps(evidence, sort_keys=True, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
@@ -212,13 +266,16 @@ def _fingerprint(row):
         return None
 
 
-def reconcile_receipt_links(session, owner, now):
-    try:
-        if type(now) not in (int, float) or not math.isfinite(now) or now < 0:
-            raise ValueError
-    except (ValueError, OverflowError):
-        raise AnalyticsError("budget_analytics_unavailable", 503) from None
-    session.flush()
+def _latch_receipt_source_changed(session, owner, row, now, *, linked=None):
+    before = audit_payload(row, "source_changed")
+    row.status, row.version, row.updated_at = "needs_review", row.version + 1, now
+    after = audit_payload(row, "source_changed")
+    if linked is not None:
+        before["linked"] = after["linked"] = linked
+    write_audit(session, owner, row, "source_changed", before, after, now)
+
+
+def _reconcile_one_to_one(session, owner, now):
     linked = list(session.scalars(select(Receipt).where(
         Receipt.owner == owner, Receipt.status.in_(("confirmed", "needs_review")),
         Receipt.linked_account_id.is_not(None),
@@ -263,11 +320,80 @@ def reconcile_receipt_links(session, owner, now):
             if upgraded is not None:
                 row.linked_evidence = upgraded
                 continue
-        before = audit_payload(row, "source_changed")
-        row.status, row.version, row.updated_at = "needs_review", row.version + 1, now
-        write_audit(session, owner, row, "source_changed", before, audit_payload(row, "source_changed"), now)
+        _latch_receipt_source_changed(session, owner, row, now)
         changed += 1
     return changed
+
+
+def _reconcile_groups(session, owner, now):
+    groups = list(session.scalars(select(ReceiptLinkGroup).where(
+        ReceiptLinkGroup.owner == owner, ReceiptLinkGroup.status == "confirmed",
+    ).order_by(ReceiptLinkGroup.id)))
+    if not groups:
+        return 0
+    keys = sorted({(group.account_id, group.entry_reference) for group in groups})
+    transactions = _linked_transactions(session, owner, keys, require_enabled=True)
+    reserved = _reserved(session, owner, keys)
+    group_ids = [group.id for group in groups]
+    member_rows = session.execute(select(ReceiptLinkMember.group_id, Receipt).join(
+        Receipt, ReceiptLinkMember.receipt_id == Receipt.id,
+    ).where(
+        ReceiptLinkMember.owner == owner, Receipt.owner == owner,
+        ReceiptLinkMember.group_id.in_(group_ids),
+    ).order_by(Receipt.id)).all()
+    members_by_group = {}
+    for group_id, member in member_rows:
+        members_by_group.setdefault(group_id, []).append(member)
+    evidence_ids = sorted({group.evidence_receipt_id for group in groups if group.evidence_receipt_id is not None})
+    evidence_by_id = {} if not evidence_ids else {
+        row.id: row for row in session.scalars(select(Receipt).where(
+            Receipt.owner == owner, Receipt.id.in_(evidence_ids),
+        ))
+    }
+    changed = 0
+    for group in groups:
+        key = (group.account_id, group.entry_reference)
+        transaction = None if key in reserved else transactions.get(key)
+        current = _fingerprint(transaction)
+        members = members_by_group.get(group.id, [])
+        evidence_row = None if group.evidence_receipt_id is None else evidence_by_id.get(group.evidence_receipt_id)
+        expected = None
+        if (current is not None and len(members) >= 2
+                and (group.evidence_receipt_id is None or evidence_row is not None)):
+            try:
+                payload = _json(transaction.payload_json)
+                creditor, debtor = resolved_party_names(
+                    session, owner, group.account_id, group.entry_reference, payload, current,
+                )
+                expected = evidence_json(group_link_evidence(
+                    owner, group.account_id, group.entry_reference, payload, creditor, current,
+                    members, group.fee_amount, group.evidence_receipt_id, debtor=debtor,
+                ))
+            except (AnalyticsError, ValueError, TypeError, RecursionError):
+                expected = None
+        if current is not None and current == group.linked_fingerprint and expected == group.linked_evidence:
+            continue
+        before = group_audit_payload(group, "source_changed", len(members))
+        group.status, group.version, group.updated_at = "needs_review", group.version + 1, now
+        # Flush group status before latching evidence_receipt_id so trigger allows evidence -> needs_review.
+        session.flush()
+        write_group_audit(session, owner, group.id, "source_changed", before,
+                          group_audit_payload(group, "source_changed", len(members)), now)
+        for receipt in (*members, *(() if evidence_row is None else (evidence_row,))):
+            if receipt.status != "needs_review":
+                _latch_receipt_source_changed(session, owner, receipt, now, linked=True)
+        changed += 1
+    return changed
+
+
+def reconcile_receipt_links(session, owner, now):
+    try:
+        if type(now) not in (int, float) or not math.isfinite(now) or now < 0:
+            raise ValueError
+    except (ValueError, OverflowError):
+        raise AnalyticsError("budget_analytics_unavailable", 503) from None
+    session.flush()
+    return _reconcile_one_to_one(session, owner, now) + _reconcile_groups(session, owner, now)
 
 
 _BASE_EVIDENCE_KEYS = frozenset(_EVIDENCE_KEYS) - {"creditor_digest", "debtor_digest"}

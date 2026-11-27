@@ -6,8 +6,11 @@ import {
   addDecimals,
   availableLinkOptions,
   buildBulkConfirmRequest,
+  buildBulkGroupPlan,
   buildBulkSelectionPlan,
   buildConfirmRequest,
+  buildGroupLinkRequest,
+  buildGroupPreConfirmRequest,
   buildPlainBulkConfirmRequest,
   buildReceiptListRequest,
   candidateDisplayDate,
@@ -27,6 +30,11 @@ import {
   isBulkConfirmable,
   isExcludedDraftForBulk,
   isGmailImportSource,
+  isGroupDateSpanValid,
+  isGroupMemberEligible,
+  isReceiptGrouped,
+  mergeGroupPoolMembers,
+  positiveGroupFee,
   isRedactedValue,
   isStaleCursorError,
   isStrongMatchStrength,
@@ -599,6 +607,27 @@ describe("receipts_model", () => {
     expect(editedOther.net_line_total).toBe("15.00");
   });
 
+  it("keeps grouped Gmail receipts out of legacy link and bulk-confirm flows", () => {
+    const receipt = detailOf({ status: "imported", source_kind: "email" });
+    const grouped = {
+      ...receipt,
+      link_group: { group_id: "group-1", group_version: 1, group_status: "confirmed" as const,
+        member_count: 2, evidence_receipt_id: null, fee_amount: null },
+    };
+    const candidate = candidateOf({ match_strength: "id" });
+    expect(isReceiptGrouped(receipt)).toBe(false);
+    expect(isReceiptGrouped({ link_group: null })).toBe(false);
+    expect(isBulkConfirmable(receipt)).toBe(true);
+    expect(isBulkConfirmable(grouped)).toBe(false);
+    expect(preselectedCandidate(grouped, [candidate], "card")).toBeNull();
+    expect(uniqueIdCandidate(grouped, [candidate])).toBeNull();
+    expect(availableLinkOptions({ ...grouped, linked: true }, [candidate], "card")).toMatchObject({
+      canKeep: false, canPickCandidates: false, mustUnlinkToConfirm: false,
+    });
+    expect(buildConfirmRequest(grouped, draftFromDetail(receipt, [candidate]), [candidate]).ok).toBe(false);
+    expect(buildBulkConfirmRequest(grouped, [candidate], "Document", { linkById: true }).ok).toBe(false);
+  });
+
   it("restricts bulk confirm to Gmail imports, groups by NIP or normalized name, and omits lines on confirm", () => {
     expect(isGmailImportSource("email")).toBe(true);
     expect(isGmailImportSource("attachment")).toBe(true);
@@ -1110,5 +1139,92 @@ describe("receipts_model", () => {
       expect(withNipOnly.linkedById).toBe(false);
       expect(withNipOnly.request.link).toBeNull();
     }
+  });
+
+  it("validates M:1 group member eligibility, bulk plan constraints, and 14-day date spans", () => {
+    const base = detailOf({ status: "confirmed", linked: false, payment_method: "card" });
+    expect(isGroupMemberEligible(base)).toBe(true);
+    expect(isGroupMemberEligible({ ...base, status: "imported" })).toBe(true);
+    expect(isGroupMemberEligible({ ...base, receipt_kind: "refund" })).toBe(true);
+    expect(isGroupMemberEligible({ ...base, status: "needs_review" })).toBe(false);
+    expect(isGroupMemberEligible({ ...base, status: "draft" })).toBe(false);
+    expect(isGroupMemberEligible({ ...base, linked: true, linked_account_id: "acc-1", linked_entry_ref: "1".repeat(64) })).toBe(false);
+    expect(isGroupMemberEligible({
+      ...base,
+      link_group: { group_id: "g1", group_version: 1, group_status: "confirmed", member_count: 2, evidence_receipt_id: null, fee_amount: null },
+    })).toBe(false);
+    expect(isGroupMemberEligible({ ...base, gateway: "Przelewy24" })).toBe(false);
+    expect(isGroupMemberEligible({ ...base, evidence_for_receipt_id: "other" })).toBe(false);
+    expect(isGroupMemberEligible({ ...base, payment_method: "cash" })).toBe(false);
+    expect(isGroupMemberEligible({ ...base, payment_method: "mixed" })).toBe(false);
+    expect(isGroupMemberEligible({ ...base, total_amount: "0" })).toBe(false);
+    expect(isGroupMemberEligible({ ...base, currency: null })).toBe(false);
+    expect(isGroupMemberEligible({ ...base, receipt_date: null })).toBe(false);
+
+    const r1 = detailOf({ receipt_id: "r1", status: "confirmed", currency: "PLN", receipt_kind: "purchase" });
+    const r2 = detailOf({ receipt_id: "r2", status: "imported", currency: "PLN", receipt_kind: "purchase" });
+    const eur = detailOf({ receipt_id: "r3", status: "confirmed", currency: "EUR", receipt_kind: "purchase" });
+    const ref = detailOf({ receipt_id: "r4", status: "confirmed", currency: "PLN", receipt_kind: "refund" });
+    const rows = [r1, r2, eur, ref, ...Array.from({ length: 7 }, (_, i) => detailOf({
+      receipt_id: `extra-${String(i)}`, status: "confirmed", currency: "PLN", receipt_kind: "purchase",
+    }))];
+
+    expect(buildBulkGroupPlan(rows, new Set(["r1"]))).toMatchObject({ eligible: false, reason: "count" });
+    expect(buildBulkGroupPlan(rows, new Set(["r1", "r2"]))).toMatchObject({
+      eligible: true, reason: "none", currency: "PLN", receiptKind: "purchase",
+    });
+    expect(buildBulkGroupPlan(rows, new Set(["r1", "r3"]))).toMatchObject({ eligible: false, reason: "mismatch" });
+    expect(buildBulkGroupPlan(rows, new Set(["r1", "r4"]))).toMatchObject({ eligible: false, reason: "mismatch" });
+    expect(buildBulkGroupPlan(rows, new Set(rows.filter((r) => r.currency === "PLN" && r.receipt_kind === "purchase").map((r) => r.receipt_id)))).toMatchObject({
+      eligible: false, reason: "count",
+    });
+
+    expect(isGroupDateSpanValid(["2026-11-01", "2026-11-15"])).toBe(true);
+    expect(isGroupDateSpanValid(["2026-11-01", "2026-11-16"])).toBe(false);
+    expect(isGroupDateSpanValid(["2026-11-01", null])).toBe(false);
+    expect(isGroupDateSpanValid([])).toBe(false);
+  });
+
+  it("builds unlinked group pre-confirm payloads, CAS group/link requests, and merges pool versions safely", () => {
+    const importedInv = detailOf({
+      receipt_id: "imp-inv",
+      status: "imported",
+      document_kind: "invoice",
+      lines: [],
+      total_amount: "19.99",
+      version: 4,
+    });
+    const pre = buildGroupPreConfirmRequest(importedInv, 4, "Summary");
+    expect(pre.ok).toBe(true);
+    if (pre.ok) {
+      expect(pre.request.link).toBeNull();
+      expect(pre.request.expected_version).toBe(4);
+      expect(pre.request.lines).toHaveLength(1);
+    }
+    expect(buildGroupPreConfirmRequest(importedInv, 3, "Summary")).toEqual({
+      ok: false, errorCode: "budget_receipt_conflict",
+    });
+    expect(buildGroupPreConfirmRequest({ ...importedInv, linked: true, linked_account_id: "acc-1", linked_entry_ref: "a".repeat(64) }, 4, "Summary")).toEqual({
+      ok: false, errorCode: "budget_receipt_tx_already_linked",
+    });
+
+    const staleAnchor = detailOf({ receipt_id: "r1", version: 1 });
+    const freshAnchor = detailOf({ receipt_id: "r1", version: 2 });
+    const pooled = mergeGroupPoolMembers(staleAnchor, [freshAnchor, detailOf({ receipt_id: "r2", version: 5 })]);
+    expect(pooled.map((r) => [r.receipt_id, r.version])).toEqual([["r1", 2], ["r2", 5]]);
+
+    expect(positiveGroupFee("0.00")).toBeNull();
+    expect(positiveGroupFee("1.25")).toBe("1.25");
+    expect(buildGroupLinkRequest({
+      transaction: { account_id: "acc-1", entry_reference: "a".repeat(64), candidate_token: "fresh-tok" },
+      members: [{ receipt_id: "r1", expected_version: 2 }, { receipt_id: "r2", expected_version: 5 }],
+      evidence: { receipt_id: "ev-1", expected_version: 3, fee_amount: "0.50" },
+    })).toEqual({
+      link: { account_id: "acc-1", entry_reference: "a".repeat(64), candidate_token: "fresh-tok" },
+      members: [{ receipt_id: "r1", expected_version: 2 }, { receipt_id: "r2", expected_version: 5 }],
+      evidence_receipt_id: "ev-1",
+      evidence_expected_version: 3,
+      fee_amount: "0.5",
+    });
   });
 });

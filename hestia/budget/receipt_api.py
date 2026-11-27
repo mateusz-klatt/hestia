@@ -20,19 +20,24 @@ from .views import BudgetUsersBackendRequired
 
 PREFIX = "/api/budget/receipts"
 FLAG = "HESTIA_BUDGET_RECEIPTS_ENABLED"
-READS = ("detail", "image")
+READS = ("detail", "image", "group/detail")
 WRITES = {
     "parse-text": (api_contract.BudgetReceiptParseTextRequest, 49152),
     "confirm": (api_contract.BudgetReceiptConfirmRequest, 131072),
     "list": (api_contract.BudgetReceiptListRequest, 16384),
     "search": (api_contract.BudgetReceiptSearchRequest, 16384),
     "delete": (api_contract.BudgetReceiptDeleteRequest, 16384),
+    "group/candidates": (api_contract.BudgetReceiptGroupCandidatesRequest, 16384),
+    "group/link": (api_contract.BudgetReceiptGroupLinkRequest, 16384),
+    "group/unlink": (api_contract.BudgetReceiptGroupUnlinkRequest, 16384),
 }
+_GROUP_OPERATIONS = frozenset({"group/detail", "group/candidates", "group/link", "group/unlink"})
 _CONTRACT_HEADER = "X-Hestia-Contract-Version"
 _CONTRACT_VERSION = re.compile(r"0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\Z")
 _NATIVE_GMAIL_VERSION = (0, 40, 0)
 _GATEWAY_EVIDENCE_VERSION = (0, 52, 0)
 _ID_MATCH_VERSION = (0, 57, 0)
+_MANY_TO_ONE_VERSION = (0, 59, 0)
 _CURRENT_VERSION = tuple(int(part) for part in api_contract.CONTRACT_VERSION.split("."))
 _RECEIPT_RESULT_KEY = {"parse-text": "draft", "confirm": "receipt", "list": "receipts",
                        "search": "receipts", "detail": "receipt"}
@@ -79,17 +84,17 @@ def retain_expired(path=None, clock=time.time):
     return BudgetReceiptStore(sessions, clock=clock, cursor_secret=_RETENTION_SECRET).purge_expired()
 
 
-def _receipt_id(request):
-    if set(request.query) != {"receipt_id"} or len(request.query.getall("receipt_id")) != 1:
+def _receipt_id(request, *, field="receipt_id"):
+    if set(request.query) != {field} or len(request.query.getall(field)) != 1:
         raise ReceiptError()
-    return request.query["receipt_id"]
+    return request.query[field]
 
 
 def _run(owner, operation, values, secret, device_id, actor=None):
     store = _store(secret, device_id, actor)
     if operation == "parse-text":
         return store.parse_text(owner, values["text"], source_kind=values["source_kind"])
-    return getattr(store, operation)(owner, values)
+    return getattr(store, operation.replace("/", "_"))(owner, values)
 
 
 def _device_error(status, code, retry=None):
@@ -106,7 +111,7 @@ _DEVICE_BROWSER_REQUESTS = {
 
 
 def _receipt_contract(request, operation):
-    if operation not in _RECEIPT_RESULT_KEY and operation != "gmail-status":
+    if operation not in _RECEIPT_RESULT_KEY and operation != "gmail-status" and operation not in _GROUP_OPERATIONS:
         return (0, 0, 0)
     values = request.headers.getall(_CONTRACT_HEADER, [])
     if not values:
@@ -120,6 +125,12 @@ def _receipt_contract(request, operation):
 
 
 def _response(operation, result, version):
+    if version < _MANY_TO_ONE_VERSION and operation in _RECEIPT_RESULT_KEY:
+        key = _RECEIPT_RESULT_KEY[operation]
+        receipts = result[key] if key == "receipts" else (result[key],)
+        for receipt in receipts:
+            receipt.pop("link_group", None)
+        result.pop("group_candidates", None)
     if version < _ID_MATCH_VERSION and operation in _RECEIPT_RESULT_KEY:
         key = _RECEIPT_RESULT_KEY[operation]
         receipts = result[key] if key == "receipts" else (result[key],)
@@ -155,7 +166,7 @@ def _response(operation, result, version):
 def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter):
     async def handle(request):
         device_id = request.get(device_token.REQUEST_KEY)
-        operation = request.path.rsplit("/", 1)[-1]
+        operation = request.path.removeprefix(PREFIX + "/")
         try:
             owner = api._principal(request, auth_enabled)
             secret = api._secret(session_secret)
@@ -164,9 +175,11 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
             actor = request.get(device_token.ACTOR_REQUEST_KEY, owner) if device_id is not None else owner
             if request.method == "GET":
                 version = _receipt_contract(request, operation)
-                receipt_id = _receipt_id(request)
+                if operation == "group/detail" and version < _MANY_TO_ONE_VERSION:
+                    raise ReceiptError("budget_receipt_not_found", 404)
+                identifier = _receipt_id(request, field="group_id" if operation == "group/detail" else "receipt_id")
                 result = await api._settled_thread(
-                    lambda: _run_read(owner, operation, receipt_id, secret, device_id, actor),
+                    lambda: _run_read(owner, operation, identifier, secret, device_id, actor),
                 )
                 return _response(operation, result, version)
             if device_id is None:
@@ -176,6 +189,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
                 if retry is not None:
                     return _device_error(429, "device_token_rate_limited", retry)
             version = _receipt_contract(request, operation)
+            if operation in _GROUP_OPERATIONS and version < _MANY_TO_ONE_VERSION:
+                raise ReceiptError("budget_receipt_not_found", 404)
             body, error = await read_json_body(request, WRITES[operation][1], reject_duplicates=True)
             if error:
                 return body
@@ -358,9 +373,11 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
     app.router.add_post(device_token.LOGIN_PATH, login)
 
 
-def _run_read(owner, operation, receipt_id, secret, device_id=None, actor=None):
+def _run_read(owner, operation, identifier, secret, device_id=None, actor=None):
     store = _store(secret, device_id, actor)
     if operation == "detail":
-        return store.detail(owner, receipt_id)
-    store.image(owner, receipt_id)
+        return store.detail(owner, identifier)
+    if operation == "group/detail":
+        return store.group_detail(owner, identifier)
+    store.image(owner, identifier)
     raise ReceiptError("budget_receipt_not_found", 404)
