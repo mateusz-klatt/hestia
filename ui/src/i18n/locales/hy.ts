@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} վրկ առաջ",
   "time.minutesAgo": "{n} րոպ առաջ",
   "time.hoursAgo": "{n} ժ առաջ",
+  "globals.cribHumidity": "Մանկական մահճակալի խոնավությունը՝ {humidity}",
 
   "type.light": "լույս",
   "type.blind": "շերտավարագույր",

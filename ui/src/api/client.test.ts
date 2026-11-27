@@ -5,6 +5,7 @@ import {
   apiBase,
   changeOwnPassword,
   deleteRule,
+  eventsUrl,
   fetchAudit,
   fetchAutomations,
   fetchDbStats,
@@ -54,11 +55,57 @@ describe("fetchDiscovery", () => {
     vi.unstubAllGlobals();
   });
 
-  it("returns the parsed payload on a 2xx response", async () => {
-    vi.stubGlobal("fetch", () =>
-      Promise.resolve({ ok: true, json: () => Promise.resolve({ devices: {} }) }),
-    );
+  it("returns the parsed payload on a 2xx response and sends the 0.62.0 contract header", async () => {
+    const calls: (RequestInit | undefined)[] = [];
+    vi.stubGlobal("fetch", (_url: URL, init?: RequestInit) => {
+      calls.push(init);
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ devices: {} }) });
+    });
     expect(await fetchDiscovery()).toEqual({ devices: {} });
+    expect(new Headers(calls[0]?.headers).get("X-Hestia-Contract-Version")).toBe("0.62.0");
+  });
+
+  it("retries once without the contract header when an older server rejects it with 400", async () => {
+    const calls: (RequestInit | undefined)[] = [];
+    vi.stubGlobal("fetch", (_url: URL, init?: RequestInit) => {
+      calls.push(init);
+      if (calls.length === 1) {
+        return Promise.resolve({
+          ok: false,
+          status: 400,
+          json: () => Promise.resolve({ ok: false, error: "contract_version_invalid" }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ devices: {} }),
+      });
+    });
+    expect(await fetchDiscovery()).toEqual({ devices: {} });
+    expect(calls).toHaveLength(2);
+    expect(new Headers(calls[0]?.headers).get("X-Hestia-Contract-Version")).toBe("0.62.0");
+    expect(calls[1]).toBeUndefined();
+  });
+
+  it("does not retry on a 400 with a different error", async () => {
+    const calls: (RequestInit | undefined)[] = [];
+    vi.stubGlobal("fetch", (_url: URL, init?: RequestInit) => {
+      calls.push(init);
+      return Promise.resolve({
+        ok: false,
+        status: 400,
+        json: () => Promise.resolve({ ok: false, error: "other" }),
+      });
+    });
+    expect(await fetchDiscovery()).toBeNull();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("appends contract_version=0.62.0 on eventsUrl()", () => {
+    const target = eventsUrl();
+    expect(target.pathname.endsWith("/api/events")).toBe(true);
+    expect(target.searchParams.get("contract_version")).toBe("0.62.0");
   });
 
   it("returns null on a non-2xx response", async () => {

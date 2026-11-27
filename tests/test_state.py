@@ -22,8 +22,11 @@ class TlvValueTests(unittest.TestCase):
 
 class DefaultsTests(unittest.TestCase):
     def test_crib_temp_defaults_none(self):
-        # global (node-less) field, set only by the baby-monitor poller — no device event touches it.
-        self.assertIsNone(State().crib_temp)
+        # global (node-less) fields, set only by the crib feeder — no device event touches them.
+        st = State()
+        self.assertIsNone(st.crib_temp)
+        self.assertIsNone(st.crib_humidity)
+        self.assertIsNone(st.crib_battery_ok)
 
     def test_crib_temp_not_touched_by_events(self):
         st = State()
@@ -49,7 +52,9 @@ class SnapshotTests(unittest.TestCase):
         st.gang[0x07] = {1: True, 2: False}
         st.scene_seq[0x05] = 7
         st.crib_temp = 22.0
+        st.crib_humidity = 48.0
         st.crib_temp_ts = 1_699_900_000.0                  # crib sample time IS cached too
+        st.crib_battery_ok = False                         # battery flag is runtime-only → NOT cached
         st.outdoor_temp = -3.0
         st.outdoor_humidity = 44.0
         st.outdoor_temp_ts = 1_700_000_000.0               # sample time IS cached (freshness survives a restart)
@@ -60,10 +65,10 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(snap["doors"], {"18": "open"})
         self.assertEqual(snap["gang"], {"7": {"1": True, "2": False}})
         self.assertNotIn("scene_seq", snap)                # dedup bookkeeping stays runtime-only
-        self.assertEqual(snap["globals"],                  # global temps + ts ARE cached (survive a restart)
-                         {"crib_temp": 22.0, "crib_temp_ts": 1_699_900_000.0, "outdoor_temp": -3.0,
-                          "outdoor_humidity": 44.0,
-                          "outdoor_temp_ts": 1_700_000_000.0})  # outdoor_battery_ok omitted — runtime-only
+        self.assertEqual(snap["globals"],                  # global temps/humidities + ts ARE cached (survive a restart)
+                         {"crib_temp": 22.0, "crib_humidity": 48.0, "crib_temp_ts": 1_699_900_000.0,
+                          "outdoor_temp": -3.0, "outdoor_humidity": 44.0,
+                          "outdoor_temp_ts": 1_700_000_000.0})  # *_battery_ok omitted — runtime-only
         self.assertEqual(snap["klima"], {"power": True, "mode": "cool", "temp": 22})
 
         restored = State()
@@ -78,25 +83,29 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(restored.plug_kwh, {0x13: 8.75})
         self.assertEqual(restored.plug_v, {0x14: 244.58})
         self.assertEqual(restored.gang, {0x07: {1: True, 2: False}})
-        self.assertEqual((restored.crib_temp, restored.outdoor_temp, restored.outdoor_humidity),
-                         (22.0, -3.0, 44.0))               # globals restored → no "—" after a restart
+        self.assertEqual((restored.crib_temp, restored.crib_humidity, restored.outdoor_temp, restored.outdoor_humidity),
+                         (22.0, 48.0, -3.0, 44.0))         # globals restored → no "—" after a restart
         self.assertEqual((restored.crib_temp_ts, restored.outdoor_temp_ts),
                          (1_699_900_000.0, 1_700_000_000.0))  # both freshness ts restored
+        self.assertIsNone(restored.crib_battery_ok)        # runtime-only flag NOT restored (re-read next sample)
         self.assertIsNone(restored.outdoor_battery_ok)     # runtime-only flag NOT restored (re-read next sample)
         self.assertEqual(restored.klima, {"power": True, "mode": "cool", "temp": 22})  # A/C state survives
         self.assertFalse(restored.dirty)
 
     def test_load_snapshot_restores_partial_and_ignores_bad_globals(self):
         st = State()
-        st.load_snapshot({"globals": {"crib_temp": 21.5, "outdoor_temp": "nan",
+        st.load_snapshot({"globals": {"crib_temp": 21.5, "crib_humidity": False, "outdoor_temp": "nan",
                                       "outdoor_humidity": True}})  # str + bool rejected
         self.assertEqual(st.crib_temp, 21.5)
+        self.assertIsNone(st.crib_humidity)                # bool is an int subclass — explicitly rejected
         self.assertIsNone(st.outdoor_temp)                 # non-numeric ignored
         self.assertIsNone(st.outdoor_humidity)             # bool is an int subclass — explicitly rejected
         st.load_snapshot({"globals": "not a dict"})        # malformed section → no-op
         self.assertEqual(st.crib_temp, 21.5)
-        st.load_snapshot({"globals": {"crib_temp": float("nan"), "outdoor_temp": float("inf")}})
+        st.load_snapshot({"globals": {"crib_temp": float("nan"), "crib_humidity": float("inf"),
+                                      "outdoor_temp": float("inf")}})
         self.assertEqual(st.crib_temp, 21.5)               # NaN/inf rejected → values unchanged
+        self.assertIsNone(st.crib_humidity)
         self.assertIsNone(st.outdoor_temp)
 
     def test_load_klima_accepts_valid_shapes_and_rejects_malformed(self):

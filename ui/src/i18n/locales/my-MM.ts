@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "လွန်ခဲ့သော {n} စက္က.",
   "time.minutesAgo": "လွန်ခဲ့သော {n} မိ.",
   "time.hoursAgo": "လွန်ခဲ့သော {n} နာ.",
+  "globals.cribHumidity": "ကလေးပုခက် စိုထိုင်းဆ: {humidity}",
 
   "type.light": "မီး",
   "type.blind": "ဘလိုင်း",

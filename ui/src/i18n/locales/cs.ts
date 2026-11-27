@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "před {n} s",
   "time.minutesAgo": "před {n} min",
   "time.hoursAgo": "před {n} h",
+  "globals.cribHumidity": "Vlhkost u postýlky: {humidity}",
 
   "type.light": "světlo",
   "type.blind": "žaluzie",

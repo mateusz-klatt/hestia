@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "πριν {n}δ",
   "time.minutesAgo": "πριν {n}λ",
   "time.hoursAgo": "πριν {n}ώ",
+  "globals.cribHumidity": "Υγρασία κούνιας: {humidity}",
 
   "type.light": "φως",
   "type.blind": "περσίδα",

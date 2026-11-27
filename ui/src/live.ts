@@ -1,7 +1,14 @@
 import type { DeviceInfo, Discovery, Globals, KlimaState, LiveEvent, Scene } from "./api/types";
 import { patchControls } from "./controls";
 import { t } from "./i18n";
-import { paintMeta, renderDeviceRows, renderGlobals, renderMode, summaryText } from "./render/devices";
+import {
+  paintCribHumidity,
+  paintMeta,
+  renderDeviceRows,
+  renderGlobals,
+  renderMode,
+  summaryText,
+} from "./render/devices";
 import { fmtHumidity, fmtTemp, onOff, relAgo, stateStr } from "./render/format";
 
 /** How long a row stays brightly highlighted after activity. */
@@ -16,6 +23,7 @@ export interface LiveView {
   hdrText: HTMLElement;
   mode: HTMLElement;
   crib: HTMLElement;
+  cribHumidity: HTMLElement;
   cribMeta: HTMLElement;
   outdoor: HTMLElement;
   outdoorHumidity: HTMLElement;
@@ -72,9 +80,10 @@ export class LiveController {
   private refreshAgain = false;
   private readonly pendingState = new Map<number, Partial<DeviceInfo>>();
   private pendingGlobals: Partial<Globals> | null = null;
-  // Last crib / outdoor sample ts (+ outdoor battery flag), cached so the 1 Hz tick can keep the "N ago"
+  // Last crib / outdoor sample ts (+ optional battery flags), cached so the 1 Hz tick can keep the "N ago"
   // badges advancing between deltas (the snapshot + every `globals` delta refresh these).
   private cribTs: string | null = null;
+  private cribBatteryOk: boolean | null = null;
   private outdoorTs: string | null = null;
   private outdoorBatteryOk: boolean | null = null;
   private pendingKlima: { state: KlimaState | null } | null = null;
@@ -182,6 +191,7 @@ export class LiveController {
     this.view.hdrText.textContent = summaryText(data.summary);
     renderMode(this.view.mode, data);
     this.cribTs = data.globals.crib_temp_ts;
+    this.cribBatteryOk = data.globals.crib_battery_ok ?? null;
     this.outdoorTs = data.globals.outdoor_temp_ts;
     this.outdoorBatteryOk = data.globals.outdoor_battery_ok;
     renderGlobals(this.view, data.globals);
@@ -294,6 +304,9 @@ export class LiveController {
       return;
     }
     if ("crib_temp" in fields) this.view.crib.textContent = fmtTemp(fields.crib_temp ?? null);
+    if ("crib_humidity" in fields) {
+      paintCribHumidity(this.view.cribHumidity, fields.crib_humidity ?? null);
+    }
     if ("outdoor_temp" in fields) {
       this.view.outdoor.textContent = fmtTemp(fields.outdoor_temp ?? null);
     }
@@ -301,6 +314,7 @@ export class LiveController {
       this.view.outdoorHumidity.textContent = fmtHumidity(fields.outdoor_humidity ?? null);
     }
     if ("crib_temp_ts" in fields) this.cribTs = fields.crib_temp_ts ?? null;
+    if ("crib_battery_ok" in fields) this.cribBatteryOk = fields.crib_battery_ok ?? null;
     if ("outdoor_temp_ts" in fields) this.outdoorTs = fields.outdoor_temp_ts ?? null;
     if ("outdoor_battery_ok" in fields) this.outdoorBatteryOk = fields.outdoor_battery_ok ?? null;
     this.renderMeta();
@@ -309,7 +323,7 @@ export class LiveController {
   /** Repaint the crib + outdoor freshness/battery badges from the cached sample ts / flag. Called on every
    *  `globals` delta and once a second by the tick so each "N ago" age keeps advancing between readings. */
   private renderMeta(): void {
-    paintMeta(this.view.cribMeta, this.cribTs, null);            // crib (mains baby-monitor): no battery
+    paintMeta(this.view.cribMeta, this.cribTs, this.cribBatteryOk);
     paintMeta(this.view.outdoorMeta, this.outdoorTs, this.outdoorBatteryOk);
   }
 

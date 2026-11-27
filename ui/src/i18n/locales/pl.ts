@@ -167,6 +167,7 @@ const pl: Partial<Messages> = {
   "time.secondsAgo": "{n} s temu",
   "time.minutesAgo": "{n} min temu",
   "time.hoursAgo": "{n} godz. temu",
+  "globals.cribHumidity": "Wilgotność przy łóżeczku: {humidity}",
 
   "type.light": "światło",
   "type.blind": "roleta",

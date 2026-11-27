@@ -936,17 +936,36 @@ def _iso(ts: "float | None") -> "str | None":
     return None if ts is None else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
 
 
-def globals_snapshot(state: State) -> dict:
+def _battery_warn_enabled() -> bool:
+    raw = os.environ.get("HESTIA_RTL433_BATTERY_WARN")
+    return RTL433_BATTERY_WARN if raw is None else _truthy_env(raw)
+
+
+def globals_snapshot(state: State, *, include_crib_extras: bool = True,
+                     battery_warn: "bool | None" = None) -> dict:
     """The node-less GLOBAL fields — surfaced to the dashboard (``/api/discovery``) and the ``state``
-    control op. ``crib_temp`` / ``outdoor_temp`` are °C automation fields; ``outdoor_humidity`` is a
-    display-only %RH companion from the local 433 feeder (no rule trigger). ``outdoor_temp_ts`` (ISO ts of
-    the last outdoor sample) + ``outdoor_battery_ok`` (433 battery flag) drive the freshness / low-battery
-    badge. ``None`` when the relevant poller is off / has no sample → JSON ``null``; the UI renders "—"."""
-    return {"crib_temp": state.crib_temp, "crib_temp_ts": _iso(state.crib_temp_ts),
-            "outdoor_temp": state.outdoor_temp,
-            "outdoor_humidity": state.outdoor_humidity,
-            "outdoor_temp_ts": _iso(state.outdoor_temp_ts),
-            "outdoor_battery_ok": state.outdoor_battery_ok}
+    control op. ``crib_temp`` / ``outdoor_temp`` are °C automation fields; ``crib_humidity`` /
+    ``outdoor_humidity`` are display-only %RH companions from the local 433 feeder (no rule trigger).
+    ``crib_temp_ts`` / ``outdoor_temp_ts`` (ISO ts of the last sample) + ``crib_battery_ok`` /
+    ``outdoor_battery_ok`` (433 battery flags) drive the freshness / low-battery badges.
+    ``crib_humidity`` and ``crib_battery_ok`` are contract-gated (0.62.0) and omitted when
+    ``include_crib_extras`` is ``False``; ``crib_battery_ok`` is also omitted unless
+    ``HESTIA_RTL433_BATTERY_WARN`` is enabled. ``None`` when the relevant poller is off / has no
+    sample → JSON ``null``; the UI renders "—"."""
+    snap = {
+        "crib_temp": state.crib_temp,
+        "crib_temp_ts": _iso(state.crib_temp_ts),
+        "outdoor_temp": state.outdoor_temp,
+        "outdoor_humidity": state.outdoor_humidity,
+        "outdoor_temp_ts": _iso(state.outdoor_temp_ts),
+        "outdoor_battery_ok": state.outdoor_battery_ok,
+    }
+    if include_crib_extras:
+        snap["crib_humidity"] = state.crib_humidity
+        warn = _battery_warn_enabled() if battery_warn is None else battery_warn
+        if warn:
+            snap["crib_battery_ok"] = state.crib_battery_ok
+    return snap
 
 
 def state_snapshot(state: State) -> dict:
@@ -962,7 +981,8 @@ def state_snapshot(state: State) -> dict:
         "temperature": hexkeys(state.temperature),
         # multi-gang: node→{ep:on}; stringify both key levels for clean JSON.
         "gang": {f"{n:#04x}": {str(ep): on for ep, on in eps.items()} for n, eps in state.gang.items()},
-        "globals": globals_snapshot(state),
+        # TCP control socket has no contract-version negotiation — omit 0.62+ crib extras.
+        "globals": globals_snapshot(state, include_crib_extras=False),
     }
 
 
@@ -1159,12 +1179,20 @@ async def _persist_store(rt) -> None:
     await _persist_obj(rt.save_lock, rt.engine.store)
 
 
-def seed_device_state(rt) -> None:
-    """Best-effort boot seed from the SQLite telemetry cache."""
+_UNSET = object()
+
+
+def seed_device_state(rt, *, rtl_crib_model=_UNSET) -> None:
+    """Best-effort boot seed from the SQLite telemetry cache. Drops cached ``crib_humidity`` when the
+    rtl_433 crib route is inactive so a switch back to Tuya never displays stale 433 humidity."""
     from . import store_sql
     snap = store_sql.load_device_state()
     if snap:
         rt.state.load_snapshot(snap)
+        crib_model = RTL433_CRIB_MODEL if rtl_crib_model is _UNSET else rtl_crib_model
+        if not crib_model and rt.state.crib_humidity is not None:
+            rt.state.crib_humidity = None
+            rt.state.dirty = True
 
 
 async def _persist_state(rt) -> None:
@@ -1344,9 +1372,6 @@ async def _scheduler(rt, now=datetime.datetime.now, interval: float = SCHEDULER_
         await _inject(rt, frames)
 
 
-_UNSET = object()
-
-
 async def _apply_global(rt, field: str, value, source: str, *, with_timestamp: bool = False,
                         extra_fields: "dict | None" = None,
                         post_fields: "dict | None" = None,
@@ -1371,7 +1396,8 @@ async def _apply_global(rt, field: str, value, source: str, *, with_timestamp: b
     await _inject(rt, rt.engine.on_global(rt, field, value), source=source)
 
 
-async def _poll_global_field(rt, field, read, interval, source, *, with_timestamp=False) -> None:
+async def _poll_global_field(rt, field, read, interval, source, *, with_timestamp=False,
+                             apply=None) -> None:
     """Generic poller for a GLOBAL automation field. Every ``interval`` seconds, call the BLOCKING
     ``read()`` OFF the event loop (a worker thread, so the loop stays free); a non-``None`` return sets
     ``State.<field>``, fires ``on_global``, and injects the resulting frames (log-tagged ``source``). A
@@ -1388,7 +1414,10 @@ async def _poll_global_field(rt, field, read, interval, source, *, with_timestam
             value = await loop.run_in_executor(None, read)
             if value is None:                        # failed read -> keep the last value
                 continue
-            await _apply_global(rt, field, value, source, with_timestamp=with_timestamp)
+            if apply is None:
+                await _apply_global(rt, field, value, source, with_timestamp=with_timestamp)
+            else:
+                await apply(rt, value)
         except Exception:                            # a daemon loop must never die on a tick error
             log.exception("%s poller tick failed", source)
 
@@ -1413,6 +1442,22 @@ def _niania_read(dev):
     return read
 
 
+async def _apply_niania_temp(rt, value) -> None:
+    """Apply a Tuya crib temperature sample, clearing any stale 433 humidity/battery companion so
+    humidity from a previous rtl_433 route is never shown beside a newer Tuya temperature."""
+    had_humidity = rt.state.crib_humidity is not None
+    had_battery = rt.state.crib_battery_ok is not None
+    rt.state.crib_humidity = None
+    rt.state.crib_battery_ok = None
+    await _apply_global(
+        rt, "crib_temp", value, "niania",
+        with_timestamp=True,
+        extra_fields={"crib_humidity": None} if had_humidity else None,
+        post_fields={"crib_battery_ok": None} if had_battery else None,
+        dirty=had_humidity,
+    )
+
+
 async def _niania_poller(rt, make_device=_niania_device, interval: float = NIANIA_SECS,
                          rtl_crib_model=_UNSET) -> None:
     """Poll the Tuya baby monitor for the crib temperature into ``State.crib_temp`` (the `crib_temp`
@@ -1431,7 +1476,8 @@ async def _niania_poller(rt, make_device=_niania_device, interval: float = NIANI
     dev = make_device()
     if dev is None:                                  # not configured -> nothing to poll
         return
-    await _poll_global_field(rt, "crib_temp", _niania_read(dev), interval, "niania", with_timestamp=True)
+    await _poll_global_field(rt, "crib_temp", _niania_read(dev), interval, "niania",
+                             with_timestamp=True, apply=_apply_niania_temp)
 
 
 async def _weather_poller(rt, fetch=weather.fetch_outdoor_temp, lat=HESTIA_LAT, lon=HESTIA_LON,
@@ -1505,8 +1551,16 @@ async def _sensor433_poller(rt, stream=sensor433.stream_readings, enabled: bool 
                 log.warning("sensor433: crib sensor (%s) battery low", resolved_crib_model)
             if battery_ok is not None:
                 last_crib_battery_ok = battery_ok
-            # Crib has no Globals humidity/battery fields — just update crib_temp + crib_temp_ts and fire rules.
-            await _apply_global(rt, "crib_temp", reading.temperature_C, "sensor433", with_timestamp=True)
+            humidity_changed = rt.state.crib_humidity != reading.humidity
+            rt.state.crib_humidity = reading.humidity
+            rt.state.crib_battery_ok = battery_ok                     # runtime-only, opt-in low-battery flag
+            await _apply_global(
+                rt, "crib_temp", reading.temperature_C, "sensor433",
+                with_timestamp=True,
+                extra_fields={"crib_humidity": reading.humidity},
+                post_fields={"crib_battery_ok": battery_ok} if battery_warn else None,
+                dirty=humidity_changed,
+            )
         except Exception:                            # one bad reading/rule-eval must NOT drop the SDR stream
             log.exception("sensor433 reading failed")
 

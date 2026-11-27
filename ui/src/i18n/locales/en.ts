@@ -179,6 +179,7 @@ const en = {
   "time.secondsAgo": "{n}s ago",
   "time.minutesAgo": "{n}m ago",
   "time.hoursAgo": "{n}h ago",
+  "globals.cribHumidity": "Crib humidity: {humidity}",
 
   // Device type names (the classifier's values), shown in the "inferred type" cell + as a fallback label.
   "type.light": "light",
