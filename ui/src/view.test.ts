@@ -248,28 +248,65 @@ describe("renderViewSwitch", () => {
     expect(budgetEl.hidden).toBe(true);
   });
 
-  it("keeps all five app tabs readable and non-truncated on mobile in style.css", async () => {
-    const base = els();
-    const calendarEl = document.createElement("section");
-    const budgetEl = document.createElement("section");
-    const switcher = renderViewSwitch({ ...base, calendarEl, budgetEl }, () => undefined);
-    switcher.setBudgetAvailable(true);
-    switcher.apply("budget");
+  it("keeps all five Polish app tabs readable and non-truncated on mobile (393 px) in style.css", async () => {
+    const prevLang = document.documentElement.lang;
+    document.documentElement.lang = "pl";
+    try {
+      const { loadLocale } = await import("./i18n");
+      await loadLocale("pl");
+      const base = els();
+      base.switchBox.className = "view-switch";
+      const calendarEl = document.createElement("section");
+      const budgetEl = document.createElement("section");
+      const switcher = renderViewSwitch({ ...base, calendarEl, budgetEl }, () => undefined);
+      switcher.setBudgetAvailable(true);
+      switcher.apply("budget");
 
-    const tabs = [...base.switchBox.querySelectorAll("button")];
-    expect(tabs).toHaveLength(5);
-    expect(tabs.filter((btn) => btn.getAttribute("aria-pressed") === "true")).toHaveLength(1);
-    expect(tabs.find((btn) => btn.classList.contains("active"))?.textContent).toContain("Budget");
+      const tabs = [...base.switchBox.querySelectorAll("button")];
+      expect(tabs.map((btn) => btn.textContent)).toEqual([
+        "🏠 Pokoje",
+        "📜 Dziennik",
+        "📅 Kalendarz",
+        "💰 Budżet",
+        "🔧 Zaawansowane",
+      ]);
+      expect(tabs.filter((btn) => btn.getAttribute("aria-pressed") === "true")).toHaveLength(1);
+      expect(tabs.find((btn) => btn.classList.contains("active"))?.textContent).toBe("💰 Budżet");
 
-    const fsModule = "node:fs";
-    const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as {
-      readFileSync: (path: string, encoding: "utf8") => string;
-    };
-    const css = readFileSync("src/style.css", "utf8");
-    const mobileViewBlock = css.slice(css.indexOf(".view-tab.active"), css.indexOf(".room-grid"));
-    expect(mobileViewBlock).toMatch(/\.view-switch\s*\{[^}]*flex-wrap:\s*wrap/);
-    expect(mobileViewBlock).not.toMatch(/flex-wrap:\s*nowrap/);
-    expect(mobileViewBlock).not.toMatch(/text-overflow:\s*ellipsis/);
-    expect(mobileViewBlock).not.toMatch(/overflow:\s*hidden/);
+      const fsModule = "node:fs";
+      const { readFileSync } = (await import(/* @vite-ignore */ fsModule)) as {
+        readFileSync: (path: string, encoding: "utf8") => string;
+      };
+      const css = readFileSync("src/style.css", "utf8");
+      const mobileViewBlock = css.slice(css.indexOf(".view-tab.active"), css.indexOf(".room-grid"));
+      expect(mobileViewBlock).toMatch(/\.view-switch\s*\{[^}]*flex-wrap:\s*wrap/);
+      expect(mobileViewBlock).not.toMatch(/flex-wrap:\s*nowrap/);
+      expect(mobileViewBlock).not.toMatch(/text-overflow:\s*ellipsis/);
+      expect(mobileViewBlock).not.toMatch(/overflow:\s*hidden/);
+
+      // Apply the base + @media (max-width: 640px) view-switch rules in jsdom to verify computed styles.
+      const mediaMatch = /@media\s*\(max-width:\s*640px\)\s*\{([\s\S]*?)\n\}/.exec(mobileViewBlock);
+      expect(mediaMatch).not.toBeNull();
+      const styleEl = document.createElement("style");
+      styleEl.textContent = `${css.slice(css.indexOf(".view-switch"), css.indexOf(".view-tab.active"))}\n${mediaMatch?.[1] ?? ""}`;
+      document.head.append(styleEl);
+      document.body.append(base.switchBox);
+      try {
+        expect(getComputedStyle(base.switchBox).flexWrap).toBe("wrap");
+        for (const tab of tabs) {
+          const st = getComputedStyle(tab);
+          expect(st.overflow).not.toBe("hidden");
+          expect(st.textOverflow).not.toBe("ellipsis");
+          expect(st.whiteSpace).toBe("normal");
+        }
+      } finally {
+        base.switchBox.remove();
+        styleEl.remove();
+      }
+    } finally {
+      document.documentElement.lang = prevLang;
+      const { loadLocale } = await import("./i18n");
+      await loadLocale("en");
+    }
   });
 });
