@@ -25,6 +25,117 @@ _REMOVED = "[usunięto]"
 _JOIN_SEPARATORS = frozenset(" .,/-\n\t") | frozenset("‐‑‒–—―")
 _PESEL_WEIGHTS = (1, 3, 7, 9, 1, 3, 7, 9, 1, 3)
 _IBAN_MIN, _IBAN_MAX = 15, 34
+_IBAN_SPEC_GROUP = re.compile(r"([0-9]+)!([nac])", re.ASCII)
+# Official ISO 13616 BBAN specs from the SWIFT IBAN Registry (verified 2026-11-26 via
+# https://www.swift.com/resource/iban-registry-pdf and
+# https://www.swift.com/swift-resource/11971/download?language=en).
+_IBAN_BBAN_SPECS = {
+    "AD": "4!n4!n12!c",
+    "AE": "3!n16!n",
+    "AL": "8!n16!c",
+    "AT": "5!n11!n",
+    "AZ": "4!a20!c",
+    "BA": "3!n3!n8!n2!n",
+    "BE": "3!n7!n2!n",
+    "BG": "4!a4!n2!n8!c",
+    "BH": "4!a14!c",
+    "BI": "5!n5!n11!n2!n",
+    "BR": "8!c5!n10!n1!c1!c",
+    "BY": "4!c4!n16!c",
+    "CH": "5!n12!c",
+    "CR": "4!n14!n",
+    "CY": "3!n5!n16!c",
+    "CZ": "4!n6!n10!n",
+    "DE": "8!n10!n",
+    "DJ": "5!n5!n11!n2!n",
+    "DK": "4!n9!n1!n",
+    "DO": "4!c20!n",
+    "EE": "2!n2!n11!n1!n",
+    "EG": "4!n4!n17!n",
+    "ES": "4!n4!n1!n1!n10!n",
+    "FI": "3!n11!n",
+    "FK": "2!a12!n",
+    "FO": "4!n9!n1!n",
+    "FR": "5!n5!n11!c2!n",
+    "GB": "4!a6!n8!n",
+    "GE": "2!a16!n",
+    "GI": "4!a15!c",
+    "GL": "4!n9!n1!n",
+    "GR": "3!n4!n16!c",
+    "GT": "4!c20!c",
+    "HN": "4!a20!n",
+    "HR": "7!n10!n",
+    "HU": "3!n4!n1!n15!n1!n",
+    "IE": "4!a6!n8!n",
+    "IL": "3!n3!n13!n",
+    "IQ": "4!a3!n12!n",
+    "IS": "4!n2!n6!n10!n",
+    "IT": "1!a5!n5!n12!c",
+    "JO": "4!a4!n18!c",
+    "KW": "4!a22!c",
+    "KZ": "3!n13!c",
+    "LB": "4!n20!c",
+    "LC": "4!a24!c",
+    "LI": "5!n12!c",
+    "LT": "5!n11!n",
+    "LU": "3!n13!c",
+    "LV": "4!a13!c",
+    "LY": "3!n3!n15!n",
+    "MC": "5!n5!n11!c2!n",
+    "MD": "2!c18!c",
+    "ME": "3!n13!n2!n",
+    "MK": "3!n10!c2!n",
+    "MN": "4!n12!n",
+    "MR": "5!n5!n11!n2!n",
+    "MT": "4!a5!n18!c",
+    "MU": "4!a2!n2!n12!n3!n3!a",
+    "NI": "4!a20!n",
+    "NL": "4!a10!n",
+    "NO": "4!n6!n1!n",
+    "OM": "3!n16!c",
+    "PK": "4!a16!c",
+    "PL": "8!n16!n",
+    "PS": "4!a21!c",
+    "PT": "4!n4!n11!n2!n",
+    "QA": "4!a21!c",
+    "RO": "4!a16!c",
+    "RS": "3!n13!n2!n",
+    "RU": "9!n5!n15!c",
+    "SA": "2!n18!c",
+    "SC": "4!a2!n2!n16!n3!a",
+    "SD": "2!n12!n",
+    "SE": "3!n16!n1!n",
+    "SI": "5!n8!n2!n",
+    "SK": "4!n6!n10!n",
+    "SM": "1!a5!n5!n12!c",
+    "SO": "4!n3!n12!n",
+    "ST": "4!n4!n11!n2!n",
+    "SV": "4!a20!n",
+    "TL": "3!n14!n2!n",
+    "TN": "2!n3!n13!n2!n",
+    "TR": "5!n1!n16!c",
+    "UA": "6!n19!c",
+    "VA": "3!n15!n",
+    "VG": "4!a16!n",
+    "XK": "4!n10!n2!n",
+    "YE": "4!a4!n18!c",
+}
+
+
+def _compile_iban_specs():
+    """Compile SWIFT BBAN specs into ``(total_length, character_class_mask)`` entries."""
+    compiled = {}
+    for country, spec in _IBAN_BBAN_SPECS.items():
+        # Position 2..3 are always two check digits ('n'), followed by the BBAN mask.
+        kinds = ["n", "n"]
+        for count, kind in _IBAN_SPEC_GROUP.findall(spec):
+            kinds.extend(kind * int(count))
+        mask = "".join(kinds)
+        compiled[country] = (2 + len(mask), mask)
+    return compiled
+
+
+_IBAN_COUNTRY_SPECS = _compile_iban_specs()
 DRAFT_TTL_SECONDS = 48 * 60 * 60
 CONFIRMED_TEXT_TTL_SECONDS = 30 * 24 * 60 * 60
 
@@ -431,16 +542,29 @@ def _iban_checksum(token):
     return total == 1
 
 
+def _iban_char_matches(char, kind):
+    """Return True when ``char`` matches SWIFT BBAN character class ``n``, ``a`` or ``c``."""
+    if "0" <= char <= "9":
+        return kind != "a"
+    if "A" <= char <= "Z":
+        return kind != "n"
+    return False
+
+
 def _iban_shape(token):
-    """Polish PL plus 26 digits, or a generic IBAN with a valid mod-97 checksum."""
-    length = len(token)
-    if length < _IBAN_MIN or length > _IBAN_MAX:
+    """Polish PL plus 26 digits, or a country-structured IBAN with a valid mod-97 checksum."""
+    if not token.isascii():
         return False
-    if not (token[0].isalpha() and token[1].isalpha() and token[2].isdigit() and token[3].isdigit()):
+    token = token.upper()
+    spec = _IBAN_COUNTRY_SPECS.get(token[:2])
+    if spec is None:
         return False
-    if not all(char.isalnum() for char in token):
+    expected_len, mask = spec
+    if len(token) != expected_len:
         return False
-    if token[:2] == "PL" and length == 28 and token[2:].isdigit():
+    if not all(_iban_char_matches(char, kind) for char, kind in zip(token[2:], mask)):
+        return False
+    if token[:2] == "PL":
         return True
     return _iban_checksum(token)
 
@@ -476,12 +600,13 @@ def _mark_digit_runs(text, bad):
     flush()
 
 
-def _mark_ibans(text, bad):
-    """Mark lines that contribute a character to a bounded IBAN.
+def _mark_ibans(text, redactions):
+    """Mark IBAN lines and keep a space-delimited suffix on the final line.
 
-    Separators may sit between the IBAN characters. The match must end on a
-    boundary, so a longer word is not a prefix hit. Each start reads at most
-    ``_IBAN_MAX`` alphanumeric characters.
+    Separators, including line breaks, may sit between IBAN characters. A
+    candidate is validated once it reaches the country's fixed SWIFT length and
+    the next character cannot continue an ASCII alphanumeric token. Each start
+    bounds token work to the country's IBAN structure and length.
     """
     line_of = []
     line = 0
@@ -493,27 +618,37 @@ def _mark_ibans(text, bad):
     index = 0
     while index < length:
         char = text[index]
-        if not char.isalpha() or (index and text[index - 1].isalnum()):
+        if not (char.isascii() and char.isalpha()) or (index and text[index - 1].isalnum()):
             index += 1
             continue
-        compact = []
-        positions = []
-        cursor = index
+        compact = [char.upper()]
+        positions = [index]
+        cursor = index + 1
+        spec = None
         matched_end = None
-        matched_len = 0
-        while cursor < length and len(compact) < _IBAN_MAX:
+        while cursor < length:
             current = text[cursor]
             if current.isalnum():
-                compact.append(current.upper())
+                if not current.isascii():
+                    break
+                upper = current.upper()
+                pos = len(compact)
+                if pos == 1:
+                    spec = _IBAN_COUNTRY_SPECS.get(compact[0] + upper)
+                    if spec is None:
+                        break
+                elif not _iban_char_matches(upper, spec[1][pos - 2]):
+                    break
+                compact.append(upper)
                 positions.append(cursor)
                 cursor += 1
-                if _iban_shape("".join(compact)):
-                    look = cursor
-                    while look < length and text[look] in _JOIN_SEPARATORS:
-                        look += 1
-                    if look >= length or not text[look].isalnum():
-                        matched_end = look
-                        matched_len = len(compact)
+                if len(compact) == spec[0]:
+                    token = "".join(compact)
+                    if token[:2] == "PL" or _iban_checksum(token):
+                        # A glued ASCII alphanumeric may belong to a longer reference.
+                        if cursor == length or not (text[cursor].isascii() and text[cursor].isalnum()):
+                            matched_end = cursor
+                    break
                 continue
             if current in _JOIN_SEPARATORS:
                 cursor += 1
@@ -522,8 +657,11 @@ def _mark_ibans(text, bad):
         if matched_end is None:
             index += 1
             continue
-        for pos in positions[:matched_len]:
-            bad.add(line_of[pos])
+        for pos in positions:
+            redactions[line_of[pos]] = ""
+        if text[matched_end:matched_end + 1] == " ":
+            line_end = text.find("\n", matched_end)
+            redactions[line_of[positions[-1]]] = text[matched_end:line_end if line_end >= 0 else length].rstrip()
         index = matched_end
 
 
@@ -571,16 +709,20 @@ def _secret_lines(text):
                 bad.add(index - 1)
                 masked[index] = "x" + masked[index]
     _mark_digit_runs("\n".join(masked), bad)
-    _mark_ibans(text, bad)
-    return bad
+    ibans = {}
+    _mark_ibans(text, ibans)
+    return ibans | dict.fromkeys(bad, "")
 
 
 def _redact_normalized(text):
-    """Replace each tainted line entirely. Other lines stay, including their digits."""
-    bad = _secret_lines(text)
-    if not bad:
+    """Apply the redactions while keeping all other lines intact."""
+    redactions = _secret_lines(text)
+    if not redactions:
         return text
-    return "\n".join(_REMOVED if number in bad else line for number, line in enumerate(text.split("\n")))
+    return "\n".join(
+        _REMOVED + redactions[number] if number in redactions else line
+        for number, line in enumerate(text.split("\n"))
+    )
 
 
 def _contains_secret(value):

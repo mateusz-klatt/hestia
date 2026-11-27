@@ -770,7 +770,7 @@ def _payee(value: str) -> str:
     stripped = _TRAILING_ID.sub("", value)
     if stripped != value and re.search(r"[^\W\d_]", stripped):
         value = stripped
-    if 2 <= len(value) <= 128 and not _PAYEE_DIGITS.search(value) and redact_pan(value) != _REDACTED:
+    if 2 <= len(value) <= 128 and not _PAYEE_DIGITS.search(value) and _REDACTED not in redact_pan(value):
         return value
     return ""
 
