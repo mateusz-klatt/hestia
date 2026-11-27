@@ -939,45 +939,78 @@ export function draftFromDetail(
   };
 }
 
+function canonicalDraftSnapshot(draft: ReceiptConfirmDraft): string {
+  return JSON.stringify({
+    receiptId: draft.receiptId,
+    rawShopName: draft.rawShopName,
+    rawNip: draft.rawNip,
+    receiptKind: draft.receiptKind,
+    receiptDate: draft.receiptDate,
+    receiptTime: draft.receiptTime,
+    totalAmount: draft.totalAmount,
+    currency: draft.currency,
+    paymentMethod: draft.paymentMethod,
+    lines: draft.lines.map((line) => ({
+      line_kind: line.line_kind,
+      raw_name: line.raw_name,
+      ptu_code: line.ptu_code,
+      quantity: line.quantity,
+      raw_unit: line.raw_unit,
+      unit_price_raw: line.unit_price_raw,
+      gross_line_total: line.gross_line_total,
+      discount_amount: line.discount_amount,
+      net_line_total: line.net_line_total,
+    })),
+    linkChoice: draft.linkChoice,
+    selectedCandidate: draft.selectedCandidate === null
+      ? null
+      : {
+          account_id: draft.selectedCandidate.account_id,
+          entry_reference: draft.selectedCandidate.entry_reference,
+          match_strength: draft.selectedCandidate.match_strength,
+          evidence_fingerprint: draft.selectedCandidate.evidence_fingerprint,
+        },
+    keepBinding: draft.keepBinding === null
+      ? null
+      : {
+          account_id: draft.keepBinding.account_id,
+          entry_reference: draft.keepBinding.entry_reference,
+          match_strength: draft.keepBinding.match_strength,
+          evidence_fingerprint: draft.keepBinding.evidence_fingerprint,
+          evidence_digest: draft.keepBinding.evidence_digest,
+        },
+  });
+}
+
 /**
- * True when any editable receipt field or line in `draft` differs from the clean baseline
- * derived from `detail` (excluding `linkChoice`, which is tracked separately in session memory
- * so bank-evidence drift refreshes can still invalidate stale tokens).
+ * True when the full editable draft (header fields, lines, link choice, candidate selection,
+ * and keep binding) differs from the clean server snapshot derived from `detail` and `candidates`.
  */
 export function isReceiptDraftDirty(
+  detail: ReceiptDetail,
+  draft: ReceiptConfirmDraft,
+  candidates: readonly ReceiptCandidate[] = [],
+): boolean {
+  if (draft.receiptId !== detail.receipt_id) return false;
+  return canonicalDraftSnapshot(draft) !== canonicalDraftSnapshot(draftFromDetail(detail, candidates));
+}
+
+/**
+ * True when header fields or lines differ from `detail`, ignoring link/candidate selection changes
+ * (used only to distinguish stale candidate token 409s from unsaved receipt field/line edits).
+ */
+export function hasReceiptFieldOrLineEdits(
   detail: ReceiptDetail,
   draft: ReceiptConfirmDraft,
 ): boolean {
   if (draft.receiptId !== detail.receipt_id) return false;
   const baseline = draftFromDetail(detail, []);
-  if (draft.rawShopName !== baseline.rawShopName) return true;
-  if (draft.rawNip !== baseline.rawNip) return true;
-  if (draft.receiptKind !== baseline.receiptKind) return true;
-  if (draft.receiptDate !== baseline.receiptDate) return true;
-  if (draft.receiptTime !== baseline.receiptTime) return true;
-  if (draft.totalAmount !== baseline.totalAmount) return true;
-  if (draft.currency !== baseline.currency) return true;
-  if (draft.paymentMethod !== baseline.paymentMethod) return true;
-  if (draft.lines.length !== baseline.lines.length) return true;
-  for (let i = 0; i < baseline.lines.length; i += 1) {
-    const orig = baseline.lines[i];
-    const next = draft.lines[i];
-    if (orig === undefined || next === undefined) return true;
-    if (
-      orig.line_kind !== next.line_kind
-      || orig.raw_name !== next.raw_name
-      || orig.ptu_code !== next.ptu_code
-      || orig.quantity !== next.quantity
-      || orig.raw_unit !== next.raw_unit
-      || orig.unit_price_raw !== next.unit_price_raw
-      || orig.gross_line_total !== next.gross_line_total
-      || orig.discount_amount !== next.discount_amount
-      || orig.net_line_total !== next.net_line_total
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return canonicalDraftSnapshot({
+    ...draft,
+    linkChoice: baseline.linkChoice,
+    selectedCandidate: baseline.selectedCandidate,
+    keepBinding: baseline.keepBinding,
+  }) !== canonicalDraftSnapshot(baseline);
 }
 
 /** Keeps link choices valid after field edits: disables stale tokens without silently picking unlink. */

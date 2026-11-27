@@ -761,6 +761,7 @@ describe("ReceiptsView", () => {
       candidates: [candKeep, candAlt],
     }));
     await click(button("Close", dialog()));
+    await click(button("Discard", dialog()));
     await click(button("Details"));
     const d3 = dialog();
     expect(d3.textContent).toContain("Choose whether to keep the link, change it or unlink");
@@ -1896,8 +1897,9 @@ describe("ReceiptsView", () => {
     expect(linkRadio("unlink", dialog()).checked).toBe(true);
     expect(dialog().querySelector(".budget-receipt-suggested")).toBeNull();
 
-    // INV-B: Close and re-open same receipt -> builds a fresh draft from server detail (preselection and banner reset).
+    // INV-B: Close (discarding Unlink edit) and re-open same receipt -> builds a fresh draft from server detail.
     await click(button("Zamknij", dialog()));
+    await click(button("Odrzuć", dialog()));
     await click(openDetailButton(0, "Szczegóły"));
     expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
     expect(linkRadio("unlink", dialog()).checked).toBe(false);
@@ -4110,5 +4112,236 @@ describe("ReceiptsView", () => {
     await settle();
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     expect(host.textContent).toContain("Dokument został usunięty");
+  });
+
+  it("prompts Save/Discard when Unlink, Keep, or candidate choice is the only edit and clears dirty when reverted", async () => {
+    const candNip = receiptCandidate({
+      entry_reference: "a".repeat(64),
+      candidate_token: "tok-link-only-1",
+      amount: "12.50",
+      match_strength: "nip",
+    });
+    const candAlt = receiptCandidate({
+      entry_reference: "b".repeat(64),
+      candidate_token: "tok-link-only-2",
+      amount: "12.50",
+      match_strength: "none",
+    });
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const r1 = receiptSummary({
+      receipt_id: "link-dirty-1",
+      status: "imported",
+      linked: false,
+      raw_shop_name: "Sklep Z Dopasowaniem",
+      total_amount: "12.50",
+      version: 1,
+    });
+    const r2 = receiptSummary({
+      receipt_id: "link-dirty-2",
+      status: "needs_review",
+      linked: true,
+      raw_shop_name: "Sklep Do Przeglądu",
+      total_amount: "12.50",
+      version: 2,
+    });
+    const clients = fakeClients([r1, r2]);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      if (id === "link-dirty-1") {
+        return ok<ReceiptDetailResult>({
+          receipt: receiptDetail({ ...r1, lines: singleLine }),
+          candidates: [candNip],
+        });
+      }
+      return ok<ReceiptDetailResult>({
+        receipt: receiptDetail({
+          ...r2,
+          linked: true,
+          linked_account_id: candNip.account_id,
+          linked_entry_ref: candNip.entry_reference,
+          lines: singleLine,
+        }),
+        candidates: [candNip, candAlt],
+      });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => ok({
+      ok: true,
+      receipt: receiptDetail({
+        ...(req.receipt_id === "link-dirty-1" ? r1 : r2),
+        status: "confirmed",
+        linked: req.link !== null,
+        version: req.expected_version + 1,
+        lines: singleLine,
+      }),
+    }));
+
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailById("link-dirty-1", "Szczegóły"));
+    expect(linkRadio("candidate:0", dialog()).checked).toBe(true);
+
+    // 1. Choosing Unlink as the ONLY edit triggers Save/Discard on Next AND Close without dropping the edit.
+    await click(button("Odłącz / bez powiązania", dialog()));
+    expect(linkRadio("unlink", dialog()).checked).toBe(true);
+    await click(button("Następny", dialog()));
+    expect(dialog().textContent).toContain("Sklep Z Dopasowaniem");
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+    expect(linkRadio("unlink", dialog()).checked).toBe(true);
+
+    await click(button("Zamknij", dialog()));
+    expect(dialog().textContent).toContain("Sklep Z Dopasowaniem");
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+    expect(linkRadio("unlink", dialog()).checked).toBe(true);
+
+    // Reverting link choice back to the server baseline clears dirty and allows immediate Next navigation.
+    await click(linkRadio("candidate:0", dialog()));
+    expect(dialog().textContent).not.toContain("Masz niezapisane zmiany");
+    await click(button("Następny", dialog()));
+    expect(dialog().textContent).toContain("Sklep Do Przeglądu");
+
+    // 2. Choosing Keep as the ONLY edit prompts Save/Discard on Close; Discard closes cleanly.
+    await click(linkRadio("keep", dialog()));
+    expect(linkRadio("keep", dialog()).checked).toBe(true);
+    await click(button("Zamknij", dialog()));
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+    await click(button("Odrzuć", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+
+    // 3. Choosing a candidate radio as the ONLY edit prompts Save/Discard on Previous; Save commits and navigates.
+    await click(openDetailById("link-dirty-2", "Szczegóły"));
+    await click(linkRadio("candidate:1", dialog()));
+    await click(button("Poprzedni", dialog()));
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+    await click(button("Zapisz", dialog()));
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
+      receipt_id: "link-dirty-2",
+      link: {
+        account_id: candAlt.account_id,
+        entry_reference: candAlt.entry_reference,
+        candidate_token: "tok-link-only-2",
+      },
+    }));
+    expect(dialog().textContent).toContain("Sklep Z Dopasowaniem");
+  });
+
+  it("reloads clean open drawer via INV-C when group dialog closes after partial pre-confirm and rejected linking under Imported filter", async () => {
+    const firstLine = receiptDetail().lines[0];
+    if (firstLine === undefined) throw new Error("expected receipt line");
+    const lineFor = (amount: string) => [{
+      ...firstLine,
+      unit_price_raw: amount,
+      gross_line_total: amount,
+      net_line_total: amount,
+    }];
+    const g1Imported = receiptSummary({
+      receipt_id: "grp-part-1",
+      status: "imported",
+      linked: false,
+      raw_shop_name: "Imported Group Anchor",
+      total_amount: "20.00",
+      version: 1,
+    });
+    const g2Imported = receiptSummary({
+      receipt_id: "grp-part-2",
+      status: "imported",
+      linked: false,
+      raw_shop_name: "Imported Group Partner",
+      total_amount: "30.00",
+      version: 1,
+    });
+    const groupTx = {
+      account_id: "local-a",
+      entry_reference: "e".repeat(64),
+      amount: "50.00",
+      currency: "PLN",
+      credit_debit_indicator: "DBIT" as const,
+      transaction_date: "2026-11-14",
+      booking_date: "2026-11-14",
+      value_date: "2026-11-14",
+      merchant_token_hit: false,
+      match_strength: "none" as const,
+      date_distance: 0,
+      evidence_fingerprint: "fp-grp-part",
+      candidate_token: "tok-grp-part",
+    };
+
+    const serverState = new Map<string, ReceiptSummary>([
+      [g1Imported.receipt_id, g1Imported],
+      [g2Imported.receipt_id, g2Imported],
+    ]);
+    const clients = fakeClients([g1Imported, g2Imported]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      const all = [...serverState.values()];
+      const filtered = req?.status === undefined ? all : all.filter((row) => row.status === req.status);
+      return ok<ReceiptListResult>({ receipts: filtered, next_cursor: null });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const current = serverState.get(id) ?? g1Imported;
+      return ok<ReceiptDetailResult>({
+        receipt: receiptDetail({ ...current, lines: lineFor(current.total_amount ?? "20.00") }),
+        candidates: [],
+        group_candidates: [],
+      });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => {
+      const current = serverState.get(req.receipt_id);
+      if (current === undefined) return fail(404, "budget_receipt_not_found");
+      const confirmed: ReceiptSummary = {
+        ...current,
+        status: "confirmed",
+        version: current.version + 1,
+      };
+      serverState.set(req.receipt_id, confirmed);
+      return ok({
+        ok: true,
+        receipt: receiptDetail({ ...confirmed, lines: lineFor(confirmed.total_amount ?? "20.00") }),
+      });
+    });
+    clients.rApi.receiptGroupCandidates = vi.fn<NonNullable<ReceiptsApi["receiptGroupCandidates"]>>(() => ok<ReceiptGroupCandidatesResult>({
+      anchor_receipt_id: g1Imported.receipt_id,
+      transactions: [groupTx],
+      proposals: [],
+      eligible_receipts: [...serverState.values()],
+      eligible_evidence: [],
+      no_bank_data: false,
+    }));
+    clients.rApi.linkReceiptGroup = vi.fn<NonNullable<ReceiptsApi["linkReceiptGroup"]>>(
+      () => fail(409, "budget_receipt_group_sum_mismatch"),
+    );
+
+    await renderReceipts(clients);
+    await choose(selectByName("status"), "imported");
+    await settle();
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(2);
+
+    await click(openDetailById("grp-part-1"));
+    expect(dialog().querySelector(".budget-receipt-status")?.getAttribute("data-status")).toBe("imported");
+    expect(dialog().textContent).toContain("Version 1");
+
+    // Open group dialog and submit: pre-confirm succeeds (imported v1 -> confirmed v2), final linking is rejected.
+    await click(button("Group with other receipts", dialog()));
+    const groupModal = [...host.querySelectorAll<HTMLElement>('[role="dialog"]')].at(-1);
+    if (groupModal === undefined) throw new Error("Expected group controller modal");
+    const txRadio = groupModal.querySelector<HTMLInputElement>('input[name="group_tx_choice"][value="0"]');
+    if (txRadio === null) throw new Error("Expected tx choice");
+    await click(txRadio);
+    for (const box of groupModal.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) {
+      if (!box.checked) await click(box);
+    }
+    await click(button("Confirm group link", groupModal));
+    await settle();
+
+    // Pre-confirm committed both receipts, linkReceiptGroup was rejected, and Imported list is now empty.
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledTimes(2);
+    expect(clients.rApi.linkReceiptGroup).toHaveBeenCalledTimes(1);
+    expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(2);
+    expect(groupModal.querySelector('[role="alert"]')).not.toBeNull();
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(0);
+
+    // Closing the group dialog MUST trigger INV-C so the clean drawer shows Confirmed / Version 2, not stale Imported / Version 1.
+    await click(button("Close", groupModal));
+    await settle();
+    expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(dialog().querySelector(".budget-receipt-status")?.getAttribute("data-status")).toBe("confirmed");
+    expect(dialog().textContent).toContain("Version 2");
+    expect(dialog().textContent).not.toContain("Version 1");
   });
 });

@@ -48,6 +48,7 @@ import {
   hasActiveReceiptFilter,
   hasClientSideFilter,
   hasMatchingFieldsChanged,
+  hasReceiptFieldOrLineEdits,
   isBulkConfirmable,
   isExcludedDraftForBulk,
   isGroupMemberEligible,
@@ -56,6 +57,7 @@ import {
   isRedactedValue,
   isStaleCursorError,
   keepCandidateBinding,
+  keepEvidenceMatches,
   merchantBulkGroups,
   mergeReceiptRows,
   normalizeDecimalInput,
@@ -147,6 +149,7 @@ type DetailState =
       candidates: ReceiptCandidate[];
       groupCandidates: ReceiptGroupCandidate[];
       noBankData: boolean;
+      candidatesOnly?: boolean;
     }
   | { kind: "error" };
 
@@ -482,6 +485,7 @@ export function ReceiptsView({
   const bulkProgressRef = useRef(bulkProgress);
   const autoAdvanceRef = useRef(autoAdvance);
   const groupControllerOpenRef = useRef(groupControllerTarget !== null);
+  const groupCommittedWhileOpenRef = useRef(false);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadMorePromiseRef = useRef<Promise<LoadMoreOutcome> | null>(null);
   const activeRefreshRef = useRef<ActiveRefreshState | null>(null);
@@ -579,6 +583,7 @@ export function ReceiptsView({
 
   const updateGroupControllerTarget = useCallback((next: ReceiptGroupControllerTarget | null) => {
     groupControllerOpenRef.current = next !== null;
+    groupCommittedWhileOpenRef.current = false;
     setGroupControllerTarget(next);
   }, []);
 
@@ -1137,11 +1142,12 @@ export function ReceiptsView({
             ? { ...current, refreshing: false, refreshError: true }
             : { kind: "error" }));
           const openId = openReceiptIdRef.current;
-          if (openId !== null && !state.deferredReconcileIds.has(openId) && !state.probeIfMissingIds.has(openId)) {
+          if (openId !== null && !state.deferredReconcileIds.has(openId)) {
             const opts = state.reconcileOptionsById.get(openId);
-            if (opts?.reloadDetail === true) {
+            const shouldReload = opts?.reloadDetail === true || state.probeIfMissingIds.has(openId);
+            if (shouldReload) {
               if (isDraftDirtyFor(openId)) {
-                deferDrawerReconcile(openId, opts);
+                deferDrawerReconcile(openId, opts ?? { reloadDetail: true, preserveNotice: null });
               } else {
                 receiptFloorGenRef.current.set(openId, ++detailGeneration.current);
                 setDetailRefresh((current) => current + 1);
@@ -1518,11 +1524,6 @@ export function ReceiptsView({
       return;
     }
     const targetId = selectedId;
-    if (loadedReceiptIdRef.current === targetId && isDraftDirtyFor(targetId)) {
-      deferDrawerReconcile(targetId, { reloadDetail: true, preserveNotice: null });
-      probeMissingOpenReceipt(targetId);
-      return;
-    }
     const token = ++detailGeneration.current;
     if (loadedReceiptIdRef.current !== targetId) {
       latestReadyCandidatesRef.current = null;
@@ -1540,6 +1541,15 @@ export function ReceiptsView({
       }
       if (isDraftDirtyFor(targetId)) {
         deferDrawerReconcile(targetId, { reloadDetail: true, preserveNotice: null });
+        if (result.ok) {
+          const freshCandidates = result.data.candidates ?? [];
+          latestReadyCandidatesRef.current = { receiptId: targetId, candidates: freshCandidates };
+          setDetailState((current) => (
+            current.kind === "ready" && current.detail.receipt_id === targetId
+              ? { ...current, candidates: freshCandidates, candidatesOnly: true }
+              : current
+          ));
+        }
         return;
       }
       if (!result.ok) {
@@ -1603,7 +1613,6 @@ export function ReceiptsView({
     deferDrawerReconcile,
     isDraftDirtyFor,
     isMounted,
-    probeMissingOpenReceipt,
     quietRefetchLoadedRange,
   ]);
 
@@ -2454,7 +2463,12 @@ export function ReceiptsView({
               });
             }}
             onConflictOrStale={(receiptId) => {
-              if (isDraftDirtyFor(receiptId)) return;
+              if (dirtyDraftReceiptIdRef.current === receiptId) {
+                dirtyDraftReceiptIdRef.current = null;
+              }
+              pendingNavRef.current = null;
+              setPendingNavPrompt(null);
+              pendingDrawerReconcileRef.current.delete(receiptId);
               recordLinkChoiceTouched(receiptId, { kind: "empty" });
               const floorToken = ++detailGeneration.current;
               receiptFloorGenRef.current.set(receiptId, floorToken);
@@ -2512,16 +2526,28 @@ export function ReceiptsView({
           revision={revision}
           onAccessLoss={checkBarrier}
           onClose={() => {
+            const hadCommittedStep = groupCommittedWhileOpenRef.current;
             updateGroupControllerTarget(null);
             const opener = groupReturnFocusRef.current;
             groupReturnFocusRef.current = null;
             if (opener?.isConnected === true) opener.focus({ preventScroll: true });
+            if (hadCommittedStep) {
+              const openId = openReceiptIdRef.current;
+              if (openId !== null && !isDraftDirtyFor(openId)) {
+                clearLinkChoiceMemory(openId);
+                receiptFloorGenRef.current.set(openId, ++detailGeneration.current);
+                setDetailRefresh((current) => current + 1);
+              }
+              void quietRefetchLoadedRange({ probeIfMissingForId: openId });
+            }
           }}
           onPartialConfirm={(affectedIds) => {
+            groupCommittedWhileOpenRef.current = true;
             const openId = openReceiptIdRef.current;
-            void quietRefetchLoadedRange({
-              reloadDetailForId: openId !== null && affectedIds.includes(openId) ? openId : null,
-            });
+            if (openId !== null && affectedIds.includes(openId) && !isDraftDirtyFor(openId)) {
+              clearLinkChoiceMemory(openId);
+            }
+            void quietRefetchLoadedRange({ probeIfMissingForId: openId });
           }}
           onGroupLinked={(_, affectedIds) => {
             updateGroupControllerTarget(null);
@@ -2896,6 +2922,58 @@ function ReceiptDetailDrawer({
     };
 
     if (detailState.kind === "ready" && !isReceiptGrouped(detailState.detail)) {
+      if (
+        detailState.candidatesOnly === true
+        && confirmDraftRef.current !== null
+        && confirmDraftRef.current.receiptId === detailState.detail.receipt_id
+      ) {
+        // Candidates-only refresh while the user holds a dirty draft: keep user edits intact and only check bank drift.
+        const currentDraft = confirmDraftRef.current;
+        const freshKey = buildCandidateSetKey(detailState.detail, detailState.candidates);
+        const freshKeep = findCurrentLinkedCandidate(detailState.detail, detailState.candidates);
+        if (currentDraft.linkChoice === "keep" && !keepEvidenceMatches(freshKeep, currentDraft.keepBinding)) {
+          keepActionErrorRef.current = { mode: "always" };
+          onLinkChoiceTouched(detailState.detail.receipt_id, { kind: "empty" });
+          const nextDraft: ReceiptConfirmDraft = {
+            ...currentDraft,
+            linkChoice: "",
+            selectedCandidate: null,
+            keepBinding: null,
+            candidateSetKey: freshKey,
+          };
+          confirmDraftRef.current = nextDraft;
+          setConfirmDraft(nextDraft);
+          setActionError(t("budget.receipts.bankEvidenceChanged"));
+          onDraftDirtyChange(
+            detailState.detail.receipt_id,
+            isReceiptDraftDirty(detailState.detail, nextDraft, detailState.candidates),
+          );
+        } else if (
+          currentDraft.linkChoice.startsWith("candidate:")
+          && currentDraft.candidateSetKey !== freshKey
+        ) {
+          onLinkChoiceTouched(detailState.detail.receipt_id, { kind: "empty" });
+          setSuggestionDismissed(true);
+          const nextDraft: ReceiptConfirmDraft = {
+            ...currentDraft,
+            linkChoice: "",
+            selectedCandidate: null,
+            keepBinding: null,
+            candidateSetKey: freshKey,
+          };
+          confirmDraftRef.current = nextDraft;
+          setConfirmDraft(nextDraft);
+          onDraftDirtyChange(
+            detailState.detail.receipt_id,
+            isReceiptDraftDirty(detailState.detail, nextDraft, detailState.candidates),
+          );
+        } else if (currentDraft.candidateSetKey !== freshKey) {
+          const nextDraft: ReceiptConfirmDraft = { ...currentDraft, candidateSetKey: freshKey };
+          confirmDraftRef.current = nextDraft;
+          setConfirmDraft(nextDraft);
+        }
+        return;
+      }
       groupDetailRef.current = null;
       const resolved = resolveDetailDraft(detailState.detail, detailState.candidates);
       confirmDraftRef.current = resolved.draft;
@@ -2943,7 +3021,7 @@ function ReceiptDetailDrawer({
       setConfirmingDelete(false);
       setConfirmingDissolve(false);
     }
-  }, [detailState, resolveDetailDraft]);
+  }, [detailState, onDraftDirtyChange, onLinkChoiceTouched, resolveDetailDraft]);
 
   const title = t("budget.receipts.detailTitle");
 
@@ -2963,21 +3041,24 @@ function ReceiptDetailDrawer({
     setConfirmingDissolve(false);
   };
 
-  const updateLinkDraft = (next: ReceiptConfirmDraft | null) => {
+  const commitDraft = (
+    detail: ReceiptDetail,
+    candidates: readonly ReceiptCandidate[],
+    next: ReceiptConfirmDraft,
+  ) => {
     confirmDraftRef.current = next;
     setConfirmDraft(next);
+    onDraftDirtyChange(detail.receipt_id, isReceiptDraftDirty(detail, next, candidates));
   };
 
   const mutateDraft = (
     detail: ReceiptDetail,
+    candidates: readonly ReceiptCandidate[],
     fallback: ReceiptConfirmDraft,
     updater: (current: ReceiptConfirmDraft) => ReceiptConfirmDraft,
   ) => {
     const base = confirmDraftRef.current ?? fallback;
-    const next = updater(base);
-    confirmDraftRef.current = next;
-    setConfirmDraft(next);
-    onDraftDirtyChange(detail.receipt_id, isReceiptDraftDirty(detail, next));
+    commitDraft(detail, candidates, updater(base));
   };
 
   const updateDraftFields = (
@@ -2986,7 +3067,7 @@ function ReceiptDetailDrawer({
     fallback: ReceiptConfirmDraft,
     patch: Partial<ReceiptConfirmDraft>,
   ) => {
-    mutateDraft(detail, fallback, (current) => {
+    mutateDraft(detail, candidates, fallback, (current) => {
       const next = { ...current, ...patch };
       const nextLinkChoice = reconcileLinkChoice(detail, current.linkChoice, next, candidates);
       return {
@@ -3017,7 +3098,7 @@ function ReceiptDetailDrawer({
         }
         const currentDraft = confirmDraftRef.current;
         if (currentDraft !== null) {
-          updateLinkDraft({ ...currentDraft, linkChoice: "", selectedCandidate: null, keepBinding: null });
+          commitDraft(detail, currentCandidates, { ...currentDraft, linkChoice: "", selectedCandidate: null, keepBinding: null });
         }
       }
       setActionError(t(built.errorKey));
@@ -3051,7 +3132,7 @@ function ReceiptDetailDrawer({
         }
         if (isConflictOrStaleError(result)) {
           const cleanStaleTokenOnly =
-            result.error === "budget_receipt_stale_source" && !isReceiptDraftDirty(detail, draft);
+            result.error === "budget_receipt_stale_source" && !hasReceiptFieldOrLineEdits(detail, draft);
           if (cleanStaleTokenOnly) {
             setActionError(confirmErrorText(result.error));
             keepActionErrorRef.current = { mode: "always" };
@@ -3084,7 +3165,7 @@ function ReceiptDetailDrawer({
     }
   };
 
-  const submitDelete = async (detail: ReceiptDetail) => {
+  const submitDelete = async (detail: ReceiptDetail, candidates: readonly ReceiptCandidate[]) => {
     if (isReceiptGrouped(detail) || !isOpenReceipt(detail.receipt_id)) return;
     const lockToken = store.tryAcquire(detail.receipt_id, "delete");
     if (lockToken === null) return;
@@ -3112,7 +3193,8 @@ function ReceiptDetailDrawer({
           return;
         }
         if (isConflictOrStaleError(result)) {
-          const hasDirtyDraft = confirmDraftRef.current !== null && isReceiptDraftDirty(detail, confirmDraftRef.current);
+          const hasDirtyDraft =
+            confirmDraftRef.current !== null && isReceiptDraftDirty(detail, confirmDraftRef.current, candidates);
           if (hasDirtyDraft) {
             setConfirmingDelete(false);
             setActionError(t("budget.receipts.conflictDraftNotice"));
@@ -3278,7 +3360,11 @@ function ReceiptDetailDrawer({
     }
   };
 
-  const addSummaryLine = (detail: ReceiptDetail, draft: ReceiptConfirmDraft) => {
+  const addSummaryLine = (
+    detail: ReceiptDetail,
+    candidates: readonly ReceiptCandidate[],
+    draft: ReceiptConfirmDraft,
+  ) => {
     if (receiptHasRedactedLines(detail.lines)) return;
     const normalizedTotal = normalizeDecimalInput(draft.totalAmount) ?? draft.totalAmount.trim();
     const defaultName = detail.invoice_number !== null && !isRedactedValue(detail.invoice_number)
@@ -3298,26 +3384,32 @@ function ReceiptDetailDrawer({
       discount_amount: "0",
       net_line_total: normalizedTotal === "" ? "0" : normalizedTotal,
     };
-    mutateDraft(detail, draft, (current) => ({ ...current, lines: [...current.lines, nextLine] }));
+    mutateDraft(detail, candidates, draft, (current) => ({ ...current, lines: [...current.lines, nextLine] }));
   };
 
   const updateLine = (
     detail: ReceiptDetail,
+    candidates: readonly ReceiptCandidate[],
     draft: ReceiptConfirmDraft,
     index: number,
     field: ReceiptLineEditField,
     value: string,
   ) => {
     if (receiptHasRedactedLines(detail.lines)) return;
-    mutateDraft(detail, draft, (current) => ({
+    mutateDraft(detail, candidates, draft, (current) => ({
       ...current,
       lines: current.lines.map((line, idx) => (idx === index ? editReceiptLine(line, field, value) : line)),
     }));
   };
 
-  const removeLine = (detail: ReceiptDetail, draft: ReceiptConfirmDraft, index: number) => {
+  const removeLine = (
+    detail: ReceiptDetail,
+    candidates: readonly ReceiptCandidate[],
+    draft: ReceiptConfirmDraft,
+    index: number,
+  ) => {
     if (receiptHasRedactedLines(detail.lines)) return;
-    mutateDraft(detail, draft, (current) => ({
+    mutateDraft(detail, candidates, draft, (current) => ({
       ...current,
       lines: current.lines.filter((_, idx) => idx !== index),
     }));
@@ -3497,7 +3589,7 @@ function ReceiptDetailDrawer({
                           setSuggestionDismissed(true);
                           const currentDraft = confirmDraftRef.current;
                           if (currentDraft !== null) {
-                            updateLinkDraft({ ...currentDraft, linkChoice: "", selectedCandidate: null, keepBinding: null });
+                            commitDraft(detail, candidates, { ...currentDraft, linkChoice: "", selectedCandidate: null, keepBinding: null });
                           }
                           linkChoicesRef.current?.focus();
                           const target: { scrollIntoView?: (options?: ScrollIntoViewOptions) => void } | null =
@@ -3515,7 +3607,7 @@ function ReceiptDetailDrawer({
                           setSuggestionDismissed(true);
                           const currentDraft = confirmDraftRef.current;
                           if (currentDraft !== null) {
-                            updateLinkDraft({ ...currentDraft, linkChoice: "unlink", selectedCandidate: null, keepBinding: null });
+                            commitDraft(detail, candidates, { ...currentDraft, linkChoice: "unlink", selectedCandidate: null, keepBinding: null });
                           }
                         }}
                       >
@@ -3865,7 +3957,7 @@ function ReceiptDetailDrawer({
                         value={activeDraft.receiptTime}
                         onChange={(event) => {
                           const nextTime = event.currentTarget.value;
-                          mutateDraft(detail, activeDraft, (current) => ({ ...current, receiptTime: nextTime }));
+                          mutateDraft(detail, candidates, activeDraft, (current) => ({ ...current, receiptTime: nextTime }));
                         }}
                       />
                     </label>
@@ -3926,7 +4018,7 @@ function ReceiptDetailDrawer({
                           <button
                             type="button"
                             disabled={actionBusy !== null || hasRedactedLines}
-                            onClick={() => { addSummaryLine(detail, activeDraft); }}
+                            onClick={() => { addSummaryLine(detail, candidates, activeDraft); }}
                           >
                             {t("budget.receipts.addSummaryLine")}
                           </button>
@@ -3934,7 +4026,7 @@ function ReceiptDetailDrawer({
                           <button
                             type="button"
                             disabled={actionBusy !== null || hasRedactedLines}
-                            onClick={() => { addSummaryLine(detail, activeDraft); }}
+                            onClick={() => { addSummaryLine(detail, candidates, activeDraft); }}
                           >
                             {t("budget.receipts.addLine")}
                           </button>
@@ -3968,7 +4060,7 @@ function ReceiptDetailDrawer({
                             maxLength={128}
                             disabled={actionBusy !== null || hasRedactedLines}
                             value={line.raw_name}
-                            onChange={(event) => { updateLine(detail, activeDraft, idx, "raw_name", event.currentTarget.value); }}
+                            onChange={(event) => { updateLine(detail, candidates, activeDraft, idx, "raw_name", event.currentTarget.value); }}
                           />
                         </label>
                         <label>
@@ -3979,7 +4071,7 @@ function ReceiptDetailDrawer({
                             inputMode="decimal"
                             disabled={actionBusy !== null || hasRedactedLines}
                             value={line.gross_line_total}
-                            onChange={(event) => { updateLine(detail, activeDraft, idx, "gross_line_total", event.currentTarget.value); }}
+                            onChange={(event) => { updateLine(detail, candidates, activeDraft, idx, "gross_line_total", event.currentTarget.value); }}
                           />
                         </label>
                         {line.line_kind === "item" ? (
@@ -3991,7 +4083,7 @@ function ReceiptDetailDrawer({
                               inputMode="decimal"
                               disabled={actionBusy !== null || hasRedactedLines}
                               value={line.discount_amount}
-                              onChange={(event) => { updateLine(detail, activeDraft, idx, "discount_amount", event.currentTarget.value); }}
+                              onChange={(event) => { updateLine(detail, candidates, activeDraft, idx, "discount_amount", event.currentTarget.value); }}
                             />
                           </label>
                         ) : null}
@@ -4003,13 +4095,13 @@ function ReceiptDetailDrawer({
                             inputMode="decimal"
                             disabled={actionBusy !== null || hasRedactedLines}
                             value={line.net_line_total}
-                            onChange={(event) => { updateLine(detail, activeDraft, idx, "net_line_total", event.currentTarget.value); }}
+                            onChange={(event) => { updateLine(detail, candidates, activeDraft, idx, "net_line_total", event.currentTarget.value); }}
                           />
                         </label>
                         <button
                           type="button"
                           disabled={actionBusy !== null || hasRedactedLines}
-                          onClick={() => { removeLine(detail, activeDraft, idx); }}
+                          onClick={() => { removeLine(detail, candidates, activeDraft, idx); }}
                         >
                           {t("budget.receipts.removeLine")}
                         </button>
@@ -4058,7 +4150,7 @@ function ReceiptDetailDrawer({
                               kind: "keep",
                               keepBinding: currentCandidate === null ? null : keepCandidateBinding(currentCandidate),
                             });
-                            updateLinkDraft(selectKeepDraft(activeDraft, currentCandidate));
+                            commitDraft(detail, candidates, selectKeepDraft(activeDraft, currentCandidate));
                           }}
                         />
                         <span>{t("budget.receipts.linkChoiceKeep")}</span>
@@ -4074,7 +4166,7 @@ function ReceiptDetailDrawer({
                         checked={activeDraft.linkChoice === "unlink"}
                         onChange={() => {
                           onLinkChoiceTouched(detail.receipt_id, { kind: "unlink" });
-                          updateLinkDraft({ ...activeDraft, linkChoice: "unlink", selectedCandidate: null, keepBinding: null });
+                          commitDraft(detail, candidates, { ...activeDraft, linkChoice: "unlink", selectedCandidate: null, keepBinding: null });
                         }}
                       />
                       <span>
@@ -4113,7 +4205,7 @@ function ReceiptDetailDrawer({
                                 kind: "candidate",
                                 ...candidateSelectionBinding(candidate),
                               });
-                              updateLinkDraft(selectCandidateDraft(activeDraft, candidate, index));
+                              commitDraft(detail, candidates, selectCandidateDraft(activeDraft, candidate, index));
                             }}
                           />
                           <span>
@@ -4216,7 +4308,7 @@ function ReceiptDetailDrawer({
                       type="button"
                       className="budget-primary"
                       disabled={actionBusy !== null}
-                      onClick={() => { void submitDelete(detail); }}
+                      onClick={() => { void submitDelete(detail, candidates); }}
                     >
                       {actionBusy === "delete"
                         ? t("budget.receipts.deleting")

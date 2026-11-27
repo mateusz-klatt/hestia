@@ -30,6 +30,7 @@ import {
   hasActiveReceiptFilter,
   hasClientSideFilter,
   hasMatchingFieldsChanged,
+  hasReceiptFieldOrLineEdits,
   haveConfirmLinesChanged,
   isBulkConfirmable,
   isExcludedDraftForBulk,
@@ -1483,7 +1484,7 @@ describe("receipts_model", () => {
     expect(findNextUnconfirmedReceiptId(allConfirmed, "r1", { wrap: true })).toBeNull();
   });
 
-  it("detects dirty receipt drafts against detail baseline while ignoring link-choice-only changes", () => {
+  it("detects dirty receipt drafts via a single full-draft snapshot comparison including link, candidate, and keep state", () => {
     const baseDetail = detailOf({
       receipt_id: "dirty-1",
       currency: null,
@@ -1493,9 +1494,9 @@ describe("receipts_model", () => {
     });
     const clean = draftFromDetail(baseDetail, []);
     expect(isReceiptDraftDirty(baseDetail, clean)).toBe(false);
-    expect(isReceiptDraftDirty(baseDetail, { ...clean, linkChoice: "unlink" })).toBe(false);
     expect(isReceiptDraftDirty(baseDetail, { ...clean, receiptId: "other-id", rawShopName: "Changed" })).toBe(false);
 
+    // Header and line edits mark the draft dirty.
     expect(isReceiptDraftDirty(baseDetail, { ...clean, rawShopName: "Edited Shop" })).toBe(true);
     expect(isReceiptDraftDirty(baseDetail, { ...clean, rawNip: "5261040828" })).toBe(true);
     expect(isReceiptDraftDirty(baseDetail, { ...clean, receiptKind: "refund" })).toBe(true);
@@ -1507,5 +1508,56 @@ describe("receipts_model", () => {
     expect(isReceiptDraftDirty(baseDetail, { ...clean, lines: [] })).toBe(true);
     const editedLine = clean.lines.map((line, idx) => (idx === 0 ? { ...line, raw_name: "Edited Milk" } : line));
     expect(isReceiptDraftDirty(baseDetail, { ...clean, lines: editedLine })).toBe(true);
+    expect(hasReceiptFieldOrLineEdits(baseDetail, { ...clean, rawShopName: "Edited Shop" })).toBe(true);
+    expect(hasReceiptFieldOrLineEdits(baseDetail, { ...clean, lines: editedLine })).toBe(true);
+
+    // Link choice (Unlink / Keep) and candidate selection edits mark the draft dirty.
+    const candNip: ReceiptCandidate = {
+      account_id: "acc-1",
+      entry_reference: "a".repeat(64),
+      amount: "42.50",
+      currency: "PLN",
+      credit_debit_indicator: "DBIT",
+      transaction_date: "2026-11-14",
+      booking_date: "2026-11-14",
+      value_date: "2026-11-14",
+      merchant_token_hit: true,
+      match_strength: "nip",
+      date_distance: 0,
+      candidate_token: "tok-1",
+    };
+    const candAlt: ReceiptCandidate = {
+      ...candNip,
+      entry_reference: "b".repeat(64),
+      match_strength: "none",
+      candidate_token: "tok-2",
+    };
+
+    const importedUnlinked = detailOf({ receipt_id: "dirty-imp", status: "imported", linked: false });
+    const preselectedClean = draftFromDetail(importedUnlinked, [candNip]);
+    expect(isReceiptDraftDirty(importedUnlinked, preselectedClean, [candNip])).toBe(false);
+    // Token rotation on the same candidate does not introduce false dirtiness.
+    expect(isReceiptDraftDirty(importedUnlinked, preselectedClean, [{ ...candNip, candidate_token: "tok-rotated" }])).toBe(false);
+    // Choosing Unlink as the only edit makes the draft dirty (while header/line edit helper stays false).
+    const unlinkedOnly = { ...preselectedClean, linkChoice: "unlink", selectedCandidate: null, keepBinding: null };
+    expect(isReceiptDraftDirty(importedUnlinked, unlinkedOnly, [candNip])).toBe(true);
+    expect(hasReceiptFieldOrLineEdits(importedUnlinked, unlinkedOnly)).toBe(false);
+    // Reverting back to candidate:0 restores clean state.
+    expect(isReceiptDraftDirty(importedUnlinked, selectCandidateDraft(unlinkedOnly, candNip, 0), [candNip])).toBe(false);
+
+    // Linked needs_review receipt: baseline is "", so choosing Keep, Unlink, or an alternate candidate is dirty.
+    const linkedReview = detailOf({
+      receipt_id: "dirty-linked",
+      status: "needs_review",
+      linked: true,
+      linked_account_id: candNip.account_id,
+      linked_entry_ref: candNip.entry_reference,
+    });
+    const linkedClean = draftFromDetail(linkedReview, [candNip, candAlt]);
+    expect(isReceiptDraftDirty(linkedReview, linkedClean, [candNip, candAlt])).toBe(false);
+    expect(isReceiptDraftDirty(linkedReview, selectKeepDraft(linkedClean, candNip), [candNip, candAlt])).toBe(true);
+    expect(isReceiptDraftDirty(linkedReview, { ...linkedClean, linkChoice: "unlink" }, [candNip, candAlt])).toBe(true);
+    expect(isReceiptDraftDirty(linkedReview, selectCandidateDraft(linkedClean, candAlt, 1), [candNip, candAlt])).toBe(true);
+    expect(hasReceiptFieldOrLineEdits(linkedReview, selectKeepDraft(linkedClean, candNip))).toBe(false);
   });
 });
