@@ -11,7 +11,7 @@ import type { AnalyticsCategory, AnalyticsForecast, AnalyticsInbox, AnalyticsInb
   AnalyticsMonthlyBudget, AnalyticsMonthlyBudgetCharts, AnalyticsMortgages, AnalyticsOverview, AnalyticsQuarantine,
   AnalyticsRecurring, AnalyticsRule, AnalyticsSpendingLimits, AnalyticsTransactions, AnalyticsTransactionsByKeysRequest,
   AnnotationRequest, AnnotationSaved, CategoryCreateRequest, CategorySaved, CategoryUpdateRequest, MortgagePaymentSaved,
-  MortgagePaymentSetRequest, MortgageSaveRequest, MortgageScheduleSaved, RuleCandidate, RulePreview, RuleSaved,
+  MortgagePaymentSetRequest, MortgageReferenceCandidates, MortgageSaveRequest, MortgageScheduleSaved, RuleCandidate, RulePreview, RuleSaved,
   SpendingLimitSaveRequest, SpendingLimitSaved, TransactionFilter, TransferDecisionRequest, TransferDecisionResult,
   TransferList, TransferQueue } from "./analytics/model";
 import type {
@@ -36,6 +36,7 @@ export const RECEIPT_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.57.0" } 
 const RECEIPT_GROUP_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.59.0" } as const;
 const LINK_INDICATORS_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.60.0" } as const;
 const RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.61.0" } as const;
+const MORTGAGE_REFERENCES_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.63.0" } as const;
 
 export interface ReceiptDevice {
   token_id: string;
@@ -218,19 +219,20 @@ export function createBudgetApi(expectedActor: string | null = null) {
     });
   }
 
-  function readAnalyticsTransactions<T>(target: URL, body?: object): Promise<BudgetResult<T>> {
+  function readVersionedAnalytics<T>(target: URL, contractHeaders: Record<string, string>,
+    body?: object): Promise<BudgetResult<T>> {
     const init: RequestInit = body === undefined
-      ? { headers: LINK_INDICATORS_CONTRACT_HEADERS }
+      ? { headers: contractHeaders }
       : {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...LINK_INDICATORS_CONTRACT_HEADERS },
+        headers: { "Content-Type": "application/json", ...contractHeaders },
         body: JSON.stringify(body),
       };
     return runGated<T>(target, init, false, async (finalTarget, finalInit) => {
       const result = await request<T>(finalTarget, finalInit);
       if (result.ok || result.status !== 400 || result.error !== "budget_analytics_contract_version_invalid"
         || finalInit.signal?.aborted) return result;
-      // Older servers reject 0.60.0 before handling these read-only requests.
+      // Older servers reject newer versions before handling these read-only requests.
       const headers = new Headers(finalInit.headers);
       headers.delete(RECEIPT_CONTRACT_HEADER);
       return request<T>(finalTarget, { ...finalInit, headers });
@@ -310,13 +312,13 @@ export function createBudgetApi(expectedActor: string | null = null) {
     call<AnalyticsOverview>(url("analytics/overview", { period, currency })),
   /** One server-bounded page of a period's entries; empty filter values are omitted. */
   analyticsTransactions: (period: string, filter: TransactionFilter, cursor?: string, limit?: number) =>
-    readAnalyticsTransactions<AnalyticsTransactions>(url("analytics/transactions", {
+    readVersionedAnalytics<AnalyticsTransactions>(url("analytics/transactions", {
       period, currency: filter.currency, category_id: filter.category, kind: filter.kind, query: filter.query,
       cursor, limit,
-    })),
+    }), LINK_INDICATORS_CONTRACT_HEADERS),
   /** One server-bounded page matching 1..500 exact row keys across periods via JSON POST. */
   analyticsTransactionsByKeys: (request: AnalyticsTransactionsByKeysRequest) =>
-    readAnalyticsTransactions<AnalyticsTransactions>(url("analytics/transactions-by-keys"), request),
+    readVersionedAnalytics<AnalyticsTransactions>(url("analytics/transactions-by-keys"), LINK_INDICATORS_CONTRACT_HEADERS, request),
   categories: () => call<{ categories: AnalyticsCategory[] }>(url("analytics/categories")),
   /** The owner's explicit category/kind decision for one entry, versioned against concurrent edits. */
   annotate: (request: AnnotationRequest) => post<{ annotation: AnnotationSaved }>("analytics/annotation", request),
@@ -343,9 +345,13 @@ export function createBudgetApi(expectedActor: string | null = null) {
   saveSpendingLimit: (request: SpendingLimitSaveRequest) =>
     post<{ limit: SpendingLimitSaved }>("analytics/spending-limit-save", request),
   /** Owner-private mortgage schedules evaluated against server UTC today (evaluation-only). */
-  mortgages: () => call<AnalyticsMortgages>(url("analytics/mortgages")),
+  mortgages: () => readVersionedAnalytics<AnalyticsMortgages>(url("analytics/mortgages"), MORTGAGE_REFERENCES_CONTRACT_HEADERS),
+  /** Masked references extracted from recurring debits that can be linked to a private schedule. */
+  mortgageReferenceCandidates: () => call<MortgageReferenceCandidates>(url("analytics/mortgage-reference-candidates"),
+    { headers: MORTGAGE_REFERENCES_CONTRACT_HEADERS }),
   /** Read-only estimate of scheduled and recurring commitments, with exact per-currency totals. */
-  forecast: (months?: number, currency?: string) => call<AnalyticsForecast>(url("analytics/forecast", { months, currency })),
+  forecast: (months?: number, currency?: string) =>
+    readVersionedAnalytics<AnalyticsForecast>(url("analytics/forecast", { months, currency }), MORTGAGE_REFERENCES_CONTRACT_HEADERS),
   /** Read-only owner-private monthly budget dashboard evaluated in Europe/Warsaw from one snapshot. */
   monthlyBudget: (period?: string, currency?: string) =>
     call<AnalyticsMonthlyBudget>(url("analytics/monthly-budget", { period, currency })),
@@ -354,7 +360,8 @@ export function createBudgetApi(expectedActor: string | null = null) {
     call<AnalyticsMonthlyBudgetCharts>(url("analytics/monthly-budget/charts", { period, currency, history })),
   /** Creates (schedule_id=null, expected_version=0) or updates one private mortgage schedule. */
   saveMortgage: (request: MortgageSaveRequest) =>
-    post<{ schedule: MortgageScheduleSaved }>("analytics/mortgage-save", request),
+    post<{ schedule: MortgageScheduleSaved }>("analytics/mortgage-save", request,
+      request.match_references === undefined ? {} : MORTGAGE_REFERENCES_CONTRACT_HEADERS),
   /** Marks or unmarks one YYYY-MM installment paid on an owned mortgage schedule with strict CAS. */
   setMortgagePayment: (request: MortgagePaymentSetRequest) =>
     post<{ payment: MortgagePaymentSaved }>("analytics/mortgage-payment-set", request),

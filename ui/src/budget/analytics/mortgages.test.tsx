@@ -31,9 +31,10 @@ function fakeApi() {
       [mortgageSchedule({ id: "mtg-1", version: 2, paid_months: ["2026-10"] })],
       [mortgageReminder({ schedule_id: "mtg-1", due_date: "2026-11-10", days_until_due: 3, status: "due_soon" })],
     ))),
+    mortgageReferenceCandidates: vi.fn<BudgetApi["mortgageReferenceCandidates"]>(() => ok({ candidates: [] })),
     saveMortgage: vi.fn<BudgetApi["saveMortgage"]>(() => ok({ schedule: mortgageSaved({ version: 3 }) })),
     setMortgagePayment: vi.fn<BudgetApi["setMortgagePayment"]>(() => ok({ payment: mortgagePaymentSaved({ version: 3 }) })),
-  } satisfies Pick<BudgetApi, "mortgages" | "saveMortgage" | "setMortgagePayment">;
+  } satisfies Pick<BudgetApi, "mortgages" | "mortgageReferenceCandidates" | "saveMortgage" | "setMortgagePayment">;
 }
 
 let host: HTMLElement;
@@ -147,6 +148,8 @@ describe("MortgagesView", () => {
     await click(button("New schedule"));
     const form = host.querySelector("form");
     if (form === null) throw new Error("create form missing");
+    expect(form.querySelector("fieldset")).toBeNull();
+    expect(api.mortgageReferenceCandidates).not.toHaveBeenCalled();
     expect(button("Save schedule", form).disabled).toBe(true);
     await type(form.querySelector('input[name="mortgage_label"]'), "  Synthetic Flat  ");
     await type(form.querySelector('input[name="mortgage_amount"]'), "3100.25");
@@ -214,6 +217,61 @@ describe("MortgagesView", () => {
     expect(api.saveMortgage).toHaveBeenLastCalledWith(expect.objectContaining({
       schedule_id: "mtg-1", enabled: false, expected_version: 2,
     }));
+  });
+
+  it("links two masked bank payments and removes a saved reference absent from current candidates", async () => {
+    await loadLocale("pl");
+    const api = fakeApi();
+    const stored = { hash: "a".repeat(64), last4: "Z001" };
+    const installment = { hash: "b".repeat(64), last4: "Z002" };
+    const insurance = { hash: "c".repeat(64), last4: "Z003" };
+    const other = { hash: "d".repeat(64), last4: "Z004" };
+    api.mortgages.mockImplementation(() => ok(mortgagesOf([
+      mortgageSchedule({ match_references: [stored] }),
+    ], [], { match_references_supported: true })));
+    api.mortgageReferenceCandidates.mockImplementation(() => ok({ candidates: [
+      { ...installment, label: "RATA KREDYTU NR •••• Z002" },
+      { ...insurance, label: "UBEZPIECZENIE NR •••• Z003" },
+      { ...other, label: "UBEZPIECZENIE NR •••• Z003" },
+    ] }));
+    await act(async () => {
+      root.render(<MortgagesView api={api} accounts={accounts} locale="pl-PL" revision={1} onAccessLoss={() => false} />);
+    });
+    await settle();
+    expect(api.mortgageReferenceCandidates).not.toHaveBeenCalled();
+    await click(button("Edytuj"));
+
+    expect(api.mortgageReferenceCandidates).toHaveBeenCalledOnce();
+    const picker = host.querySelector("fieldset");
+    expect(picker?.querySelector("legend")?.textContent).toBe("Powiąż z płatnością w banku");
+    const [old, debit, premium] = [...(picker?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]') ?? [])];
+    if (old === undefined || debit === undefined || premium === undefined) throw new Error("reference choices missing");
+    expect(old.checked).toBe(true);
+    expect(debit.checked).toBe(false);
+    expect(premium.checked).toBe(false);
+    expect(picker?.textContent).toContain("•••• Z001");
+    expect(picker?.textContent).toContain("RATA KREDYTU NR •••• Z002");
+    expect(picker?.textContent).toContain("UBEZPIECZENIE NR •••• Z003 (••••Z003)");
+    expect(picker?.textContent).toContain("UBEZPIECZENIE NR •••• Z003 (••••Z004)");
+    expect(picker?.innerHTML).not.toContain(installment.hash);
+    await click(old);
+    await click(debit);
+    await click(premium);
+    await click(button("Zapisz harmonogram"));
+
+    expect(api.saveMortgage).toHaveBeenCalledWith(expect.objectContaining({ match_references: [installment, insurance] }));
+  });
+
+  it("offers the picker on a capable server with no schedules or candidates", async () => {
+    const api = fakeApi();
+    api.mortgages.mockImplementation(() => ok(mortgagesOf([], [], { match_references_supported: true })));
+    await act(async () => {
+      root.render(<MortgagesView api={api} accounts={accounts} locale="en-US" revision={1} onAccessLoss={() => false} />);
+    });
+    await settle();
+    await click(button("New schedule"));
+    expect(host.querySelector("fieldset")?.textContent).toContain("Link to a bank payment");
+    expect(host.textContent).toContain("No recurring bank payments with a reference found.");
   });
 
   it("drops superseded reads while always tripping onAccessLoss and handles empty/error states", async () => {

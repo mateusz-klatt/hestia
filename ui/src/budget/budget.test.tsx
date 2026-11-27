@@ -101,6 +101,7 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     spendingLimits: vi.fn<BudgetApi["spendingLimits"]>((period) => ok(spendingLimitsOf(period))),
     saveSpendingLimit: vi.fn<BudgetApi["saveSpendingLimit"]>(),
     mortgages: vi.fn<BudgetApi["mortgages"]>(() => ok(mortgagesOf())),
+    mortgageReferenceCandidates: vi.fn<BudgetApi["mortgageReferenceCandidates"]>(() => ok({ candidates: [] })),
     forecast: vi.fn<BudgetApi["forecast"]>(() => ok(forecastOf())),
     monthlyBudget: vi.fn<BudgetApi["monthlyBudget"]>(() => ok(monthlyBudgetOf())),
     monthlyBudgetCharts: vi.fn<BudgetApi["monthlyBudgetCharts"]>(() => ok(monthlyBudgetChartsOf())),

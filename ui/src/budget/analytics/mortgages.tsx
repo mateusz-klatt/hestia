@@ -11,10 +11,11 @@ import { ANALYTICS_ERROR, DEFAULT_REMIND_DAYS_BEFORE, MORTGAGE_DESTINATIONS, MOR
   mortgageCurrencies, parseIntInRange, validCurrency, validIsoDate, validLimitAmount,
   validMortgageLabel } from "./model";
 import type { AnalyticsMortgageReminder, AnalyticsMortgageSchedule, AnalyticsMortgages, MortgageDestination,
-  MortgageSaveRequest } from "./model";
+  MortgageMatchReference, MortgageReferenceCandidates, MortgageSaveRequest } from "./model";
 
 type Loss = (result: { ok: boolean; status?: number; error?: string }) => boolean;
 type Shown = { state: "loading" } | { state: "error" } | { state: "ready"; data: AnalyticsMortgages };
+const MAX_MATCH_REFERENCES = 16;
 
 interface ScheduleDraft {
   schedule_id: string | null;
@@ -26,12 +27,13 @@ interface ScheduleDraft {
   end_date: string;
   remind_days_before: string;
   destination_kind: MortgageDestination;
+  match_references?: MortgageMatchReference[];
   enabled: boolean;
   expected_version: number;
 }
 
 export interface MortgagesViewProps {
-  api: Pick<BudgetApi, "mortgages" | "saveMortgage" | "setMortgagePayment">;
+  api: Pick<BudgetApi, "mortgages" | "mortgageReferenceCandidates" | "saveMortgage" | "setMortgagePayment">;
   accounts: readonly BudgetAccount[];
   locale: string;
   revision: number;
@@ -45,7 +47,7 @@ function saveFailure(error: string): string {
   return t("budget.mortgages.saveError");
 }
 
-function buildScheduleRequest(draft: ScheduleDraft): MortgageSaveRequest | null {
+function buildScheduleRequest(draft: ScheduleDraft, canLinkBankPayments: boolean): MortgageSaveRequest | null {
   const dueDay = parseIntInRange(draft.due_day, 1, 31);
   const remindDays = parseIntInRange(draft.remind_days_before, 0, 31);
   const start = draft.start_date.trim();
@@ -65,6 +67,7 @@ function buildScheduleRequest(draft: ScheduleDraft): MortgageSaveRequest | null 
     end_date: end === "" ? null : end,
     remind_days_before: remindDays,
     destination_kind: draft.destination_kind,
+    ...(canLinkBankPayments && draft.match_references !== undefined ? { match_references: draft.match_references } : {}),
     enabled: draft.enabled,
     expected_version: draft.expected_version,
   };
@@ -124,18 +127,76 @@ function RemindersPanel({ reminders, scheduleMap, busy, locale, onMarkPaid }: Re
   );
 }
 
+interface ReferencePickerProps {
+  storedReferences: readonly MortgageMatchReference[];
+  selected: readonly MortgageMatchReference[];
+  busy: boolean;
+  loadCandidates: BudgetApi["mortgageReferenceCandidates"];
+  onAccessLoss: Loss;
+  onChange: (references: MortgageMatchReference[]) => void;
+}
+
+function ReferencePicker({ storedReferences, selected, busy, loadCandidates, onAccessLoss, onChange }: ReferencePickerProps) {
+  const [result, setResult] = useState<BudgetResult<MortgageReferenceCandidates> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setResult(null);
+    void loadCandidates().then((answer) => {
+      if (!onAccessLoss(answer) && !cancelled) setResult(answer);
+    });
+    return () => { cancelled = true; };
+  }, [loadCandidates, onAccessLoss]);
+
+  const choices = new Map(storedReferences.map((reference) => [reference.hash, {
+    ...reference, label: `•••• ${reference.last4}`,
+  }]));
+  for (const candidate of result?.ok ? result.data.candidates : []) choices.set(candidate.hash, candidate);
+  const selectedHashes = new Set(selected.map((reference) => reference.hash));
+  const countsByLabel = new Map<string, number>();
+  for (const { label } of choices.values()) countsByLabel.set(label, (countsByLabel.get(label) ?? 0) + 1);
+
+  return (
+    <fieldset className="budget-mortgage-references" disabled={busy}>
+      <legend>{t("budget.mortgages.linkBankPayment")}</legend>
+      {result === null ? <p className="budget-muted" role="status">{t("budget.recurring.loading")}</p> : null}
+      {result?.ok === false ? <p className="budget-muted" role="alert">{t("budget.recurring.error")}</p> : null}
+      {result?.ok && choices.size === 0 ? (
+        <p className="budget-muted">{t("budget.mortgages.noReferenceCandidates")}</p>
+      ) : null}
+      {[...choices.values()].map(({ hash, last4, label }) => {
+        const checked = selectedHashes.has(hash);
+        const mask = `••••${last4}`;
+        const showMask = (countsByLabel.get(label) ?? 0) > 1
+          || (!label.includes(mask) && !label.includes(`•••• ${last4}`));
+        return (
+          <label className="budget-toggle" key={hash}>
+            <input type="checkbox" checked={checked} disabled={!checked && selected.length >= MAX_MATCH_REFERENCES}
+              onChange={(event) => {
+                onChange(event.currentTarget.checked ? [...selected, { hash, last4 }]
+                  : selected.filter((reference) => reference.hash !== hash));
+              }} />
+            {showMask ? `${label} (${mask})` : label}
+          </label>
+        );
+      })}
+    </fieldset>
+  );
+}
+
 interface ScheduleEditorProps {
   draft: ScheduleDraft;
   currencySuggestions: readonly string[];
   busy: boolean;
+  referencePicker: Omit<ReferencePickerProps, "selected" | "busy" | "onChange"> | undefined;
   onChange: (patch: Partial<ScheduleDraft>) => void;
   onSubmit: (request: MortgageSaveRequest) => void;
   onCancel: () => void;
 }
 
-function ScheduleEditor({ draft, currencySuggestions, busy, onChange, onSubmit, onCancel }: ScheduleEditorProps) {
+function ScheduleEditor({ draft, currencySuggestions, busy, referencePicker, onChange, onSubmit, onCancel }: ScheduleEditorProps) {
   const listId = useId();
-  const request = buildScheduleRequest(draft);
+  const request = buildScheduleRequest(draft, referencePicker !== undefined);
   const canSave = !busy && request !== null;
 
   return (
@@ -189,6 +250,10 @@ function ScheduleEditor({ draft, currencySuggestions, busy, onChange, onSubmit, 
         {t("budget.mortgages.enabled")}
       </label>
       <p className="budget-muted">{t("budget.mortgages.destinationHelp")}</p>
+      {referencePicker === undefined ? null : (
+        <ReferencePicker {...referencePicker} selected={draft.match_references ?? referencePicker.storedReferences}
+          busy={busy} onChange={(match_references) => { onChange({ match_references }); }} />
+      )}
       {request === null ? <p className="budget-muted">{t("budget.mortgages.invalidHint")}</p> : null}
       <div className="budget-actions">
         <button type="submit" className="budget-primary" disabled={!canSave}>{t("budget.mortgages.save")}</button>
@@ -406,6 +471,11 @@ export function MortgagesView({ api, accounts, locale, revision, onAccessLoss }:
             </div>
             {editing === null ? null : (
               <ScheduleEditor draft={editing} currencySuggestions={suggestions} busy={busy}
+                referencePicker={shown.data.match_references_supported === true ? {
+                  storedReferences: scheduleMap.get(editing.schedule_id ?? "")?.match_references ?? [],
+                  loadCandidates: api.mortgageReferenceCandidates,
+                  onAccessLoss,
+                } : undefined}
                 onChange={(patch) => { setEditing((current) => (current === null ? null : { ...current, ...patch })); }}
                 onSubmit={(request) => { void mutate(() => api.saveMortgage(request), true); }}
                 onCancel={() => { setEditing(null); }} />

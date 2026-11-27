@@ -266,7 +266,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         for read_path in ("/api/budget/consent/renewal-reminders", "/api/budget/consent/reconcile"):
             self.assertIn("413", consent[read_path]["get"]["responses"])
         analytics_reads = {"overview", "transactions", "categories", "rules", "transfers", "recurring",
-                           "spending-limits", "mortgages", "inbox", "quarantine", "forecast",
+                           "spending-limits", "mortgages", "mortgage-reference-candidates", "inbox", "quarantine", "forecast",
                            "monthly-budget", "monthly-budget/charts"}
         analytics_writes = {"transactions-by-keys", "category-create", "category-update", "category-colors-spread", "category-translation-set",
                             "category-translation-delete", "label-translation-set", "label-translation-delete",
@@ -480,6 +480,10 @@ class BudgetOpenApiTests(unittest.TestCase):
         paths = contract.build_openapi()["paths"]
         forecast = paths["/api/budget/analytics/forecast"]["get"]
         parameters = {param["name"]: param for param in forecast["parameters"]}
+        version = parameters.pop("X-Hestia-Contract-Version")
+        self.assertEqual(version["in"], "header")
+        self.assertFalse(version["required"])
+        self.assertIn("0.63.0", version["description"])
         self.assertEqual(set(parameters), {"months", "currency"})
         for param in parameters.values():
             self.assertEqual(param["in"], "query")
@@ -514,7 +518,8 @@ class BudgetOpenApiTests(unittest.TestCase):
 
     def test_forecast_schemas_pin_wire_fields_and_bounds(self):
         schemas = contract.build_openapi()["components"]["schemas"]
-        optional_keys = {"Summary": {"baseline_conflicts"}, "Item": {"display_name"}}
+        optional_keys = {"Summary": {"baseline_conflicts"}, "Item": {"display_name"},
+                         "Deduplication": {"match_type", "amount_delta"}}
         for suffix, keys in {
             "": {"evaluation_date", "evaluation_timezone", "horizon_months", "start_month", "end_month",
                  "ledger_as_of", "freshness_stale", "stale_account_ids", "stale_account_ids_truncated",
@@ -524,7 +529,8 @@ class BudgetOpenApiTests(unittest.TestCase):
                         "baseline_conflicts"},
             "CurrencyTotal": {"currency", "total", "scheduled_total", "estimated_total"},
             "Deduplication": {"schedule_id", "schedule_label", "recurring_label", "amount", "currency",
-                              "matched_due_date", "last_observed_date", "day_distance", "account_stale"},
+                              "matched_due_date", "last_observed_date", "day_distance", "account_stale",
+                              "match_type", "amount_delta"},
             "Month": {"month", "currencies", "items"},
             "Item": {"source", "schedule_id", "label", "display_name", "amount", "currency", "expected_date", "confidence",
                      "past_due", "account_stale"},
@@ -541,6 +547,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         totals = schemas["BudgetAnalyticsForecastCurrencyTotal"]["properties"]
         self.assertEqual(item["source"]["enum"], ["mortgage", "recurring", "category_baseline"])
         self.assertEqual(item["confidence"]["enum"], ["scheduled", "high", "medium", "estimated"])
+        self.assertEqual(dedup["match_type"]["enum"], ["linked", "inferred"])
         self.assertEqual(forecast["evaluation_timezone"]["const"], "UTC")
         self.assertEqual(forecast["stale_account_ids"]["maxItems"], 200)
         conflicts = schemas["BudgetAnalyticsForecastSummary"]["properties"]["baseline_conflicts"]
@@ -553,7 +560,8 @@ class BudgetOpenApiTests(unittest.TestCase):
         self.assertNotIn("amount", conflict)
         for label in (item["label"], dedup["schedule_label"], dedup["recurring_label"]):
             self.assertEqual(label["maxLength"], 256)
-        for money in (item["amount"], dedup["amount"], totals["total"], totals["scheduled_total"], totals["estimated_total"]):
+        for money in (item["amount"], dedup["amount"], dedup["amount_delta"], totals["total"],
+                      totals["scheduled_total"], totals["estimated_total"]):
             self.assertEqual(money["type"], "string")
 
     def test_monthly_budget_query_and_error_contract(self):

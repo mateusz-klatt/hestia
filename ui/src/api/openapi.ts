@@ -525,6 +525,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/analytics/mortgage-reference-candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List masked recurring bank payment references
+         * @description Returns up to 200 distinct reference digests and masked labels from the owner's recurring charges. Requires X-Hestia-Contract-Version 0.63.0 or later. Makes no bank requests or stored changes.
+         */
+        get: operations["getBudgetAnalyticsMortgageReferenceCandidates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/analytics/mortgage-save": {
         parameters: {
             query?: never;
@@ -3082,12 +3102,22 @@ export interface components {
             account_stale: boolean;
             /** Amount */
             amount: string;
+            /**
+             * Amount Delta
+             * @description Signed decimal bank amount minus schedule amount, available from 0.63.0.
+             */
+            amount_delta?: string;
             /** Currency */
             currency: string;
             /** Day Distance */
             day_distance: number;
             /** Last Observed Date */
             last_observed_date: string;
+            /**
+             * Match Type
+             * @enum {string}
+             */
+            match_type?: "linked" | "inferred";
             /** Matched Due Date */
             matched_due_date: string;
             /** Recurring Label */
@@ -3852,6 +3882,16 @@ export interface components {
             /** Start Budget */
             start_budget: string;
         };
+        /**
+         * BudgetAnalyticsMortgageMatchReference
+         * @description A SHA-256 reference digest and its last four normalized characters.
+         */
+        BudgetAnalyticsMortgageMatchReference: {
+            /** Hash */
+            hash: string;
+            /** Last4 */
+            last4: string;
+        };
         /** BudgetAnalyticsMortgagePaymentResult */
         BudgetAnalyticsMortgagePaymentResult: {
             /**
@@ -3889,6 +3929,23 @@ export interface components {
             paid: boolean;
             /** Schedule Id */
             schedule_id: string;
+        };
+        /** BudgetAnalyticsMortgageReferenceCandidate */
+        BudgetAnalyticsMortgageReferenceCandidate: {
+            /** Hash */
+            hash: string;
+            /**
+             * Label
+             * @description Recurring bank label with references masked.
+             */
+            label: string;
+            /** Last4 */
+            last4: string;
+        };
+        /** BudgetAnalyticsMortgageReferenceCandidates */
+        BudgetAnalyticsMortgageReferenceCandidates: {
+            /** Candidates */
+            candidates: components["schemas"]["BudgetAnalyticsMortgageReferenceCandidate"][];
         };
         /** BudgetAnalyticsMortgageReminder */
         BudgetAnalyticsMortgageReminder: {
@@ -3951,6 +4008,11 @@ export interface components {
             expected_version: number;
             /** Label */
             label: string;
+            /**
+             * Match References
+             * @description Requires 0.63.0. Omit to preserve links or send [] to clear them.
+             */
+            match_references?: components["schemas"]["BudgetAnalyticsMortgageMatchReference"][];
             /** Remind Days Before */
             remind_days_before: number;
             /**
@@ -3984,6 +4046,11 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+            /**
+             * Match References
+             * @description Available from 0.63.0.
+             */
+            match_references?: components["schemas"]["BudgetAnalyticsMortgageMatchReference"][];
             /** Paid Months */
             paid_months: string[];
             /** Remind Days Before */
@@ -4029,6 +4096,11 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+            /**
+             * Match References
+             * @description Available from 0.63.0.
+             */
+            match_references?: components["schemas"]["BudgetAnalyticsMortgageMatchReference"][];
             /** Paid Months */
             paid_months: string[];
             /** Remind Days Before */
@@ -4055,6 +4127,11 @@ export interface components {
             evaluation_timezone: "UTC";
             /** Ledger As Of */
             ledger_as_of: string | null;
+            /**
+             * Match References Supported
+             * @constant
+             */
+            match_references_supported?: true;
             /** Reminders */
             reminders: components["schemas"]["BudgetAnalyticsMortgageReminder"][];
             /** Rule Version */
@@ -9979,7 +10056,10 @@ export interface operations {
                 months?: string;
                 currency?: string;
             };
-            header?: never;
+            header?: {
+                /** @description Opt in to mortgage match references and forecast matching audit fields from 0.63.0. */
+                "X-Hestia-Contract-Version"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -10746,10 +10826,108 @@ export interface operations {
             };
         };
     };
+    getBudgetAnalyticsMortgageReferenceCandidates: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opt in to mortgage match references and forecast matching audit fields from 0.63.0. */
+                "X-Hestia-Contract-Version": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetAnalyticsMortgageReferenceCandidates"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description session required; middleware may return an empty body */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description unknown, disabled or foreign resource */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Version, financial source, reserved transfer leg, preview or cursor changed; reload and review. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Explicit analytics processing or owner configuration limit; no partial totals. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
     saveBudgetAnalyticsMortgage: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opt in to mortgage match references and forecast matching audit fields from 0.63.0. */
+                "X-Hestia-Contract-Version"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -10845,7 +11023,10 @@ export interface operations {
     getBudgetAnalyticsMortgages: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Opt in to mortgage match references and forecast matching audit fields from 0.63.0. */
+                "X-Hestia-Contract-Version"?: string;
+            };
             path?: never;
             cookie?: never;
         };

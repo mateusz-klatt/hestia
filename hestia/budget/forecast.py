@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import calendar
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -16,11 +16,12 @@ from types import MappingProxyType
 from . import analytics_core as core
 from .analytics_core import AnalyticsError, MAX_ROWS, canonical_money, compare_money, negate_money, sum_money
 from .config import BudgetConfigError
+from .loan_references import extract_reference_hashes, mask_loan_references, normalized_loan_label
 from .mortgage_reminders import (DEFAULT_STALE_AFTER_DAYS, MortgageInputError, MortgageLimitError,
                                  MortgageSchedule, evaluate_mortgage_reminders, installment_due_date)
 from .recurring import RecurringHint, RecurringOccurrence
 
-RULE_VERSION = 1
+RULE_VERSION = 2
 LAPSED_AFTER_DAYS = 45
 MAX_FORECAST_HINTS = 200
 MAX_BASELINE_CATEGORIES = 32
@@ -41,6 +42,8 @@ _MEAN_EXTRA_DIGITS = 7
 _BASELINE_ESTIMATORS = frozenset({"median", "trimmed_mean"})
 _CONFIG_ERROR = "Invalid forecast configuration"
 _MAX_MATCH_DISTANCE = 5
+_INFERRED_MAX_MATCH_DISTANCE = 3
+_LOAN_KEYWORDS = re.compile(r"\b(?:RATA\s+KREDYTU|KREDYT|POZYCZKA|LEASING)\b")
 _FIRST_MONTH = 1900 * 12
 _LAST_MONTH = 9999 * 12 + 11
 # Prefer complete Polish and compact forms, then uppercase print forms, before
@@ -723,6 +726,30 @@ class _ActiveHint:
     account_stale: bool
 
 
+@dataclass(frozen=True, repr=False)
+class _DeduplicationMatch:
+    schedule: MortgageSchedule
+    active: _ActiveHint
+    due: str
+    distance: int
+    match_type: str
+
+    @property
+    def installment(self):
+        return self.schedule.schedule_id, self.due
+
+    def audit(self):
+        row = {
+            "schedule_id": self.schedule.schedule_id, "schedule_label": self.schedule.label,
+            "recurring_label": self.active.hint.label, "amount": self.active.amount, "currency": self.schedule.currency,
+            "matched_due_date": self.due, "last_observed_date": self.active.hint.last_date,
+            "day_distance": self.distance, "account_stale": self.active.account_stale,
+        }
+        if self.match_type != "exact":
+            row.update(match_type=self.match_type, amount_delta=_amount_delta(self.active.amount, self.schedule.amount))
+        return row
+
+
 def validate_forecast_query(months: str | None, currency: str | None) -> tuple[int, str | None]:
     """Validate the optional values of the forecast's two query parameters."""
     horizon = 3
@@ -789,43 +816,83 @@ def _due_date(schedule, month):
     return installment_due_date(schedule.due_day, schedule.start_date, schedule.end_date, month)
 
 
+def _amount_delta(hint_amount, schedule_amount):
+    return sum_money((hint_amount, negate_money(schedule_amount)))
+
+
+def _within_inferred_amount(hint_amount, schedule_amount):
+    coefficient, scale = _parts(schedule_amount)
+    tolerance = core._format(coefficient, scale + 1)
+    return compare_money(_amount_delta(hint_amount, schedule_amount).removeprefix("-"), tolerance) <= 0
+
+
 def _deduplicate(schedules, active_hints):
-    edges = []
+    schedule_references = {schedule.schedule_id: {reference["hash"] for reference in schedule.match_references or ()}
+                           for schedule in schedules}
+    linked = defaultdict(list)
+    inferred = []
+    exact = []
     for active in active_hints:
+        label = active.hint.normalized_label
+        hint_references = extract_reference_hashes(label)
+        loan_label = _LOAN_KEYWORDS.search(normalized_loan_label(label))
         last_month = _month_number(active.last_date)
         first_month = max(_FIRST_MONTH, last_month - 1)
         last_candidate_month = min(_LAST_MONTH, last_month + 1)
         candidate_months = [_month_name(number) for number in range(first_month, last_candidate_month + 1)]
         for schedule in schedules:
-            if schedule.currency != active.hint.currency or compare_money(active.amount, schedule.amount) != 0:
+            if schedule.currency != active.hint.currency:
                 continue
+            references = schedule_references[schedule.schedule_id]
+            max_distance = _MAX_MATCH_DISTANCE
+            if references:
+                if references.isdisjoint(hint_references):
+                    continue
+                match_type = "linked"
+            elif loan_label:
+                if not _within_inferred_amount(active.amount, schedule.amount):
+                    continue
+                match_type = "inferred"
+                max_distance = _INFERRED_MAX_MATCH_DISTANCE
+            else:
+                if compare_money(active.amount, schedule.amount) != 0:
+                    continue
+                match_type = "exact"
             for month in candidate_months:
                 due = _due_date(schedule, month)
                 if due is None:
                     continue
                 distance = abs((active.last_date - date.fromisoformat(due)).days)
-                if distance <= _MAX_MATCH_DISTANCE:
-                    edges.append(((distance, due, *active.key, schedule.schedule_id), schedule, active))
-                    break
+                if distance > max_distance:
+                    continue
+                match = _DeduplicationMatch(schedule, active, due, distance, match_type)
+                if match_type == "linked":
+                    linked[active.key].append(match)
+                elif match_type == "inferred":
+                    inferred.append(match)
+                else:
+                    exact.append(match)
+                break
 
-    audits = []
-    used_installments = set()
-    used_hints = set()
-    for edge_key, schedule, active in sorted(edges, key=lambda edge: edge[0]):
-        distance, due = edge_key[:2]
-        installment = (schedule.schedule_id, due)
-        if installment in used_installments or active.key in used_hints:
+    # A reference can cover several debits on one schedule. Two schedules claiming
+    # the same debit leave it visible, without falling back to inference.
+    matches = [candidates[0] for candidates in linked.values() if len(candidates) == 1]
+    inferred = [match for match in inferred if match.active.key not in linked]
+    inferred_by_hint = Counter(match.active.key for match in inferred)
+    inferred_by_schedule = Counter(match.schedule.schedule_id for match in inferred)
+    matches.extend(match for match in inferred
+                   if inferred_by_hint[match.active.key] == inferred_by_schedule[match.schedule.schedule_id] == 1)
+
+    used_installments = {match.installment for match in matches}
+    used_hints = {match.active.key for match in matches}
+    for match in sorted(exact, key=lambda item: (item.distance, item.due, *item.active.key, item.schedule.schedule_id)):
+        if match.installment in used_installments or match.active.key in used_hints:
             # An occupied instalment leaves its competing hint eligible for a later edge.
             continue
-        used_installments.add(installment)
-        used_hints.add(active.key)
-        audits.append({
-            "schedule_id": schedule.schedule_id, "schedule_label": schedule.label,
-            "recurring_label": active.hint.label, "amount": active.amount, "currency": schedule.currency,
-            "matched_due_date": due, "last_observed_date": active.hint.last_date,
-            "day_distance": distance, "account_stale": active.account_stale,
-        })
-    return audits, [active for active in active_hints if active.key not in used_hints]
+        used_installments.add(match.installment)
+        used_hints.add(match.active.key)
+        matches.append(match)
+    return [match.audit() for match in matches], [active for active in active_hints if active.key not in used_hints]
 
 
 def _project_month(month, evaluation_date, schedules, hints):
@@ -866,7 +933,7 @@ def _mask_iban(match):
 
 
 def _bounded_label(label):
-    label = _IBAN_LIKE.sub(_mask_iban, label)
+    label = mask_loan_references(_IBAN_LIKE.sub(_mask_iban, label))
     if len(label) > MAX_FORECAST_LABEL:
         return label[:MAX_FORECAST_LABEL - 1].rstrip() + "…"
     return label
@@ -964,7 +1031,8 @@ def evaluate_forecast(*, owner: str, evaluation_date: str, months: int, currency
         audit["schedule_label"] = display_label(audit["schedule_label"])
         audit["recurring_label"] = display_label(audit["recurring_label"])
     audits.sort(key=lambda audit: (audit["currency"], audit["matched_due_date"], audit["schedule_id"],
-                                   audit["recurring_label"], audit["amount"]))
+                                   audit["recurring_label"], audit["amount"], audit["last_observed_date"],
+                                   audit["account_stale"]))
 
     return {
         "evaluation_date": evaluation_date, "evaluation_timezone": "UTC", "horizon_months": months,

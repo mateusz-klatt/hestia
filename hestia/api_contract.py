@@ -28,6 +28,7 @@ from pydantic.json_schema import models_json_schema
 
 from .budget.gmail_store import PARSE_FAILED_REASONS
 from .budget.i18n import LANGUAGES, validate_languages
+from .budget.loan_references import MAX_MATCH_REFERENCES
 
 # The contract's own version, independent of the app release — bumped when the wire shape changes.
 # 0.2.0: + GET/POST /api/whole-home — a dedicated admin surface for the per-device opt-out of the
@@ -128,7 +129,8 @@ from .budget.i18n import LANGUAGES, validate_languages
 # 0.61.0: additive OCR issuer display name on receipt list, search and detail.
 # 0.62.0: additive crib_humidity (display-only %RH) and crib_battery_ok (opt-in 433 low-battery flag) on
 #         Globals and GlobalsPatch, negotiated via X-Hestia-Contract-Version (and contract_version query on SSE).
-CONTRACT_VERSION = "0.62.0"
+# 0.63.0: opt-in mortgage payment references and forecast matching audit (migration 0036).
+CONTRACT_VERSION = "0.63.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2465,6 +2467,28 @@ class BudgetAnalyticsSpendingLimits(BudgetAnalyticsPeriod):
 _MORTGAGE_DESTINATION = Literal["owner_inbox", "owner_push", "owner_email"]
 
 
+class BudgetAnalyticsMortgageMatchReference(BaseModel):
+    """A SHA-256 reference digest and its last four normalized characters."""
+    model_config = _STRICT
+    hash: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
+    last4: Annotated[str, Field(pattern=r"^[A-Z0-9]{4}$")]
+
+
+_MortgageMatchReferences = Annotated[list[BudgetAnalyticsMortgageMatchReference],
+                                     Field(strict=True, max_length=MAX_MATCH_REFERENCES)]
+MORTGAGE_MATCH_REFERENCES_ADAPTER = TypeAdapter(_MortgageMatchReferences)
+
+
+class BudgetAnalyticsMortgageReferenceCandidate(BudgetAnalyticsMortgageMatchReference):
+    model_config = _READ
+    label: Annotated[str, Field(max_length=256, description="Recurring bank label with references masked.")]
+
+
+class BudgetAnalyticsMortgageReferenceCandidates(BaseModel):
+    model_config = _READ
+    candidates: Annotated[list[BudgetAnalyticsMortgageReferenceCandidate], Field(max_length=200)]
+
+
 class BudgetAnalyticsMortgageSaveRequest(BaseModel):
     """Create (schedule_id=None, expected_version=0) or update one private mortgage schedule.
     Evaluation-only: stores destination_kind without PII targets and triggers no delivery or payments."""
@@ -2480,6 +2504,9 @@ class BudgetAnalyticsMortgageSaveRequest(BaseModel):
     destination_kind: _MORTGAGE_DESTINATION
     enabled: bool
     expected_version: Annotated[int, Field(ge=0)]
+    match_references: Annotated[_MortgageMatchReferences, Field(
+        json_schema_extra=_OMIT, description="Requires 0.63.0. Omit to preserve links or send [] to clear them.",
+    )] = None
 
 
 class BudgetAnalyticsMortgagePaymentSetRequest(BaseModel):
@@ -2507,6 +2534,9 @@ class BudgetAnalyticsMortgageSchedule(BaseModel):
     paid_months: list[str]
     created_at: float
     updated_at: float
+    match_references: Annotated[_MortgageMatchReferences, Field(
+        json_schema_extra=_OMIT, description="Available from 0.63.0.",
+    )] = None
 
 
 class BudgetAnalyticsMortgageScheduleSaved(BudgetAnalyticsMortgageSchedule):
@@ -2562,6 +2592,7 @@ class BudgetAnalyticsMortgages(BaseModel):
     rule_version: int
     schedules: list[BudgetAnalyticsMortgageSchedule]
     reminders: list[BudgetAnalyticsMortgageReminder]
+    match_references_supported: Annotated[Literal[True], Field(json_schema_extra=_OMIT)] = None
 
 
 BudgetAnalyticsInboxKind = Literal[
@@ -2871,6 +2902,10 @@ class BudgetAnalyticsForecastDeduplication(BaseModel):
     last_observed_date: str
     day_distance: Annotated[int, Field(ge=0, le=5)]
     account_stale: bool
+    match_type: Annotated[Literal["linked", "inferred"], Field(json_schema_extra=_OMIT)] = None
+    amount_delta: Annotated[str, Field(
+        json_schema_extra=_OMIT, description="Signed decimal bank amount minus schedule amount, available from 0.63.0.",
+    )] = None
 
 
 class BudgetAnalyticsForecastItem(BaseModel):
@@ -3976,7 +4011,7 @@ _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCatego
                      BudgetAnalyticsOverview, BudgetAnalyticsTransactions, BudgetAnalyticsTransfers,
                      BudgetAnalyticsDecisionResult, BudgetAnalyticsRecurring,
                      BudgetAnalyticsSpendingLimits, BudgetAnalyticsSpendingLimitResult,
-                     BudgetAnalyticsMortgages, BudgetAnalyticsMortgageScheduleResult,
+                     BudgetAnalyticsMortgages, BudgetAnalyticsMortgageScheduleResult, BudgetAnalyticsMortgageReferenceCandidates,
                      BudgetAnalyticsMortgagePaymentResult, BudgetAnalyticsInbox,
                      BudgetAnalyticsInboxMarkResult, BudgetAnalyticsQuarantine, BudgetAnalyticsForecast,
                      BudgetAnalyticsMonthlyBudget, BudgetAnalyticsMonthlyBudgetDailyPoint,
@@ -4012,6 +4047,7 @@ _PATH_ROLES = {
     ("GET", "/api/budget/analytics/recurring"): "admin",
     ("GET", "/api/budget/analytics/spending-limits"): "admin",
     ("GET", "/api/budget/analytics/mortgages"): "admin",
+    ("GET", "/api/budget/analytics/mortgage-reference-candidates"): "admin",
     ("GET", "/api/budget/analytics/inbox"): "admin",
     ("GET", "/api/budget/analytics/quarantine"): "admin",
     ("GET", "/api/budget/analytics/forecast"): "admin",
@@ -5331,6 +5367,11 @@ def _analytics_paths():
                        "Earlier versions or an omitted header omit the receipt key entirely.",
         "schema": {"type": "string", "pattern": r"^0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$"},
     }
+    mortgage_contract_version = {
+        "name": "X-Hestia-Contract-Version", "in": "header", "required": False,
+        "description": "Opt in to mortgage match references and forecast matching audit fields from 0.63.0.",
+        "schema": tx_contract_version["schema"],
+    }
     reads = (
         ("overview", "getBudgetAnalyticsOverview", "BudgetAnalyticsOverview", [period, currency]),
         ("transactions", "getBudgetAnalyticsTransactions", "BudgetAnalyticsTransactions",
@@ -5344,7 +5385,9 @@ def _analytics_paths():
              ["suggested", "accepted", "review", "boundary", "rejected", "undone"], "default": "suggested"}), *page]),
         ("recurring", "getBudgetAnalyticsRecurring", "BudgetAnalyticsRecurring", [currency]),
         ("spending-limits", "getBudgetAnalyticsSpendingLimits", "BudgetAnalyticsSpendingLimits", [month, currency]),
-        ("mortgages", "getBudgetAnalyticsMortgages", "BudgetAnalyticsMortgages", []),
+        ("mortgages", "getBudgetAnalyticsMortgages", "BudgetAnalyticsMortgages", [mortgage_contract_version]),
+        ("mortgage-reference-candidates", "getBudgetAnalyticsMortgageReferenceCandidates",
+         "BudgetAnalyticsMortgageReferenceCandidates", [{**mortgage_contract_version, "required": True}]),
         ("inbox", "getBudgetAnalyticsInbox", "BudgetAnalyticsInbox", [{
             "name": "X-Hestia-Contract-Version", "in": "header", "required": False,
             "description": "Negotiate owner-private appointment_slot and appointment_attention inbox items "
@@ -5353,7 +5396,7 @@ def _analytics_paths():
         }]),
         ("quarantine", "getBudgetAnalyticsQuarantine", "BudgetAnalyticsQuarantine",
          [_budget_query("account_id", description="Optional owned local account ID filter.")]),
-        ("forecast", "getBudgetAnalyticsForecast", "BudgetAnalyticsForecast", [horizon, currency]),
+        ("forecast", "getBudgetAnalyticsForecast", "BudgetAnalyticsForecast", [horizon, currency, mortgage_contract_version]),
         ("monthly-budget", "getBudgetAnalyticsMonthlyBudget", "BudgetAnalyticsMonthlyBudget",
          [month_optional, month_currency]),
         ("monthly-budget/charts", "getBudgetAnalyticsMonthlyBudgetCharts", "BudgetAnalyticsMonthlyBudgetCharts",
@@ -5363,6 +5406,10 @@ def _analytics_paths():
               "parameters": parameters, "responses": _analytics_responses(model)}}
              for path, operation, model, parameters in reads}
     read_overrides = {
+        "mortgage-reference-candidates": ("List masked recurring bank payment references", (
+            "Returns up to 200 distinct reference digests and masked labels from the owner's recurring charges. "
+            "Requires X-Hestia-Contract-Version 0.63.0 or later. Makes no bank requests or stored changes."
+        )),
         "inbox": ("Read owner-private live active alerts inbox (pure read-only)", (
             "Pure read-only single-snapshot evaluation of currently active consent renewal, mortgage due and "
             "spending-limit alerts against durable owner read markers (zero DB writes, zero bank requests). "
@@ -5483,6 +5530,7 @@ def _analytics_paths():
                            "Version and source fingerprints prevent stale changes. No bank request is made.",
             "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref(request)}}},
             "responses": _analytics_responses(model)}}
+    paths[prefix + "mortgage-save"]["post"]["parameters"] = [mortgage_contract_version]
     batch_overrides = {
         "rule-batch-preview": (
             "Preview up to 100 owner-private rules against one snapshot",
