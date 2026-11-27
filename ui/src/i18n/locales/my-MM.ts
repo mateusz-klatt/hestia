@@ -500,6 +500,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "စကင်ဖတ်ထားသော စာရွက်စာတမ်း",
   "budget.receipts.imageLoading": "ပုံ တင်နေသည်…",
   "budget.receipts.imageUnavailable": "ပုံ အကြိုကြည့်ရှုမှု မရနိုင်ပါ။",
+  "budget.receipts.transactionPicker": "ငွေလွှဲစာရင်းကို ရွေးပါ…",
   "budget.receipts.linkSection": "ချိတ်ဆက်ထားသော ဘဏ်လွှဲငွေ",
   "budget.receipts.linkedAccount": "အကောင့် - {account}",
   "budget.receipts.unlinkedState": "မည်သည့် ဘဏ်လွှဲငွေနှင့်မျှ ချိတ်ဆက်မထားပါ။",

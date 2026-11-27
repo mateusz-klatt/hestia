@@ -499,6 +499,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "Document scanat",
   "budget.receipts.imageLoading": "Se încarcă imaginea…",
   "budget.receipts.imageUnavailable": "Previzualizarea imaginii nu este disponibilă.",
+  "budget.receipts.transactionPicker": "Alege tranzacția…",
   "budget.receipts.linkSection": "Tranzacție bancară asociată",
   "budget.receipts.linkedAccount": "Cont: {account}",
   "budget.receipts.unlinkedState": "Nu este asociat cu nicio tranzacție bancară.",

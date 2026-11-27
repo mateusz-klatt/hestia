@@ -16,16 +16,19 @@ from .analytics_core import canonical_money
 from .config import BudgetConfigError
 from .receipt_parser import ReceiptError
 from .receipt_store import BudgetReceiptStore
+from .receipt_transaction_search import MANUAL_LINK_VERSION, ReceiptTransactionSearch
 from .views import BudgetUsersBackendRequired
 
 PREFIX = "/api/budget/receipts"
 FLAG = "HESTIA_BUDGET_RECEIPTS_ENABLED"
 READS = ("detail", "image", "group/detail")
+_TX_SEARCH = "transaction-search"
 WRITES = {
     "parse-text": (api_contract.BudgetReceiptParseTextRequest, 49152),
     "confirm": (api_contract.BudgetReceiptConfirmRequest, 131072),
     "list": (api_contract.BudgetReceiptListRequest, 16384),
     "search": (api_contract.BudgetReceiptSearchRequest, 16384),
+    _TX_SEARCH: (api_contract.BudgetReceiptTransactionSearchRequest, 16384),
     "delete": (api_contract.BudgetReceiptDeleteRequest, 16384),
     "group/candidates": (api_contract.BudgetReceiptGroupCandidatesRequest, 16384),
     "group/link": (api_contract.BudgetReceiptGroupLinkRequest, 16384),
@@ -58,14 +61,14 @@ def enabled():
 _RETENTION_SECRET = b"hestia/budget/receipts/retention/v1"
 
 
-def _store(secret, device_id=None, actor=None):
+def _store(secret, device_id=None, actor=None, *, store_type=BudgetReceiptStore):
     engine, sessions = init_db()
     with sessions() as session:
         store_sql.auth_session_phase(session)
         authz.require_supported_policy_phase(session)
     if not store_sql.is_users_db_authoritative(engine):
         raise BudgetUsersBackendRequired()
-    return BudgetReceiptStore(
+    return store_type(
         sessions, clock=time.time, cursor_secret=secret, device_id=device_id, actor=actor,
         ref_hmac_secret=gmail_config.load_ref_hmac_secret(session_secret=secret),
         card_accounts=gmail_config.load_card_accounts(),
@@ -95,6 +98,10 @@ def _receipt_id(request, *, field="receipt_id"):
 
 def _run(owner, operation, values, secret, device_id, actor=None, *,
          include_linked_transaction=False, include_display_shop_name=False):
+    if operation == _TX_SEARCH:
+        return _store(secret, actor=actor, store_type=ReceiptTransactionSearch).search_transactions(owner, values)
+    if operation == "confirm" and values["link"] is not None and "transaction_id" in values["link"]:
+        return _store(secret, actor=actor, store_type=ReceiptTransactionSearch).confirm_manual(owner, values)
     store = _store(secret, device_id, actor)
     if operation == "parse-text":
         return store.parse_text(owner, values["text"], source_kind=values["source_kind"])
@@ -120,7 +127,8 @@ _DEVICE_BROWSER_REQUESTS = {
 
 
 def _receipt_contract(request, operation):
-    if operation not in _RECEIPT_RESULT_KEY and operation != "gmail-status" and operation not in _GROUP_OPERATIONS:
+    if (operation not in _RECEIPT_RESULT_KEY and operation not in ("gmail-status", _TX_SEARCH)
+            and operation not in _GROUP_OPERATIONS):
         return (0, 0, 0)
     values = request.headers.getall(_CONTRACT_HEADER, [])
     if not values:
@@ -213,6 +221,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
             version = _receipt_contract(request, operation)
             if operation in _GROUP_OPERATIONS and version < _MANY_TO_ONE_VERSION:
                 raise ReceiptError("budget_receipt_not_found", 404)
+            if operation == _TX_SEARCH and version < MANUAL_LINK_VERSION:
+                raise ReceiptError("budget_receipt_not_found", 404)
             body, error = await read_json_body(request, WRITES[operation][1], reject_duplicates=True)
             if error:
                 return body
@@ -220,7 +230,12 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
                     and isinstance(body, dict) and "statuses" in body):
                 raise ReceiptError()
             validated = WRITES[operation][0].model_validate(body)
-            values = validated.model_dump(exclude_unset=operation in ("confirm", "list"))
+            if operation == "confirm" and isinstance(validated.link, api_contract.BudgetReceiptManualLinkRequest):
+                if version < MANUAL_LINK_VERSION:
+                    raise ReceiptError()
+                if device_id is not None:
+                    raise api._Rejected(403, "budget_browser_session_required")
+            values = validated.model_dump(exclude_unset=operation in ("confirm", "list", _TX_SEARCH))
             owner = api._principal(request, auth_enabled)
             secret = api._secret(session_secret)
             if device_id is None:

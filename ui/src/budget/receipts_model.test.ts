@@ -1187,7 +1187,7 @@ describe("receipts_model", () => {
     const builtAfterReopen = buildConfirmRequest(inv, sameReload.draft, [candARotated]);
     expect(builtAfterReopen.ok).toBe(true);
     if (builtAfterReopen.ok) {
-      expect(builtAfterReopen.request.link?.candidate_token).toBe("tok-rand-2");
+      expect(builtAfterReopen.request.link).toMatchObject({ candidate_token: "tok-rand-2" });
     }
 
     // Optional evidence_fingerprint participates in identity binding when present.
@@ -1266,7 +1266,7 @@ describe("receipts_model", () => {
     expect(keepBuilt.ok).toBe(true);
     if (keepBuilt.ok) {
       // Must submit reviewed_token ("tok-a"), NEVER swap in the fresh rotated token ("tok-rand-2").
-      expect(keepBuilt.request.link?.candidate_token).toBe("tok-a");
+      expect(keepBuilt.request.link).toMatchObject({ candidate_token: "tok-a" });
     }
 
     const candAChangedAmount: ReceiptCandidate = { ...candA, candidate_token: "tok-changed", amount: "43.00" };

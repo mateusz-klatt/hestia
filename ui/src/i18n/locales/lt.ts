@@ -499,6 +499,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "Nuskaitytas dokumentas",
   "budget.receipts.imageLoading": "Įkeliamas vaizdas…",
   "budget.receipts.imageUnavailable": "Vaizdo peržiūra nepasiekiama.",
+  "budget.receipts.transactionPicker": "Pasirinkite operaciją…",
   "budget.receipts.linkSection": "Susieta banko operacija",
   "budget.receipts.linkedAccount": "Sąskaita: {account}",
   "budget.receipts.unlinkedState": "Nesusieta su jokia banko operacija.",

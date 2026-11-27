@@ -500,6 +500,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "Chứng từ đã quét",
   "budget.receipts.imageLoading": "Đang tải ảnh…",
   "budget.receipts.imageUnavailable": "Không có bản xem trước ảnh.",
+  "budget.receipts.transactionPicker": "Chọn giao dịch…",
   "budget.receipts.linkSection": "Giao dịch ngân hàng đã liên kết",
   "budget.receipts.linkedAccount": "Tài khoản: {account}",
   "budget.receipts.unlinkedState": "Chưa liên kết với giao dịch ngân hàng nào.",

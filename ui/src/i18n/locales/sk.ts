@@ -499,6 +499,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "Naskenovaný dokument",
   "budget.receipts.imageLoading": "Načítavanie obrázka…",
   "budget.receipts.imageUnavailable": "Náhľad obrázka nie je dostupný.",
+  "budget.receipts.transactionPicker": "Vybrať transakciu…",
   "budget.receipts.linkSection": "Prepojená banková transakcia",
   "budget.receipts.linkedAccount": "Účet: {account}",
   "budget.receipts.unlinkedState": "Nie je prepojený so žiadnou bankovou transakciou.",

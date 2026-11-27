@@ -500,6 +500,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "เอกสารที่สแกน",
   "budget.receipts.imageLoading": "กำลังโหลดรูปภาพ…",
   "budget.receipts.imageUnavailable": "ไม่พร้อมแสดงตัวอย่างรูปภาพ",
+  "budget.receipts.transactionPicker": "เลือกธุรกรรม…",
   "budget.receipts.linkSection": "รายการธนาคารที่เชื่อมโยง",
   "budget.receipts.linkedAccount": "บัญชี: {account}",
   "budget.receipts.unlinkedState": "ไม่ได้เชื่อมโยงกับรายการธนาคารใดๆ",

@@ -500,6 +500,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "스캔된 문서",
   "budget.receipts.imageLoading": "이미지를 불러오는 중…",
   "budget.receipts.imageUnavailable": "이미지 미리보기를 사용할 수 없습니다.",
+  "budget.receipts.transactionPicker": "거래 선택…",
   "budget.receipts.linkSection": "연결된 은행 거래",
   "budget.receipts.linkedAccount": "계좌: {account}",
   "budget.receipts.unlinkedState": "연결된 은행 거래가 없습니다.",

@@ -12,6 +12,7 @@ import type { ReceiptsApi } from "./receipts_api";
 import { ReceiptGroupController } from "./receipt_group_controller";
 import type { ReceiptGroupControllerTarget } from "./receipt_group_controller";
 import { LinkedTransactionIndicator } from "./receipt_link_indicator";
+import { ReceiptTransactionPicker, transactionPickerDescription } from "./receipt_transaction_picker";
 import {
   EMPTY_RECEIPT_FILTER,
   RECEIPT_DOCUMENT_KINDS,
@@ -36,6 +37,7 @@ import {
   buildReceiptListRequest,
   candidateDisplayDate,
   candidateSelectionBinding,
+  canPickManualTransaction,
   clearStaleCandidateSelection,
   computeLinesDelta,
   createPendingReceiptStore,
@@ -122,6 +124,7 @@ export interface ReceiptsViewProps {
   receiptsApi?: ReceiptsApi | undefined;
   pendingStore?: PendingReceiptStore | undefined;
   actorKey?: string | undefined;
+  transactionSearchSupported?: boolean | undefined;
   accounts: readonly BudgetAccount[];
   connections?: readonly BudgetConnection[] | undefined;
   locale: string;
@@ -439,6 +442,7 @@ export function ReceiptsView({
   receiptsApi = defaultReceiptsApi,
   pendingStore,
   actorKey = "",
+  transactionSearchSupported = false,
   accounts,
   connections = [],
   locale,
@@ -2458,6 +2462,7 @@ export function ReceiptsView({
           <ReceiptDetailDrawer
             key={`${actorKey}:${selectedId}:${String(drawerOpenSession)}`}
             api={receiptsApi}
+            transactionSearchSupported={transactionSearchSupported}
             store={store}
             accounts={accounts}
             connections={connections}
@@ -2633,8 +2638,10 @@ interface DrawerProps {
     | "receiptGroupCandidates"
     | "linkReceiptGroup"
     | "unlinkReceiptGroup"
+    | "searchReceiptTransactions"
     | "isAuthorizationLocked"
   >;
+  transactionSearchSupported: boolean;
   store: PendingReceiptStore;
   accounts: readonly BudgetAccount[];
   connections: readonly BudgetConnection[];
@@ -2883,6 +2890,7 @@ function ReceiptGroupSection({
 
 function ReceiptDetailDrawer({
   api,
+  transactionSearchSupported,
   store,
   accounts,
   connections,
@@ -2921,6 +2929,7 @@ function ReceiptDetailDrawer({
   onMutationError,
 }: DrawerProps) {
   const [confirmDraft, setConfirmDraft] = useState<ReceiptConfirmDraft | null>(null);
+  const [manualPickerOpen, setManualPickerOpen] = useState(false);
   const confirmDraftRef = useRef<ReceiptConfirmDraft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [conflictReloadPending, setConflictReloadPending] = useState(false);
@@ -2935,13 +2944,26 @@ function ReceiptDetailDrawer({
   const drawerMountedRef = useRef(true);
   const groupDetailRef = useRef<ReceiptGroupDetail | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const manualPickerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const linkChoicesRef = useRef<HTMLFieldSetElement | null>(null);
+  const searchTransactions = transactionSearchSupported ? api.searchReceiptTransactions : undefined;
+  const manualPickerVisible = manualPickerOpen && searchTransactions !== undefined
+    && detailState.kind === "ready" && confirmDraft !== null
+    && canPickManualTransaction(detailState.detail, confirmDraft);
+
+  const closeManualPicker = useCallback(() => { setManualPickerOpen(false); }, []);
 
   const handleGroupDetailLoaded = useCallback((loaded: ReceiptGroupDetail) => {
     groupDetailRef.current = loaded;
   }, []);
 
   useLayoutEffect(() => { closeButtonRef.current?.focus({ preventScroll: true }); }, []);
+  useLayoutEffect(() => {
+    if (manualPickerVisible || manualPickerTriggerRef.current === null) return;
+    manualPickerTriggerRef.current.focus({ preventScroll: true });
+    manualPickerTriggerRef.current = null;
+    closeManualPicker();
+  }, [closeManualPicker, manualPickerVisible]);
 
   useEffect(() => {
     drawerMountedRef.current = true;
@@ -2950,11 +2972,11 @@ function ReceiptDetailDrawer({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && actionBusy === null && !groupControllerOpen) onClose();
+      if (event.key === "Escape" && actionBusy === null && !groupControllerOpen && !manualPickerVisible) onClose();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => { document.removeEventListener("keydown", onKeyDown); };
-  }, [onClose, actionBusy, groupControllerOpen]);
+  }, [onClose, actionBusy, groupControllerOpen, manualPickerVisible]);
 
   useEffect(() => {
     const shouldKeepExistingError = (detail: ReceiptDetail): boolean => {
@@ -3467,10 +3489,11 @@ function ReceiptDetailDrawer({
     <div
       className="modal-overlay budget-receipt-overlay"
       onClick={(event) => {
-        if (event.target === event.currentTarget && actionBusy === null && !groupControllerOpen) onClose();
+        if (event.target === event.currentTarget && actionBusy === null && !groupControllerOpen && !manualPickerVisible) onClose();
       }}
     >
-      <div className="modal-card budget-receipt-drawer" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="modal-card budget-receipt-drawer" role="dialog" aria-modal="true" aria-label={title}
+        inert={manualPickerVisible}>
         <header className="budget-receipt-drawer-head">
           <h3>{title}</h3>
           <div className="budget-receipt-drawer-head-actions">
@@ -3509,6 +3532,8 @@ function ReceiptDetailDrawer({
           const activeDraft = group != null || confirmDraft === null
             ? null
             : clearStaleCandidateSelection(confirmDraft, detail.receipt_id, currentCandidateSetKey, storedKeepCandidate);
+          const canPickManually = searchTransactions !== undefined && activeDraft !== null
+            && canPickManualTransaction(detail, activeDraft);
           const hasRedactedLines = receiptHasRedactedLines(detail.lines);
           const draftMethod: ReceiptPaymentMethod = activeDraft?.paymentMethod ?? "unknown";
           const matchingChanged = activeDraft !== null && hasMatchingFieldsChanged(detail, activeDraft);
@@ -3820,6 +3845,38 @@ function ReceiptDetailDrawer({
                 />
               ) : <section className="budget-receipt-section" aria-label={t("budget.receipts.linkSection")}>
                 <h5>{t("budget.receipts.linkSection")}</h5>
+                {canPickManually && activeDraft !== null && searchTransactions !== undefined ? (
+                  <>
+                    <div className="budget-actions">
+                      <button type="button" disabled={actionBusy !== null || groupControllerOpen}
+                        onClick={(event) => {
+                          manualPickerTriggerRef.current = event.currentTarget;
+                          setManualPickerOpen(true);
+                        }}>
+                        {t("budget.receipts.transactionPicker")}
+                      </button>
+                    </div>
+                    {activeDraft.linkChoice === "manual" && activeDraft.manualTransaction !== undefined ? (
+                      <label className="budget-toggle budget-receipt-candidate">
+                        <input type="radio" name="link_choice" value="manual" checked readOnly />
+                        <span>{transactionPickerDescription(activeDraft.manualTransaction, locale)}</span>
+                      </label>
+                    ) : null}
+                    {manualPickerVisible ? (
+                      <ReceiptTransactionPicker receiptId={detail.receipt_id} receiptDate={activeDraft.receiptDate}
+                        receiptTotal={activeDraft.totalAmount} accounts={accounts} connections={connections} locale={locale}
+                        search={searchTransactions} onAccessLoss={onAccessLoss} onClose={closeManualPicker}
+                        onPick={(item) => {
+                          onLinkChoiceTouched(detail.receipt_id, { kind: "empty" });
+                          commitDraft(detail, candidates, {
+                            ...activeDraft, linkChoice: "manual", manualTransaction: item,
+                            selectedCandidate: null, keepBinding: null,
+                          });
+                          closeManualPicker();
+                        }} />
+                    ) : null}
+                  </>
+                ) : null}
                 {detail.linked ? (
                   <div className="budget-receipt-linked-tx">
                     <div className="budget-entry-facts">
@@ -4173,10 +4230,11 @@ function ReceiptDetailDrawer({
                         {t("budget.receipts.noBankDataPeriod")}
                       </p>
                     ) : null}
-                    {linkOptions.mustUnlinkToConfirm && detail.status === "confirmed" ? (
+                    {linkOptions.mustUnlinkToConfirm && detail.status === "confirmed" && !canPickManually ? (
                       <p className="budget-warn" role="note">{t("budget.receipts.confirmedUnlinkNote")}</p>
                     ) : null}
-                    {detail.status === "needs_review" && detail.linked && currentCandidate === null && !matchingChanged ? (
+                    {detail.status === "needs_review" && detail.linked && currentCandidate === null
+                      && !matchingChanged && !canPickManually ? (
                       <p className="budget-warn" role="note">{t("budget.receipts.needsReviewNoKeepNote")}</p>
                     ) : null}
                     {tokensDisabledByEdit ? (
@@ -4184,7 +4242,7 @@ function ReceiptDetailDrawer({
                     ) : null}
                     {activeDraft.linkChoice === "" && detail.linked ? (
                       <p className="budget-warn" role="note">
-                        {linkOptions.canKeep
+                        {linkOptions.canKeep || canPickManually
                           ? t("budget.receipts.reviewLinkChoiceRequired")
                           : t("budget.receipts.explicitUnlinkRequired")}
                       </p>

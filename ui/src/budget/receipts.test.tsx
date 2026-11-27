@@ -19,6 +19,7 @@ import type {
   ReceiptGroupLinkResult,
   ReceiptListResult,
   ReceiptSummary,
+  ReceiptTransactionSearchItem,
 } from "./receipts_model";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
@@ -196,8 +197,8 @@ function fakeClients(rows: ReceiptSummary[] = [receiptSummary()], detail?: Recei
           currency: req.currency,
           payment_method: req.payment_method,
           linked: req.link !== null,
-          linked_account_id: req.link === null ? null : req.link.account_id,
-          linked_entry_ref: req.link === null ? null : req.link.entry_reference,
+          linked_account_id: req.link !== null && "account_id" in req.link ? req.link.account_id : null,
+          linked_entry_ref: req.link !== null && "entry_reference" in req.link ? req.link.entry_reference : null,
           version: req.expected_version + 1,
         }),
       })),
@@ -252,6 +253,7 @@ interface RenderOpts {
   locale?: string;
   revision?: number;
   actorKey?: string;
+  transactionSearchSupported?: boolean;
   onAccessLoss?: (result: { ok: boolean; status?: number; error?: string }) => boolean;
 }
 
@@ -268,6 +270,7 @@ async function renderReceipts(
     root.render(
       <ReceiptsView
         receiptsApi={clients.rApi}
+        transactionSearchSupported={options.transactionSearchSupported}
         actorKey={options.actorKey ?? "owner"}
         accounts={accounts}
         connections={[connection]}
@@ -293,6 +296,96 @@ function dialog(scope: ParentNode = host): HTMLElement {
   if (found === null) throw new Error("dialog missing");
   return found;
 }
+
+describe("manual bank transaction picker", () => {
+  it("is hidden without server capability even when the client implements search", async () => {
+    const clients = fakeClients();
+    const search = vi.fn<NonNullable<ReceiptsApi["searchReceiptTransactions"]>>();
+    clients.rApi.searchReceiptTransactions = search;
+    await renderReceipts(clients);
+    await click(openDetailButton(0));
+    expect(dialog().textContent).not.toContain("Choose transaction…");
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("prefills filters, traps focus, debounces search, pages results, and saves a guarded draft choice", async () => {
+    const clients = fakeClients();
+    const item: ReceiptTransactionSearchItem = {
+      id: "7." + "a".repeat(64), amount: "38", currency: "PLN", date: "2026-11-13",
+      account_label: "Synthetic Checking ••1001", counterparty: "Synthetic market", title: "Purchase",
+    };
+    const second: ReceiptTransactionSearchItem = { ...item, id: "8." + "b".repeat(64), title: "Another purchase" };
+    const search = vi.fn<NonNullable<ReceiptsApi["searchReceiptTransactions"]>>((request) =>
+      ok(request.cursor === "page-2"
+        ? { items: [second], next_cursor: null }
+        : { items: [item], next_cursor: "page-2" }));
+    clients.rApi.searchReceiptTransactions = search;
+    await renderReceipts(clients, { transactionSearchSupported: true });
+    await click(openDetailButton(0));
+    const trigger = button("Choose transaction…", dialog());
+    await click(trigger);
+    const picker = () => {
+      const element = document.body.querySelector<HTMLElement>(".budget-receipt-picker");
+      if (element === null) throw new Error("transaction picker missing");
+      return element;
+    };
+    const searchBox = () => {
+      const element = picker().querySelector<HTMLInputElement>('input[type="search"]');
+      if (element === null) throw new Error("search field missing");
+      return element;
+    };
+    const initial = {
+      receipt_id: receiptSummary().receipt_id, amount_min: "34", amount_max: "51",
+      date_from: "2026-10-31", date_to: "2026-12-14", account_id: null, query: "",
+    };
+    expect(search).toHaveBeenLastCalledWith(initial);
+    expect(document.activeElement).toBe(searchBox());
+    expect(dialog().hasAttribute("inert")).toBe(true);
+    const trapFirst = button("Close", picker());
+    trapFirst.focus();
+    trapFirst.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, shiftKey: true }));
+    expect(document.activeElement).toBe(button("Load more", picker()));
+    await act(async () => {
+      searchBox().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(document.body.querySelector(".budget-receipt-picker")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(dialog().textContent).not.toContain("You have unsaved changes");
+
+    await click(trigger);
+    vi.useFakeTimers();
+    try {
+      const before = search.mock.calls.length;
+      await typeInto(searchBox(), "market");
+      await act(async () => { await vi.advanceTimersByTimeAsync(299); });
+      expect(search).toHaveBeenCalledTimes(before);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(search).toHaveBeenLastCalledWith({ ...initial, query: "market" });
+    } finally {
+      vi.useRealTimers();
+    }
+    const account = picker().querySelector("select");
+    if (account === null) throw new Error("account filter missing");
+    await choose(account, "local-a");
+    expect(search).toHaveBeenLastCalledWith({ ...initial, query: "market", account_id: "local-a" });
+    await click(button("Load more", picker()));
+    expect(search).toHaveBeenLastCalledWith({ ...initial, query: "market", account_id: "local-a", cursor: "page-2" });
+    const result = [...picker().querySelectorAll("button")].find((candidate) => (
+      candidate.textContent?.includes("Another purchase") === true
+    ));
+    if (result === undefined) throw new Error("next-page transaction missing");
+    await click(result);
+    expect(linkRadio("manual", dialog()).checked).toBe(true);
+    expect(clients.rApi.confirmReceipt).not.toHaveBeenCalled();
+    await click(button("Close", dialog()));
+    expect(dialog().textContent).toContain("You have unsaved changes");
+    await click(button("Save", dialog()));
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      receipt_id: receiptSummary().receipt_id, link: { transaction_id: second.id },
+    }));
+  });
+});
 
 function alertBox(scope: ParentNode = host): HTMLElement {
   const found = scope.querySelector<HTMLElement>('[role="alertdialog"]');

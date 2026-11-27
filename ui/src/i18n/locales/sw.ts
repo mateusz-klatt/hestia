@@ -499,6 +499,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "Waraka uliochanganuliwa",
   "budget.receipts.imageLoading": "Inapakia picha…",
   "budget.receipts.imageUnavailable": "Hakikisho la picha halipatikani.",
+  "budget.receipts.transactionPicker": "Chagua muamala…",
   "budget.receipts.linkSection": "Muamala wa benki uliounganishwa",
   "budget.receipts.linkedAccount": "Akaunti: {account}",
   "budget.receipts.unlinkedState": "Haijaunganishwa na muamala wowote wa benki.",

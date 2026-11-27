@@ -499,6 +499,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "Szkennelt dokumentum",
   "budget.receipts.imageLoading": "Kép betöltése…",
   "budget.receipts.imageUnavailable": "A kép előnézete nem érhető el.",
+  "budget.receipts.transactionPicker": "Tranzakció kiválasztása…",
   "budget.receipts.linkSection": "Összekapcsolt banki tranzakció",
   "budget.receipts.linkedAccount": "Számla: {account}",
   "budget.receipts.unlinkedState": "Nincs banki tranzakcióhoz kapcsolva.",

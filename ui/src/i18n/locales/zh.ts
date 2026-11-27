@@ -500,6 +500,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "扫描的凭证",
   "budget.receipts.imageLoading": "正在加载图片…",
   "budget.receipts.imageUnavailable": "无法预览图片。",
+  "budget.receipts.transactionPicker": "选择交易…",
   "budget.receipts.linkSection": "已关联银行交易",
   "budget.receipts.linkedAccount": "账户：{account}",
   "budget.receipts.unlinkedState": "尚未关联任何银行交易。",

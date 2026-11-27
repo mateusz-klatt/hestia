@@ -59,7 +59,22 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.65.0")
+        self.assertEqual(document["info"]["version"], "0.67.0")
+        picker = document["paths"].pop("/api/budget/receipts/transaction-search")["post"]
+        self.assertEqual(picker["x-required-permission"], "budget.receipts.match")
+        self.assertTrue(picker["parameters"][0]["required"])
+        schemas["BudgetCapabilities"]["properties"].pop("receipt_transaction_search")
+        schemas["BudgetReceiptConfirmRequest"]["properties"]["link"]["anyOf"].remove(
+            {"$ref": "#/components/schemas/BudgetReceiptManualLinkRequest"}
+        )
+        schemas["BudgetReceiptConfirmRequest"]["properties"]["link"].pop("title")
+        for schema in ("BudgetReceiptManualLinkRequest", "BudgetReceiptTransactionSearchRequest",
+                       "BudgetReceiptTransactionSearchItem", "BudgetReceiptTransactionSearchResult"):
+            schemas.pop(schema)
+        document["info"]["version"] = "0.65.0"
+        canonical_0_65 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_65).hexdigest(),
+                         "38a1c47d1813e5679540fc7da259943085035282bd5adb2b2610385c29546fda")
         schemas["BudgetReceiptListRequest"]["properties"].pop("statuses")
         document["info"]["version"] = "0.64.0"
         canonical_0_64 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")

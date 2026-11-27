@@ -499,6 +499,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "Skenirani dokument",
   "budget.receipts.imageLoading": "Učitavanje slike…",
   "budget.receipts.imageUnavailable": "Pregled slike nije dostupan.",
+  "budget.receipts.transactionPicker": "Odaberite transakciju…",
   "budget.receipts.linkSection": "Povezana bankovna transakcija",
   "budget.receipts.linkedAccount": "Račun: {account}",
   "budget.receipts.unlinkedState": "Nije povezano ni s jednom bankovnom transakcijom.",

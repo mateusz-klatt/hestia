@@ -499,6 +499,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "Taranan belge",
   "budget.receipts.imageLoading": "Görsel yükleniyor…",
   "budget.receipts.imageUnavailable": "Görsel önizlemesi kullanılamıyor.",
+  "budget.receipts.transactionPicker": "İşlem seç…",
   "budget.receipts.linkSection": "Bağlı banka işlemi",
   "budget.receipts.linkedAccount": "Hesap: {account}",
   "budget.receipts.unlinkedState": "Herhangi bir banka işlemine bağlı değil.",

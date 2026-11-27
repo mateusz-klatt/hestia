@@ -430,6 +430,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       return result;
     };
     const fetchReceiptLinkGroupDetail = effectiveReceiptsApi.fetchReceiptLinkGroupDetail?.bind(effectiveReceiptsApi);
+    const searchReceiptTransactions = effectiveReceiptsApi.searchReceiptTransactions?.bind(effectiveReceiptsApi);
     const receiptGroupCandidates = effectiveReceiptsApi.receiptGroupCandidates?.bind(effectiveReceiptsApi);
     const linkReceiptGroup = effectiveReceiptsApi.linkReceiptGroup?.bind(effectiveReceiptsApi);
     const unlinkReceiptGroup = effectiveReceiptsApi.unlinkReceiptGroup?.bind(effectiveReceiptsApi);
@@ -437,6 +438,10 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       receiptsList: (request) => runWithGate(() => effectiveReceiptsApi.receiptsList(request), false, true),
       receiptsSearch: (request) => runWithGate(() => effectiveReceiptsApi.receiptsSearch(request), false, true),
       receiptDetail: (receiptId) => runWithGate(() => effectiveReceiptsApi.receiptDetail(receiptId), false, false),
+      ...(searchReceiptTransactions === undefined ? {} : {
+        searchReceiptTransactions: (request: Parameters<typeof searchReceiptTransactions>[0]) =>
+          runWithGate(() => searchReceiptTransactions(request), false),
+      }),
       ...(fetchReceiptLinkGroupDetail === undefined ? {} : {
         fetchReceiptLinkGroupDetail: (groupId: string) => runWithGate(() => fetchReceiptLinkGroupDetail(groupId), false, false),
       }),
@@ -806,6 +811,8 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       ) : shownView === "receipts" ? (
         <ReceiptsView key={`${principal ?? ""}:${String(sessionEpoch)}:${String(receiptEpoch)}`} receiptsApi={guardedReceiptsApi}
           pendingStore={pendingReceiptActions} actorKey={principal ?? ""} accounts={accounts}
+          transactionSearchSupported={capabilities?.receipt_transaction_search === true
+            && receiptPermissions?.includes("budget.receipts.match") === true}
           connections={connections} locale={locale} revision={revision} onAccessLoss={receiptViewBarrier} />
       ) : (
         <>

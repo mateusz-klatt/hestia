@@ -29,6 +29,8 @@ import type {
   ReceiptListRequest,
   ReceiptListResult,
   ReceiptSearchRequest,
+  ReceiptTransactionSearchRequest,
+  ReceiptTransactionSearchResult,
 } from "./receipts_model";
 
 const RECEIPT_CONTRACT_HEADER = "X-Hestia-Contract-Version";
@@ -37,6 +39,7 @@ const RECEIPT_GROUP_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.59.0" } a
 const LINK_INDICATORS_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.60.0" } as const;
 const RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.61.0" } as const;
 const MORTGAGE_REFERENCES_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.64.0" } as const;
+const RECEIPT_TRANSACTION_SEARCH_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.67.0" } as const;
 const RECEIPT_MULTI_STATUS_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.65.0" } as const;
 
 export interface ReceiptDevice {
@@ -389,6 +392,9 @@ export function createBudgetApi(expectedActor: string | null = null) {
   /** Reads one owned receipt, its line items, and needs_review link candidates when available. */
   receiptDetail: (receiptId: string) =>
     readReceipts<ReceiptDetailResult>(url("receipts/detail", { receipt_id: receiptId })),
+  searchReceiptTransactions: (body: ReceiptTransactionSearchRequest) =>
+    post<ReceiptTransactionSearchResult>("receipts/transaction-search", body,
+      RECEIPT_TRANSACTION_SEARCH_CONTRACT_HEADERS, false),
   /** Reads the stored members and evidence of an owned receipt group. */
   fetchReceiptLinkGroupDetail: (groupId: string) =>
     call<ReceiptGroupDetailResult>(url("receipts/group/detail", { group_id: groupId }),
@@ -407,7 +413,9 @@ export function createBudgetApi(expectedActor: string | null = null) {
   receiptImage: (receiptId: string) => callBinary(url("receipts/image", { receipt_id: receiptId }), "image/webp"),
   /** Confirms receipt metadata, line items, and optional transaction link with expected_version CAS. */
   confirmReceipt: (body: ReceiptConfirmRequest) =>
-    post<ReceiptConfirmResult>("receipts/confirm", body, RECEIPT_CONTRACT_HEADERS, true),
+    post<ReceiptConfirmResult>("receipts/confirm", body,
+      body.link !== null && "transaction_id" in body.link
+        ? RECEIPT_TRANSACTION_SEARCH_CONTRACT_HEADERS : RECEIPT_CONTRACT_HEADERS, true),
   /** Deletes an owned receipt with expected_version CAS (and optional group dissolution CAS). */
   deleteReceipt: (body: ReceiptDeleteRequest) =>
     post<ReceiptDeleteResult>("receipts/delete", body,
@@ -454,4 +462,5 @@ export interface ReceiptGroupWriteApi {
 
 export const budgetApi = createBudgetApi();
 export type BudgetGroupCapableApi = ReturnType<typeof createBudgetApi>;
-export type BudgetApi = Omit<BudgetGroupCapableApi, keyof ReceiptGroupWriteApi> & Partial<ReceiptGroupWriteApi>;
+type OptionalReceiptsApi = ReceiptGroupWriteApi & Pick<BudgetGroupCapableApi, "searchReceiptTransactions">;
+export type BudgetApi = Omit<BudgetGroupCapableApi, keyof OptionalReceiptsApi> & Partial<OptionalReceiptsApi>;

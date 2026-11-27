@@ -499,6 +499,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "מסמך סרוק",
   "budget.receipts.imageLoading": "טוען תמונה…",
   "budget.receipts.imageUnavailable": "תצוגה מקדימה של התמונה אינה זמינה.",
+  "budget.receipts.transactionPicker": "בחירת עסקה…",
   "budget.receipts.linkSection": "תנועת בנק מקושרת",
   "budget.receipts.linkedAccount": "חשבון: {account}",
   "budget.receipts.unlinkedState": "לא מקושר לאף תנועת בנק.",

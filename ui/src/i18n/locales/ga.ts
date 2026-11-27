@@ -500,6 +500,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "Doiciméad scanta",
   "budget.receipts.imageLoading": "Íomhá á lódáil…",
   "budget.receipts.imageUnavailable": "Níl réamhamharc íomhá ar fáil.",
+  "budget.receipts.transactionPicker": "Roghnaigh idirbheart…",
   "budget.receipts.linkSection": "Idirbheart bainc nasctha",
   "budget.receipts.linkedAccount": "Cuntas: {account}",
   "budget.receipts.unlinkedState": "Gan nasc le haon idirbheart bainc.",

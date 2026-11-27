@@ -498,6 +498,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "Documento escaneado",
   "budget.receipts.imageLoading": "Cargando imagen…",
   "budget.receipts.imageUnavailable": "La vista previa de la imagen no está disponible.",
+  "budget.receipts.transactionPicker": "Elegir transacción…",
   "budget.receipts.linkSection": "Movimiento bancario vinculado",
   "budget.receipts.linkedAccount": "Cuenta: {account}",
   "budget.receipts.unlinkedState": "No está vinculado a ningún movimiento bancario.",

@@ -500,6 +500,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "Dokument i skanuar",
   "budget.receipts.imageLoading": "Duke ngarkuar imazhin…",
   "budget.receipts.imageUnavailable": "Parapamja e imazhit nuk është e disponueshme.",
+  "budget.receipts.transactionPicker": "Zgjidhni një transaksion…",
   "budget.receipts.linkSection": "Transaksioni bankar i lidhur",
   "budget.receipts.linkedAccount": "Llogaria: {account}",
   "budget.receipts.unlinkedState": "Nuk është e lidhur me asnjë transaksion bankar.",

@@ -499,6 +499,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "سند اسکن‌شده",
   "budget.receipts.imageLoading": "در حال بارگذاری تصویر…",
   "budget.receipts.imageUnavailable": "پیش‌نمایش تصویر در دسترس نیست.",
+  "budget.receipts.transactionPicker": "انتخاب تراکنش…",
   "budget.receipts.linkSection": "تراکنش بانکی متصل",
   "budget.receipts.linkedAccount": "حساب: {account}",
   "budget.receipts.unlinkedState": "به هیچ تراکنش بانکی متصل نیست.",

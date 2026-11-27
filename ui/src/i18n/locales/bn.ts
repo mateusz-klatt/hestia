@@ -500,6 +500,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "স্ক্যান করা নথি",
   "budget.receipts.imageLoading": "ছবি লোড হচ্ছে…",
   "budget.receipts.imageUnavailable": "ছবির প্রিভিউ পাওয়া যাচ্ছে না।",
+  "budget.receipts.transactionPicker": "লেনদেন বেছে নিন…",
   "budget.receipts.linkSection": "যুক্ত ব্যাংক লেনদেন",
   "budget.receipts.linkedAccount": "অ্যাকাউন্ট: {account}",
   "budget.receipts.unlinkedState": "কোনো ব্যাংক লেনদেনের সাথে যুক্ত নয়।",

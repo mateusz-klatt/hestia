@@ -136,7 +136,7 @@ class BudgetAPITests(unittest.IsolatedAsyncioTestCase):
         capabilities = (await (await self.get("connections")).json())["capabilities"]
         self.assertEqual(capabilities, {"stored_reads": True, "account_controls": True, "refresh": False,
                                        "background_selection": True, "background_polling": False,
-                                       "consent": False, "analytics": False})
+                                       "consent": False, "analytics": False, "receipt_transaction_search": False})
 
     async def test_display_metadata_and_observed_currencies_are_private_and_not_global_events(self):
         initial = await self.account()

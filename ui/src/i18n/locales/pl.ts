@@ -503,6 +503,7 @@ const pl: Partial<Messages> = {
   "budget.receipts.imageAlt": "Skan dokumentu",
   "budget.receipts.imageLoading": "Wczytywanie obrazu…",
   "budget.receipts.imageUnavailable": "Podgląd obrazu jest niedostępny.",
+  "budget.receipts.transactionPicker": "Wybierz transakcję…",
   "budget.receipts.linkSection": "Powiązana transakcja bankowa",
   "budget.receipts.linkedAccount": "Konto: {account}",
   "budget.receipts.unlinkedState": "Brak powiązania z transakcją bankową.",

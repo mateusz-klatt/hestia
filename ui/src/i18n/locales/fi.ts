@@ -499,6 +499,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "Skannattu tosite",
   "budget.receipts.imageLoading": "Ladataan kuvaa…",
   "budget.receipts.imageUnavailable": "Kuvan esikatselu ei ole saatavilla.",
+  "budget.receipts.transactionPicker": "Valitse tapahtuma…",
   "budget.receipts.linkSection": "Linkitetty pankkitapahtuma",
   "budget.receipts.linkedAccount": "Tili: {account}",
   "budget.receipts.unlinkedState": "Ei linkitetty mihinkään pankkitapahtumaan.",

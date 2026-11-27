@@ -500,6 +500,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "Na-scan na dokumento",
   "budget.receipts.imageLoading": "Nilo-load ang larawan…",
   "budget.receipts.imageUnavailable": "Hindi magagamit ang preview ng larawan.",
+  "budget.receipts.transactionPicker": "Pumili ng transaksyon…",
   "budget.receipts.linkSection": "Naka-link na transaksyon sa bangko",
   "budget.receipts.linkedAccount": "Account: {account}",
   "budget.receipts.unlinkedState": "Hindi naka-link sa anumang transaksyon sa bangko.",

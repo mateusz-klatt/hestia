@@ -499,6 +499,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "Отсканированный документ",
   "budget.receipts.imageLoading": "Загрузка изображения…",
   "budget.receipts.imageUnavailable": "Предпросмотр изображения недоступен.",
+  "budget.receipts.transactionPicker": "Выбрать операцию…",
   "budget.receipts.linkSection": "Связанная банковская операция",
   "budget.receipts.linkedAccount": "Счёт: {account}",
   "budget.receipts.unlinkedState": "Не связано ни с одной банковской операцией.",

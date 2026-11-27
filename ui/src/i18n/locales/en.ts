@@ -521,6 +521,7 @@ const en = {
   "budget.receipts.imageAlt": "Scanned receipt document",
   "budget.receipts.imageLoading": "Loading image…",
   "budget.receipts.imageUnavailable": "Image preview is unavailable.",
+  "budget.receipts.transactionPicker": "Choose transaction…",
   "budget.receipts.linkSection": "Linked bank transaction",
   "budget.receipts.linkedAccount": "Account: {account}",
   "budget.receipts.unlinkedState": "Not linked to any bank transaction.",

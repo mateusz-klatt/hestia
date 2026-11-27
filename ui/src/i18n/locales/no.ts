@@ -499,6 +499,7 @@ const messages: Partial<Messages> = {
   "budget.receipts.imageAlt": "Skannet dokument",
   "budget.receipts.imageLoading": "Laster inn bilde…",
   "budget.receipts.imageUnavailable": "Bildeforhåndsvisning er ikke tilgjengelig.",
+  "budget.receipts.transactionPicker": "Velg transaksjon…",
   "budget.receipts.linkSection": "Koblet bankpostering",
   "budget.receipts.linkedAccount": "Konto: {account}",
   "budget.receipts.unlinkedState": "Ikke koblet til noen bankpostering.",
