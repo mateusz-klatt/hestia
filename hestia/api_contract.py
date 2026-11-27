@@ -130,7 +130,8 @@ from .budget.loan_references import MAX_MATCH_REFERENCES
 # 0.62.0: additive crib_humidity (display-only %RH) and crib_battery_ok (opt-in 433 low-battery flag) on
 #         Globals and GlobalsPatch, negotiated via X-Hestia-Contract-Version (and contract_version query on SSE).
 # 0.64.0: opt-in mortgage payment references and forecast matching audit (migration 0036).
-CONTRACT_VERSION = "0.64.0"
+# 0.68.0: opt-in one-to-one receipt FX candidates and accepted FX link evidence.
+CONTRACT_VERSION = "0.68.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -3333,9 +3334,53 @@ class BudgetReceiptPaymentEvidence(BaseModel):
     receipt_date: str | None
 
 
+_ReceiptFxSource = Literal["bank_original", "bank_remittance", "receipt_charged"]
+
+
+class BudgetReceiptFxQuote(BaseModel):
+    model_config = _READ
+    rate: str = Field(description="NBP table A mid in PLN per one unit of unit_currency.")
+    unit_currency: str
+    publication_date: str
+    table_number: str
+    estimated_amount: str = Field(description="Receipt amount converted to the booked currency.")
+    difference: str = Field(description="Booked magnitude minus estimate in the booked currency.")
+
+
+class BudgetReceiptFxStatedRate(BaseModel):
+    model_config = _READ
+    source: _ReceiptFxSource
+    rate: str = Field(description="Stated counter currency per one unit of unit currency, retaining source precision.")
+    unit_currency: str
+    counter_currency: str
+
+
+class BudgetReceiptFxFee(BaseModel):
+    model_config = _READ
+    amount: str
+    currency: str
+
+
+class BudgetReceiptFx(BaseModel):
+    model_config = _READ
+    source: Literal["bank_original", "bank_remittance", "receipt_charged", "nbp"]
+    receipt_amount: str
+    receipt_currency: str
+    booked_amount: str
+    booked_currency: str
+    implied_rate: str = Field(description="Booked currency per one unit of receipt currency.")
+    quote: BudgetReceiptFxQuote | None
+    stated_rate: BudgetReceiptFxStatedRate | None
+    explicit_fee: BudgetReceiptFxFee | None = Field(description="Separately stated fee, when available.")
+    conflicting: bool = Field(description="Source conflict requires resolution before the candidate can be linked.")
+
+
 class BudgetReceiptDetail(BudgetReceiptSummary):
     lines: list[BudgetReceiptLine]
     payment_evidence: list[BudgetReceiptPaymentEvidence] = []
+    fx_link: Annotated[BudgetReceiptFx | None, Field(
+        default=None, json_schema_extra=_OMIT, description="Explicitly accepted FX link evidence from 0.68.0.",
+    )] = None
 
 
 class BudgetReceiptCandidate(BaseModel):
@@ -3349,9 +3394,13 @@ class BudgetReceiptCandidate(BaseModel):
     booking_date: str | None
     value_date: str | None
     merchant_token_hit: bool
-    match_strength: Literal["id", "nip", "distinctive", "generic", "none"]
+    match_strength: Literal["id", "nip", "distinctive", "generic", "none", "medium", "ambiguous"]
     date_distance: int
     candidate_token: Annotated[str, Field(min_length=1, max_length=4096)]
+    fx: Annotated[BudgetReceiptFx | None, Field(
+        default=None, json_schema_extra=_OMIT,
+        description="FX candidate evidence from 0.68.0. Market estimates require explicit review.",
+    )] = None
 
 
 class BudgetReceiptParseResult(BaseModel):

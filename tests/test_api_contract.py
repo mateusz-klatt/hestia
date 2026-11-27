@@ -59,7 +59,18 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.64.0")
+        self.assertEqual(document["info"]["version"], "0.68.0")
+        schemas["BudgetReceiptDetail"]["properties"].pop("fx_link")
+        candidate = schemas["BudgetReceiptCandidate"]["properties"]
+        candidate.pop("fx")
+        for strength in ("medium", "ambiguous"):
+            candidate["match_strength"]["enum"].remove(strength)
+        for schema in ("BudgetReceiptFx", "BudgetReceiptFxFee", "BudgetReceiptFxQuote", "BudgetReceiptFxStatedRate"):
+            schemas.pop(schema)
+        document["info"]["version"] = "0.64.0"
+        canonical_0_64 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_64).hexdigest(),
+                         "b2c98c2b1c780c0d6f2b8085d8d3b64eab23f7ac93eeef1fb03a3b1113b1ee98")
         analytics = "/api/budget/analytics/"
         candidates = document["paths"].pop(analytics + "mortgage-reference-candidates")["get"]
         self.assertEqual(candidates["x-required-permission"], "budget.view")

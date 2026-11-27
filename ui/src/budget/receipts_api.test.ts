@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBudgetApi } from "./api";
-import { RECEIPT_CONTRACT_HEADERS, createReceiptsApi, receiptsApi } from "./receipts_api";
+import { createReceiptsApi, receiptsApi } from "./receipts_api";
 import type { ReceiptsApi } from "./receipts_api";
 
 const OWNER_TAG = "ZYtoux-yHqo-dVxLUe_uXkgvKgk2LWgJCV6VODecrlo";
@@ -119,14 +119,14 @@ describe("receipts api", () => {
     const detail = sent(fetchMock, 1);
     expect(detail.url.pathname).toMatch(/\/api\/budget\/receipts\/detail$/);
     expect(Object.fromEntries(detail.url.searchParams)).toEqual({ receipt_id: "rec-42" });
-    expect(new Headers(detail.init.headers).get(CONTRACT_HEADER)).toBe("0.61.0");
+    expect(new Headers(detail.init.headers).get(CONTRACT_HEADER)).toBe("0.68.0");
     expect(new Headers(detail.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
     expect(detail.init.credentials).toBe("same-origin");
 
     const confirm = sent(fetchMock, 2);
     expect(confirm.url.pathname).toMatch(/\/api\/budget\/receipts\/confirm$/);
     expect(new Headers(confirm.init.headers).get("Content-Type")).toBe("application/json");
-    expect(new Headers(confirm.init.headers).get(CONTRACT_HEADER)).toBe(RECEIPT_CONTRACT_HEADERS[CONTRACT_HEADER]);
+    expect(new Headers(confirm.init.headers).get(CONTRACT_HEADER)).toBe("0.68.0");
     expect(new Headers(confirm.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
     expect(JSON.parse(confirm.init.body as string)).toMatchObject({
       receipt_id: "rec-42",
@@ -177,11 +177,32 @@ describe("receipts api", () => {
     expect(retry.init.signal).toBe(first.init.signal);
     expect(retry.init.credentials).toBe("same-origin");
     expect(retry.init.cache).toBe("no-store");
-    expect(new Headers(first.init.headers).get(CONTRACT_HEADER)).toBe("0.61.0");
+    expect(new Headers(first.init.headers).get(CONTRACT_HEADER)).toBe(path === "detail" ? "0.68.0" : "0.61.0");
     const headers = new Headers(first.init.headers);
-    headers.set(CONTRACT_HEADER, "0.60.0");
+    headers.set(CONTRACT_HEADER, path === "detail" ? "0.61.0" : "0.60.0");
     expect(Object.fromEntries(new Headers(retry.init.headers))).toEqual(Object.fromEntries(headers));
     expect(new Headers(retry.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
+  });
+
+  it("retries receipt confirmation only on a pre-write contract rejection", async () => {
+    const payload = { ok: true, receipt: { receipt_id: "rec-42" } };
+    const fetchMock = respond(200, payload);
+    const gate = createBudgetApi("owner");
+    await gate.capabilities();
+    fetchMock.mockImplementationOnce(() => Promise.resolve(
+      new Response(JSON.stringify({ error: { code: VERSION_ERROR } }), { status: 400 }),
+    ));
+    const body = {
+      receipt_id: "rec-42", expected_version: 2, receipt_kind: "purchase", receipt_date: "2026-11-21",
+      receipt_time: null, currency: "EUR", total_amount: "42.5", payment_method: "card", link: null,
+    } as const;
+    expect(await createReceiptsApi(gate).confirmReceipt(body)).toEqual({ ok: true, data: payload });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const first = sent(fetchMock, 1);
+    const retry = sent(fetchMock, 2);
+    expect(new Headers(first.init.headers).get(CONTRACT_HEADER)).toBe("0.68.0");
+    expect(new Headers(retry.init.headers).get(CONTRACT_HEADER)).toBe("0.57.0");
+    expect(retry.init.body).toBe(first.init.body);
   });
 
   it("falls back through 0.60.0 and 0.59.0 when talking to a 0.57.0 server", async () => {

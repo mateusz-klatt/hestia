@@ -12,6 +12,7 @@ from .bank_metadata import exchange_evidence
 from .config import BudgetConfigError
 from .gmail_config import load_card_accounts
 from .gmail_payment import _card_suffixes
+from .receipt_fx import read_receipt_conversion, remittance_original_amounts
 from .receipt_parser import (
     _distinctive_shop_words,
     contains_gateway_marker,
@@ -32,11 +33,6 @@ _NON_PURCHASE = re.compile(
     r"|cash withdrawal|cash advance|chargeback)\b"
 )
 _BLIK_DEBIT = re.compile(r"^(?:(?:platnosc|transakcja|payment|zakup) )?blik\b")
-_ORIGINAL_AMOUNT = re.compile(
-    r"\b(?:kwota (?:oryginalna|w walucie (?:oryginalnej|transakcji))|original (?:transaction )?amount)"
-    r"\s*[:=]?\s*(?:([A-Z]{3})\s+)?(\d{1,16}(?:[,.]\d{1,12})?)(?:\s+([A-Z]{3})\b)?(?![\d,.])",
-    re.ASCII | re.IGNORECASE,
-)
 _DATE_KEYS = ("transaction_date", "booking_date", "value_date")
 _MAX_DUE_DATE_DAYS = 45
 
@@ -86,19 +82,18 @@ class CardCandidate:
         return self.result is _CardCandidateBlock.OCCUPIED
 
 
-def _card_amount_matches(payload, currency, amount, lines, metadata):
+def _card_amount_matches(payload, currency, amount, lines, metadata, receipt_fx=None):
     if payload["currency"] == currency:
         return canonical_money(payload["amount"]) == amount
     if "exchange_rate" in metadata and metadata["exchange_rate"] is None:
         return False
     original = exchange_evidence(metadata.get("exchange_rate")).get("instructed_amount")
     amounts = {(original["currency"], canonical_money(original["amount"]))} if original else set()
-    for line in lines:
-        for match in _ORIGINAL_AMOUNT.finditer(line):
-            before, quantity, after = match.groups()
-            if (before is None) != (after is None):
-                amounts.add(((before or after).upper(), canonical_money(quantity.replace(",", "."))))
-    return amounts == {(currency, amount)}
+    amounts.update((item["currency"], canonical_money(item["amount"])) for item in remittance_original_amounts(lines))
+    charged = {(item["currency"], canonical_money(item["amount"])) for item in (receipt_fx or {}).get("charged", [])}
+    return amounts == {(currency, amount)} and (
+        not charged or charged == {(payload["currency"], canonical_money(payload["amount"]))}
+    )
 
 
 def _bank_descriptor(line):
@@ -166,7 +161,9 @@ def _card_row(session, owner, invoice, transaction, account_kind, amount, receip
     data = {}
     if metadata and metadata.owner == owner and metadata.ledger_fingerprint == fingerprint:
         data = _json(metadata.payload_json)
-    amount_matches = isinstance(data, dict) and _card_amount_matches(payload, invoice.currency, amount, lines, data)
+    amount_matches = isinstance(data, dict) and _card_amount_matches(
+        payload, invoice.currency, amount, lines, data, getattr(invoice, "fx_fields", None),
+    )
     if google_issuer is None and not amount_matches:
         return None
     creditor, debtor = resolved_party_names(session, owner, transaction.account_id, transaction.entry_reference,
@@ -248,5 +245,6 @@ def still_matches_card(session, row):
     """Only a receipt auto-confirmed by this matcher needs uniqueness/FX revalidation."""
     from .gmail_card_import import receipt_document
 
-    match = match_card_purchase(session, row.owner, receipt_document(row), include_receipt_id=row.id)
+    document = receipt_document(row, fx_fields=read_receipt_conversion(session, row.owner, row.id))
+    match = match_card_purchase(session, row.owner, document, include_receipt_id=row.id)
     return match is not None and (match.account_id, match.entry_reference) == (row.linked_account_id, row.linked_entry_ref)

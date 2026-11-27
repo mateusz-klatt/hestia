@@ -36,6 +36,7 @@ export const RECEIPT_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.57.0" } 
 const RECEIPT_GROUP_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.59.0" } as const;
 const LINK_INDICATORS_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.60.0" } as const;
 const RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.61.0" } as const;
+const RECEIPT_FX_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.68.0" } as const;
 const MORTGAGE_REFERENCES_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.64.0" } as const;
 
 export interface ReceiptDevice {
@@ -195,7 +196,7 @@ export function createBudgetApi(expectedActor: string | null = null) {
 
   function readReceipts<T>(target: URL, body?: object): Promise<BudgetResult<T>> {
     const init: RequestInit = body === undefined
-      ? { headers: RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS }
+      ? { headers: RECEIPT_FX_CONTRACT_HEADERS }
       : {
         method: "POST",
         headers: { "Content-Type": "application/json", ...RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS },
@@ -204,6 +205,7 @@ export function createBudgetApi(expectedActor: string | null = null) {
     return runGated<T>(target, init, false, async (finalTarget, finalInit) => {
       let result = await request<T>(finalTarget, finalInit);
       for (const fallback of [
+        ...(body === undefined ? [RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER]] : []),
         LINK_INDICATORS_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER],
         RECEIPT_GROUP_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER],
         RECEIPT_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER],
@@ -403,8 +405,14 @@ export function createBudgetApi(expectedActor: string | null = null) {
   /** Fetches the owner-private WebP receipt image only when image_available is true. */
   receiptImage: (receiptId: string) => callBinary(url("receipts/image", { receipt_id: receiptId }), "image/webp"),
   /** Confirms receipt metadata, line items, and optional transaction link with expected_version CAS. */
-  confirmReceipt: (body: ReceiptConfirmRequest) =>
-    post<ReceiptConfirmResult>("receipts/confirm", body, RECEIPT_CONTRACT_HEADERS, true),
+  confirmReceipt: async (body: ReceiptConfirmRequest) => {
+    const result = await post<ReceiptConfirmResult>("receipts/confirm", body, RECEIPT_FX_CONTRACT_HEADERS, true);
+    // Unsupported contract versions are rejected before the server processes the write.
+    if (!result.ok && result.status === 400 && result.error === "budget_receipt_contract_version_invalid") {
+      return post<ReceiptConfirmResult>("receipts/confirm", body, RECEIPT_CONTRACT_HEADERS, true);
+    }
+    return result;
+  },
   /** Deletes an owned receipt with expected_version CAS (and optional group dissolution CAS). */
   deleteReceipt: (body: ReceiptDeleteRequest) =>
     post<ReceiptDeleteResult>("receipts/delete", body,

@@ -17,7 +17,9 @@ from . import gmail_card_import
 from .gmail_client import GmailError
 from .gmail_payment import ImportedPayment, _payee_key
 from .receipt_parser import fold_text
-from .receipt_reconcile import audit_payload, erase_receipt_audit, write_audit
+from .receipt_fx import (merge_receipt_conversion, read_receipt_conversion, receipt_conversion_key,
+                         write_receipt_conversion)
+from .receipt_reconcile import audit_payload, erase_receipt_audit, reconcile_receipt_links, write_audit
 from .store import BudgetStore
 from .views import BudgetHTTPStore
 
@@ -136,6 +138,7 @@ class PendingPayment:
     apple_document_hmac: str | None = None
     item_block_rejected: bool = False
     payment_method: str | None = None
+    fx_fields: dict | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -155,6 +158,7 @@ class PendingMessage:
     document_provenance: dict | None = None
     diagnostic_reason: str | None = None
     card_required: bool = False
+    fx_fields: dict | None = None
 
 
 def _linked_manual_forward():
@@ -280,7 +284,9 @@ def _delete_imports(session, owner, expires_at=None):
         # Earlier manual-review rows had no explicit expiry.
         deadline = func.coalesce(BudgetReceipt.import_expires_at, BudgetReceipt.created_at + IMPORT_TTL)
         receipts = receipts.where(deadline <= expires_at)
-    _forget_payment_provenance(session, receipts.subquery().c.id)
+    receipt_keys = receipts.subquery().c.id
+    _forget_payment_provenance(session, receipt_keys)
+    session.execute(delete(AppMeta).where(AppMeta.key.in_(select(receipt_conversion_key(receipt_keys)))))
     if expires_at is not None:
         _tombstone_messages(session, BudgetGmailMessage.receipt_id.in_(receipts))
     session.execute(delete(BudgetReceiptLine).where(BudgetReceiptLine.receipt_id.in_(receipts)))
@@ -656,6 +662,7 @@ class GmailStore(BudgetStore):
         evidence_changed = (row.total_amount, row.fee_amount, row.receipt_date) != (
             fields.total_amount, fields.fee_amount, receipt_date)
         row.gateway_status = "paid"
+        write_receipt_conversion(session, owner, row.id, payment.fx_fields)
         if not fields.payee_from_config:
             row.raw_shop_name = fields.merchant
         row.fee_amount = fields.fee_amount
@@ -804,6 +811,13 @@ class GmailStore(BudgetStore):
                         self._attach_evidence(session, owner, gateway_row, revalidate=True)
                     self._attach_gateway_for_document(session, owner, receipt)
                 meta.value = json.dumps(existing, sort_keys=True)
+                if fields := getattr(item.invoice, "fx_fields", None):
+                    prior = read_receipt_conversion(session, owner, receipt.id)
+                    updated = merge_receipt_conversion(prior, fields)
+                    if updated != prior:
+                        write_receipt_conversion(session, owner, receipt.id, updated)
+                        if receipt.linked_account_id is not None:
+                            reconcile_receipt_links(session, owner, now)
                 return "skipped_duplicate"
         return None
 
@@ -823,6 +837,7 @@ class GmailStore(BudgetStore):
                                 version=1, created_at=now, updated_at=now, import_expires_at=now + IMPORT_TTL)
         session.add(receipt)
         session.flush()
+        write_receipt_conversion(session, owner, receipt.id, item.fx_fields or getattr(invoice, "fx_fields", None))
         if item.document_provenance is not None:
             session.add(AppMeta(key=_document_number_key(receipt.id),
                                 value=json.dumps(item.document_provenance, sort_keys=True)))
@@ -849,6 +864,7 @@ class GmailStore(BudgetStore):
         )
         session.add(receipt)
         session.flush()
+        write_receipt_conversion(session, owner, receipt.id, payment.fx_fields)
         if payment.items and not payment.gateway:
             session.add_all(BudgetReceiptLine(receipt_id=receipt.id, owner=owner, **line) for line in payment.items)
         else:

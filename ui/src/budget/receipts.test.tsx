@@ -1950,6 +1950,58 @@ describe("ReceiptsView", () => {
     expect(button("Confirm receipt", dialog()).disabled).toBe(true);
   });
 
+  it("shows the dated NBP estimate separately from the booked debit and requires selecting the FX candidate", async () => {
+    const summary = receiptSummary({ receipt_id: "receipt-market-fx", currency: "EUR", status: "imported" });
+    const fx = receiptCandidate({
+      amount: "172.55", currency: "PLN", match_strength: "medium", candidate_token: "fx-nbp-token",
+      fx: {
+        source: "nbp", receipt_amount: "42.5", receipt_currency: "EUR", booked_amount: "172.55",
+        booked_currency: "PLN", implied_rate: "4.06", stated_rate: null, explicit_fee: null, conflicting: false,
+        quote: {
+          rate: "4.0000", unit_currency: "EUR", publication_date: "2026-11-13", table_number: "220/A/NBP/2026",
+          estimated_amount: "170", difference: "2.55",
+        },
+      },
+    });
+    const clients = fakeClients([summary], receiptDetail(summary), [fx]);
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailButton(0, "Szczegóły"));
+    const d = dialog();
+    expect(d.textContent).toContain("42,50 EUR");
+    expect(d.textContent).toContain("≈ 170,00 PLN (kurs NBP z dnia 2026-11-13, tabela 220/A/NBP/2026)");
+    expect(d.textContent).toContain("Zaksięgowano 172,55 PLN · kurs wynikowy 4,06 PLN/EUR");
+    expect(d.textContent).toContain("Różnica względem szacunku 2,55 PLN");
+    expect(linkRadio("candidate:0", d).checked).toBe(false);
+    expect(clients.rApi.confirmReceipt).not.toHaveBeenCalled();
+
+    await click(linkRadio("candidate:0", d));
+    await click(button("Zatwierdź dokument", d));
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      receipt_id: summary.receipt_id, total_amount: "42.5", currency: "EUR",
+      link: { account_id: fx.account_id, entry_reference: fx.entry_reference, candidate_token: fx.candidate_token },
+    }));
+  });
+
+  it("shows conflicting FX evidence but disables selecting it", async () => {
+    const summary = receiptSummary({ receipt_id: "receipt-conflicting-fx", currency: "EUR", status: "imported" });
+    const fx = receiptCandidate({
+      amount: "172.55", currency: "PLN", match_strength: "ambiguous",
+      fx: {
+        source: "bank_original", receipt_amount: "42.5", receipt_currency: "EUR", booked_amount: "172.55",
+        booked_currency: "PLN", implied_rate: "4.06", quote: null, conflicting: true,
+        stated_rate: { source: "bank_original", rate: "4.0600", unit_currency: "EUR", counter_currency: "PLN" },
+        explicit_fee: { amount: "1.25", currency: "PLN" },
+      },
+    });
+    await renderReceipts(fakeClients([summary], receiptDetail(summary), [fx]), { locale: "en" });
+    await click(openDetailButton(0));
+    const d = dialog();
+    expect(d.textContent).toContain("Conflicting conversion evidence");
+    expect(d.textContent).toContain("Stated rate (Bank’s original amount) 4.0600 PLN/EUR");
+    expect(d.textContent).toContain("fee 1.25 PLN");
+    expect(linkRadio("candidate:0", d).disabled).toBe(true);
+  });
+
   it("confirms a zero-line Gmail invoice with a preselected strong candidate on single click", async () => {
     const candNip = receiptCandidate({
       entry_reference: "5".repeat(64),

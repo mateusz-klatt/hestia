@@ -13,6 +13,7 @@ export type ReceiptDetail = Schemas["BudgetReceiptDetail"];
 export type ReceiptLine = Schemas["BudgetReceiptLine"];
 export type ReceiptLineInput = Schemas["BudgetReceiptLineInput"];
 export type ReceiptCandidate = Schemas["BudgetReceiptCandidate"];
+export type ReceiptFx = Schemas["BudgetReceiptFx"];
 export type ReceiptLinkRequest = Schemas["BudgetReceiptLinkRequest"];
 export type ReceiptConfirmRequest = Schemas["BudgetReceiptConfirmRequest"];
 export type ReceiptConfirmResult = Schemas["BudgetReceiptConfirmResult"];
@@ -38,7 +39,7 @@ export interface ReceiptGroupTransactionCandidate {
   booking_date: string | null;
   value_date: string | null;
   merchant_token_hit: boolean;
-  match_strength: ReceiptCandidate["match_strength"];
+  match_strength: Schemas["BudgetReceiptGroupTransactionCandidate"]["match_strength"];
   date_distance: number;
   evidence_fingerprint: string;
   candidate_token: string;
@@ -53,7 +54,7 @@ export interface ReceiptGroupCandidate {
   transaction_date: string | null;
   booking_date: string | null;
   value_date: string | null;
-  match_strength: ReceiptCandidate["match_strength"];
+  match_strength: Schemas["BudgetReceiptGroupTransactionCandidate"]["match_strength"];
   date_distance: number;
   evidence_fingerprint: string;
   candidate_token: string;
@@ -479,6 +480,7 @@ export interface ReceiptConfirmDraft {
 }
 
 function candidateEvidenceFingerprint(candidate: ReceiptCandidate): string | null {
+  if (candidate.fx != null) return JSON.stringify(candidate.fx);
   const extra = candidate as ReceiptCandidate & { evidence_fingerprint?: unknown };
   return typeof extra.evidence_fingerprint === "string" && extra.evidence_fingerprint !== ""
     ? extra.evidence_fingerprint
@@ -619,7 +621,8 @@ export function findCurrentLinkedCandidate(
 ): ReceiptCandidate | null {
   if (!detail.linked || detail.linked_account_id === null || detail.linked_entry_ref === null) return null;
   return candidates.find(
-    (item) => item.account_id === detail.linked_account_id && item.entry_reference === detail.linked_entry_ref,
+    (item) => item.account_id === detail.linked_account_id && item.entry_reference === detail.linked_entry_ref
+      && item.fx?.conflicting !== true,
   ) ?? null;
 }
 
@@ -679,8 +682,7 @@ export function isStrongMatchStrength(strength: ReceiptCandidate["match_strength
 
 /**
  * Preselects the single candidate only when the receipt is unlinked (`imported` / `draft` / `needs_review`
- * with no stored link), payment allows linking, there is exactly one candidate, and `match_strength` is
- * `"nip"` or `"distinctive"`.
+ * with no stored link), payment allows linking, and there is exactly one strong same-currency candidate.
  */
 export function preselectedCandidate(
   detail: Pick<ReceiptDetail, "status" | "linked" | "linked_account_id" | "linked_entry_ref" | "link_group">,
@@ -696,10 +698,11 @@ export function preselectedCandidate(
   if (paymentMethod === "cash" || paymentMethod === "mixed") {
     return null;
   }
-  if (candidates.length !== 1) {
+  const sameCurrency = candidates.filter((candidate) => candidate.fx == null);
+  if (sameCurrency.length !== 1) {
     return null;
   }
-  const sole = candidates[0];
+  const sole = sameCurrency[0];
   if (sole === undefined || !isStrongMatchStrength(sole.match_strength)) {
     return null;
   }
@@ -1450,7 +1453,8 @@ export function buildConfirmRequest(
     }
     const idx = Number(draft.linkChoice.slice("candidate:".length));
     const chosen = Number.isInteger(idx) ? candidates[idx] : undefined;
-    if (!options.canPickCandidates || chosen === undefined || !candidateMatchesBinding(chosen, binding)) {
+    if (!options.canPickCandidates || chosen === undefined || chosen.fx?.conflicting === true
+      || !candidateMatchesBinding(chosen, binding)) {
       return { ok: false, errorKey: "budget.receipts.candidateListChanged" };
     }
     link = {
@@ -1649,7 +1653,7 @@ export function uniqueIdCandidate(
   let found: { candidate: ReceiptCandidate; index: number } | null = null;
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
-    if (candidate?.match_strength === "id") {
+    if (candidate?.match_strength === "id" && candidate.fx == null) {
       if (found !== null) {
         return null;
       }

@@ -11218,13 +11218,26 @@
             "title": "Entry Reference",
             "type": "string"
           },
+          "fx": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetReceiptFx"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "FX candidate evidence from 0.68.0. Market estimates require explicit review."
+          },
           "match_strength": {
             "enum": [
               "id",
               "nip",
               "distinctive",
               "generic",
-              "none"
+              "none",
+              "medium",
+              "ambiguous"
             ],
             "title": "Match Strength",
             "type": "string"
@@ -11606,6 +11619,17 @@
             ],
             "default": null,
             "title": "Forwarded Sender Domain"
+          },
+          "fx_link": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetReceiptFx"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Explicitly accepted FX link evidence from 0.68.0."
           },
           "gateway": {
             "anyOf": [
@@ -12192,6 +12216,184 @@
           "expires_at"
         ],
         "title": "BudgetReceiptDeviceToken",
+        "type": "object"
+      },
+      "BudgetReceiptFx": {
+        "properties": {
+          "booked_amount": {
+            "title": "Booked Amount",
+            "type": "string"
+          },
+          "booked_currency": {
+            "title": "Booked Currency",
+            "type": "string"
+          },
+          "conflicting": {
+            "description": "Source conflict requires resolution before the candidate can be linked.",
+            "title": "Conflicting",
+            "type": "boolean"
+          },
+          "explicit_fee": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetReceiptFxFee"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Separately stated fee, when available."
+          },
+          "implied_rate": {
+            "description": "Booked currency per one unit of receipt currency.",
+            "title": "Implied Rate",
+            "type": "string"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetReceiptFxQuote"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "receipt_amount": {
+            "title": "Receipt Amount",
+            "type": "string"
+          },
+          "receipt_currency": {
+            "title": "Receipt Currency",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "bank_original",
+              "bank_remittance",
+              "receipt_charged",
+              "nbp"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "stated_rate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetReceiptFxStatedRate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "source",
+          "receipt_amount",
+          "receipt_currency",
+          "booked_amount",
+          "booked_currency",
+          "implied_rate",
+          "quote",
+          "stated_rate",
+          "explicit_fee",
+          "conflicting"
+        ],
+        "title": "BudgetReceiptFx",
+        "type": "object"
+      },
+      "BudgetReceiptFxFee": {
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "currency"
+        ],
+        "title": "BudgetReceiptFxFee",
+        "type": "object"
+      },
+      "BudgetReceiptFxQuote": {
+        "properties": {
+          "difference": {
+            "description": "Booked magnitude minus estimate in the booked currency.",
+            "title": "Difference",
+            "type": "string"
+          },
+          "estimated_amount": {
+            "description": "Receipt amount converted to the booked currency.",
+            "title": "Estimated Amount",
+            "type": "string"
+          },
+          "publication_date": {
+            "title": "Publication Date",
+            "type": "string"
+          },
+          "rate": {
+            "description": "NBP table A mid in PLN per one unit of unit_currency.",
+            "title": "Rate",
+            "type": "string"
+          },
+          "table_number": {
+            "title": "Table Number",
+            "type": "string"
+          },
+          "unit_currency": {
+            "title": "Unit Currency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rate",
+          "unit_currency",
+          "publication_date",
+          "table_number",
+          "estimated_amount",
+          "difference"
+        ],
+        "title": "BudgetReceiptFxQuote",
+        "type": "object"
+      },
+      "BudgetReceiptFxStatedRate": {
+        "properties": {
+          "counter_currency": {
+            "title": "Counter Currency",
+            "type": "string"
+          },
+          "rate": {
+            "description": "Stated counter currency per one unit of unit currency, retaining source precision.",
+            "title": "Rate",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "bank_original",
+              "bank_remittance",
+              "receipt_charged"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "unit_currency": {
+            "title": "Unit Currency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "rate",
+          "unit_currency",
+          "counter_currency"
+        ],
+        "title": "BudgetReceiptFxStatedRate",
         "type": "object"
       },
       "BudgetReceiptGmailGrantRequest": {
@@ -18296,7 +18498,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.64.0"
+    "version": "0.68.0"
   },
   "openapi": "3.1.0",
   "paths": {

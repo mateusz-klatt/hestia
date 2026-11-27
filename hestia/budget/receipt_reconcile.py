@@ -12,6 +12,7 @@ from ..db import (BudgetAccount as Account, BudgetAnalyticsAudit as Audit, Budge
                   BudgetReceiptLinkMember as ReceiptLinkMember, BudgetTransaction as Transaction,
                   BudgetTransactionMetadata as Metadata, BudgetTransferLeg as Leg)
 from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint
+from .receipt_fx import accepted_fx_quote, erase_receipt_conversion, fx_candidate, fx_link_evidence
 from .receipt_parser import normalize_shop_name
 
 _CHUNK = 400
@@ -249,6 +250,7 @@ def evidence_json(evidence):
 
 
 def erase_receipt_audit(session, owner, receipt_id):
+    erase_receipt_conversion(session, receipt_id)
     session.execute(delete(Audit).where(
         Audit.owner == owner, Audit.subject_type == "receipt", Audit.subject_id == receipt_id,
     ))
@@ -308,7 +310,18 @@ def _reconcile_one_to_one(session, owner, now):
                 for candidate_shop in shop_forms
             ]
             expected_evidence = {evidence_json(ev) for ev in evidences}
-        except (AnalyticsError, ValueError, TypeError, RecursionError):
+            stored = _json(row.linked_evidence)
+            linked_fx = stored.get("fx") if isinstance(stored, dict) else None
+            if linked_fx is not None and current is not None:
+                account = session.get(Account, transaction.account_id)
+                connection = session.get(Connection, account.connection_id)
+                if account.enabled and connection.enabled:
+                    suggestion = fx_candidate(session, owner, row, transaction, payload, current,
+                                              accepted_quote=accepted_fx_quote(linked_fx))
+                    if suggestion is not None and not suggestion[0]["conflicting"]:
+                        fx = fx_link_evidence(row, suggestion[0])
+                        expected_evidence.update(evidence_json({**ev, "fx": fx}) for ev in evidences)
+        except (AnalyticsError, ValueError, TypeError, KeyError, RecursionError):
             evidences = ()
             expected_evidence = ()
         if current == row.linked_fingerprint:

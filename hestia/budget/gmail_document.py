@@ -27,6 +27,7 @@ class ImportedDocument:
     items: tuple[dict, ...] = field(default=(), compare=False)
     card_last4: str | None = field(default=None, compare=False)
     payment_method: str | None = field(default=None, compare=False)
+    fx_fields: dict | None = field(default=None, compare=False)
 
 
 _REJECT = re.compile(r"wyciąg|zestawienie operacji|statement of account|historia rachunku|skierowanie|recepta|e-zwolnienie|wynik badania|newsletter|korekta|korygując|credit note", re.I)

@@ -6147,11 +6147,13 @@ export interface components {
             date_distance: number;
             /** Entry Reference */
             entry_reference: string;
+            /** @description FX candidate evidence from 0.68.0. Market estimates require explicit review. */
+            fx?: components["schemas"]["BudgetReceiptFx"] | null;
             /**
              * Match Strength
              * @enum {string}
              */
-            match_strength: "id" | "nip" | "distinctive" | "generic" | "none";
+            match_strength: "id" | "nip" | "distinctive" | "generic" | "none" | "medium" | "ambiguous";
             /** Merchant Token Hit */
             merchant_token_hit: boolean;
             /** Transaction Date */
@@ -6290,6 +6292,8 @@ export interface components {
              * @default null
              */
             forwarded_sender_domain: string | null;
+            /** @description Explicitly accepted FX link evidence from 0.68.0. */
+            fx_link?: components["schemas"]["BudgetReceiptFx"] | null;
             /**
              * Gateway
              * @default null
@@ -6477,6 +6481,84 @@ export interface components {
             last_used_at: number | null;
             /** Token Id */
             token_id: string;
+        };
+        /** BudgetReceiptFx */
+        BudgetReceiptFx: {
+            /** Booked Amount */
+            booked_amount: string;
+            /** Booked Currency */
+            booked_currency: string;
+            /**
+             * Conflicting
+             * @description Source conflict requires resolution before the candidate can be linked.
+             */
+            conflicting: boolean;
+            /** @description Separately stated fee, when available. */
+            explicit_fee: components["schemas"]["BudgetReceiptFxFee"] | null;
+            /**
+             * Implied Rate
+             * @description Booked currency per one unit of receipt currency.
+             */
+            implied_rate: string;
+            quote: components["schemas"]["BudgetReceiptFxQuote"] | null;
+            /** Receipt Amount */
+            receipt_amount: string;
+            /** Receipt Currency */
+            receipt_currency: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "bank_original" | "bank_remittance" | "receipt_charged" | "nbp";
+            stated_rate: components["schemas"]["BudgetReceiptFxStatedRate"] | null;
+        };
+        /** BudgetReceiptFxFee */
+        BudgetReceiptFxFee: {
+            /** Amount */
+            amount: string;
+            /** Currency */
+            currency: string;
+        };
+        /** BudgetReceiptFxQuote */
+        BudgetReceiptFxQuote: {
+            /**
+             * Difference
+             * @description Booked magnitude minus estimate in the booked currency.
+             */
+            difference: string;
+            /**
+             * Estimated Amount
+             * @description Receipt amount converted to the booked currency.
+             */
+            estimated_amount: string;
+            /** Publication Date */
+            publication_date: string;
+            /**
+             * Rate
+             * @description NBP table A mid in PLN per one unit of unit_currency.
+             */
+            rate: string;
+            /** Table Number */
+            table_number: string;
+            /** Unit Currency */
+            unit_currency: string;
+        };
+        /** BudgetReceiptFxStatedRate */
+        BudgetReceiptFxStatedRate: {
+            /** Counter Currency */
+            counter_currency: string;
+            /**
+             * Rate
+             * @description Stated counter currency per one unit of unit currency, retaining source precision.
+             */
+            rate: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "bank_original" | "bank_remittance" | "receipt_charged";
+            /** Unit Currency */
+            unit_currency: string;
         };
         /** BudgetReceiptGmailGrantRequest */
         BudgetReceiptGmailGrantRequest: {

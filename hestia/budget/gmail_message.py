@@ -28,6 +28,7 @@ from .gmail_trust import (_FORWARD_MARKERS, _INVALID_FORWARD, _forward_sender, _
                           _is_forward_marker, classify_sender, domain_matches, forward_sender_domain, inline_forward_body,
                           mime_parts, payment_sender_for, sender_address)
 from .gmail_worker import MAX_HTML_BYTES, MAX_PDF_BYTES, PDFUnsupported, WorkerRejected, WorkerUnavailable
+from .receipt_fx import merge_receipt_conversion, receipt_conversion_fields
 
 
 MAX_MESSAGE_BYTES = 10 * 1024 * 1024
@@ -312,7 +313,7 @@ class GmailMessageProcessor:
                 return replace(pending, outcome="imported", invoice=invoice,
                                rfc_message_id_hmac=_rfc_message_hmac(message, self.settings.hmac_secret),
                                source_kind="attachment" if kind == "pdf" else "email",
-                               parse_failed_reason=None)
+                               fx_fields=receipt_conversion_fields(text) or None, parse_failed_reason=None)
         return pending
 
     def _document(self, message, pending, sender, *, inline_outer=None, forwarded=False, manual=False,
@@ -358,6 +359,7 @@ class GmailMessageProcessor:
                 document = extract_document(text, merchant=sender.merchant, pdf=True)
             if document is None:
                 continue
+            document = replace(document, fx_fields=receipt_conversion_fields(text) or None)
             if document.issue_date is None:
                 if invoice is None or not allow_undated_template:
                     continue
@@ -390,13 +392,15 @@ class GmailMessageProcessor:
                     selected_template = invoice if document.issue_date is None else None
                 selected = replace(preferred, items=selected.items if selected.items == document.items else (),
                                    paid=selected.paid or document.paid,
-                                   receipt_number=selected.receipt_number or document.receipt_number)
+                                   receipt_number=selected.receipt_number or document.receipt_number,
+                                   fx_fields=merge_receipt_conversion(selected.fx_fields, document.fx_fields) or None)
         if selected is None:
             return replace(failure, diagnostic_reason="pdf_no_text") if no_text else failure
         secret = self.settings.hmac_secret
         if selected.issue_date is None and selected_template is not None and len(issue_dates) == 1:
             return replace(pending, outcome="imported", invoice=selected_template, source_kind="attachment",
-                           rfc_message_id_hmac=_rfc_message_hmac(message, secret), parse_failed_reason=None)
+                           rfc_message_id_hmac=_rfc_message_hmac(message, secret), fx_fields=selected.fx_fields,
+                           parse_failed_reason=None)
         return self._document_result(message, pending, selected, "attachment")
 
     def _document_result(self, message, pending, selected, source_kind):
@@ -478,6 +482,7 @@ class GmailMessageProcessor:
             payment_method=payment_method,
             items=item_block or (), item_block_rejected=item_block == (),
             apple_document_hmac=digest(secret, DOCUMENT_NUMBER_DOMAIN, apple_number) if apple_number else None,
+            fx_fields=receipt_conversion_fields(text) or None,
         )
         return replace(pending, outcome="imported", payment=provenance,
                        rfc_message_id_hmac=_rfc_message_hmac(message, secret)), False, False
@@ -500,6 +505,7 @@ class GmailMessageProcessor:
             alternate = pending
         first, second = result.payment, alternate.payment
         items = ()
+        fx_fields = first.fx_fields
         if (second is not None and not (first.item_block_rejected or second.item_block_rejected)
                 and first.fields.total_amount == second.fields.total_amount
                 and first.fields.currency == second.fields.currency):
@@ -508,7 +514,8 @@ class GmailMessageProcessor:
                         (first.fields.body_dates, second.fields.body_dates), (first.items, second.items))
             if all(not left or not right or left == right for left, right in evidence):
                 items = first.items or second.items
-        return replace(result, payment=replace(first, items=items))
+                fx_fields = merge_receipt_conversion(first.fx_fields, second.fx_fields) or None
+        return replace(result, payment=replace(first, items=items, fx_fields=fx_fields))
 
     def _payment(self, message, pending, sender, *, inline_outer=None):
         subjects = tuple(map(str, message.get_all("Subject", ())))

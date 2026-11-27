@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { t } from "../i18n";
 import type { BudgetResult } from "./api";
 import { labelOf } from "./analytics/model";
-import { formatAmount } from "./model";
+import { formatAmount, formatEstimate } from "./model";
 import type { BudgetAccount, BudgetConnection } from "./model";
 import { receiptsApi as defaultReceiptsApi } from "./receipts_api";
 import type { ReceiptsApi } from "./receipts_api";
@@ -86,6 +86,7 @@ import type {
   ReceiptDetailResult,
   ReceiptDocumentKind,
   ReceiptFilter,
+  ReceiptFx,
   ReceiptGroupCandidate,
   ReceiptGroupDetailResult,
   ReceiptLineEditField,
@@ -226,6 +227,49 @@ function SourceIcon({ kind }: { kind: ReceiptSourceKind }) {
       <rect x="3" y="2" width="10" height="12" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
       <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
     </svg>
+  );
+}
+
+const FX_SOURCE_LABEL = {
+  bank_original: "budget.receipts.fxOriginal",
+  bank_remittance: "budget.receipts.fxRemittance",
+  receipt_charged: "budget.receipts.fxCharged",
+} as const;
+
+function ReceiptFxDetails({ fx, ambiguous, locale }: { fx: ReceiptFx; ambiguous?: boolean; locale: string }) {
+  const { quote, stated_rate: stated, explicit_fee: fee } = fx;
+  const implied = formatAmount(fx.implied_rate, `${fx.booked_currency}/${fx.receipt_currency}`, locale);
+  const booked = formatAmount(fx.booked_amount, fx.booked_currency, locale);
+  return (
+    <span>
+      {quote !== null ? (
+        <><br />{t("budget.receipts.fxEstimate", {
+          amount: formatEstimate(quote.estimated_amount, fx.booked_currency, locale),
+          date: quote.publication_date,
+          table: quote.table_number,
+        })}</>
+      ) : fx.source !== "nbp" ? (
+        <><br />{t(FX_SOURCE_LABEL[fx.source])}</>
+      ) : null}
+      <br />{t("budget.receipts.fxBooked", { amount: booked, rate: implied })}
+      {quote === null ? null : (
+        <><br />{t("budget.receipts.fxDifference", {
+          amount: formatEstimate(quote.difference, fx.booked_currency, locale),
+        })}</>
+      )}
+      {stated === null ? null : (
+        <><br />{t("budget.receipts.fxStated", {
+          source: t(FX_SOURCE_LABEL[stated.source]),
+          rate: formatAmount(stated.rate, `${stated.counter_currency}/${stated.unit_currency}`, locale),
+        })}</>
+      )}
+      {fee === null ? null : (
+        <><br />{t("budget.receipts.paymentEvidenceFee", { amount: formatAmount(fee.amount, fee.currency, locale) })}</>
+      )}
+      {fx.conflicting || ambiguous ? (
+        <><br /><strong>{t(fx.conflicting ? "budget.receipts.fxConflicting" : "budget.receipts.fxAmbiguous")}</strong></>
+      ) : null}
+    </span>
   );
 }
 
@@ -3467,6 +3511,7 @@ function ReceiptDetailDrawer({
           const matchingChanged = activeDraft !== null && hasMatchingFieldsChanged(detail, activeDraft);
           const linkOptions = availableLinkOptions(detail, candidates, draftMethod, matchingChanged);
           const { currentCandidate } = linkOptions;
+          const linkedFx = currentCandidate?.fx ?? detail.fx_link;
           const hasStoredKeepCandidate = storedKeepCandidate !== null;
           const lineAdjustment = activeDraft === null ? null : receiptTotalAdjustment(detail, activeDraft);
           const lineDelta = activeDraft === null || lineAdjustment !== null
@@ -3790,7 +3835,9 @@ function ReceiptDetailDrawer({
                         })}
                       </span>
                     </div>
-                    {currentCandidate !== null ? (
+                    {linkedFx != null ? (
+                      <ReceiptFxDetails fx={linkedFx} ambiguous={currentCandidate?.match_strength === "ambiguous"} locale={locale} />
+                    ) : currentCandidate !== null ? (
                       <div className="budget-entry-main">
                         <span className="budget-muted">
                           {candidateDisplayDate(currentCandidate) ?? t("budget.receipts.noDate")}
@@ -4204,7 +4251,7 @@ function ReceiptDetailDrawer({
                             type="radio"
                             name="link_choice"
                             value={choiceValue}
-                            disabled={disableTokens}
+                            disabled={disableTokens || candidate.fx?.conflicting === true}
                             checked={activeDraft.linkChoice === choiceValue && linkOptions.canPickCandidates}
                             onChange={() => {
                               onLinkChoiceTouched(detail.receipt_id, {
@@ -4215,9 +4262,12 @@ function ReceiptDetailDrawer({
                             }}
                           />
                           <span>
-                            {accountText} · {dateText} · {amountText}
+                            {accountText} · {dateText}{candidate.fx == null ? ` · ${amountText}` : ""}
                             {` (${daysText})`}
                             {candidate.merchant_token_hit ? ` · ${t("budget.receipts.candidateMerchantMatch")}` : ""}
+                            {candidate.fx == null ? null : (
+                              <ReceiptFxDetails fx={candidate.fx} ambiguous={candidate.match_strength === "ambiguous"} locale={locale} />
+                            )}
                           </span>
                         </label>
                       );

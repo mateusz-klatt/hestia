@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import time
@@ -14,6 +15,7 @@ from ..db import init_db
 from . import api, consent_context, device_token, gmail_config
 from .analytics_core import canonical_money
 from .config import BudgetConfigError
+from .receipt_fx_rates import prefetch_nbp_quotes
 from .receipt_parser import ReceiptError
 from .receipt_store import BudgetReceiptStore
 from .views import BudgetUsersBackendRequired
@@ -40,6 +42,7 @@ _ID_MATCH_VERSION = (0, 57, 0)
 _MANY_TO_ONE_VERSION = (0, 59, 0)
 _LINK_INDICATORS_VERSION = (0, 60, 0)
 _DISPLAY_SHOP_NAME_VERSION = (0, 61, 0)
+_FX_VERSION = (0, 68, 0)
 _CURRENT_VERSION = tuple(int(part) for part in api_contract.CONTRACT_VERSION.split("."))
 _RECEIPT_RESULT_KEY = {"parse-text": "draft", "confirm": "receipt", "list": "receipts",
                        "search": "receipts", "detail": "receipt"}
@@ -53,6 +56,10 @@ _GATEWAY_EVIDENCE_FIELDS = ("gateway", "gateway_status", "fee_amount", "payee_ho
 def enabled():
     return os.environ.get(FLAG) == "1"
 
+
+_FX_PREFETCH_INITIAL_SECONDS = 60
+_FX_PREFETCH_SECONDS = 300
+_log = logging.getLogger(__name__)
 
 _RETENTION_SECRET = b"hestia/budget/receipts/retention/v1"
 
@@ -86,6 +93,12 @@ def retain_expired(path=None, clock=time.time):
     return BudgetReceiptStore(sessions, clock=clock, cursor_secret=_RETENTION_SECRET).purge_expired()
 
 
+def _prefetch_rates():
+    engine, sessions = init_db()
+    if store_sql.is_users_db_authoritative(engine):
+        prefetch_nbp_quotes(sessions, time.time())
+
+
 def _receipt_id(request, *, field="receipt_id"):
     if set(request.query) != {field} or len(request.query.getall(field)) != 1:
         raise ReceiptError()
@@ -93,10 +106,12 @@ def _receipt_id(request, *, field="receipt_id"):
 
 
 def _run(owner, operation, values, secret, device_id, actor=None, *,
-         include_linked_transaction=False, include_display_shop_name=False):
+         include_linked_transaction=False, include_display_shop_name=False, include_fx=False):
     store = _store(secret, device_id, actor)
     if operation == "parse-text":
-        return store.parse_text(owner, values["text"], source_kind=values["source_kind"])
+        return store.parse_text(owner, values["text"], source_kind=values["source_kind"], include_fx=include_fx)
+    if operation == "confirm":
+        return store.confirm(owner, values, include_fx=include_fx)
     if operation in ("list", "search"):
         return getattr(store, operation)(
             owner, values, include_linked_transaction=include_linked_transaction,
@@ -200,6 +215,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
                     lambda: _run_read(
                         owner, operation, identifier, secret, device_id, actor,
                         include_display_shop_name=version >= _DISPLAY_SHOP_NAME_VERSION,
+                        include_fx=version >= _FX_VERSION,
                     ),
                 )
                 return _response(operation, result, version)
@@ -230,6 +246,10 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
                         owner, operation, values, secret, device_id, actor, include_linked_transaction=True,
                         include_display_shop_name=version >= _DISPLAY_SHOP_NAME_VERSION,
                     ),
+                )
+            elif version >= _FX_VERSION and operation in ("parse-text", "confirm"):
+                result = await api._settled_thread(
+                    lambda: _run(owner, operation, values, secret, device_id, actor, include_fx=True),
                 )
             else:
                 result = await api._settled_thread(lambda: _run(owner, operation, values, secret, device_id, actor))
@@ -391,7 +411,27 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
         # catch that exception here, so a cancellation of this cleanup still propagates.
         await asyncio.gather(task, return_exceptions=True)
 
-    app.cleanup_ctx.append(retention)
+    async def fx_prefetch(_app):
+        if not (enabled() and device_token.budget_http_enabled() and auth_enabled()
+                and os.environ.get("HESTIA_PERSIST", "json").lower() == "sqlite"):
+            yield
+            return
+
+        async def poll():
+            await asyncio.sleep(_FX_PREFETCH_INITIAL_SECONDS)
+            while True:
+                try:
+                    await api._settled_thread(_prefetch_rates)
+                except Exception:
+                    _log.warning("Receipt exchange-rate prefetch failed")
+                await asyncio.sleep(_FX_PREFETCH_SECONDS)
+
+        task = asyncio.create_task(poll())
+        yield
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    app.cleanup_ctx.extend((fx_prefetch, retention))
     for operation in READS:
         app.router.add_get(PREFIX + "/" + operation, handle, allow_head=False)
     for operation in WRITES:
@@ -402,10 +442,11 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
     app.router.add_post(device_token.LOGIN_PATH, login)
 
 
-def _run_read(owner, operation, identifier, secret, device_id=None, actor=None, *, include_display_shop_name=False):
+def _run_read(owner, operation, identifier, secret, device_id=None, actor=None, *,
+              include_display_shop_name=False, include_fx=False):
     store = _store(secret, device_id, actor)
     if operation == "detail":
-        return store.detail(owner, identifier, include_display_shop_name=include_display_shop_name)
+        return store.detail(owner, identifier, include_display_shop_name=include_display_shop_name, include_fx=include_fx)
     if operation == "group/detail":
         return store.group_detail(owner, identifier)
     store.image(owner, identifier)

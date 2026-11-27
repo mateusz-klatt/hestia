@@ -12,6 +12,7 @@ from ..db import AppMeta, BudgetAnalyticsAudit, BudgetGmailMessage, BudgetReceip
 from .analytics_core import AnalyticsError, canonical_money
 from .gmail_document import ImportedDocument
 from .gmail_payment import _payee_key
+from .receipt_fx import merge_receipt_conversion, read_receipt_conversion
 from .receipt_parser import merchant_word_tokens
 from .receipt_reconcile import _latch_receipt_source_changed, audit_payload, evidence_json, write_audit
 
@@ -112,7 +113,14 @@ def _identity(data, invoice):
 def _matching_variants(copies):
     variants = {}
     for _, data, invoice in copies:
-        variants.setdefault(_identity(data, invoice), (data, invoice))
+        key = _identity(data, invoice)
+        previous = variants.get(key)
+        if previous is None:
+            variants[key] = data, invoice
+        elif invoice.fx_fields:
+            primary_data, primary = previous
+            fields = merge_receipt_conversion(primary.fx_fields, invoice.fx_fields)
+            variants[key] = primary_data, replace(primary, fx_fields=fields)
     return variants
 
 
@@ -125,11 +133,11 @@ def _groups_by_rfc(groups):
     return groups_by_rfc
 
 
-def receipt_document(receipt):
+def receipt_document(receipt, *, fx_fields=None):
     return SimpleNamespace(issuer=receipt.raw_shop_name, nip=receipt.raw_nip, invoice_number=receipt.invoice_number,
                            amount=receipt.total_amount, currency=receipt.currency, issue_date=receipt.receipt_date,
                            due_date=receipt.due_date, card_last4=receipt.card_last4,
-                           payment_method=receipt.payment_method, document_kind=(
+                           payment_method=receipt.payment_method, fx_fields=fx_fields, document_kind=(
                                "receipt" if receipt.document_kind == "payment_confirmation" else receipt.document_kind))
 
 
@@ -263,7 +271,8 @@ def _waiting_documents(store, session, owner, now):
 def _import_copies(store, session, owner, copies, now):
     from .gmail_store import PendingMessage
 
-    meta, data, invoice = copies[0]
+    meta, data, _invoice = copies[0]
+    _, invoice = next(iter(_matching_variants(copies).values()))
     provenance = dict(data["provenance"])
     provenance["paid"] = any(bool(copy_data["provenance"].get("paid")) for _, copy_data, _ in copies)
     invoice = replace(invoice, paid=provenance["paid"])
@@ -386,9 +395,10 @@ def settle(store, session, owner, now):
         receipts[receipt.id] = receipt
         if not auto_eligible:
             claim_only.add(document)
+        conversion = read_receipt_conversion(session, owner, receipt.id)
         candidates = card_purchase_candidates(
-            session, owner, receipt_document(receipt), received_date=None if stamp is None else _received_date(stamp),
-            include_receipt_id=receipt.id,
+            session, owner, receipt_document(receipt, fx_fields=conversion),
+            received_date=None if stamp is None else _received_date(stamp), include_receipt_id=receipt.id,
         )
         _record_claims(claims, claims_by_document, document, candidates)
 
