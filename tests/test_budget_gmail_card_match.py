@@ -3,11 +3,13 @@
 import json
 from dataclasses import replace
 from datetime import date
+from unittest.mock import patch
 
 from hestia import db
 from hestia.budget import analytics_views, bank_metadata
 from hestia.budget.analytics_core import AnalyticsError, financial_fingerprint
 from hestia.budget.gmail_card_match import match_card_purchase
+from hestia.budget.gmail_config import CARD_ACCOUNTS_ENV
 from hestia.budget.gmail_document import ImportedDocument
 from hestia.budget.receipt_reconcile import evidence_json, reconcile_receipt_links
 from tests.test_budget_analytics_store import AnalyticsCase
@@ -116,6 +118,9 @@ class CardPurchaseTests(AnalyticsCase):
             self.ledger(f"unrelated-{index}", lines=["Card purchase", description])
         self.assertIsNone(self.match(google))
         self.assertIsNone(self.match(apple))
+        with self.sessions.begin() as session:
+            for index in range(6):
+                session.delete(session.get(db.BudgetTransaction, (self.accounts["a"], f"unrelated-{index}")))
         self.ledger("google-sale", lines=[
             "Płatność kartą: GOOGLE*Google Storage g.co/helppay# IE", "Original amount: EUR 9.99",
         ])
@@ -128,6 +133,47 @@ class CardPurchaseTests(AnalyticsCase):
         self.assertIsNone(self.match(replace(google, issuer="Google Commerce Stationery Limited")))
         self.ledger("second", lines=["Card purchase", "GOOGLE*YouTube Premium"])
         self.assertIsNone(self.match(google))
+
+    def test_google_legal_name_is_insufficient_and_different_products_are_ambiguous(self):
+        google = replace(DOCUMENT, issuer="Google Ireland Limited", nip="5250007738")
+        self.ledger("legal-name", lines=["Card purchase", "Google Ireland Limited", "NIP: 5250007738"])
+        self.assertIsNone(self.match(google))
+        self.ledger("workspace", account="d", lines=["Card purchase", "GOOGLE *WORKSPACE"])
+        self.assertIsNone(self.match(google))
+        with self.sessions.begin() as session:
+            session.delete(session.get(db.BudgetTransaction, (self.accounts["a"], "legal-name")))
+        self.assertEqual(self.match(google).entry_reference, "workspace")
+        self.ledger("play", lines=["Card purchase", "GOOGLE *PLAY"], amount="9.99")
+        self.assertIsNone(self.match(google))
+
+    def test_card_suffix_limits_eligible_accounts_and_overrides_no_bank_suffix(self):
+        document = replace(DOCUMENT, card_last4="0123")
+        self.ledger("unknown-suffix", lines=["Card purchase Arvid Books"])
+        self.ledger("wrong-suffix", lines=["Card purchase Arvid Books", "Visa ending in 4567"])
+        self.ledger("other-account", account="d", lines=["Card purchase Arvid Books", "Visa ending in 0123"])
+        with patch.dict("os.environ", {CARD_ACCOUNTS_ENV: ""}):
+            self.assertEqual(self.match(document).entry_reference, "other-account")
+            self.assertIsNone(self.match(replace(document, card_last4="9999")))
+        with patch.dict("os.environ", {CARD_ACCOUNTS_ENV: json.dumps({"0123": [self.accounts["a"]]})}):
+            self.assertEqual(self.match(document).entry_reference, "unknown-suffix")
+            with self.sessions.begin() as session:
+                session.delete(session.get(db.BudgetTransaction, (self.accounts["a"], "unknown-suffix")))
+            self.assertIsNone(self.match(document))
+        with patch.dict("os.environ", {CARD_ACCOUNTS_ENV: "invalid"}):
+            self.assertIsNone(self.match(document))
+
+    def test_blik_document_requires_a_blik_purchase_without_card_evidence(self):
+        self.ledger("card")
+        document = replace(DOCUMENT, payment_method="blik")
+        self.assertIsNone(self.match(document))
+        self.assertIsNone(self.match(replace(document, payment_method="mixed")))
+        self.ledger("card-and-blik", lines=["Card purchase", "Płatność BLIK Arvid Books"])
+        self.ledger("masked-card-and-blik", lines=["Płatność BLIK Arvid Books", "Visa ending in 0123"])
+        self.set_kind("d", "credit_card")
+        self.ledger("credit-account", account="d", lines=["Płatność BLIK Arvid Books"])
+        self.assertIsNone(self.match(document))
+        self.ledger("blik", lines=["Płatność BLIK Arvid Books"])
+        self.assertEqual(self.match(document).entry_reference, "blik")
 
     def test_foreign_amount_requires_unique_explicit_original(self):
         invoice = replace(DOCUMENT, currency="EUR", amount="10")

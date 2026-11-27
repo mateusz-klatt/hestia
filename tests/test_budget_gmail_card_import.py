@@ -200,6 +200,43 @@ class GmailCardImportTests(AnalyticsCase):
         self.gmail.retain(OWNER, 1, settle_cards=True)
         self.assert_linked_once("TEST/42")
 
+    def test_card_suffix_survives_staging_and_link_revalidation(self):
+        from hestia.budget.receipt_reconcile import reconcile_receipt_links
+
+        body = DOCUMENT + "\nKarta płatnicza: **** 0123\n"
+        item = self.message("scoped-card", body=body)
+        self.assertEqual(item.invoice.card_last4, "0123")
+        for account, ending in (("d", "9876"), ("a", "0123")):
+            self.add_transaction(account, f"card-{ending}", amount="7.5", booking_date="2026-11-23",
+                                 remittance_information=["Płatność kartą", "Cedar Tools", f"Visa ending in {ending}"])
+            if account == "d":
+                self.commit(item)
+                self.assertEqual(self.rows(db.BudgetReceipt), [])
+        self.gmail = GmailStore(self.sessions, clock=lambda: self.now)
+        self.gmail.retain(OWNER, 1, settle_cards=True)
+        receipt, = self.rows(db.BudgetReceipt)
+        self.assertEqual((receipt.status, receipt.card_last4, receipt.linked_account_id, receipt.linked_entry_ref),
+                         ("confirmed", "0123", self.accounts["a"], "card-0123"))
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, OWNER, self.now), 0)
+
+    def test_blik_document_waits_for_blik_debit_and_keeps_its_payment_method(self):
+        from hestia.budget.receipt_reconcile import reconcile_receipt_links
+
+        self.add_card()
+        item = self.message("blik", body=DOCUMENT + "\nMetoda płatności: BLIK\n")
+        self.assertEqual(item.invoice.payment_method, "blik")
+        self.commit(item)
+        self.assertEqual(self.rows(db.BudgetReceipt), [])
+        self.add_transaction("d", "booked-blik", amount="7.5", booking_date="2026-11-23",
+                             remittance_information=["Płatność BLIK", "Cedar Tools"])
+        self.gmail.retain(OWNER, 1, settle_cards=True)
+        receipt, = self.rows(db.BudgetReceipt)
+        self.assertEqual((receipt.status, receipt.payment_method, receipt.linked_account_id, receipt.linked_entry_ref),
+                         ("confirmed", "blik", self.accounts["d"], "booked-blik"))
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, OWNER, self.now), 0)
+
     def test_late_bank_booking_is_imported_on_a_sync_without_new_mail(self):
         transport = FakeGmailTransport()
         clock = FakeClock()

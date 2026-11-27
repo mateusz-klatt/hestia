@@ -19,7 +19,7 @@ from .gmail_apple import apple_document_number, inspect_apple_subscription_items
 from .gmail_client import GmailError, has_spam_or_trash_label
 from .gmail_document import ImportedDocument, extract_document
 from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, _normalized_invoice_lines, extract_invoice
-from .gmail_payment import _payee_key, confirms_order_cancellation, inspect_payment
+from .gmail_payment import _payee_key, confirms_order_cancellation, inspect_payment, purchase_payment_scope
 from .gmail_respect import settlement_items
 from .gmail_shop_items import inspect_shop_items
 from .gmail_store import (DOCUMENT_NUMBER_DOMAIN, DOCUMENT_RECEIPT_DOMAIN, GATEWAY_REF_DOMAIN, ORDER_REFERENCE_DOMAIN, PAYMENT_PAYEE_DOMAIN, PAYMENT_SENDER_DOMAIN,
@@ -454,9 +454,11 @@ class GmailMessageProcessor:
         reference = payment.order_reference
         apple_number = apple_document_number(text) if apple else None
         item_block = None
+        payment_method = None
         if not sender.gateway:
             inspect_items = inspect_apple_subscription_items if apple else inspect_shop_items
             item_block = inspect_items(text, payment.total_amount, payment.currency)
+            _, payment_method = purchase_payment_scope(text.splitlines())
         provenance = PendingPayment(
             replace(payment, order_reference=None), receipt_date,
             digest(secret, PAYMENT_SENDER_DOMAIN, sender.sender),
@@ -473,6 +475,7 @@ class GmailMessageProcessor:
             blik_ref_hmac=(digest(secret, GATEWAY_REF_DOMAIN, inspected.blik_ref)
                            if inspected.blik_ref is not None else None),
             card_last4=inspected.card_last4,
+            payment_method=payment_method,
             items=item_block or (), item_block_rejected=item_block == (),
             apple_document_hmac=digest(secret, DOCUMENT_NUMBER_DOMAIN, apple_number) if apple_number else None,
         )

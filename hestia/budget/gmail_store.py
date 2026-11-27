@@ -135,6 +135,7 @@ class PendingPayment:
     # Transient correlation of the two MIME alternatives; never persisted.
     apple_document_hmac: str | None = None
     item_block_rejected: bool = False
+    payment_method: str | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -803,6 +804,8 @@ class GmailStore(BudgetStore):
         receipt = BudgetReceipt(id=str(uuid.uuid4()), owner=owner, raw_shop_name=invoice.issuer, raw_nip=invoice.nip,
                                 invoice_number=invoice_number, receipt_date=invoice.issue_date,
                                 due_date=invoice.due_date, total_amount=invoice.amount, currency=invoice.currency,
+                                card_last4=getattr(invoice, "card_last4", None),
+                                payment_method=getattr(invoice, "payment_method", None),
                                 status="imported", document_kind=getattr(invoice, "document_kind", "invoice"), source_kind=item.source_kind,
                                 version=1, created_at=now, updated_at=now, import_expires_at=now + IMPORT_TTL)
         session.add(receipt)
@@ -827,7 +830,7 @@ class GmailStore(BudgetStore):
             status="imported", document_kind="payment_confirmation", source_kind="email",
             gateway=payment.gateway_name, gateway_status=payment.status,
             gateway_ref_hmac=payment.gateway_ref_hmac, blik_ref_hmac=payment.blik_ref_hmac,
-            card_last4=payment.card_last4, fee_amount=fields.fee_amount,
+            card_last4=payment.card_last4, payment_method=payment.payment_method, fee_amount=fields.fee_amount,
             payee_host=fields.payee_host,
             version=1, created_at=now, updated_at=now, import_expires_at=now + IMPORT_TTL,
         )

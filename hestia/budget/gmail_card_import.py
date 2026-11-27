@@ -53,7 +53,8 @@ def _identity(invoice):
 def receipt_document(receipt):
     return SimpleNamespace(issuer=receipt.raw_shop_name, nip=receipt.raw_nip, invoice_number=receipt.invoice_number,
                            amount=receipt.total_amount, currency=receipt.currency, issue_date=receipt.receipt_date,
-                           due_date=receipt.due_date, document_kind=(
+                           due_date=receipt.due_date, card_last4=receipt.card_last4,
+                           payment_method=receipt.payment_method, document_kind=(
                                "receipt" if receipt.document_kind == "payment_confirmation" else receipt.document_kind))
 
 
@@ -85,7 +86,8 @@ def _confirm(session, owner, receipt, match, now):
                                      raw_name="Dokument", raw_name_key="dokument", quantity="1",
                                      gross_line_total=receipt.total_amount, net_line_total=receipt.total_amount))
     receipt.receipt_date = receipt.receipt_date or match.receipt_date
-    receipt.status, receipt.payment_method, receipt.import_expires_at = "confirmed", "card", None
+    receipt.status, receipt.import_expires_at = "confirmed", None
+    receipt.payment_method = receipt.payment_method or "card"
     receipt.linked_account_id, receipt.linked_entry_ref = match.account_id, match.entry_reference
     receipt.linked_fingerprint, receipt.linked_evidence = match.fingerprint, evidence_json(match.evidence)
     receipt.version += 1
@@ -162,7 +164,8 @@ def settle(store, session, owner, now):
 
     waiting = _waiting_documents(store, session, owner, now)
     for key, copies in waiting.items():
-        if len({(_identity(invoice), invoice.issue_date) for _, _, invoice in copies}) > 1:
+        if len({(_identity(invoice), invoice.issue_date, invoice.card_last4, invoice.payment_method)
+                for _, _, invoice in copies}) > 1:
             continue
         _, data, invoice = copies[0]
         match = match_card_purchase(session, owner, invoice, received_date=_received_date(data["received"]))

@@ -8,6 +8,9 @@ from sqlalchemy import case, func, or_
 from ..db import BudgetTransaction, BudgetTransactionMetadata
 from .analytics_core import AnalyticsError, canonical_money, financial_fingerprint
 from .bank_metadata import exchange_evidence
+from .config import BudgetConfigError
+from .gmail_config import load_card_accounts
+from .gmail_payment import _card_suffixes
 from .receipt_parser import (
     contains_gateway_marker,
     fold_text,
@@ -23,9 +26,10 @@ _CARD_PURCHASE = re.compile(
 )
 _NON_PURCHASE = re.compile(
     r"^(?:przelew|polecenie zaplaty|splata karty|wyplata (?:z bankomatu|gotowki)|odsetki|prowizja"
-    r"|oplata za karte|(?:platnosc |transakcja )?blik|bank transfer|credit transfer|direct debit|card repayment|credit card repayment"
+    r"|oplata za karte|bank transfer|credit transfer|direct debit|card repayment|credit card repayment"
     r"|cash withdrawal|cash advance|chargeback)\b"
 )
+_BLIK_DEBIT = re.compile(r"^(?:(?:platnosc|transakcja|payment|zakup) )?blik\b")
 _ORIGINAL_AMOUNT = re.compile(
     r"\b(?:kwota (?:oryginalna|w walucie (?:oryginalnej|transakcji))|original (?:transaction )?amount)"
     r"\s*[:=]?\s*(?:([A-Z]{3})\s+)?(\d{1,16}(?:[,.]\d{1,12})?)(?:\s+([A-Z]{3})\b)?(?![\d,.])",
@@ -33,15 +37,17 @@ _ORIGINAL_AMOUNT = re.compile(
 )
 _DATE_KEYS = ("transaction_date", "booking_date", "value_date")
 
-# The GOOGLE* prefix also covers third-party app developers and temporary holds.
-# Only the listed first-party billing descriptions corroborate these Google issuers.
+# A Google debit can create ambiguity even if its descriptor cannot prove a purchase.
+_GOOGLE_DEBIT = re.compile(r"^google\b")
 _GOOGLE_BILLING = re.compile(
-    r"google\s*\*\s*(?:google\s*(?:storage|one)|youtube(?: premium| music| videos| tv)?|cloud_[a-z0-9-]+)"
+    r"google(?:\s*\*\s*|\s+)(?:google\s*)?(?:storage|one|"
+    r"workspace|play(?: store)?|youtube(?: premium| music| videos| tv)?|cloud(?:_[a-z0-9-]+)?)"
     r"(?:\s+g\.co/helppay#?)?(?:\s+[a-z]{2})?"
 )
+_GOOGLE_ISSUERS = {("google",), ("google", "commerce"), ("google", "ireland"), ("google", "llc"),
+                   ("google", "payment"), ("google", "payments")}
+_UNCORROBORATED_GOOGLE_DEBIT = object()
 _BILLING_DESCRIPTORS = {
-    ("google", "commerce"): _GOOGLE_BILLING,
-    ("google", "ireland"): _GOOGLE_BILLING,
     ("apple", "distribution", "international"): re.compile(r"apple\.com/bill(?:\s+cork)?(?:\s+[a-z]{2})?"),
 }
 
@@ -70,6 +76,10 @@ def _card_amount_matches(payload, currency, amount, lines, metadata):
     return amounts == {(currency, amount)}
 
 
+def _bank_descriptor(line):
+    return _CARD_PURCHASE.sub("", fold_text(line).strip()).lstrip(" :-")
+
+
 def _merchant_matches(invoice, lines, creditor):
     name = invoice.issuer
     if contains_gateway_marker(name):
@@ -78,17 +88,36 @@ def _merchant_matches(invoice, lines, creditor):
     if _nip_match(invoice.nip, text.casefold())[1]:
         return True
     descriptor = _BILLING_DESCRIPTORS.get(merchant_word_tokens(name))
-    if descriptor and any(
-        descriptor.fullmatch(_CARD_PURCHASE.sub("", fold_text(line).strip()).lstrip(" :-"))
-        for line in filter(None, (creditor, *lines))
-    ):
+    if descriptor and any(descriptor.fullmatch(_bank_descriptor(line)) for line in filter(None, (creditor, *lines))):
         return True
     groups, _ = merchant_score_groups(name, invoice.nip)
     words = frozenset(merchant_word_tokens(text))
     return bool(groups) and all(any(alias <= words for alias in group) for group in groups)
 
 
-def _card_row(session, owner, invoice, transaction, account_kind, amount, receipt_date, start, end):
+def _payment_matches(invoice, transaction, account_kind, lines, mapped_accounts):
+    descriptions = [" ".join(merchant_word_tokens(line)) for line in lines]
+    if any(_NON_PURCHASE.match(line) for line in descriptions):
+        return False
+    is_blik = any(_BLIK_DEBIT.match(line) for line in descriptions)
+    is_card = any(_CARD_PURCHASE.match(line) for line in descriptions)
+    if getattr(invoice, "payment_method", None) == "blik":
+        return is_blik and not is_card and account_kind != "credit_card" and not _card_suffixes(lines)
+    if is_blik or (account_kind != "credit_card" and not is_card):
+        return False
+    last4 = getattr(invoice, "card_last4", None)
+    if last4 is None:
+        return True
+    if mapped_accounts is not None and transaction.account_id not in mapped_accounts:
+        return False
+    suffixes = _card_suffixes(lines)
+    if suffixes:
+        return suffixes == {last4}
+    return mapped_accounts is not None
+
+
+def _card_row(session, owner, invoice, transaction, account_kind, amount, receipt_date, start, end,
+              mapped_accounts, google):
     payload = _json(transaction.payload_json)
     fingerprint = financial_fingerprint(payload)
     if canonical_money(payload["amount"]) == "0" or not any(
@@ -98,20 +127,25 @@ def _card_row(session, owner, invoice, transaction, account_kind, amount, receip
     lines = payload.get("remittance_information", [])
     if not isinstance(lines, list) or any(not isinstance(value, str) for value in lines):
         return None
-    descriptions = [" ".join(merchant_word_tokens(line)) for line in lines]
-    if any(_NON_PURCHASE.match(line) for line in descriptions):
-        return None
-    if account_kind != "credit_card" and not any(_CARD_PURCHASE.match(line) for line in descriptions):
+    if not _payment_matches(invoice, transaction, account_kind, lines, mapped_accounts):
         return None
     metadata = session.get(BudgetTransactionMetadata, (transaction.account_id, transaction.entry_reference))
     data = {}
     if metadata and metadata.owner == owner and metadata.ledger_fingerprint == fingerprint:
         data = _json(metadata.payload_json)
-    if not isinstance(data, dict) or not _card_amount_matches(payload, invoice.currency, amount, lines, data):
+    amount_matches = isinstance(data, dict) and _card_amount_matches(payload, invoice.currency, amount, lines, data)
+    if not google and not amount_matches:
         return None
     creditor, debtor = resolved_party_names(session, owner, transaction.account_id, transaction.entry_reference,
                                            payload, fingerprint)
-    if not _merchant_matches(invoice, lines, creditor):
+    if google:
+        descriptors = [_bank_descriptor(line) for line in filter(None, (creditor, *lines))]
+        if not any(_GOOGLE_DEBIT.match(line) for line in descriptors):
+            return None
+        if not amount_matches or not any(_GOOGLE_BILLING.fullmatch(line) for line in descriptors):
+            # An uncorroborated Google debit still prevents a unique match in this window.
+            return _UNCORROBORATED_GOOGLE_DEBIT
+    elif not _merchant_matches(invoice, lines, creditor):
         return None
     evidence = link_evidence(owner, transaction.account_id, transaction.entry_reference, payload,
                              invoice.issuer, invoice.nip, creditor, fingerprint, debtor=debtor)
@@ -124,7 +158,8 @@ def match_card_purchase(session, owner, invoice, *, received_date=None, include_
     if isinstance(received_date, date):
         received_date = received_date.isoformat()
     receipt_date = _bound_date(invoice.issue_date or received_date)
-    if not receipt_date or getattr(invoice, "document_kind", "invoice") not in ("invoice", "receipt"):
+    if (not receipt_date or getattr(invoice, "document_kind", "invoice") not in ("invoice", "receipt")
+            or getattr(invoice, "payment_method", None) in ("cash", "mixed")):
         return None
     try:
         amount = canonical_money(invoice.amount)
@@ -132,6 +167,12 @@ def match_card_purchase(session, owner, invoice, *, received_date=None, include_
         return None
     if amount == "0" or amount.startswith("-"):
         return None
+    last4 = getattr(invoice, "card_last4", None)
+    try:
+        mapped_accounts = load_card_accounts().get(last4) if last4 is not None else None
+    except BudgetConfigError:
+        return None
+    google = merchant_word_tokens(invoice.issuer) in _GOOGLE_ISSUERS
     target = date.fromisoformat(receipt_date)
     due = _bound_date(invoice.due_date)
     last = max(target, date.fromisoformat(due)) if due else target
@@ -146,14 +187,15 @@ def match_card_purchase(session, owner, invoice, *, received_date=None, include_
         session, owner, include_receipt_id=include_receipt_id, card_filters=filters
     ):
         try:
-            candidate = _card_row(session, owner, invoice, transaction, account_kind, amount, receipt_date, start, end)
+            candidate = _card_row(session, owner, invoice, transaction, account_kind, amount, receipt_date, start,
+                                  end, mapped_accounts, google)
         except (AnalyticsError, KeyError, ValueError, TypeError, RecursionError):
             continue
         if candidate is not None:
             if occupied or result is not None:
                 return None
             result = candidate
-    return result
+    return None if result is _UNCORROBORATED_GOOGLE_DEBIT else result
 
 
 def still_matches_card(session, row):

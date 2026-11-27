@@ -132,6 +132,40 @@ class GmailDocumentDiscoveryTests(TestCase):
         self.assertIsNone(self.process(_email(UNLISTED, INVOICE.replace("Data wystawienia: 21.11.2026\n", ""))).invoice)
         self.assertIsNone(self.process(_email(UNLISTED, INVOICE.replace("RE/2026/00042", "TEST/42"))).invoice)
 
+    def test_reversal_notices_in_subject_or_body_cannot_create_purchases(self):
+        for notice in (
+            "Potwierdzenie anulowania zamówienia", "Anulowanie zamówienia TEST/42",
+            "Informujemy, że zamówienie zostało anulowane.", "Anulowane: TEST/42",
+            "Zwrot środków: TEST/42", "Zwrot: TEST/42", "Otrzymaliśmy zwrot towaru.",
+            "Korekta: TEST/42", "Faktura korygująca TEST/42",
+            "Your order has been cancelled", "Order canceled", "Cancellation confirmation",
+            "Refund", "We processed your refund", "Your return has been approved",
+            "Return #TEST/42", "Credit note TEST/42", "Corrected invoice TEST/42",
+        ):
+            for field in ("subject", "body"):
+                with self.subTest(notice=notice, field=field):
+                    message = _email(UNLISTED, DOCUMENT + ("\n" + notice if field == "body" else ""))
+                    message["Subject"] = notice if field == "subject" else "Faktura TEST/42"
+                    result = self.process(message)
+                    self.assertEqual((result.outcome, result.card_required, result.invoice),
+                                     ("skipped_non_receipt", False, None))
+
+    def test_purchase_with_optional_cancellation_or_return_instructions_is_discovered(self):
+        footer = ("\nMożesz anulować zamówienie i otrzymać zwrot środków.\n"
+                  "Jeśli zamówienie zostało anulowane, sprawdź status w swoim koncie.\n"
+                  "Cancellation policy: You can cancel your order within 24 hours.\n"
+                  "Return policy: You can return unopened items within 14 days.\n")
+        result = self.process(_email(UNLISTED, DOCUMENT + footer))
+        self.assertEqual((result.outcome, result.card_required, result.invoice.amount), ("imported", True, "7.5"))
+
+    def test_conflicting_payment_labels_do_not_lose_their_scope(self):
+        for conflict in ("Visa ending in 9876", "Metoda płatności: BLIK"):
+            with self.subTest(conflict=conflict):
+                body = DOCUMENT + "\nVisa ending in 0123\n" + conflict
+                pending = self.process(_email(UNLISTED, body))
+                self.assertTrue(pending.card_required)
+                self.assertEqual((pending.invoice.card_last4, pending.invoice.payment_method), (None, "mixed"))
+
     def test_explicit_seller_takes_precedence_over_issuer_name_in_buyer_field(self):
         body = DOCUMENT + ("Numer faktury: TEST/42\nKwota brutto: 7,50 PLN\n"
                            "Termin płatności: 29.11.2026\nNabywca: Respect Energy\n")

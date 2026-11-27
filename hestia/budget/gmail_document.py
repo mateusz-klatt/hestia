@@ -8,7 +8,7 @@ import re
 from .analytics_core import canonical_money
 from .gmail_invoice import _normalized_invoice_lines, _parse_nip, _safe_field
 from .gmail_respect import settlement_items
-from .gmail_payment import _following_values, _parse_amount, _parse_date, _RejectedPayment
+from .gmail_payment import _following_values, _parse_amount, _parse_date, _RejectedPayment, purchase_payment_scope
 from .receipt_parser import MAX_TEXT_BYTES, ReceiptError
 
 
@@ -25,6 +25,8 @@ class ImportedDocument:
     paid: bool
     receipt_number: str | None
     items: tuple[dict, ...] = field(default=(), compare=False)
+    card_last4: str | None = field(default=None, compare=False)
+    payment_method: str | None = field(default=None, compare=False)
 
 
 _REJECT = re.compile(r"wyciąg|zestawienie operacji|statement of account|historia rachunku|skierowanie|recepta|e-zwolnienie|wynik badania|newsletter|korekta|korygując|credit note", re.I)
@@ -328,5 +330,6 @@ def extract_document(text: str, *, merchant: str, allow_unnumbered_receipt: bool
     paid = bool(receipt_number or zero_due or dates["paid_date"] or _PAID.search(joined))
     amount = canonical_money(str(total[0]))
     items = settlement_items(lines, seller, number, amount) if pdf and kind == "invoice" and total[1] == "PLN" else ()
+    last4, payment_method = purchase_payment_scope(text.splitlines())
     return ImportedDocument(seller, nip, number, amount, total[1], dates["issue"], dates["due"],
-                            kind, paid, receipt_number, items)
+                            kind, paid, receipt_number, items, last4, payment_method)

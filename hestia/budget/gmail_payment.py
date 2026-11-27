@@ -14,7 +14,7 @@ from .gmail_address import canonical_domain
 from .gmail_invoice import _MONTHS, _SKIPPED_LINE, _line_pairs, _normalized_invoice_lines
 from .gmail_trust import PaymentProvider
 from .receipt_parser import (MAX_LINE_CHARS, MAX_TEXT_BYTES, ReceiptError, _normalize_receipt_text,
-                             canonical_money, redact_digit_field, redact_pan)
+                             canonical_money, fold_text, redact_digit_field, redact_pan)
 
 
 @dataclass(frozen=True)
@@ -249,6 +249,11 @@ _CARD_LAST4_PATTERNS = (
         r"([0-9]{4})(?![0-9-])",
         re.IGNORECASE,
     ),
+)
+_BLIK_PAYMENT = re.compile(
+    r"^(?:(?:(?:metoda|forma|sposob) platnosci|payment method|platnosc|transakcja|payment|"
+    r"paid (?:with|via|by|using)|zaplacono(?: przez| za pomoca)?|(?:nr|numer|identyfikator) transakcji)"
+    r"(?:\s*[:=-]\s*|\s+))?blik\b"
 )
 _CURRENCY_CODE = r"(?:PLN|EUR|USD|GBP)"
 _CURRENCY = rf"(?:{_CURRENCY_CODE}|zł|€|\$|£)"
@@ -503,14 +508,27 @@ def _blik_ref(subjects: tuple[str, ...], lines: list[str]) -> str | None:
     return match[1] if match else None
 
 
-def _card_last4(lines: list[str]) -> str | None:
-    found = {
+def _card_suffixes(lines) -> set[str]:
+    return {
         match[1]
         for line in lines
         for pattern in _CARD_LAST4_PATTERNS
         for match in pattern.finditer(line)
     }
+
+
+def _card_last4(lines: list[str]) -> str | None:
+    found = _card_suffixes(lines)
     return found.pop() if len(found) == 1 else None
+
+
+def purchase_payment_scope(lines: list[str]) -> tuple[str | None, str | None]:
+    """Use explicit payment labels and mark conflicting evidence as mixed."""
+    suffixes = _card_suffixes(lines)
+    blik = any(_BLIK_PAYMENT.match(fold_text(_BULLET.sub("", line.strip()))) for line in lines)
+    if len(suffixes) > 1 or (suffixes and blik):
+        return None, "mixed"
+    return next(iter(suffixes), None), "blik" if blik else None
 
 
 def _is_other_gateway_token(token: str) -> bool:
