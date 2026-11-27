@@ -63,7 +63,7 @@ class ParserEdgeTests(unittest.TestCase):
         self.assertEqual(redact_pan("gb29 nwbk 6016 1331 9268 19"), "[usunięto]")
         self.assertEqual(redact_pan("GB29 NWBK\n6016 1331 9268 19"), "[usunięto]\n[usunięto]")
         self.assertEqual(redact_pan("NL91 ABNA 0417 1643 00"), "[usunięto]")
-        self.assertEqual(redact_pan("NL91 ABNA 0417 1643 00EXTRA"), "NL91 ABNA 0417 1643 00EXTRA")
+        self.assertEqual(redact_pan("NL91 ABNA 0417 1643 00EXTRA"), "[usunięto]EXTRA")
         self.assertEqual(redact_pan("NL91 ABNA 0417 1643 00\n"), "[usunięto]\n")
         self.assertEqual(redact_pan("PL61!123"), "PL61!123")
         self.assertEqual(redact_pan("PL6110901014"), "PL6110901014")
@@ -84,6 +84,17 @@ class ParserEdgeTests(unittest.TestCase):
         with self.assertRaises(ReceiptError):
             receipt_parser._bounded_money("99999999.9999")
         self.assertEqual(receipt_parser._bounded_money("999999999.99"), "999999999.99")
+
+    def test_iban_matching_and_redaction_share_the_oman_country_length(self):
+        iban = "OM65001ABCDEFGHIJKLMNOP"
+        self.assertEqual(redact_pan(iban), "[usunięto]")
+        self.assertEqual(receipt_store._mask_iban_sequences(iban), " " * len(iban))
+
+        # Matching still excludes IBAN-shaped evidence even if the check digits are wrong.
+        # This exercises the registry length instead of the store's existing checksum fallback.
+        invalid = "OM00" + iban[4:]
+        self.assertEqual(redact_pan(invalid), invalid)
+        self.assertEqual(receipt_store._mask_iban_sequences(invalid), " " * len(invalid))
 
     def test_nip_scan_matches_the_bounded_span(self):
         scan = receipt_parser._nip_candidate

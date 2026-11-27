@@ -356,6 +356,7 @@ NR KARTY ****5555
         iban = "MT86MALT01100ABCDEFGHIJKLMNOPQR"
         # This synthetic account's 26-character prefix also has a valid checksum.
         wrapped = "MT77MALT01100TFOJOFWVWEUBOIPZVU"
+        polish = "PL61109010140000071219812874"
         following = "PARAGON FISKALNY\nSUMA PLN 5,00"
         invalid_checksum = f"MT00{iban[4:]}"
         for account_text, expected in (
@@ -363,7 +364,12 @@ NR KARTY ****5555
             (f"IBAN {iban}\n4111 1111\n1111 1111", "[usunięto]\n[usunięto]\n[usunięto]"),
             (f"IBAN {wrapped[:26]}\n{wrapped[26:]}", "[usunięto]\n[usunięto]"),
             (f"IBAN {invalid_checksum}", f"IBAN {invalid_checksum}"),
-            (f"IBAN {iban}EXTRA", f"IBAN {iban}EXTRA"),
+            (f"IBAN {invalid_checksum}EXTRA", f"IBAN {invalid_checksum}EXTRA"),
+            (f"IBAN {iban}EXTRA", "[usunięto]EXTRA"),
+            (f"IBAN {polish}123", "[usunięto]123"),
+            (f"IBAN PL00{polish[4:]}EXTRA", "[usunięto]"),
+            (f"IBAN {iban}{iban}", "[usunięto]"),
+            (f"IBAN {polish}4111111111111111", "[usunięto]"),
         ):
             with self.subTest(account_text=account_text):
                 redacted = redact_pan(f"{account_text}\n{following}")
@@ -380,6 +386,13 @@ NR KARTY ****5555
                 self.assertEqual(redact_pan(redacted), redacted)
         self.assertEqual(redact_pan(f"{iban} {iban} zł"), "[usunięto] zł")
         self.assertEqual(redact_pan(f"{iban} 4111 1111 1111 1111"), "[usunięto]")
+        # The long domestic BBAN must not be counted by the digit-run redactor.
+        polish = "PL61109010140000071219812874"
+        for separator in (" ", "\n"):
+            for suffix in (nip, "5,00 PLN"):
+                with self.subTest(separator=separator, suffix=suffix):
+                    self.assertEqual(redact_pan(f"{polish}{separator}{suffix}"),
+                                     f"[usunięto]{separator}{suffix}")
 
         receipt = f"SKLEP TESTOWY\n{iban} {nip}\nPARAGON FISKALNY\nSUMA PLN 5,00"
         redacted = "SKLEP TESTOWY\n[usunięto] NIP 5260250274\nPARAGON FISKALNY\nSUMA PLN 5,00"
@@ -552,7 +565,7 @@ NR KARTY ****5555
             "[usunięto]\nSKLEP TESTOWY\nPARAGON FISKALNY",
         )
         iban = "IBAN MT86MALT01100ABCDEFGHIJKLMNOPQR"
-        self.assertEqual(redact_pan(f"{iban}zł"), f"{iban}zł")
+        self.assertEqual(redact_pan(f"{iban}zł"), "[usunięto]zł")
         self.assertEqual(redact_pan(f"{iban}ł"), "[usunięto]")
         self.assertEqual(redact_pan(f"{iban} ł"), "[usunięto] ł")
         self.assertEqual(redact_pan(f"{iban}\nzł"), "[usunięto]\nzł")

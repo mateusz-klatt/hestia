@@ -373,6 +373,12 @@ class PaymentExtractionTests(unittest.TestCase):
         self.assertEqual(payment.merchant, _MERCHANT)
         self.assertTrue(payment.payee_from_config)
 
+    def test_description_falls_back_when_contact_cleanup_reassembles_an_iban(self):
+        body = "Tytuł: MT86 MALT01100 person@example.test ABCDEFGHIJKLMNOPQR zł\nTotal 3 PLN"
+        for subject, fallback in (("Example payment", "Example payment"), ("", "Płatność")):
+            with self.subTest(subject=subject):
+                self.assertEqual(_extract(body, subject).description, fallback)
+
     def test_date_labels(self):
         body = ("Date paid\n\nNov 14, 2026\nData 14 listopada 2026\nData: 15/11/2026\n"
                 "Paid:2026-11-16\nPaid 17 lis. 2026\nPaid 31/11/2026\nData unknown\nTotal 3 PLN")
