@@ -548,11 +548,14 @@ def _iban_char_matches(char, kind):
         return kind != "a"
     if "A" <= char <= "Z":
         return kind != "n"
-    return kind == "c" and "a" <= char <= "z"
+    return False
 
 
 def _iban_shape(token):
     """Polish PL plus 26 digits, or a country-structured IBAN with a valid mod-97 checksum."""
+    if not token.isascii():
+        return False
+    token = token.upper()
     spec = _IBAN_COUNTRY_SPECS.get(token[:2])
     if spec is None:
         return False
@@ -563,7 +566,7 @@ def _iban_shape(token):
         return False
     if token[:2] == "PL":
         return True
-    return _iban_checksum(token.upper())
+    return _iban_checksum(token)
 
 
 def _mark_digit_runs(text, bad):
@@ -597,13 +600,13 @@ def _mark_digit_runs(text, bad):
     flush()
 
 
-def _mark_ibans(text, bad):
-    """Mark lines that contribute a character to a bounded IBAN.
+def _mark_ibans(text, redactions):
+    """Mark IBAN lines and keep a space-delimited suffix on the final line.
 
     Separators, including line breaks, may sit between IBAN characters. A
     candidate is validated once it reaches the country's fixed SWIFT length and
-    ends at a non-alphanumeric or line boundary. Each start bounds token work
-    to the country's IBAN structure and length.
+    the next character cannot continue an ASCII alphanumeric token. Each start
+    bounds token work to the country's IBAN structure and length.
     """
     line_of = []
     line = 0
@@ -642,11 +645,9 @@ def _mark_ibans(text, bad):
                 if len(compact) == spec[0]:
                     token = "".join(compact)
                     if token[:2] == "PL" or _iban_checksum(token):
-                        look = cursor
-                        while look < length and text[look] in _JOIN_SEPARATORS:
-                            look += 1
-                        if look >= length or not text[look].isalnum() or "\n" in text[cursor:look]:
-                            matched_end = look
+                        # A glued ASCII alphanumeric may belong to a longer reference.
+                        if cursor == length or not (text[cursor].isascii() and text[cursor].isalnum()):
+                            matched_end = cursor
                     break
                 continue
             if current in _JOIN_SEPARATORS:
@@ -657,7 +658,10 @@ def _mark_ibans(text, bad):
             index += 1
             continue
         for pos in positions:
-            bad.add(line_of[pos])
+            redactions[line_of[pos]] = ""
+        if text[matched_end:matched_end + 1] == " ":
+            line_end = text.find("\n", matched_end)
+            redactions[line_of[positions[-1]]] = text[matched_end:line_end if line_end >= 0 else length].rstrip()
         index = matched_end
 
 
@@ -705,16 +709,20 @@ def _secret_lines(text):
                 bad.add(index - 1)
                 masked[index] = "x" + masked[index]
     _mark_digit_runs("\n".join(masked), bad)
-    _mark_ibans(text, bad)
-    return bad
+    ibans = {}
+    _mark_ibans(text, ibans)
+    return ibans | dict.fromkeys(bad, "")
 
 
 def _redact_normalized(text):
-    """Replace each tainted line entirely. Other lines stay, including their digits."""
-    bad = _secret_lines(text)
-    if not bad:
+    """Apply the redactions while keeping all other lines intact."""
+    redactions = _secret_lines(text)
+    if not redactions:
         return text
-    return "\n".join(_REMOVED if number in bad else line for number, line in enumerate(text.split("\n")))
+    return "\n".join(
+        _REMOVED + redactions[number] if number in redactions else line
+        for number, line in enumerate(text.split("\n"))
+    )
 
 
 def _contains_secret(value):

@@ -370,6 +370,24 @@ NR KARTY ****5555
                 self.assertEqual(redacted, f"{expected}\n{following}")
                 self.assertEqual(redact_pan(redacted), redacted)
 
+    def test_iban_redaction_keeps_separated_suffix_and_parseable_nip(self):
+        iban = "NL91 ABNA 0417 1643 00"
+        nip = "NIP 5260250274"
+        for suffix in ("zł", nip):
+            with self.subTest(suffix=suffix):
+                redacted = redact_pan(f"{iban} {suffix}")
+                self.assertEqual(redacted, f"[usunięto] {suffix}")
+                self.assertEqual(redact_pan(redacted), redacted)
+        self.assertEqual(redact_pan(f"{iban} {iban} zł"), "[usunięto] zł")
+        self.assertEqual(redact_pan(f"{iban} 4111 1111 1111 1111"), "[usunięto]")
+
+        receipt = f"SKLEP TESTOWY\n{iban} {nip}\nPARAGON FISKALNY\nSUMA PLN 5,00"
+        redacted = "SKLEP TESTOWY\n[usunięto] NIP 5260250274\nPARAGON FISKALNY\nSUMA PLN 5,00"
+        self.assertEqual(redact_pan(receipt), redacted)
+        parsed = parse_receipt(receipt)
+        self.assertEqual(parsed["raw_nip"], "5260250274")
+        self.assertEqual(parse_receipt(redacted), parsed)
+
     def test_receipt_draft_does_not_use_first_line_iban_as_shop_name(self):
         iban = "MT86MALT01100ABCDEFGHIJKLMNOPQR"
         text = (f"IBAN {iban}\nPARAGON FISKALNY\n2026-11-20 12:34\n"
@@ -410,7 +428,7 @@ NR KARTY ****5555
                 self.assertEqual(redact_pan(valid), "[usunięto]")
                 self.assertFalse(receipt_parser._iban_shape(valid[:-1]))
                 self.assertFalse(receipt_parser._iban_shape(valid + "0"))
-                self.assertFalse(receipt_parser._iban_shape(valid.lower()))
+                self.assertTrue(receipt_parser._iban_shape(valid.lower()))
             wrong_char = "A" if mask[-1] == "n" else "0" if mask[-1] == "a" else "!"
             mutated = with_check_digits(country, sample_bban[:-1] + wrong_char) if wrong_char != "!" else valid[:-1] + "!"
             self.assertFalse(receipt_parser._iban_shape(mutated), country)
@@ -419,9 +437,10 @@ NR KARTY ****5555
         self.assertTrue(receipt_parser._iban_shape("PL" + "0" * 26))
         self.assertFalse(receipt_parser._iban_shape(with_check_digits("PL", "0" * 16)))
         self.assertFalse(receipt_parser._iban_shape(with_check_digits("PL", "A" * 24)))
-        # Alphanumeric !c permits lowercase in _iban_shape while !a requires uppercase and rejects punctuation.
+        # Both !a and !c accept ASCII letters in either case after normalization.
         self.assertTrue(receipt_parser._iban_shape(with_check_digits("MT", "MALT01100abcdefghijklmnopqr")))
-        self.assertFalse(receipt_parser._iban_shape(with_check_digits("MT", "malt01100ABCDEFGHIJKLMNOPQR")))
+        self.assertTrue(receipt_parser._iban_shape(with_check_digits("MT", "malt01100ABCDEFGHIJKLMNOPQR")))
+        self.assertFalse(receipt_parser._iban_shape("MT86MALT01100ABCDEFGHıJKLMNOPQR"))
         self.assertFalse(receipt_parser._iban_shape(with_check_digits("MT", "MALT01100ABCDEFGHIJKLMNOPQ") + "!"))
         for bad in ("", "A", "PL", "NR0017NIP0000001494", "MT77MALT01100TFOJOFWVWEUBO", "PL6110901014000007121981287Ł"):
             self.assertFalse(receipt_parser._iban_shape(bad), bad)
@@ -480,6 +499,7 @@ NR KARTY ****5555
             ("IBAN FR14 2004 1010 0505 0001 3M02 606", "[usunięto]"),
             ("IBAN NO93 8601 1117 947", "[usunięto]"),
             ("IBAN MT86 MALT 01100 ABCDEFGH\nIJKLMNOPQR", "[usunięto]\n[usunięto]"),
+            ("IBAN MT86 MALT 01100 ABCDEFGH\nIJKLMNOPQR zł", "[usunięto]\n[usunięto] zł"),
             ("IBAN MT77MALT01100TFOJOFWVWEUBO\nIPZVU", "[usunięto]\n[usunięto]"),
             ("IBAN DE89-3704\n0044\t0532\n0130 00", "[usunięto]\n[usunięto]\n[usunięto]"),
             ("IBAN PL61 1090 1014\n0000 0712 1981 2874", "[usunięto]\n[usunięto]"),
@@ -531,13 +551,11 @@ NR KARTY ****5555
             redact_pan("IBAN MT86MALT01100ABCDEFGHIJKLMNOPQR\nSKLEP TESTOWY\nPARAGON FISKALNY"),
             "[usunięto]\nSKLEP TESTOWY\nPARAGON FISKALNY",
         )
-        for glued_mt in (
-            "IBAN MT86MALT01100ABCDEFGHIJKLMNOPQRzł",
-            "IBAN MT86MALT01100ABCDEFGHIJKLMNOPQRł",
-            "IBAN MT86MALT01100ABCDEFGHIJKLMNOPQR ł",
-        ):
-            self.assertEqual(redact_pan(glued_mt), glued_mt)
-        self.assertEqual(redact_pan("IBAN MT86MALT01100ABCDEFGHIJKLMNOPQR\nzł"), "[usunięto]\nzł")
+        iban = "IBAN MT86MALT01100ABCDEFGHIJKLMNOPQR"
+        self.assertEqual(redact_pan(f"{iban}zł"), f"{iban}zł")
+        self.assertEqual(redact_pan(f"{iban}ł"), "[usunięto]")
+        self.assertEqual(redact_pan(f"{iban} ł"), "[usunięto] ł")
+        self.assertEqual(redact_pan(f"{iban}\nzł"), "[usunięto]\nzł")
 
         # Bounded token work on repetitive country-code-shaped 32 KiB noise.
         noise = ("SK00 " * 100 + "\n") * 60
