@@ -129,6 +129,7 @@ from .budget.loan_references import MAX_MATCH_REFERENCES
 # 0.61.0: additive OCR issuer display name on receipt list, search and detail.
 # 0.62.0: additive crib_humidity (display-only %RH) and crib_battery_ok (opt-in 433 low-battery flag) on
 #         Globals and GlobalsPatch, negotiated via X-Hestia-Contract-Version (and contract_version query on SSE).
+# 0.63.0: owner dismissal of offline import quarantine items and batches, with import_key and unresolved_count.
 # 0.64.0: opt-in mortgage payment references and forecast matching audit (migration 0036).
 # 0.65.0: optional multi-status filter on receipt lists (zero migration).
 # 0.68.0: late invoice-ID matches and unambiguous card round-up matches on receipts.
@@ -2833,6 +2834,26 @@ class BudgetAnalyticsQuarantineAccount(BaseModel):
     total_count: int
 
 
+class BudgetAnalyticsQuarantineBatchRequest(BaseModel):
+    model_config = _STRICT
+    batch_id: Annotated[str, Field(min_length=1, max_length=128)]
+
+
+class BudgetAnalyticsQuarantineImportKey(BudgetAnalyticsQuarantineBatchRequest):
+    ordinal: Annotated[int, Field(ge=0, le=2**53 - 1)]
+
+
+class BudgetAnalyticsQuarantineDismissal(BaseModel):
+    model_config = _READ
+    dismissed_count: Annotated[int, Field(ge=0)]
+
+
+class BudgetAnalyticsQuarantineDismissResult(BaseModel):
+    model_config = _READ
+    ok: Literal[True]
+    dismissal: BudgetAnalyticsQuarantineDismissal
+
+
 class BudgetAnalyticsQuarantineItem(BaseModel):
     """Safe non-prose quarantine entry (ref, date, status and exclusion reason only; no descriptions or amounts)."""
     model_config = _READ
@@ -2845,6 +2866,16 @@ class BudgetAnalyticsQuarantineItem(BaseModel):
     reason: BudgetAnalyticsQuarantineReason
     source: str
     observed_at: float
+    import_key: Annotated[BudgetAnalyticsQuarantineImportKey | None, Field(
+        description="Local dismissal key on import_unresolved items only, starting at 0.63.0.",
+        json_schema_extra=_OMIT,
+    )] = None
+    unresolved_count: Annotated[int | None, Field(
+        ge=1,
+        description="Current total of unresolved items in the import batch, including items outside the list cap. "
+                    "Emitted on import_unresolved items only, starting at 0.63.0.",
+        json_schema_extra=_OMIT,
+    )] = None
 
 
 class BudgetAnalyticsQuarantine(BaseModel):
@@ -4041,6 +4072,8 @@ _ANALYTICS_MODELS = (BudgetAnalyticsCategoryCreateRequest, BudgetAnalyticsCatego
                      BudgetAnalyticsMortgages, BudgetAnalyticsMortgageScheduleResult, BudgetAnalyticsMortgageReferenceCandidates,
                      BudgetAnalyticsMortgagePaymentResult, BudgetAnalyticsInbox,
                      BudgetAnalyticsInboxMarkResult, BudgetAnalyticsQuarantine, BudgetAnalyticsForecast,
+                     BudgetAnalyticsQuarantineBatchRequest, BudgetAnalyticsQuarantineImportKey,
+                     BudgetAnalyticsQuarantineDismissResult,
                      BudgetAnalyticsMonthlyBudget, BudgetAnalyticsMonthlyBudgetDailyPoint,
                      BudgetAnalyticsMonthlyBudgetSeriesCategory, BudgetAnalyticsMonthlyBudgetSeriesMonth,
                      BudgetAnalyticsMonthlyBudgetCategoryLabel, BudgetAnalyticsMonthlyBudgetSeries,
@@ -4112,6 +4145,8 @@ _PATH_ROLES = {
     ("POST", "/api/budget/analytics/mortgage-save"): "admin",
     ("POST", "/api/budget/analytics/mortgage-payment-set"): "admin",
     ("POST", "/api/budget/analytics/inbox-mark"): "admin",
+    ("POST", "/api/budget/analytics/quarantine-dismiss"): "admin",
+    ("POST", "/api/budget/analytics/quarantine-dismiss-batch"): "admin",
     ("POST", "/api/budget/receipts/parse-text"): "admin",
     ("POST", "/api/budget/receipts/confirm"): "admin",
     ("POST", "/api/budget/receipts/list"): "admin",
@@ -5394,6 +5429,11 @@ def _analytics_paths():
                        "Earlier versions or an omitted header omit the receipt key entirely.",
         "schema": {"type": "string", "pattern": r"^0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$"},
     }
+    quarantine_contract_version = {
+        **tx_contract_version,
+        "description": "Negotiate import_key and the batch's unresolved_count on offline import quarantine items "
+                       "starting at 0.63.0. Earlier versions or an omitted header omit these fields.",
+    }
     mortgage_contract_version = {
         "name": "X-Hestia-Contract-Version", "in": "header", "required": False,
         "description": "Opt in to mortgage match references and forecast matching audit fields from 0.64.0.",
@@ -5422,7 +5462,7 @@ def _analytics_paths():
             "schema": {"type": "string", "pattern": r"^0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$"},
         }]),
         ("quarantine", "getBudgetAnalyticsQuarantine", "BudgetAnalyticsQuarantine",
-         [_budget_query("account_id", description="Optional owned local account ID filter.")]),
+         [_budget_query("account_id", description="Optional owned local account ID filter."), quarantine_contract_version]),
         ("forecast", "getBudgetAnalyticsForecast", "BudgetAnalyticsForecast", [horizon, currency, mortgage_contract_version]),
         ("monthly-budget", "getBudgetAnalyticsMonthlyBudget", "BudgetAnalyticsMonthlyBudget",
          [month_optional, month_currency]),
@@ -5601,6 +5641,25 @@ def _analytics_paths():
         "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref("BudgetAnalyticsTransactionsByKeysRequest")}}},
         "responses": _analytics_responses("BudgetAnalyticsTransactions"),
     }}
+    for path, operation, request, target in (
+        ("quarantine-dismiss", "dismissBudgetAnalyticsQuarantineItem", "BudgetAnalyticsQuarantineImportKey",
+         "one unresolved offline import item"),
+        ("quarantine-dismiss-batch", "dismissBudgetAnalyticsQuarantineBatch", "BudgetAnalyticsQuarantineBatchRequest",
+         "all unresolved offline import items from one batch"),
+    ):
+        paths[prefix + path] = {"post": {
+            "operationId": operation,
+            "summary": "Dismiss " + target,
+            "description": "Requires the exact owner, budget edit permission, browser cookie and configured HTTPS Origin. "
+                           "Records an audit event when rows are removed. A repeat on the same owned batch returns a "
+                           "dismissed_count of zero. The original import report remains available to the operator.",
+            "parameters": [{
+                **quarantine_contract_version, "required": True,
+                "description": "Requires contract 0.63.0 or later. Earlier versions and an omitted header receive 404.",
+            }],
+            "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref(request)}}},
+            "responses": _analytics_responses("BudgetAnalyticsQuarantineDismissResult"),
+        }}
     return paths
 
 

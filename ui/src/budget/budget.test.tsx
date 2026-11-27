@@ -98,6 +98,8 @@ function fakeApi(accounts: BudgetAccount[] = [account({ display })]) {
     saveRule: vi.fn<BudgetApi["saveRule"]>(),
     recurring: vi.fn<BudgetApi["recurring"]>(() => ok(recurringOf([]))),
     quarantine: vi.fn<BudgetApi["quarantine"]>(() => ok(quarantineOf([]))),
+    dismissQuarantineItem: vi.fn<BudgetApi["dismissQuarantineItem"]>(),
+    dismissQuarantineBatch: vi.fn<BudgetApi["dismissQuarantineBatch"]>(),
     spendingLimits: vi.fn<BudgetApi["spendingLimits"]>((period) => ok(spendingLimitsOf(period))),
     saveSpendingLimit: vi.fn<BudgetApi["saveSpendingLimit"]>(),
     mortgages: vi.fn<BudgetApi["mortgages"]>(() => ok(mortgagesOf())),

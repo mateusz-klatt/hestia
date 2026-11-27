@@ -121,8 +121,9 @@ class ReceiptStatusHTTPTests(IsolatedAsyncioTestCase):
         self.assertEqual(unknown.status, 400)
         unknown_body = await unknown.json()
         self.assertEqual(unknown_body["error"], "budget_receipt_invalid_request")
+        old_versions = ("0.62.0", "0.63.0", "0.64.0", "0.64.99")
         for headers, filters in (
-            (legacy, {"statuses": _STATUSES}),
+            *((browser | {_HEADER: version}, {"statuses": _STATUSES}) for version in old_versions),
             (browser, {"statuses": _STATUSES}),
             (current, {"status": "draft", "statuses": _STATUSES}),
             (current, {"status": None, "statuses": _STATUSES}),
