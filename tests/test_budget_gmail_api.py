@@ -9,7 +9,6 @@ from email.message import EmailMessage
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import threading
-import time
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, mock
 
@@ -463,34 +462,38 @@ class GmailHTTPTests(IsolatedAsyncioTestCase):
         os.environ[gmail_api.FLAG] = "1"
         granted = await self.call("gmail-grant", json={"action": "enable", "expected_version": 1})
         self.assertEqual(granted.status, 200, await granted.text())
+        runtime = gmail_api._Runtime()
+        # Drain the grant's initial sync and clear the manual cooldown using the fake clock.
+        await asyncio.to_thread(runtime.poll, lambda: True, lambda: _SESSION)
+        self.clock.now += 60
+        before = await (await self.call("gmail-status")).json()
+        self.assertGreater(before["next_sync_at"], self.clock.now)
+
         message_id = "mail-scheduled"
         message = _scheduled_invoice()
+        self.transport.profile["historyId"] = "101"
+        self.transport.routes[("/history", None)] = response_json({
+            "history": [{"id": "101", "messagesAdded": [{"message": {"id": message_id}}]}],
+        })
         self.transport.routes[("/messages", None)] = response_json(page_ids(message_id))
         self.transport.routes[("/messages/" + message_id, None)] = _provider_message(message_id, message)
-        parsed = []
+        self.worker.parse.side_effect = lambda _kind, payload: payload.decode("utf-8")
+        calls = self.transport.calls[:]
+        await asyncio.to_thread(runtime.poll, lambda: True, lambda: _SESSION)
+        self.assertEqual(self.transport.calls, calls)
 
-        def slow_parse(_kind, payload):
-            parsed.append(payload)
-            time.sleep(1.2)
-            return payload.decode("utf-8")
-
-        self.worker.parse.side_effect = slow_parse
-        profiles = len(self.transport.requests("/profile"))
-        started = time.perf_counter()
         scheduled = await self.call("gmail-sync", json={})
-        elapsed = time.perf_counter() - started
         self.assertEqual(scheduled.status, 202, await scheduled.text())
-        self.assertLess(elapsed, 1.0)
-        self.assertEqual(parsed, [])
-        self.assertEqual(len(self.transport.requests("/profile")), profiles)
+        self.worker.parse.assert_not_called()
+        self.assertEqual(self.transport.calls, calls)
         body = api_contract.BudgetReceiptGmailSyncResult.model_validate(await scheduled.json())
         self.assertEqual((body.ok, body.sync_phase), (True, "idle"))
         progress = await (await self.call("gmail-status")).json()
         self.assertEqual((progress["sync_phase"], progress["batch_processed_count"], progress["next_sync_at"]),
                          ("idle", 0, self.clock.now))
 
-        gmail_api._Runtime().poll(lambda: True, lambda: _SESSION)
-        self.assertEqual(len(parsed), 1)
+        await asyncio.to_thread(runtime.poll, lambda: True, lambda: _SESSION)
+        self.worker.parse.assert_called_once()
         self.assertEqual((await self.call("gmail-sync", json={})).status, 429)
         with self.sessions() as session:
             receipt, = list(session.scalars(select(db.BudgetReceipt)))
