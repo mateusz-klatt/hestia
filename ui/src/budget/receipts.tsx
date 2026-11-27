@@ -62,10 +62,12 @@ import {
   preselectedCandidate,
   receiptAccountLabel,
   receiptHasRedactedLines,
+  receiptMatchesFilter,
   receiptMerchantGroupKey,
   receiptNeedsConfirmation,
   receiptTotalAdjustment,
   reconcileIncomingReceiptRows,
+  reconcileIncomingRowRefresh,
   reconcileLinkChoice,
   removeReceiptRowInPlace,
   resolveDraftFromDetailSession,
@@ -433,6 +435,7 @@ export function ReceiptsView({
   const navAnchorRef = useRef<ReceiptNavAnchor | null>(null);
   const deletedIdsRef = useRef<Set<string>>(new Set());
   const localEditsRef = useRef<Map<string, ReceiptSummary | ReceiptDetail>>(new Map());
+  const removedAnchorsRef = useRef<Map<string, ReceiptNavAnchor>>(new Map());
   const autoAdvanceVisitedRef = useRef<Map<string, AutoAdvancePassReceiptState>>(new Map());
 
   useLayoutEffect(() => {
@@ -451,6 +454,7 @@ export function ReceiptsView({
       revisionRef.current = revision;
       deletedIdsRef.current.clear();
       localEditsRef.current.clear();
+      removedAnchorsRef.current.clear();
     }
   }, [revision]);
 
@@ -512,6 +516,7 @@ export function ReceiptsView({
     receiptLinkMemoryRef.current.clear();
     deletedIdsRef.current.clear();
     localEditsRef.current.clear();
+    removedAnchorsRef.current.clear();
     staleCursorReloadedRef.current = false;
     resetDrawer();
     setGroupControllerTarget(null);
@@ -550,6 +555,99 @@ export function ReceiptsView({
     }
     return false;
   }, [onAccessLoss, clearAllReceiptsState, revision]);
+
+  const recordLocalEdit = useCallback((row: ReceiptSummary | ReceiptDetail) => {
+    deletedIdsRef.current.delete(row.receipt_id);
+    const existing = localEditsRef.current.get(row.receipt_id);
+    if (existing === undefined || row.version >= existing.version) {
+      localEditsRef.current.set(row.receipt_id, row);
+    }
+  }, []);
+
+  const removeRowInPlace = useCallback((receiptId: string, tombstone = true) => {
+    if (tombstone) {
+      deletedIdsRef.current.add(receiptId);
+      localEditsRef.current.delete(receiptId);
+      removedAnchorsRef.current.delete(receiptId);
+    }
+    setSelectedForBulk((current) => {
+      if (!current.has(receiptId)) return current;
+      const next = new Set(current);
+      next.delete(receiptId);
+      return next;
+    });
+    updateListState((current) => (current.kind === "ready"
+      ? { ...current, rows: removeReceiptRowInPlace(current.rows, receiptId) }
+      : current));
+  }, [updateListState]);
+
+  const upsertRowsInPlace = useCallback((updates: readonly (ReceiptSummary | ReceiptDetail)[], recordLocal = true) => {
+    if (updates.length === 0) return;
+    const effectiveUpdates: (ReceiptSummary | ReceiptDetail)[] = [];
+    for (const row of updates) {
+      const existingLocal = localEditsRef.current.get(row.receipt_id);
+      if (existingLocal !== undefined && existingLocal.version > row.version) continue;
+      effectiveUpdates.push(row);
+      if (recordLocal) recordLocalEdit(row);
+    }
+    if (effectiveUpdates.length === 0) return;
+    updateListState((current) => {
+      if (current.kind !== "ready") return current;
+      const filterNow = filterRef.current;
+      for (const row of effectiveUpdates) {
+        if (
+          !receiptMatchesFilter(row, filterNow)
+          && !removedAnchorsRef.current.has(row.receipt_id)
+          && current.rows.some((existing) => existing.receipt_id === row.receipt_id)
+        ) {
+          const rowAnchor = createReceiptNavAnchor(current.rows, row.receipt_id);
+          if (rowAnchor !== null) removedAnchorsRef.current.set(row.receipt_id, rowAnchor);
+        }
+      }
+      const nextRows = applyInPlaceReceiptUpdates(
+        current.rows,
+        effectiveUpdates,
+        filterNow,
+        removedAnchorsRef.current,
+      );
+      const nextIds = new Set(nextRows.map((row) => row.receipt_id));
+      for (const row of effectiveUpdates) {
+        if (nextIds.has(row.receipt_id)) {
+          removedAnchorsRef.current.delete(row.receipt_id);
+        }
+      }
+      return { ...current, rows: nextRows };
+    });
+  }, [recordLocalEdit, updateListState]);
+
+  const refreshRowsInPlace = useCallback((receiptIds: readonly string[]) => {
+    const cur = listStateRef.current;
+    if (cur.kind !== "ready") return;
+    const presentIds = new Set(cur.rows.map((row) => row.receipt_id));
+    const targets = [...new Set(receiptIds)].filter((id) => (
+      !deletedIdsRef.current.has(id)
+      && (presentIds.has(id) || removedAnchorsRef.current.has(id))
+    ));
+    if (targets.length === 0) return;
+    const token = listGeneration.current;
+    for (const id of targets) {
+      void receiptsApi.receiptDetail(id).then((res) => {
+        if (checkBarrier(res) || !mounted.current || token !== listGeneration.current) return;
+        if (!res.ok) {
+          if (res.status === 404) removeRowInPlace(id, true);
+          return;
+        }
+        const currentRows = listStateRef.current.kind === "ready" ? listStateRef.current.rows : [];
+        const accepted = reconcileIncomingRowRefresh(
+          [res.data.receipt],
+          { deletedIds: deletedIdsRef.current, updatedById: localEditsRef.current },
+          currentRows,
+        );
+        if (accepted.length === 0) return;
+        upsertRowsInPlace(accepted, true);
+      });
+    }
+  }, [receiptsApi, checkBarrier, removeRowInPlace, upsertRowsInPlace]);
 
   useEffect(() => {
     mounted.current = true;
@@ -753,59 +851,6 @@ export function ReceiptsView({
     });
   }, [store, reloadList, resetDrawer]);
 
-  const recordLocalEdit = useCallback((row: ReceiptSummary | ReceiptDetail) => {
-    deletedIdsRef.current.delete(row.receipt_id);
-    const existing = localEditsRef.current.get(row.receipt_id);
-    if (existing === undefined || row.version >= existing.version) {
-      localEditsRef.current.set(row.receipt_id, row);
-    }
-  }, []);
-
-  const removeRowInPlace = useCallback((receiptId: string, tombstone = true) => {
-    if (tombstone) {
-      deletedIdsRef.current.add(receiptId);
-      localEditsRef.current.delete(receiptId);
-    }
-    setSelectedForBulk((current) => {
-      if (!current.has(receiptId)) return current;
-      const next = new Set(current);
-      next.delete(receiptId);
-      return next;
-    });
-    updateListState((current) => (current.kind === "ready"
-      ? { ...current, rows: removeReceiptRowInPlace(current.rows, receiptId) }
-      : current));
-  }, [updateListState]);
-
-  const upsertRowsInPlace = useCallback((updates: readonly (ReceiptSummary | ReceiptDetail)[], recordLocal = true) => {
-    if (updates.length === 0) return;
-    if (recordLocal) {
-      for (const row of updates) recordLocalEdit(row);
-    }
-    updateListState((current) => (current.kind === "ready"
-      ? { ...current, rows: applyInPlaceReceiptUpdates(current.rows, updates, filterRef.current) }
-      : current));
-  }, [recordLocalEdit, updateListState]);
-
-  const refreshRowsInPlace = useCallback((receiptIds: readonly string[]) => {
-    const cur = listStateRef.current;
-    if (cur.kind !== "ready") return;
-    const presentIds = new Set(cur.rows.map((row) => row.receipt_id));
-    const targets = [...new Set(receiptIds)].filter((id) => presentIds.has(id));
-    if (targets.length === 0) return;
-    const token = listGeneration.current;
-    for (const id of targets) {
-      void receiptsApi.receiptDetail(id).then((res) => {
-        if (checkBarrier(res) || !mounted.current || token !== listGeneration.current) return;
-        if (!res.ok) {
-          if (res.status === 404) removeRowInPlace(id, true);
-          return;
-        }
-        upsertRowsInPlace([res.data.receipt], true);
-      });
-    }
-  }, [receiptsApi, checkBarrier, removeRowInPlace, upsertRowsInPlace]);
-
   useEffect(() => {
     if (disabledAtRevision === revision) {
       updateListState(() => ({ kind: "disabled" }));
@@ -815,6 +860,7 @@ export function ReceiptsView({
     loadMorePromiseRef.current = null;
     navGenerationRef.current += 1;
     autoAdvanceVisitedRef.current.clear();
+    removedAnchorsRef.current.clear();
     updateListState(() => ({ kind: "loading" }));
     const request = searchMode
       ? receiptsApi.receiptsSearch({ query: filter.query.trim(), limit: 50 })
@@ -965,9 +1011,14 @@ export function ReceiptsView({
       const groupCandidates = result.data.group_candidates ?? [];
       loadedReceiptIdRef.current = receipt.receipt_id;
       latestReadyCandidatesRef.current = { receiptId: receipt.receipt_id, candidates };
-      const existingLocal = localEditsRef.current.get(receipt.receipt_id);
-      if (existingLocal === undefined || receipt.version >= existingLocal.version) {
-        upsertRowsInPlace([receipt], false);
+      const currentRows = listStateRef.current.kind === "ready" ? listStateRef.current.rows : [];
+      const acceptedForList = reconcileIncomingRowRefresh(
+        [receipt],
+        { deletedIds: deletedIdsRef.current, updatedById: localEditsRef.current },
+        currentRows,
+      );
+      if (acceptedForList.length > 0) {
+        upsertRowsInPlace(acceptedForList, false);
       }
       setDetailState({
         kind: "ready",
@@ -1107,9 +1158,22 @@ export function ReceiptsView({
     }
 
     recordLocalEdit(updated);
-    const nextList = updateListState((current) => (current.kind === "ready"
-      ? { ...current, rows: applyInPlaceReceiptUpdate(current.rows, updated, filterRef.current) }
-      : current));
+    const nextList = updateListState((current) => {
+      if (current.kind !== "ready") return current;
+      const filterNow = filterRef.current;
+      const wasPresent = current.rows.some((row) => row.receipt_id === updated.receipt_id);
+      const matchesNow = receiptMatchesFilter(updated, filterNow);
+      if (wasPresent && !matchesNow && !removedAnchorsRef.current.has(updated.receipt_id)) {
+        const rowAnchor = createReceiptNavAnchor(current.rows, updated.receipt_id);
+        if (rowAnchor !== null) removedAnchorsRef.current.set(updated.receipt_id, rowAnchor);
+      }
+      const reinsertAnchor = removedAnchorsRef.current.get(updated.receipt_id) ?? preAnchor;
+      const nextRows = applyInPlaceReceiptUpdate(current.rows, updated, filterNow, reinsertAnchor);
+      if (matchesNow && nextRows.some((row) => row.receipt_id === updated.receipt_id)) {
+        removedAnchorsRef.current.delete(updated.receipt_id);
+      }
+      return { ...current, rows: nextRows };
+    });
 
     const serverChanged = updated.status !== previous.status || updated.version !== previous.version;
     if (!autoAdvanceRef.current || nextList.kind !== "ready") {

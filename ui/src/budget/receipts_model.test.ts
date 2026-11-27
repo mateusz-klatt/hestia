@@ -60,6 +60,7 @@ import {
   receiptSummaryFromDetail,
   receiptTotalAdjustment,
   reconcileIncomingReceiptRows,
+  reconcileIncomingRowRefresh,
   reconcileLinkChoice,
   removeReceiptRowInPlace,
   resolveDraftFromDetailSession,
@@ -1557,5 +1558,97 @@ describe("receipts_model", () => {
     const visited = new Map([["r4", { status: "needs_review" as const, version: 1 }]]);
     expect(isReceiptUnchangedInAutoAdvancePass(r4, visited)).toBe(true);
     expect(isReceiptUnchangedInAutoAdvancePass({ ...r4, version: 2 }, visited)).toBe(false);
+
+    // Re-inserting a previously filtered-out row restores its anchored position when a later edit re-matches.
+    const searchLidl = { ...EMPTY_RECEIPT_FILTER, query: "Lidl" };
+    const s1 = summary({ receipt_id: "s1", raw_shop_name: "Lidl One", version: 1 });
+    const s2 = summary({ receipt_id: "s2", raw_shop_name: "Lidl Two", version: 1 });
+    const s3 = summary({ receipt_id: "s3", raw_shop_name: "Lidl Three", version: 1 });
+    const s2Anchor = createReceiptNavAnchor([s1, s2, s3], "s2");
+    const afterMismatch = applyInPlaceReceiptUpdate(
+      [s1, s2, s3],
+      detailOf({ receipt_id: "s2", raw_shop_name: "Biedronka", version: 2 }),
+      searchLidl,
+      s2Anchor,
+    );
+    expect(afterMismatch.map((r) => r.receipt_id)).toEqual(["s1", "s3"]);
+    const afterRestore = applyInPlaceReceiptUpdate(
+      afterMismatch,
+      detailOf({ receipt_id: "s2", raw_shop_name: "Lidl Two Restored", version: 3 }),
+      searchLidl,
+      s2Anchor,
+    );
+    expect(afterRestore.map((r) => [r.receipt_id, r.raw_shop_name])).toEqual([
+      ["s1", "Lidl One"],
+      ["s2", "Lidl Two Restored"],
+      ["s3", "Lidl Three"],
+    ]);
+    // Without an anchor, an absent row is not inserted; with an anchor, sole-row & head-row & line-match restore cleanly.
+    expect(applyInPlaceReceiptUpdate(
+      afterMismatch,
+      detailOf({ receipt_id: "s2", raw_shop_name: "Lidl Two", version: 3 }),
+      searchLidl,
+      null,
+    ).map((r) => r.receipt_id)).toEqual(["s1", "s3"]);
+    const soleAnchor = createReceiptNavAnchor([s2], "s2");
+    const baseLine = detailOf().lines[0];
+    if (baseLine === undefined) throw new Error("expected synthetic line");
+    expect(applyInPlaceReceiptUpdate(
+      [],
+      detailOf({ receipt_id: "s2", raw_shop_name: "Other", lines: [{ ...baseLine, raw_name: "Lidl Milk", raw_name_key: "lidl milk" }], version: 3 }),
+      searchLidl,
+      soleAnchor,
+    ).map((r) => r.receipt_id)).toEqual(["s2"]);
+    const headAnchor = createReceiptNavAnchor([s1, s2], "s1");
+    expect(applyInPlaceReceiptUpdate(
+      [s2],
+      detailOf({ receipt_id: "s1", raw_shop_name: "Lidl Head", version: 2 }),
+      searchLidl,
+      headAnchor,
+    ).map((r) => r.receipt_id)).toEqual(["s1", "s2"]);
+    // Summary without lines cannot falsely re-insert under a search query unless shop/NIP matches,
+    // while summary updates under non-search filters (e.g. linked) re-insert cleanly via anchorsById.
+    const anchorMap = new Map(s2Anchor === null ? [] : [["s2", s2Anchor]]);
+    expect(applyInPlaceReceiptUpdates(
+      [s1, s3],
+      [summary({ receipt_id: "s2", raw_shop_name: "Biedronka", version: 3 })],
+      searchLidl,
+      anchorMap,
+    ).map((r) => r.receipt_id)).toEqual(["s1", "s3"]);
+    expect(applyInPlaceReceiptUpdates(
+      [s1, s3],
+      [summary({ receipt_id: "s2", linked: true, version: 3 })],
+      { ...EMPTY_RECEIPT_FILTER, linked: "linked" },
+      anchorMap,
+    ).map((r) => r.receipt_id)).toEqual(["s1", "s2", "s3"]);
+
+    // Incoming row refresh reconciliation drops tombstoned ids and older/same versions vs local edits or current rows.
+    const refreshLocal = {
+      deletedIds: new Set(["del-1"]),
+      updatedById: new Map<string, ReceiptSummary | ReceiptDetail>([
+        ["ed-1", summary({ receipt_id: "ed-1", raw_shop_name: "Saved Local v3", version: 3 })],
+      ]),
+    };
+    const currentListRows = [
+      summary({ receipt_id: "ed-1", raw_shop_name: "Saved Local v3", version: 3 }),
+      summary({ receipt_id: "cur-2", raw_shop_name: "Current v4", version: 4 }),
+      summary({ receipt_id: "ok-1", raw_shop_name: "Old v1", version: 1 }),
+    ];
+    const acceptedRefresh = reconcileIncomingRowRefresh(
+      [
+        summary({ receipt_id: "del-1", version: 2 }),
+        summary({ receipt_id: "ed-1", raw_shop_name: "Stale Group Refresh v2", version: 2 }),
+        summary({ receipt_id: "ed-1", raw_shop_name: "Same Version v3", version: 3 }),
+        summary({ receipt_id: "cur-2", raw_shop_name: "Stale List Row v3", version: 3 }),
+        summary({ receipt_id: "ok-1", raw_shop_name: "Fresh Ungrouped v2", version: 2 }),
+        summary({ receipt_id: "ed-1", raw_shop_name: "Newer Server v4", version: 4 }),
+      ],
+      refreshLocal,
+      currentListRows,
+    );
+    expect(acceptedRefresh.map((r) => [r.receipt_id, r.raw_shop_name, r.version])).toEqual([
+      ["ok-1", "Fresh Ungrouped v2", 2],
+      ["ed-1", "Newer Server v4", 4],
+    ]);
   });
 });

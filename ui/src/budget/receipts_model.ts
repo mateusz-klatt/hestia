@@ -1902,6 +1902,7 @@ export function receiptSummaryFromDetail(detail: ReceiptDetail): ReceiptSummary 
 export function receiptMatchesFilter(
   receipt: ReceiptSummary | ReceiptDetail,
   filter: ReceiptFilter,
+  options?: { requireSearchMatch?: boolean },
 ): boolean {
   if (filter.status !== "" && receipt.status !== filter.status) return false;
   if (filter.documentKind !== "" && receipt.document_kind !== filter.documentKind) return false;
@@ -1923,9 +1924,44 @@ export function receiptMatchesFilter(
         || foldReceiptSearchText(line.raw_name_key).includes(needle)
       ));
     }
-    return true;
+    return options?.requireSearchMatch !== true;
   }
   return true;
+}
+
+function insertReceiptRowAtAnchor(
+  rows: readonly ReceiptSummary[],
+  row: ReceiptSummary,
+  anchor: ReceiptNavAnchor,
+): ReceiptSummary[] {
+  const indexById = new Map<string, number>();
+  for (let i = 0; i < rows.length; i += 1) {
+    const existing = rows[i];
+    if (existing !== undefined) indexById.set(existing.receipt_id, i);
+  }
+  let insertAt = -1;
+  for (let i = anchor.beforeIds.length - 1; i >= 0; i -= 1) {
+    const beforeId = anchor.beforeIds[i];
+    if (beforeId === undefined) continue;
+    const beforeIdx = indexById.get(beforeId);
+    if (beforeIdx !== undefined) {
+      insertAt = beforeIdx + 1;
+      break;
+    }
+  }
+  if (insertAt < 0) {
+    for (const afterId of anchor.afterIds) {
+      const afterIdx = indexById.get(afterId);
+      if (afterIdx !== undefined) {
+        insertAt = afterIdx;
+        break;
+      }
+    }
+  }
+  if (insertAt < 0) {
+    insertAt = 0;
+  }
+  return [...rows.slice(0, insertAt), row, ...rows.slice(insertAt)];
 }
 
 export function upsertReceiptRowInPlace(
@@ -1948,39 +1984,70 @@ export function upsertReceiptRowsInPlace(
   return rows.map((row) => byId.get(row.receipt_id) ?? row);
 }
 
-/** Updates one row in place if it still matches the active filter, or removes it if it no longer matches. */
+/**
+ * Updates one row in place if it still matches the active filter, removes it if it no longer matches,
+ * or re-inserts it at its prior anchored position when a subsequent edit restores filter membership.
+ */
 export function applyInPlaceReceiptUpdate(
   rows: readonly ReceiptSummary[],
   updated: ReceiptSummary | ReceiptDetail,
   filter: ReceiptFilter,
+  anchor: ReceiptNavAnchor | null = null,
 ): ReceiptSummary[] {
   const idx = rows.findIndex((row) => row.receipt_id === updated.receipt_id);
-  if (idx < 0) return [...rows];
-  if (!receiptMatchesFilter(updated, filter)) {
-    return rows.filter((row) => row.receipt_id !== updated.receipt_id);
+  const summaryRow = "lines" in updated ? receiptSummaryFromDetail(updated) : updated;
+  if (idx >= 0) {
+    if (!receiptMatchesFilter(updated, filter)) {
+      return rows.filter((row) => row.receipt_id !== updated.receipt_id);
+    }
+    const next = [...rows];
+    next[idx] = summaryRow;
+    return next;
   }
-  const next = [...rows];
-  next[idx] = "lines" in updated ? receiptSummaryFromDetail(updated) : updated;
-  return next;
+  if (
+    anchor !== null
+    && anchor.receiptId === updated.receipt_id
+    && receiptMatchesFilter(updated, filter, { requireSearchMatch: true })
+  ) {
+    return insertReceiptRowAtAnchor(rows, summaryRow, anchor);
+  }
+  return [...rows];
 }
 
-/** Updates multiple rows in place if they still match the active filter, removing any that no longer match. */
+/**
+ * Updates multiple rows in place if they still match the active filter, removing any that no longer match
+ * and re-inserting any previously filtered-out anchored rows whose membership was restored.
+ */
 export function applyInPlaceReceiptUpdates(
   rows: readonly ReceiptSummary[],
   updates: readonly (ReceiptSummary | ReceiptDetail)[],
   filter: ReceiptFilter,
+  anchorsById?: ReadonlyMap<string, ReceiptNavAnchor>,
 ): ReceiptSummary[] {
   if (updates.length === 0) return [...rows];
   const byId = new Map(updates.map((row) => [row.receipt_id, row]));
-  const next: ReceiptSummary[] = [];
+  const presentIds = new Set<string>();
+  let next: ReceiptSummary[] = [];
   for (const row of rows) {
     const replacement = byId.get(row.receipt_id);
     if (replacement === undefined) {
       next.push(row);
       continue;
     }
+    presentIds.add(row.receipt_id);
     if (receiptMatchesFilter(replacement, filter)) {
       next.push("lines" in replacement ? receiptSummaryFromDetail(replacement) : replacement);
+    }
+  }
+  if (anchorsById !== undefined) {
+    for (const replacement of updates) {
+      if (presentIds.has(replacement.receipt_id)) continue;
+      const anchor = anchorsById.get(replacement.receipt_id);
+      if (anchor === undefined || anchor.receiptId !== replacement.receipt_id) continue;
+      if (!receiptMatchesFilter(replacement, filter, { requireSearchMatch: true })) continue;
+      const summaryRow = "lines" in replacement ? receiptSummaryFromDetail(replacement) : replacement;
+      next = insertReceiptRowAtAnchor(next, summaryRow, anchor);
+      presentIds.add(replacement.receipt_id);
     }
   }
   return next;
@@ -1989,6 +2056,29 @@ export function applyInPlaceReceiptUpdates(
 export interface LocalReceiptMutationState {
   readonly deletedIds: ReadonlySet<string>;
   readonly updatedById: ReadonlyMap<string, ReceiptSummary | ReceiptDetail>;
+}
+
+/**
+ * Reconciles incoming row refresh responses (e.g. group sibling or detail refreshes) against local
+ * tombstones, local edits, and current list row versions so stale responses never resurrect deleted
+ * rows or overwrite newer saved versions.
+ */
+export function reconcileIncomingRowRefresh(
+  incoming: readonly (ReceiptSummary | ReceiptDetail)[],
+  local: LocalReceiptMutationState,
+  currentRows: readonly ReceiptSummary[] = [],
+): (ReceiptSummary | ReceiptDetail)[] {
+  const currentVersionById = new Map(currentRows.map((row) => [row.receipt_id, row.version]));
+  const accepted: (ReceiptSummary | ReceiptDetail)[] = [];
+  for (const row of incoming) {
+    if (local.deletedIds.has(row.receipt_id)) continue;
+    const localEdit = local.updatedById.get(row.receipt_id);
+    if (localEdit !== undefined && localEdit.version >= row.version) continue;
+    const currentVersion = currentVersionById.get(row.receipt_id);
+    if (currentVersion !== undefined && currentVersion > row.version) continue;
+    accepted.push(row);
+  }
+  return accepted;
 }
 
 /**

@@ -3077,4 +3077,253 @@ describe("ReceiptsView", () => {
     expect(dialog().textContent).not.toContain("Linked Review One");
     expect(host.textContent).not.toContain("All confirmed.");
   });
+
+  it("mounts ReceiptsView without throwing and renders the loaded receipts list", async () => {
+    const clients = fakeClients([
+      receiptSummary({ receipt_id: "mount-1", raw_shop_name: "Clean Mount Store", version: 1 }),
+    ]);
+    const onAccessLoss = vi.fn(() => false);
+    await act(async () => {
+      expect(() => {
+        root.render(
+          <ReceiptsView
+            receiptsApi={clients.rApi}
+            actorKey="owner-mount"
+            accounts={accounts}
+            connections={[connection]}
+            locale="en"
+            revision={0}
+            onAccessLoss={onAccessLoss}
+          />,
+        );
+      }).not.toThrow();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.querySelector('[data-receipt-id="mount-1"]')?.textContent).toContain("Clean Mount Store");
+  });
+
+  it("reconciles pending group refresh responses against newer local edits and tombstoned deletes", async () => {
+    const makeGroupFixture = (groupId: string, firstId: string, secondId: string, secondShop: string) => {
+      const group: ReceiptGroupDetail["group"] = {
+        group_id: groupId,
+        group_version: 2,
+        group_status: "confirmed",
+        member_count: 2,
+        evidence_receipt_id: null,
+        fee_amount: null,
+      };
+      const firstRow = receiptSummary({
+        receipt_id: firstId,
+        status: "confirmed",
+        linked: true,
+        link_group: group,
+        raw_shop_name: "Dissolved Member",
+        total_amount: "12.50",
+        version: 1,
+      });
+      const secondRow = receiptSummary({
+        receipt_id: secondId,
+        status: "confirmed",
+        linked: true,
+        link_group: group,
+        raw_shop_name: secondShop,
+        total_amount: "12.50",
+        version: 1,
+      });
+      const groupDetail: ReceiptGroupDetail = {
+        group,
+        members: [firstRow, secondRow],
+        evidence: null,
+        linked_account_id: "local-a",
+        linked_entry_ref: "a".repeat(64),
+      };
+      return { firstRow, secondRow, groupDetail };
+    };
+
+    // 1. Editing a surviving sibling while its group refresh is pending must not let stale v2 overwrite saved v3.
+    const g1 = makeGroupFixture("grp-race-1", "g-a", "g-b", "Surviving Shop");
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const staleEditRefresh = deferred<ReceiptDetailResult>();
+    let gbDetailCalls = 0;
+    const clients = fakeClients([g1.firstRow, g1.secondRow]);
+    clients.rApi.fetchReceiptLinkGroupDetail = vi.fn<NonNullable<ReceiptsApi["fetchReceiptLinkGroupDetail"]>>(
+      () => ok(g1.groupDetail),
+    );
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      if (id === "g-a") {
+        return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...g1.firstRow, lines: singleLine }), candidates: [] });
+      }
+      gbDetailCalls += 1;
+      if (gbDetailCalls === 1) return staleEditRefresh.promise;
+      return ok<ReceiptDetailResult>({
+        receipt: receiptDetail({
+          ...g1.secondRow,
+          link_group: null,
+          linked: false,
+          status: "needs_review",
+          version: 2,
+          lines: singleLine,
+        }),
+        candidates: [],
+      });
+    });
+
+    await renderReceipts(clients);
+    await click(openDetailById("g-a"));
+    await click(button("Unlink group & delete", dialog()));
+    await click(button("Unlink & delete", alertBox()));
+    expect(gbDetailCalls).toBe(1);
+    expect(host.querySelector('[data-receipt-id="g-a"]')).toBeNull();
+
+    await click(openDetailById("g-b"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+    await typeInto(inputByName("raw_shop_name", dialog()), "Renamed Surviving Market");
+    await click(button("Confirm receipt", dialog()));
+    expect(host.querySelector('[data-receipt-id="g-b"]')?.textContent).toContain("Renamed Surviving Market");
+
+    await act(async () => {
+      staleEditRefresh.resolve({
+        ok: true,
+        data: {
+          receipt: receiptDetail({
+            ...g1.secondRow,
+            link_group: null,
+            linked: false,
+            status: "confirmed",
+            raw_shop_name: "Surviving Shop",
+            version: 2,
+            lines: singleLine,
+          }),
+          candidates: [],
+        },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.querySelector('[data-receipt-id="g-b"]')?.textContent).toContain("Renamed Surviving Market");
+    expect(host.querySelector('[data-receipt-id="g-b"]')?.textContent).not.toContain("Surviving Shop");
+    await click(button("Close", dialog()));
+
+    // 2. Deleting a surviving sibling while its group refresh is pending must not let stale refresh resurrect it.
+    const g2 = makeGroupFixture("grp-race-2", "g-c", "g-d", "Soon Deleted Sibling");
+    const staleDeleteRefresh = deferred<ReceiptDetailResult>();
+    let gdDetailCalls = 0;
+    const clients2 = fakeClients([g2.firstRow, g2.secondRow]);
+    clients2.rApi.fetchReceiptLinkGroupDetail = vi.fn<NonNullable<ReceiptsApi["fetchReceiptLinkGroupDetail"]>>(
+      () => ok(g2.groupDetail),
+    );
+    vi.mocked(clients2.rApi.receiptDetail).mockImplementation((id) => {
+      if (id === "g-c") {
+        return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...g2.firstRow, lines: singleLine }), candidates: [] });
+      }
+      gdDetailCalls += 1;
+      if (gdDetailCalls === 1) return staleDeleteRefresh.promise;
+      return ok<ReceiptDetailResult>({
+        receipt: receiptDetail({
+          ...g2.secondRow,
+          link_group: null,
+          linked: false,
+          status: "confirmed",
+          version: 2,
+          lines: singleLine,
+        }),
+        candidates: [],
+      });
+    });
+
+    await renderReceipts(clients2, { revision: 1 });
+    await click(openDetailById("g-c"));
+    await click(button("Unlink group & delete", dialog()));
+    await click(button("Unlink & delete", alertBox()));
+    expect(gdDetailCalls).toBe(1);
+
+    await click(openDetailById("g-d"));
+    await click(button("Delete document", dialog()));
+    await click(button("Confirm deletion", dialog()));
+    expect(host.querySelector('[data-receipt-id="g-d"]')).toBeNull();
+
+    await act(async () => {
+      staleDeleteRefresh.resolve({
+        ok: true,
+        data: {
+          receipt: receiptDetail({
+            ...g2.secondRow,
+            link_group: null,
+            linked: false,
+            status: "confirmed",
+            version: 2,
+            lines: singleLine,
+          }),
+          candidates: [],
+        },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(host.querySelector('[data-receipt-id="g-d"]')).toBeNull();
+  });
+
+  it("re-inserts a search result at its original position when a subsequent edit restores the match with auto-advance off", async () => {
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const s0 = receiptSummary({ receipt_id: "sr-0", status: "needs_review", raw_shop_name: "Lidl First", total_amount: "12.50", version: 1 });
+    const s1 = receiptSummary({ receipt_id: "sr-1", status: "needs_review", raw_shop_name: "Lidl Market", total_amount: "12.50", version: 1 });
+    const s2 = receiptSummary({ receipt_id: "sr-2", status: "needs_review", raw_shop_name: "Lidl Express", total_amount: "12.50", version: 1 });
+
+    const clients = fakeClients([s0, s1, s2]);
+    vi.mocked(clients.rApi.receiptsSearch).mockImplementation(() => ok<ReceiptListResult>({
+      receipts: [s0, s1, s2],
+      next_cursor: null,
+    }));
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = [s0, s1, s2].find((row) => row.receipt_id === id) ?? s1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...match, lines: singleLine }), candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => ok({
+      ok: true,
+      receipt: receiptDetail({
+        receipt_id: req.receipt_id,
+        status: "confirmed",
+        raw_shop_name: req.raw_shop_name ?? "Lidl Market",
+        receipt_date: req.receipt_date,
+        receipt_time: req.receipt_time,
+        total_amount: req.total_amount,
+        currency: req.currency,
+        payment_method: req.payment_method,
+        linked: req.link !== null,
+        linked_account_id: req.link === null ? null : req.link.account_id,
+        linked_entry_ref: req.link === null ? null : req.link.entry_reference,
+        lines: singleLine,
+        version: req.expected_version + 1,
+      }),
+    }));
+
+    await renderReceipts(clients);
+    await typeInto(inputByName("query"), "Lidl");
+    await submit(host.querySelector(".budget-range"));
+    expect([...host.querySelectorAll(".budget-receipt-row")].map((el) => el.getAttribute("data-receipt-id")))
+      .toEqual(["sr-0", "sr-1", "sr-2"]);
+
+    const searchCallsBeforeEdits = vi.mocked(clients.rApi.receiptsSearch).mock.calls.length;
+    const listCallsBeforeEdits = vi.mocked(clients.rApi.receiptsList).mock.calls.length;
+
+    await click(openDetailById("sr-1"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+
+    // Edit away the search match -> row is removed while drawer stays open.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Biedronka Corner");
+    await click(button("Confirm receipt", dialog()));
+    expect([...host.querySelectorAll(".budget-receipt-row")].map((el) => el.getAttribute("data-receipt-id")))
+      .toEqual(["sr-0", "sr-2"]);
+    expect(dialog().textContent).toContain("Version 2");
+
+    // Restore the search match -> row is re-inserted at its original middle position without reloading.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Lidl Market Restored");
+    await click(button("Confirm receipt", dialog()));
+    expect([...host.querySelectorAll(".budget-receipt-row")].map((el) => el.getAttribute("data-receipt-id")))
+      .toEqual(["sr-0", "sr-1", "sr-2"]);
+    expect(host.querySelector('[data-receipt-id="sr-1"]')?.textContent).toContain("Lidl Market Restored");
+    expect(clients.rApi.receiptsSearch).toHaveBeenCalledTimes(searchCallsBeforeEdits);
+    expect(clients.rApi.receiptsList).toHaveBeenCalledTimes(listCallsBeforeEdits);
+  });
 });
