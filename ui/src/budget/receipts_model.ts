@@ -1090,32 +1090,106 @@ const MAX_RECEIPT_LINES = 300;
 
 type ReceiptTotalAdjustment = { kind: "remainder"; amount: string } | { kind: "summary" };
 
-function adjustmentForLineDelta(delta: string, lineCount: number): ReceiptTotalAdjustment {
-  if (delta.startsWith("-") && lineCount < MAX_RECEIPT_LINES) {
-    const amount = normalizeDecimalInput(delta.slice(1));
-    if (amount !== null) return { kind: "remainder", amount };
+type ConfirmLineError = "budget.receipts.invalidForm" | "budget.receipts.totalMismatch";
+type ConfirmLinePlan =
+  | { ok: true; lines: ReceiptLineInput[] | undefined; adjustment: ReceiptTotalAdjustment | null }
+  | { ok: false; errorKey: ConfirmLineError | "budget.receipts.redactedLinesEditBlocked" };
+
+function normalizeConfirmMoney(raw: string): string | null {
+  const amount = normalizeDecimalInput(raw);
+  if (amount === null) return null;
+  // The server rejects money fields that look like private identifiers, including a valid PESEL.
+  const digits = [...amount.replace(/[-.]/g, "")].map(Number);
+  if (digits.length >= 12) return null;
+  if (digits.length === 11) {
+    const weights = [1, 3, 7, 9, 1, 3, 7, 9, 1, 3];
+    const checksum = weights.reduce((sum, weight, index) => sum + weight * (digits[index] ?? 0), 0);
+    if ((10 - checksum % 10) % 10 === digits[10]) return null;
   }
-  return { kind: "summary" };
+  return amount;
+}
+
+function validConfirmLineText(text: string): boolean {
+  if (/[\p{Cf}\p{Cs}]/u.test(text)) return false;
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    if ((code < 32 && char !== "\t" && char !== "\n" && char !== "\r") || code === 127) return false;
+  }
+  return true;
+}
+
+function cleanConfirmLine(input: ReceiptLineInput): ReceiptLineInput | ConfirmLineError {
+  const rawName = input.raw_name.normalize("NFC").trim().replace(/\s+/g, " ");
+  const rawUnit = input.raw_unit?.normalize("NFC").trim().replace(/\s+/g, " ") || null;
+  const nameKey = rawName.normalize("NFD").replace(/\p{Mn}/gu, "").trim();
+  const quantity = normalizeConfirmMoney(input.quantity);
+  const unitPrice = input.unit_price_raw === null ? null : normalizeConfirmMoney(input.unit_price_raw);
+  if (nameKey === "" || [...rawName].length > 128 || [...nameKey].length > 128 || !validConfirmLineText(input.raw_name)
+    || (rawUnit !== null && [...rawUnit].length > 16)
+    || (input.raw_unit !== null && !validConfirmLineText(input.raw_unit))
+    || (input.ptu_code !== null && !RECEIPT_PTU_CODES.includes(input.ptu_code))
+    || quantity === null || (input.unit_price_raw !== null && unitPrice === null)) {
+    return "budget.receipts.invalidForm";
+  }
+
+  // The server redacts fields carrying 12 digits individually and rejects split identifiers.
+  const nameDigits = rawName.normalize("NFKC").match(/\p{Nd}/gu)?.length ?? 0;
+  const unitDigits = rawUnit?.normalize("NFKC").match(/\p{Nd}/gu)?.length ?? 0;
+  if (nameDigits < 12 && unitDigits < 12 && nameDigits + unitDigits >= 12) {
+    return "budget.receipts.invalidForm";
+  }
+
+  const gross = normalizeConfirmMoney(input.gross_line_total);
+  const discount = normalizeConfirmMoney(input.discount_amount);
+  const net = normalizeConfirmMoney(input.net_line_total);
+  if (gross === null || discount === null || net === null) return "budget.receipts.invalidForm";
+  if (subtractDecimals(gross, discount) !== net) return "budget.receipts.totalMismatch";
+
+  // receipt_parser._validate_line_totals applies these same rules to purchases and refunds.
+  switch (input.line_kind) {
+    case "item":
+      if ([gross, discount, net].some((amount) => amount.startsWith("-"))) return "budget.receipts.totalMismatch";
+      break;
+    case "deposit":
+      if (gross === "0" || discount !== "0") return "budget.receipts.totalMismatch";
+      break;
+    case "basket_discount":
+      if (!gross.startsWith("-") || discount !== "0") return "budget.receipts.totalMismatch";
+      break;
+    case "other":
+      if (discount !== "0") return "budget.receipts.totalMismatch";
+      break;
+    default:
+      return "budget.receipts.invalidForm";
+  }
+  return {
+    line_kind: input.line_kind,
+    raw_name: rawName,
+    ptu_code: input.ptu_code,
+    quantity,
+    raw_unit: rawUnit,
+    unit_price_raw: unitPrice,
+    gross_line_total: gross,
+    discount_amount: discount,
+    net_line_total: net,
+  };
 }
 
 export function receiptTotalAdjustment(
   detail: Pick<ReceiptDetail, "document_kind" | "lines">,
   draft: Pick<ReceiptConfirmDraft, "totalAmount" | "lines">,
 ): ReceiptTotalAdjustment | null {
-  if (detail.document_kind === "payment_confirmation"
-    || (detail.document_kind === "invoice" && detail.lines.length === 0 && draft.lines.length === 0)) {
-    return null;
-  }
-  const total = normalizeDecimalInput(draft.totalAmount);
+  const total = normalizeConfirmMoney(draft.totalAmount);
   if (total === null || total === "0" || total.startsWith("-")) return null;
-  const delta = computeLinesDelta(draft.lines, total);
-  return delta === null || delta === "0" ? null : adjustmentForLineDelta(delta, draft.lines.length);
+  const plan = planConfirmLines(detail, draft.lines, total);
+  return plan.ok ? plan.adjustment : null;
 }
 
 export function receiptHasRedactedLines(
   lines: readonly Pick<ReceiptLineInput, "raw_name" | "raw_unit">[],
 ): boolean {
-  return lines.some((line) => isRedactedValue(line.raw_name) || isRedactedValue(line.raw_unit));
+  return lines.some((line) => isRedactedValue(line.raw_name.trim().normalize("NFC"))
+    || isRedactedValue(line.raw_unit?.trim().normalize("NFC")));
 }
 
 /** True when normalized confirmable line values differ from stored detail lines (pure decimal reformatting counts as unchanged). */
@@ -1157,6 +1231,55 @@ function synthesizeTotalLine(rawName: string, amount: string, lineKind: "item" |
     discount_amount: "0",
     net_line_total: amount,
   };
+}
+
+function planConfirmLines(
+  detail: Pick<ReceiptDetail, "document_kind" | "lines">,
+  draftLines: readonly ReceiptLineInput[],
+  total: string,
+): ConfirmLinePlan {
+  const allowsFallback = detail.document_kind !== "payment_confirmation";
+  const summary: ConfirmLinePlan = {
+    ok: true,
+    lines: [synthesizeTotalLine("Tylko suma", total, "other")],
+    adjustment: { kind: "summary" },
+  };
+  const hasRedactedLines = receiptHasRedactedLines(detail.lines) || receiptHasRedactedLines(draftLines);
+  if (hasRedactedLines && haveConfirmLinesChanged(detail.lines, draftLines)) {
+    return { ok: false, errorKey: "budget.receipts.redactedLinesEditBlocked" };
+  }
+  if (draftLines.length > MAX_RECEIPT_LINES) {
+    return allowsFallback ? summary : { ok: false, errorKey: "budget.receipts.invalidForm" };
+  }
+
+  const cleanLines: ReceiptLineInput[] = [];
+  for (const line of draftLines) {
+    const clean = cleanConfirmLine(line);
+    if (typeof clean === "string") return allowsFallback ? summary : { ok: false, errorKey: clean };
+    cleanLines.push(clean);
+  }
+
+  if (detail.document_kind === "invoice" && detail.lines.length === 0 && cleanLines.length === 0) {
+    return { ok: true, lines: undefined, adjustment: null };
+  }
+  const delta = computeLinesDelta(cleanLines, total);
+  if (delta === "0") {
+    const sendLines = !hasRedactedLines && haveConfirmLinesChanged(detail.lines, draftLines);
+    return { ok: true, lines: sendLines ? cleanLines : undefined, adjustment: null };
+  }
+  if (!allowsFallback) return { ok: false, errorKey: "budget.receipts.totalMismatch" };
+
+  if (!hasRedactedLines && delta?.startsWith("-") && cleanLines.length < MAX_RECEIPT_LINES) {
+    const amount = normalizeConfirmMoney(delta.slice(1));
+    if (amount !== null) {
+      return {
+        ok: true,
+        lines: [...cleanLines, synthesizeTotalLine("Pozostałe / nierozpoznane pozycje", amount, "item")],
+        adjustment: { kind: "remainder", amount },
+      };
+    }
+  }
+  return summary;
 }
 
 function synthesizeInvoiceSummaryLine(
@@ -1203,88 +1326,13 @@ export function buildConfirmRequest(
   }
   const currency = draft.currency.trim().toUpperCase();
   if (!/^[A-Z]{3}$/.test(currency)) return { ok: false, errorKey: "budget.receipts.invalidForm" };
-  const total = normalizeDecimalInput(draft.totalAmount);
-  if (total === null || (compareDecimalStrings(total, "0") ?? -1) <= 0) {
+  const total = normalizeConfirmMoney(draft.totalAmount);
+  if (total === null || total === "0" || total.startsWith("-")) {
     return { ok: false, errorKey: "budget.receipts.invalidForm" };
   }
-  if (draft.lines.length > MAX_RECEIPT_LINES) return { ok: false, errorKey: "budget.receipts.invalidForm" };
 
-  const linesChanged = haveConfirmLinesChanged(detail.lines, draft.lines);
-  if (linesChanged && receiptHasRedactedLines(detail.lines)) {
-    return { ok: false, errorKey: "budget.receipts.redactedLinesEditBlocked" };
-  }
-
-  const cleanLines: ReceiptLineInput[] = [];
-  for (const line of draft.lines) {
-    const rawName = line.raw_name.trim();
-    if (rawName === "" || rawName.length > 128) return { ok: false, errorKey: "budget.receipts.invalidForm" };
-    const qty = normalizeDecimalInput(line.quantity);
-    const gross = normalizeDecimalInput(line.gross_line_total);
-    const discount = normalizeDecimalInput(line.discount_amount);
-    const net = normalizeDecimalInput(line.net_line_total);
-    if (qty === null || gross === null || discount === null || net === null) {
-      return { ok: false, errorKey: "budget.receipts.invalidForm" };
-    }
-    const expectedNet = subtractDecimals(gross, discount);
-    if (expectedNet !== net) return { ok: false, errorKey: "budget.receipts.totalMismatch" };
-    const grossCmp = compareDecimalStrings(gross, "0");
-    const discCmp = compareDecimalStrings(discount, "0");
-    const netCmp = compareDecimalStrings(net, "0");
-    if (grossCmp === null || discCmp === null || netCmp === null) {
-      return { ok: false, errorKey: "budget.receipts.invalidForm" };
-    }
-    if (line.line_kind === "item" && (grossCmp < 0 || discCmp < 0 || netCmp < 0)) {
-      return { ok: false, errorKey: "budget.receipts.totalMismatch" };
-    }
-    if (line.line_kind === "deposit" && (grossCmp === 0 || discount !== "0" || net !== gross)) {
-      return { ok: false, errorKey: "budget.receipts.totalMismatch" };
-    }
-    if (line.line_kind === "basket_discount" && (grossCmp >= 0 || discount !== "0" || net !== gross)) {
-      return { ok: false, errorKey: "budget.receipts.totalMismatch" };
-    }
-    if (line.line_kind === "other" && (discount !== "0" || net !== gross)) {
-      return { ok: false, errorKey: "budget.receipts.totalMismatch" };
-    }
-    const unitPrice = line.unit_price_raw === null ? null : normalizeDecimalInput(line.unit_price_raw);
-    if (line.unit_price_raw !== null && unitPrice === null) {
-      return { ok: false, errorKey: "budget.receipts.invalidForm" };
-    }
-    const unit = line.raw_unit === null ? null : (line.raw_unit.trim() || null);
-    if (unit !== null && unit.length > 16) return { ok: false, errorKey: "budget.receipts.invalidForm" };
-    if (linesChanged && (isRedactedValue(rawName) || isRedactedValue(unit))) {
-      return { ok: false, errorKey: "budget.receipts.redactedLinesEditBlocked" };
-    }
-    cleanLines.push({
-      line_kind: line.line_kind,
-      raw_name: rawName,
-      ptu_code: line.ptu_code,
-      quantity: qty,
-      raw_unit: unit,
-      unit_price_raw: unitPrice,
-      gross_line_total: gross,
-      discount_amount: discount,
-      net_line_total: net,
-    });
-  }
-
-  let effectiveLines = cleanLines;
-  let sendLines = linesChanged;
-  if (detail.lines.length === 0 && cleanLines.length === 0 && detail.document_kind === "invoice") {
-    effectiveLines = [synthesizeInvoiceSummaryLine(detail, shopName, total, summaryFallbackName)];
-    sendLines = true;
-  } else {
-    const delta = computeLinesDelta(cleanLines, total);
-    if (delta !== "0") {
-      if (delta === null || detail.document_kind === "payment_confirmation") {
-        return { ok: false, errorKey: "budget.receipts.totalMismatch" };
-      }
-      const adjustment = adjustmentForLineDelta(delta, cleanLines.length);
-      effectiveLines = adjustment.kind === "remainder"
-        ? [...cleanLines, synthesizeTotalLine("Pozostałe / nierozpoznane pozycje", adjustment.amount, "item")]
-        : [synthesizeTotalLine("Tylko suma", total, "other")];
-      sendLines = true;
-    }
-  }
+  const linePlan = planConfirmLines(detail, draft.lines, total);
+  if (!linePlan.ok) return linePlan;
 
   if (draft.linkChoice === "") {
     return { ok: false, errorKey: "budget.receipts.explicitUnlinkRequired" };
@@ -1352,8 +1400,10 @@ export function buildConfirmRequest(
   if (nipEdited) {
     request.raw_nip = nip === "" ? null : nip;
   }
-  if (sendLines) {
-    request.lines = effectiveLines;
+  if (linePlan.lines !== undefined) {
+    request.lines = linePlan.lines;
+  } else if (detail.document_kind === "invoice" && detail.lines.length === 0 && draft.lines.length === 0) {
+    request.lines = [synthesizeInvoiceSummaryLine(detail, shopName, total, summaryFallbackName)];
   }
   return { ok: true, request };
 }

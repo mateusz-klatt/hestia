@@ -48,6 +48,7 @@ import {
   receiptHasRedactedLines,
   receiptMerchantGroupIdentity,
   receiptMerchantGroupKey,
+  receiptTotalAdjustment,
   reconcileLinkChoice,
   resolveDraftFromDetailSession,
   selectCandidateDraft,
@@ -552,6 +553,103 @@ describe("receipts_model", () => {
     }
   });
 
+  it.each([
+    {
+      rawName: "Product with an excessive discount",
+      receiptKind: "purchase",
+      lineKind: "item",
+      gross: "2",
+      discount: "5",
+      net: "-3",
+    },
+    {
+      rawName: "KARTA PODARUNKOWA",
+      receiptKind: "refund",
+      lineKind: "item",
+      gross: "-30",
+      discount: "0",
+      net: "-30",
+    },
+    {
+      rawName: "KAUCJA",
+      receiptKind: "purchase",
+      lineKind: "deposit",
+      gross: "0",
+      discount: "0",
+      net: "0",
+    },
+  ] as const)("shows a total-only adjustment for invalid OCR line $rawName", (example) => {
+    const detail = detailOf({
+      status: "draft",
+      receipt_kind: example.receiptKind,
+      total_amount: "50.00",
+      lines: ocrLines.slice(0, 1).map((line) => ({
+        ...line,
+        raw_name: example.rawName,
+        line_kind: example.lineKind,
+        gross_line_total: example.gross,
+        discount_amount: example.discount,
+        net_line_total: example.net,
+      })),
+    });
+
+    expect(receiptTotalAdjustment(detail, draftFromDetail(detail))).toEqual({ kind: "summary" });
+  });
+
+  it.each(["deposit", "basket_discount", "other"] as const)("keeps a valid negative %s line on a refund", (kind) => {
+    const detail = detailOf({
+      status: "draft",
+      receipt_kind: "refund",
+      total_amount: "50.00",
+      lines: ocrLines.slice(0, 1).map((line) => ({
+        ...line,
+        line_kind: kind,
+        gross_line_total: "-30",
+        net_line_total: "-30",
+      })),
+    });
+    const draft = draftFromDetail(detail);
+
+    expect(receiptTotalAdjustment(detail, draft)).toEqual({ kind: "remainder", amount: "80" });
+    expect(buildConfirmRequest(detail, draft, [])).toMatchObject({
+      ok: true,
+      request: {
+        receipt_kind: "refund",
+        total_amount: "50",
+        lines: [
+          { line_kind: kind, net_line_total: "-30" },
+          { raw_name: "Pozostałe / nierozpoznane pozycje", net_line_total: "80" },
+        ],
+      },
+    });
+  });
+
+  it.each([
+    { label: "inconsistent gross and net with a balanced total", fields: { gross_line_total: "11" } },
+    { label: "an unreadable net amount", fields: { net_line_total: "?" } },
+  ])("confirms and keeps the bank link despite $label", ({ fields }) => {
+    const detail = detailOf({
+      status: "draft",
+      total_amount: "60.00",
+      lines: ocrLines.map((line, index) => index === 0 ? { ...line, ...fields } : line),
+    });
+    const candidate = candidateOf({ amount: "60.00", match_strength: "nip" });
+    const draft = draftFromDetail(detail, [candidate]);
+
+    expect(buildConfirmRequest(detail, draft, [candidate])).toMatchObject({
+      ok: true,
+      request: {
+        total_amount: "60",
+        link: {
+          account_id: candidate.account_id,
+          entry_reference: candidate.entry_reference,
+          candidate_token: candidate.candidate_token,
+        },
+        lines: [{ line_kind: "other", raw_name: "Tylko suma", gross_line_total: "60", net_line_total: "60" }],
+      },
+    });
+  });
+
   it("keeps stored receipt lines when their sum equals the total", () => {
     const detail = detailOf({ status: "draft", total_amount: "60.00", lines: ocrLines });
     const built = buildConfirmRequest(detail, draftFromDetail(detail), []);
@@ -569,6 +667,30 @@ describe("receipts_model", () => {
     expect(built).toMatchObject({
       ok: true,
       request: { lines: [{ raw_name: "Tylko suma", net_line_total: "6007.01" }] },
+    });
+  });
+
+  it.each([
+    { reason: "exceeds the amount range", total: "999999999", deposit: "-1" },
+    { reason: "exceeds the privacy digit limit", total: "123456789", deposit: "-0.1234" },
+    { reason: "matches a private identifier checksum", total: "123456789", deposit: "-0.27" },
+  ])("uses a total-only line when the remainder $reason", ({ total, deposit }) => {
+    const detail = detailOf({
+      status: "draft",
+      total_amount: total,
+      lines: ocrLines.slice(0, 1).map((line) => ({
+        ...line,
+        line_kind: "deposit",
+        gross_line_total: deposit,
+        net_line_total: deposit,
+      })),
+    });
+    const draft = draftFromDetail(detail);
+
+    expect(receiptTotalAdjustment(detail, draft)).toEqual({ kind: "summary" });
+    expect(buildConfirmRequest(detail, draft, [])).toMatchObject({
+      ok: true,
+      request: { lines: [{ raw_name: "Tylko suma", net_line_total: total }] },
     });
   });
 

@@ -2687,7 +2687,7 @@ function ReceiptDetailDrawer({
                         )}
                       </div>
                     </div>
-                    {hasRedactedLines ? (
+                    {hasRedactedLines && lineAdjustment?.kind !== "summary" ? (
                       <p className="budget-warn" role="note">{t("budget.receipts.redactedLinesEditBlocked")}</p>
                     ) : null}
                     {lineAdjustment === null ? null : (
