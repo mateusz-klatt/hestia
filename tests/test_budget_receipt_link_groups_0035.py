@@ -10,6 +10,7 @@ from sqlalchemy import inspect, select
 from sqlalchemy.exc import IntegrityError
 
 from hestia import db
+from tests.migration_head import HEAD
 
 
 _GROUPS = db.BudgetReceiptLinkGroup.__table__
@@ -60,6 +61,9 @@ class ReceiptLinkGroupsMigrationTests(unittest.TestCase):
                 self._seed(conn)
                 self.before_schema = _schema(conn)
                 self.before_receipts = conn.execute(select(_RECEIPTS).order_by(_RECEIPTS.c.id)).all()
+            db._run_sqlite_migration(prior, lambda conn: command.upgrade(db._alembic_config(conn), "0035"))
+            with prior.connect() as conn:
+                self.receipt_group_schema = _schema(conn)
         finally:
             prior.dispose()
         self.engine, _ = db.init_db(self.path)
@@ -97,9 +101,9 @@ class ReceiptLinkGroupsMigrationTests(unittest.TestCase):
 
     def test_upgrade_and_empty_downgrade_preserve_0034(self):
         with self.engine.connect() as conn:
-            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), "0035")
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), HEAD)
             upgraded_schema = _schema(conn)
-            self.assertTrue(set(self.before_schema).issubset(upgraded_schema))
+            self.assertTrue(set(self.before_schema).issubset(self.receipt_group_schema))
             self.assertEqual(conn.execute(select(_RECEIPTS).order_by(_RECEIPTS.c.id)).all(), self.before_receipts)
             self.assertEqual(compare_metadata(MigrationContext.configure(conn), db.metadata), [])
             self.assertEqual(len([row for row in upgraded_schema if row.name.endswith(("_guard_insert", "_guard_update"))
@@ -131,11 +135,13 @@ class ReceiptLinkGroupsMigrationTests(unittest.TestCase):
             schema = _schema(conn)
         with self.assertRaisesRegex(RuntimeError, "Unlink all groups first"):
             db.downgrade_db(self.path, "0034")
-        reopened, sessions = db.init_db(self.path)
+        reopened = db.make_engine(self.path)
+        self.addCleanup(reopened.dispose)
         with reopened.connect() as conn:
-            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), "0035")
+            self.assertEqual(conn.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one(), HEAD)
             self.assertEqual(_schema(conn), schema)
             self.assertEqual(conn.exec_driver_sql("PRAGMA foreign_key_check").all(), [])
+        _, sessions = db.init_db(self.path)
         with sessions() as session:
             self.assertEqual(session.get(db.BudgetReceiptLinkGroup, "g").evidence_receipt_id, "evidence")
             self.assertEqual(session.scalars(select(db.BudgetReceiptLinkMember.receipt_id).order_by(

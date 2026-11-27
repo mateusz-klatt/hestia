@@ -59,7 +59,27 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.62.0")
+        self.assertEqual(document["info"]["version"], "0.64.0")
+        analytics = "/api/budget/analytics/"
+        candidates = document["paths"].pop(analytics + "mortgage-reference-candidates")["get"]
+        self.assertEqual(candidates["x-required-permission"], "budget.view")
+        self.assertTrue(candidates["parameters"][0]["required"])
+        document["paths"][analytics + "mortgages"]["get"]["parameters"].pop()
+        document["paths"][analytics + "forecast"]["get"]["parameters"].pop()
+        document["paths"][analytics + "mortgage-save"]["post"].pop("parameters")
+        for schema in ("BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgageSchedule",
+                       "BudgetAnalyticsMortgageScheduleSaved"):
+            schemas[schema]["properties"].pop("match_references")
+        schemas["BudgetAnalyticsMortgages"]["properties"].pop("match_references_supported")
+        schemas["BudgetAnalyticsForecastDeduplication"]["properties"].pop("match_type")
+        schemas["BudgetAnalyticsForecastDeduplication"]["properties"].pop("amount_delta")
+        for schema in ("BudgetAnalyticsMortgageMatchReference", "BudgetAnalyticsMortgageReferenceCandidate",
+                       "BudgetAnalyticsMortgageReferenceCandidates"):
+            schemas.pop(schema)
+        document["info"]["version"] = "0.62.0"
+        canonical_0_62 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_62).hexdigest(),
+                         "c4c7ed9797ccee23330bcb69d89862c230d3a33dfabac6f2bb4b4b490ad966bc")
         # 0.62.0 additive crib_humidity and crib_battery_ok on Globals / GlobalsPatch with contract negotiation.
         disco_get = document["paths"]["/api/discovery"]["get"]
         disco_header, = disco_get.pop("parameters")
@@ -86,6 +106,9 @@ class OpenApiArtifactTests(unittest.TestCase):
         self.assertIn("contract_version?: string;", events_ts)
         self.assertIn('"X-Hestia-Contract-Version"?: string;', events_ts)
         document["info"]["version"] = "0.61.0"
+        canonical_0_61 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_61).hexdigest(),
+                         "c05f41b76492cf3f2ed47ecb3289bf96d21cc497ddf910c4dc0d3b273b811461")
         for schema in ("BudgetReceiptSummary", "BudgetReceiptDetail"):
             schemas[schema]["properties"].pop("display_shop_name")
         document["info"]["version"] = "0.60.0"

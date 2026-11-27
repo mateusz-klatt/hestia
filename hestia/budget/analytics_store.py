@@ -580,7 +580,8 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
 
     @staticmethod
     def _mortgage_schedule_dict(row, paid_months):
-        return {**_dict(row, _MORTGAGE_SCHEDULE_FIELDS), "paid_months": list(paid_months)}
+        return {**_dict(row, _MORTGAGE_SCHEDULE_FIELDS), "paid_months": list(paid_months),
+                "match_references": row.match_references or []}
 
     @staticmethod
     def _mortgage_audit_payload(row):
@@ -628,11 +629,20 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
         return clean_label, canonical_amount, start.isoformat(), (None if end is None else end.isoformat())
 
     def save_mortgage_schedule(self, owner, *, schedule_id=None, label, amount, currency, due_day, start_date,
-                               end_date=None, remind_days_before, destination_kind, enabled, expected_version):
+                               end_date=None, remind_days_before, destination_kind, enabled, expected_version,
+                               match_references=_UNSET):
         """Atomically create or update one owner-private mortgage reminder schedule (evaluation-only)."""
         clean_label, canonical_amount, start_iso, end_iso = self._validate_mortgage_write(
             schedule_id, label, amount, currency, due_day, start_date, end_date,
             remind_days_before, destination_kind, enabled, expected_version)
+        if match_references is not _UNSET:
+            try:
+                references = api_contract.MORTGAGE_MATCH_REFERENCES_ADAPTER.validate_python(match_references)
+            except ValidationError:
+                raise AnalyticsError() from None
+            if len({item.hash for item in references}) != len(references):
+                raise AnalyticsError()
+            match_references = [item.model_dump() for item in sorted(references, key=lambda item: item.hash)] or None
         with self.transaction(owner, "budget.edit") as session:
             self._owner(session, owner)
             if schedule_id is None:
@@ -647,6 +657,7 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                     currency=currency, due_day=due_day, start_date=start_iso, end_date=end_iso,
                     remind_days_before=remind_days_before, destination_kind=destination_kind,
                     enabled=enabled, version=1, created_at=now, updated_at=now,
+                    match_references=None if match_references is _UNSET else match_references,
                 )
                 session.add(row)
                 session.flush()
@@ -656,15 +667,17 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
             row = self._owned(session, MortgageScheduleRow, owner, schedule_id)
             _version(row.version, expected_version)
             paid_months = self._mortgage_paid_months(session, owner, row.id)
+            if match_references is _UNSET:
+                match_references = row.match_references
             desired = (clean_label, canonical_amount, currency, due_day, start_iso, end_iso,
-                       remind_days_before, destination_kind, enabled)
+                       remind_days_before, destination_kind, enabled, match_references)
             current = (row.label, row.amount, row.currency, row.due_day, row.start_date, row.end_date,
-                       row.remind_days_before, row.destination_kind, row.enabled)
+                       row.remind_days_before, row.destination_kind, row.enabled, row.match_references)
             if current == desired:
                 return {**self._mortgage_schedule_dict(row, paid_months), "changed": False}
             before_audit = self._mortgage_audit_payload(row)
             (row.label, row.amount, row.currency, row.due_day, row.start_date, row.end_date,
-             row.remind_days_before, row.destination_kind, row.enabled) = desired
+             row.remind_days_before, row.destination_kind, row.enabled, row.match_references) = desired
             row.version += 1
             row.updated_at = self._now()
             session.flush()

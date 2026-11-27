@@ -2,6 +2,8 @@
 
 > **Status:** Revised design proposal v4 (Round-3 review fixes applied; owner decisions **Q1–Q6** and **(a)–(c)** all decided; target: OpenAPI `0.26.0`, zero schema migration in v1).
 >
+> **Mortgage links in OpenAPI 0.64.0** The mortgage editor can link recurring bank debits to a schedule. Forecast rule version 2 uses these links and can infer a match for an unlinked loan. See [§5.4](#54-deduplication-mortgage-schedule-vs-recurring-hint).
+>
 > **Compatibility (OpenAPI 0.33.0):** budget_forecast_config_conflict (0.31–0.32) wycofany w 0.33; konflikt to teraz 200 + summary.baseline_conflicts. `summary.baseline_conflicts` is optional. 0.33.0 is not a strictly additive change.  
 > **Baseline:** `master` at `dc03790` (schema `0019`, OpenAPI `0.25.0` at `hestia/api_contract.py:76` with `GET /api/budget/analytics/quarantine`).
 
@@ -113,6 +115,17 @@ Reuses the complete, untruncated `snapshot["_recurring"]` produced by `_recurrin
 5. **Reconciliation with `MAX_RECURRING_HINTS`:** `GET /recurring` is a non-summing list view (`analytics_views.py:774-777`) that truncates at `MAX_RECURRING_HINTS = 200` and sets `truncated: true`. `GET /forecast` computes **monetary totals**, so silently truncating after 200 hints would emit incomplete totals (`docs/BUDGET_2D.md:173-174`). Therefore `forecast` reads the untruncated `snapshot["_recurring"]`, filters by `currency` (if given), partitions lapsed vs. active hints, and fails closed with `413 budget_analytics_limit` (zero partial totals) if active hints exceed `MAX_FORECAST_HINTS = 200`.
 
 ### 5.4 Deduplication: Mortgage Schedule vs. Recurring Hint
+
+Forecast rule version 2 compares same-currency debits with enabled schedules and looks for a due date in the observed month or either neighboring month. The matching rules apply even if the historical installment is paid or the schedule has since ended.
+
+1. **Linked debits** match a configured reference within five days of the due date, regardless of the amount. Each schedule can link several debits, including separate installment and insurance charges. A debit claimed by multiple linked schedules stays visible.
+2. **Inferred loans** match schedules without links. A hint with a loan keyword (`RATA KREDYTU`, `KREDYT`, `POŻYCZKA`, or `LEASING`) qualifies when its amount is within 10% of the schedule amount and the payment is within three days of the due date. Keyword matching ignores case and diacritics. An inferred match requires exactly one eligible hint for the schedule and exactly one eligible schedule for the hint. Hints with an explicit match candidate are excluded from inference.
+3. **Other recurring charges** continue to use the original exact-amount algorithm below for unlinked schedules. An installment taken by an inferred match is unavailable to this algorithm.
+
+The schedule amount is projected and matched hints are suppressed for the entire horizon. The mortgage editor stores each selected bank reference as a SHA-256 hash of its normalized letters and digits plus its last four characters. In OpenAPI 0.64.0 audit rows for linked and inferred matches include `match_type` and `amount_delta` (observed amount minus scheduled amount). Clients below 0.64.0 receive the existing audit fields.
+
+#### Original exact-amount algorithm
+
 To prevent paid-off or ended loans from being resurrected by lingering bank history (**BLOCKER 1**), **identity matching is strictly separated from horizon instalment qualification and operates at instalment granularity `(schedule_id, matched_due_date)`**:
 1. **Hint identity `hint_key(h)`:** Define
    `hint_key(h) = (h.currency, h.normalized_label, h.label_source, analytics_core.canonical_money(h.amount), h.first_date, h.last_date)`.
@@ -147,7 +160,7 @@ Per **Q6**, `BudgetCategoryLimit` rows (`hestia/db.py:492-514`, `"organisational
   3. Compute per-account UTC freshness across all selected accounts (`stale_account_ids_set`, `summary.stale_accounts`, capped `stale_account_ids` at `MAX_STALE_ACCOUNT_IDS = 200` with `stale_account_ids_truncated`, `ledger_as_of`, `freshness_stale`) and compute/reuse untruncated `snapshot["_recurring"]`. `MAX_STALE_ACCOUNT_IDS` covers only the returned list. The full freshness set grows with the number of selected accounts (§5.1).
   4. Apply `currency` filter (if provided) to enabled `schedules` and detected `hints`.
   5. Partition filtered `hints` into lapsed vs. active (`§5.3`) using full `stale_account_ids_set`, computing `lapsed_recurring_count` and `stale_recurring_count`. Enforce `len(active_hints) <= MAX_FORECAST_HINTS` (`200`) -> else `413 budget_analytics_limit`.
-  6. Run instalment-level 1:1 deduplication (`§5.4`) on filtered enabled `schedules` and filtered `active_hints`.
+  6. Deduplicate filtered enabled schedules and active hints using the rules in §5.4.
   7. Instantiate all items in `[M0 .. end_month]` for filtered enabled `schedules` (`past_due = expected_date < evaluation_date`, `account_stale = False`) and surviving `active_hints` (`past_due = False`, `account_stale = hint_stale`); compute `overdue_mortgage_schedule_count`. Enforce `len(projected_items) <= MAX_FORECAST_ITEMS` (`4_368` = `(100 + 200 + 64) × 12`) -> else `413 budget_analytics_limit`. Category baselines are capped at 64 series after the currency filter (`MAX_BASELINE_SERIES`). §10 tests the item guard by injecting a lower limit.
   8. Bound display labels (`MAX_FORECAST_LABEL = 256` code points: recurring `remittance_information` in `normalize.py:124-133` + `analytics_views.py:345` can reach `409_699` chars and `MAX_DESCRIPTION = 524_288` in `recurring.py:33, 157`; any forecast `label` / `schedule_label` / `recurring_label` longer than `256` code points is truncated as `value[:255].rstrip() + "…"` while `schedule.label` is already `<= 256` at `mortgage_reminders.py:25`), sort `items` and `deduplications`, sum totals via `sum_money`, and **encode once into a private bounded UTF-8 byte buffer** (`json.JSONEncoder(ensure_ascii=False, allow_nan=False, separators=(",", ":")).iterencode(payload)`). Check the next chunk's UTF-8 length **before** extending the private `bytearray`. When `len(buffer) + len(chunk) > MAX_FORECAST_RESPONSE_BYTES` (`4_194_304` = `4 MiB`), raise `413 budget_analytics_limit` and leave that chunk unappended, so the buffer stays within `4 MiB` (**zero partial totals**). On HTTP, send **that exact measured byte buffer** with `application/json; charset=utf-8` and `api.PRIVATE_HEADERS` (rather than re-encoding a dict via `web.json_response` at `analytics_api.py:121`).
 
@@ -295,9 +308,8 @@ Implementation PRs must pass **both** repository CI gates (`.github/workflows/ci
   3. Update `docs/BUDGET.md` (`docs/BUDGET.md:3-15, 238-240, 768-780`), `docs/BUDGET_2D.md` (`docs/BUDGET_2D.md:3-5, 400-447`), and update this document's `Status` banner to **Implemented** upon shipping.
   4. Review and update `ui/public/privacy-policy.html` and `ui/public/terms-of-service.html` to cover on-read upcoming-commitment estimates and heuristic duplicate hiding (`deduplications[]`) per `docs/BUDGET.md:13-14`.
 
-## 12. v2 Option (Requires Schema Migration — Out of Scope for v1)
+## 12. Follow-up options
 
-If future feedback shows exact-amount deduplication misses variable-rate mortgages or the owner wants manual overrides:
-- **Explicit link/suppression table (migration `0020`):** Persist owner-managed links between `budget_mortgage_schedules` and recurring keys (plus reversible unmerge/snooze/dismiss flags supporting `§2(c)`) under CAS, replacing the `±5`-day exact-amount heuristic where explicitly linked.
-- **Recurring amount bands (`recurring.py` `RULE_VERSION = 2`):** Group minor merchant price drift within an explicit band and project `last_amount` with an optional `[min, max]` range.
-- **Discretionary envelope:** Optionally render enabled `BudgetCategoryLimit` ceilings in a separate non-summed section alongside committed totals.
+- Add reversible snooze and dismiss controls for recurring hints.
+- Show an optional observed amount range alongside the projected recurring amount.
+- Show enabled `BudgetCategoryLimit` ceilings separately from committed totals.

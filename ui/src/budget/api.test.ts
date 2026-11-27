@@ -498,6 +498,7 @@ describe("budget api", () => {
       ["quarantine", () => api.quarantine()],
       ["spendingLimits", () => api.spendingLimits("2026-11")],
       ["mortgages", () => api.mortgages()],
+      ["mortgageReferenceCandidates", () => api.mortgageReferenceCandidates()],
       ["forecast", () => api.forecast()],
       ["monthlyBudget", () => api.monthlyBudget()],
       ["monthlyBudgetCharts", () => api.monthlyBudgetCharts()],
@@ -531,6 +532,41 @@ describe("budget api", () => {
     expect(await budgetApi.analyticsTransactionsByKeys({ row_keys: ["acc-1/r1"] })).toEqual({ ok: true, data: payload });
     expect(new Headers(sent(fetchMock, 2).init.headers).get("X-Hestia-Contract-Version")).toBe("0.60.0");
     expect(new Headers(sent(fetchMock, 3).init.headers).has("X-Hestia-Contract-Version")).toBe(false);
+  });
+
+  it("negotiates 0.64.0 for mortgage references and forecast audits", async () => {
+    const contractHeader = "X-Hestia-Contract-Version";
+    const fetchMock = respond(200, {});
+    await budgetApi.mortgages();
+    await budgetApi.forecast();
+    await budgetApi.mortgageReferenceCandidates();
+
+    expect(sent(fetchMock, 2).url.pathname).toBe("/api/budget/analytics/mortgage-reference-candidates");
+    expect(sent(fetchMock, 2).url.search).toBe("");
+    for (const index of [0, 1, 2]) {
+      expect(new Headers(sent(fetchMock, index).init.headers).get(contractHeader)).toBe("0.64.0");
+    }
+
+    const schedule = {
+      schedule_id: null, label: "Synthetic Loan", amount: "7.5", currency: "PLN", due_day: 5,
+      start_date: "2026-01-01", end_date: null, remind_days_before: 5, destination_kind: "owner_inbox",
+      enabled: true, expected_version: 0,
+    } as const;
+    await budgetApi.saveMortgage(schedule);
+    expect(new Headers(sent(fetchMock, 3).init.headers).has(contractHeader)).toBe(false);
+    const references = [{ hash: "a".repeat(64), last4: "Z001" }];
+    await budgetApi.saveMortgage({ ...schedule, match_references: references });
+    expect(new Headers(sent(fetchMock, 4).init.headers).get(contractHeader)).toBe("0.64.0");
+    expect(JSON.parse(sent(fetchMock, 4).init.body as string)).toEqual({ ...schedule, match_references: references });
+
+    for (const [read, index] of [[budgetApi.mortgages, 5], [budgetApi.forecast, 7]] as const) {
+      fetchMock.mockImplementationOnce(() => Promise.resolve(
+        new Response(JSON.stringify({ error: "budget_analytics_contract_version_invalid" }), { status: 400 }),
+      ));
+      expect(await read()).toEqual({ ok: true, data: {} });
+      expect(new Headers(sent(fetchMock, index).init.headers).get(contractHeader)).toBe("0.64.0");
+      expect(new Headers(sent(fetchMock, index + 1).init.headers).has(contractHeader)).toBe(false);
+    }
   });
 
   it("maps refusals, empty middleware bodies and network loss without throwing", async () => {

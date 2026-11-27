@@ -173,6 +173,23 @@ describe("ForecastView", () => {
     expect(details.querySelector("button, input, select")).toBeNull();
   });
 
+  it("shows linked split debits and identifies inferred matches in the audit", async () => {
+    const api = fakeApi();
+    const installment = forecastDeduplication({ match_type: "linked", amount_delta: "-12.50" });
+    api.forecast.mockResolvedValue(ok(forecastOf({ deduplications: [
+      installment,
+      { ...installment, recurring_label: "Synthetic insurance", amount_delta: "-100.00" },
+      forecastDeduplication({ schedule_id: "mtg-2", match_type: "inferred", amount_delta: "0.50" }),
+    ] })));
+    await show(api);
+    const audit = host.querySelector("details.budget-recurring-evidence");
+    expect(audit?.querySelectorAll("li")).toHaveLength(3);
+    expect(audit?.textContent).toContain("Synthetic insurance");
+    expect(audit?.textContent).toContain("Amount difference −12.50 PLN");
+    expect(audit?.textContent).toContain("Amount difference 0.50 PLN");
+    expect(audit?.textContent).toContain("Inferred match");
+  });
+
   it.each([
     { locale: "en-US", badge: "≈ estimated", merged: "Merged with instalment" },
     { locale: "pl-PL", badge: "≈ szacowane", merged: "Połączono z ratą" },

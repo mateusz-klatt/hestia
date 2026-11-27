@@ -64,6 +64,7 @@ class MortgageSchedule:
     remind_days_before: int = DEFAULT_REMIND_DAYS
     paid_months: frozenset[str] = frozenset()
     enabled: bool = True
+    match_references: list[dict[str, str]] | None = None
 
 
 @dataclass(frozen=True, repr=False)
