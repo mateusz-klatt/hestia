@@ -271,6 +271,7 @@ _ROUTE_MIN_ROLE = {
     ("POST", "/api/budget/receipts/confirm"): _ADMIN,
     ("POST", "/api/budget/receipts/list"): _ADMIN,
     ("POST", "/api/budget/receipts/search"): _ADMIN,
+    ("POST", "/api/budget/receipts/transaction-search"): _ADMIN,
     ("GET", "/api/budget/receipts/detail"): _ADMIN,
     ("GET", _PATH_RECEIPT_GROUP_DETAIL): _ADMIN,
     ("POST", device_token.GROUP_CANDIDATES_PATH): _ADMIN,
@@ -399,6 +400,8 @@ _OWNER_ONLY_ROUTES = frozenset({
 
 def _operation_requirement(method: str, path: str, floor: str) -> str:
     route = method, path
+    if route == ("POST", "/api/budget/receipts/transaction-search"):
+        return "budget.receipts.match"
     if route in _AUTHENTICATED_ROUTES:
         return _AUTHENTICATED
     if path.startswith("/api/budget/household/"):

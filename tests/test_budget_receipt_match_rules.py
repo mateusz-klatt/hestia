@@ -226,8 +226,8 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
                                  value_date=None, remittance_information=[_SHOP])
             self.add_transaction("a", f"far-{index}", amount="42.91", booking_date="2027-01-02",
                                  value_date=None, remittance_information=[provider_ref])
-        self.add_transaction("a", "invalid-date", amount="42.91", booking_date=f"{_INVOICE_DATE}T12:00",
-                             value_date=None, remittance_information=[provider_ref])
+        self.add_transaction("a", "invalid-date", amount="42.91", transaction_date=f"{_INVOICE_DATE}T12:00",
+                             booking_date=None, value_date=None, remittance_information=[_INVOICE_NUMBER])
         self.add_transaction("a", "invalid-amount", amount="bogus", booking_date=_INVOICE_DATE, value_date=None)
         self.add_transaction("a", "pending", status="PDNG", booking_date=_INVOICE_DATE, value_date=None)
         with self.sessions.begin() as session:
@@ -244,17 +244,25 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
                 self.assertEqual(match_and_check_sql(wide=False), [])
 
     def test_peer_exact_debits_can_be_outside_the_receipt_match_window(self):
+        self.receipts = BudgetReceiptStore(
+            self.sessions, clock=lambda: self.now, cursor_secret=b"synthetic-only",
+            ref_hmac_secret=_REFERENCE_KEY, card_accounts={"1234": [self.accounts["a"]]},
+        )
         identifier = self.add_receipt(receipt_date=_INVOICE_DATE)
-        self.add_receipt(receipt_date=_LATE_DATE)
-        self.add_receipt(receipt_date=_LATE_DATE)
+        peers = [self.add_receipt(receipt_date=_LATE_DATE, card_last4="1234") for _ in range(2)]
         self.add_transaction("a", "shared-debit", amount="42.91", booking_date=_INVOICE_DATE,
                              value_date=None, transaction_date=_LATE_DATE)
         self.assertEqual(self.candidates(identifier), [])
 
         self.add_transaction("a", "invalid-peer-debit", amount="bogus", booking_date=_LATE_DATE, value_date=None)
         self.add_transaction("a", "different-amount", amount="42.90", booking_date=_LATE_DATE, value_date=None)
+        self.add_transaction("a", "outside-peer-window", amount="42.91", booking_date="2026-09-23", value_date=None)
         self.assertEqual(self.candidates(identifier), [])
         self.add_transaction("b", "peer-only", amount="42.91", booking_date=_LATE_DATE, value_date=None)
+        self.assertEqual(self.candidates(identifier), [])
+        with self.sessions.begin() as session:
+            for peer in peers:
+                session.get(db.BudgetReceipt, peer).card_last4 = None
         candidate, = self.candidates(identifier)
         self.assertEqual(candidate["entry_reference"], fixtures.reference_digest("shared-debit"))
 

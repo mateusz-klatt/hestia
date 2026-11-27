@@ -60,12 +60,30 @@ class OpenApiArtifactTests(unittest.TestCase):
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
         self.assertEqual(document["info"]["version"], "0.68.0")
+        # 0.68.0 additive receipt match rules.
         schemas["BudgetReceiptDetail"]["properties"].pop("rounding_delta")
         receipt_candidate = schemas["BudgetReceiptCandidate"]["properties"]
         receipt_candidate.pop("match_rule")
         receipt_candidate.pop("rounding_delta")
         for strength in ("weak", "medium", "strong"):
             receipt_candidate["match_strength"]["enum"].remove(strength)
+        document["info"]["version"] = "0.67.0"
+        canonical_0_67 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_67).hexdigest(),
+                         "4b7bdd193668cfcb8b83beb6c79cf32dcb2374cc194b182e83383fd9c69fac93")
+
+        # 0.67.0 additive manual receipt transaction picker.
+        picker = document["paths"].pop("/api/budget/receipts/transaction-search")["post"]
+        self.assertEqual(picker["x-required-permission"], "budget.receipts.match")
+        self.assertTrue(picker["parameters"][0]["required"])
+        schemas["BudgetCapabilities"]["properties"].pop("receipt_transaction_search")
+        schemas["BudgetReceiptConfirmRequest"]["properties"]["link"]["anyOf"].remove(
+            {"$ref": "#/components/schemas/BudgetReceiptManualLinkRequest"}
+        )
+        schemas["BudgetReceiptConfirmRequest"]["properties"]["link"].pop("title")
+        for schema in ("BudgetReceiptManualLinkRequest", "BudgetReceiptTransactionSearchRequest",
+                       "BudgetReceiptTransactionSearchItem", "BudgetReceiptTransactionSearchResult"):
+            schemas.pop(schema)
         document["info"]["version"] = "0.66.0"
         canonical_0_66 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.assertEqual(hashlib.sha256(canonical_0_66).hexdigest(),
@@ -1048,6 +1066,7 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest",
         "BudgetReceiptLineInput", "BudgetReceiptLinkRequest", "BudgetReceiptListRequest",
         "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",
+        "BudgetReceiptManualLinkRequest", "BudgetReceiptTransactionSearchRequest",
         "BudgetReceiptGroupCandidatesRequest", "BudgetReceiptGroupMemberInput",
         "BudgetReceiptGroupLinkRequest", "BudgetReceiptGroupUnlinkRequest",
         "BudgetReceiptDeviceBrowserRequest", "BudgetReceiptDeviceRedeemRequest",

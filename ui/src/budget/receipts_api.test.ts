@@ -42,6 +42,30 @@ function sent(fetchMock: ReturnType<typeof respond>, index = 0): { url: URL; ini
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("receipts api", () => {
+  it("uses the 0.67 contract for picker search and for manual selections on the existing confirm endpoint", async () => {
+    const fetchMock = respond(200, { items: [], next_cursor: null });
+    const gate = createBudgetApi("owner");
+    await gate.capabilities();
+    const client = createReceiptsApi(gate);
+    const search = { receipt_id: "synthetic", query: "shop" };
+    await client.searchReceiptTransactions?.(search);
+    await client.confirmReceipt({
+      receipt_id: "synthetic", expected_version: 1, receipt_kind: "purchase", receipt_date: "2026-11-14",
+      receipt_time: null, total_amount: "10", currency: "PLN", payment_method: "card",
+      link: { transaction_id: "1." + "f".repeat(64) },
+    });
+    const picker = sent(fetchMock, 1);
+    expect(picker.url.pathname).toMatch(/\/api\/budget\/receipts\/transaction-search$/);
+    expect(picker.url.search).toBe("");
+    expect(picker.init.method).toBe("POST");
+    expect(new Headers(picker.init.headers).get(CONTRACT_HEADER)).toBe("0.67.0");
+    expect(new Headers(picker.init.headers).get("X-Hestia-Expected-Actor")).toBe(OWNER_TAG);
+    expect(JSON.parse(picker.init.body as string)).toEqual(search);
+    const confirm = sent(fetchMock, 2);
+    expect(confirm.url.pathname).toMatch(/\/api\/budget\/receipts\/confirm$/);
+    expect(new Headers(confirm.init.headers).get(CONTRACT_HEADER)).toBe("0.67.0");
+  });
+
   it("lists receipts via POST JSON through the verified gate with X-Hestia-Expected-Actor and contract header", async () => {
     const fetchMock = respond(200, { receipts: [], next_cursor: null });
     const gate = createBudgetApi("owner");

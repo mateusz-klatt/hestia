@@ -14,7 +14,8 @@ from tests.test_budget_store import configuration, prepare_selected, snapshot, t
 
 
 CAPABILITIES = {"stored_reads": True, "account_controls": True, "refresh": False,
-                "background_selection": True, "background_polling": False, "consent": False, "analytics": False}
+                "background_selection": True, "background_polling": False, "consent": False, "analytics": False,
+                "receipt_transaction_search": False}
 COMPONENT = {"last_attempt": None, "last_success": None, "last_error": None, "failures": 0,
              "next_attempt": 0, "state": "never", "retry_at": None, "suspended": False,
              "stale": True, "age_seconds": None, "stale_after_seconds": 86400}
@@ -295,7 +296,7 @@ class BudgetOpenApiTests(unittest.TestCase):
                 self.assertEqual(names[0], "X-Budget-Grant")
                 self.assertTrue(methods["get"]["parameters"][0]["required"])
         self.assertEqual(set(receipts), {"/api/budget/receipts/" + name for name in
-                         ("parse-text", "confirm", "list", "search", "detail", "group/detail",
+                         ("parse-text", "confirm", "list", "search", "transaction-search", "detail", "group/detail",
                           "group/candidates", "group/link", "group/unlink", "image", "delete",
                           "device-token/pair-code", "device-token/pair-code-cancel", "device-token/login",
                           "device-token/redeem", "device-token/list",
@@ -779,6 +780,7 @@ class BudgetOpenApiTests(unittest.TestCase):
                               "BudgetTranslationImportRequest",
                               "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest", "BudgetReceiptLineInput",
                               "BudgetReceiptLinkRequest", "BudgetReceiptListRequest", "BudgetReceiptSearchRequest",
+                              "BudgetReceiptManualLinkRequest", "BudgetReceiptTransactionSearchRequest",
                               "BudgetReceiptDeleteRequest", "BudgetReceiptGroupCandidatesRequest",
                               "BudgetReceiptGroupMemberInput", "BudgetReceiptGroupLinkRequest",
                               "BudgetReceiptGroupUnlinkRequest", "BudgetReceiptDeviceBrowserRequest",

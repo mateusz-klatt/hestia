@@ -184,6 +184,7 @@ def _read(owner, operation, query, secret, service, consent=False):
     if operation == "connections":
         return {"connections": result, "capabilities": {
             "analytics": os.environ.get("HESTIA_BUDGET_ANALYTICS_ENABLED") == "1",
+            "receipt_transaction_search": os.environ.get("HESTIA_BUDGET_RECEIPTS_ENABLED") == "1",
             "stored_reads": True, "account_controls": True, "background_selection": True, "consent": consent,
             "refresh": service is not None and service.accepting,
             "background_polling": service is not None and service.accepting and service.poller}}

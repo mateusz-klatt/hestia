@@ -133,6 +133,7 @@ from .budget.loan_references import MAX_MATCH_REFERENCES
 # 0.64.0: opt-in mortgage payment references and forecast matching audit (migration 0036).
 # 0.65.0: optional multi-status filter on receipt lists (zero migration).
 # 0.66.0: Gmail worker_crash and discovery_pdf_too_large parse diagnostics.
+# 0.67.0: owner-private receipt transaction search and a manual selection on receipt confirmation.
 # 0.68.0: late invoice-ID matches and unambiguous card round-up matches on receipts.
 CONTRACT_VERSION = "0.68.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
@@ -1567,6 +1568,7 @@ class BudgetCapabilities(BaseModel):
     background_polling: bool
     consent: bool
     analytics: Annotated[bool, Field(default=False, json_schema_extra=_OMIT)] = False
+    receipt_transaction_search: Annotated[bool, Field(default=False, json_schema_extra=_OMIT)] = False
 
 
 class BudgetConnections(BaseModel):
@@ -3191,6 +3193,13 @@ class BudgetReceiptLinkRequest(BaseModel):
         description="HMAC bound to the owner, transaction, three dates and merchant evidence shown at preview.")]
 
 
+class BudgetReceiptManualLinkRequest(BaseModel):
+    model_config = _STRICT
+    transaction_id: Annotated[str, Field(
+        pattern=r"^[1-9][0-9]{0,18}\.[0-9a-f]{64}$",
+        description="Receipt-scoped identifier from transaction-search. Requires contract 0.67.0.")]
+
+
 _ConfirmReceiptLines = Annotated[list[BudgetReceiptLineInput], Field(max_length=300)]
 
 
@@ -3229,7 +3238,62 @@ class BudgetReceiptConfirmRequest(BaseModel):
             json_schema_extra=_OMIT,
         ),
     ] = None
-    link: BudgetReceiptLinkRequest | None
+    link: BudgetReceiptLinkRequest | BudgetReceiptManualLinkRequest | None
+
+
+_ReceiptTransactionDay = Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                                               json_schema_extra={"format": "date"})]
+_ReceiptTransactionAmount = Annotated[str, Field(max_length=80, pattern=r"^[0-9]+(?:\.[0-9]+)?$")]
+
+
+class BudgetReceiptTransactionSearchRequest(BaseModel):
+    model_config = _STRICT
+    receipt_id: BudgetReceiptId
+    receipt_date: Annotated[_ReceiptTransactionDay | None, Field(
+        description="Draft receipt date for the default date range and date-distance ranking. Defaults to the stored receipt date.",
+        json_schema_extra=_OMIT)] = None
+    total_amount: Annotated[_ReceiptTransactionAmount | None, Field(
+        description="Draft receipt total for the percentage filter and amount differences. Defaults to the stored receipt total.",
+        json_schema_extra=_OMIT)] = None
+    currency: Annotated[Annotated[str, Field(pattern=r"^[A-Z]{3}$")] | None, Field(
+        description="Draft currency for a receipt with no stored currency. Defaults to PLN for those receipts.",
+        json_schema_extra=_OMIT)] = None
+    amount_min: Annotated[_ReceiptTransactionAmount | None, Field(
+        description="Custom minimum. Any custom amount bound replaces the percentage range.", json_schema_extra=_OMIT)] = None
+    amount_max: Annotated[_ReceiptTransactionAmount | None, Field(
+        description="Custom maximum. Any custom amount bound replaces the percentage range.", json_schema_extra=_OMIT)] = None
+    date_from: Annotated[_ReceiptTransactionDay | None, Field(
+        description="Omit or send null for 30 days before the receipt date, or 90 days before today (UTC) when undated.",
+        json_schema_extra=_OMIT)] = None
+    date_to: Annotated[_ReceiptTransactionDay | None, Field(
+        description="Omit or send null for 60 days after the receipt date, or today (UTC) when undated.",
+        json_schema_extra=_OMIT)] = None
+    wide: Annotated[bool, Field(
+        description="Use ±20% of the total and allow any merchant. Defaults to ±5% and matches distinctive merchant tokens when available.",
+        json_schema_extra=_OMIT)] = False
+    query: Annotated[Annotated[str, Field(max_length=128)] | None, Field(json_schema_extra=_OMIT)] = None
+    account_id: Annotated[BudgetId | None, Field(json_schema_extra=_OMIT)] = None
+    limit: Annotated[int, Field(ge=1, le=50, json_schema_extra=_OMIT)] = 25
+    cursor: Annotated[BudgetReceiptCursor | None, Field(json_schema_extra=_OMIT)] = None
+
+
+class BudgetReceiptTransactionSearchItem(BaseModel):
+    model_config = _READ
+    id: str
+    date: _ReceiptTransactionDay | None
+    amount: _ReceiptTransactionAmount
+    amount_delta: Annotated[str | None, Field(description="Signed transaction amount minus the receipt total, if known.")]
+    includes_fee: Annotated[bool, Field(description="The transaction is closer to the receipt total plus the gateway fee.")]
+    currency: str
+    account_label: str
+    counterparty: str | None
+    title: str | None
+
+
+class BudgetReceiptTransactionSearchResult(BaseModel):
+    model_config = _READ
+    items: list[BudgetReceiptTransactionSearchItem]
+    next_cursor: str | None
 
 
 class BudgetReceiptListRequest(BaseModel):
@@ -3696,6 +3760,8 @@ _RECEIPT_MODELS = (
     BudgetReceiptGroupCandidatesResult, BudgetReceiptDetailResult, BudgetReceiptGroupDetailResult,
     BudgetReceiptGroupLinkResult, BudgetReceiptGroupUnlinkResult, BudgetReceiptConfirmResult,
     BudgetReceiptListResult, BudgetReceiptDeleteResult,
+    BudgetReceiptManualLinkRequest, BudgetReceiptTransactionSearchRequest,
+    BudgetReceiptTransactionSearchItem, BudgetReceiptTransactionSearchResult,
     BudgetReceiptDeviceBrowserRequest, BudgetReceiptDevicePairResult, BudgetReceiptDeviceCancelRequest,
     BudgetReceiptDeviceLoginRequest, BudgetReceiptDeviceRedeemRequest,
     BudgetReceiptDeviceRedeemResult, BudgetReceiptDeviceToken, BudgetReceiptDeviceRevokeRequest,
@@ -4152,6 +4218,7 @@ _PATH_ROLES = {
     ("POST", "/api/budget/receipts/confirm"): "admin",
     ("POST", "/api/budget/receipts/list"): "admin",
     ("POST", "/api/budget/receipts/search"): "admin",
+    ("POST", "/api/budget/receipts/transaction-search"): "admin",
     ("GET", "/api/budget/receipts/detail"): "admin",
     ("GET", "/api/budget/receipts/group/detail"): "admin",
     ("POST", "/api/budget/receipts/group/candidates"): "admin",
@@ -5098,6 +5165,26 @@ def _receipt_paths():
             ]
         elif name != "delete":
             paths[prefix + name]["post"]["parameters"] = [contract_version]
+    responses = _budget_responses("BudgetReceiptTransactionSearchResult")
+    responses.update({
+        "400": _receipt_error("Invalid filters or cursor. The effective date span must be between 0 and 400 days."),
+        "404": _receipt_error("Unknown, disabled or foreign receipt, or contract version below 0.67.0."),
+        "409": _receipt_error("SQLite users backend is required (budget_requires_sqlite_users)."),
+        "411": _receipt_error("Content-Length is required."),
+        "413": _receipt_error("JSON body exceeds 16384 bytes."),
+        "415": _receipt_error("Content-Type must be application/json."),
+    })
+    paths[prefix + "transaction-search"] = {"post": {
+        "operationId": "searchBudgetReceiptTransactions",
+        "summary": "Find booked outflows in the owned receipt's currency for manual linking.",
+        "description": "Browser owner and budget.receipts.match required. Searches stored transactions only. "
+                       "Percentage filters also consider the receipt total plus any positive gateway fee. "
+                       "Results sort by absolute amount difference, then by distance from the receipt date "
+                       "(most recent first without a receipt date). Confirm with link.transaction_id to link a result.",
+        "parameters": [{**contract_version, "required": True, "description": "Available from 0.67.0."}],
+        "requestBody": {"required": True, "content": {_APP_JSON: {"schema": _ref("BudgetReceiptTransactionSearchRequest")}}},
+        "responses": responses,
+    }}
     receipt_query = [_budget_query("receipt_id", required=True,
                                    schema={"type": "string",
                                            "pattern": r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"},
