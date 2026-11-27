@@ -852,7 +852,7 @@ class ForecastProjectionTests(ProjectionCase):
         for month in range(5, 11):
             amount, title = ("145.58", "Składka") if month <= 7 else ("143.40", "Odnowienie ubezpieczenia")
             self.add_transaction("a", f"premium-{month}", amount=amount, booking_date=f"2026-{month:02d}-10",
-                                 remittance_information=[title, "Polisa TEST/ZX-123456"])
+                                 remittance_information=[f"{title} 812345678"])
 
         recurring = self.store.recurring("owner")
         api_contract.BudgetAnalyticsRecurring.model_validate(recurring)

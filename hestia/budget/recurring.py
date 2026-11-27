@@ -32,7 +32,7 @@ from fractions import Fraction
 import re
 import unicodedata
 
-RULE_VERSION = 5
+RULE_VERSION = 6
 MIN_OCCURRENCES = 3
 MIN_GAP_DAYS = 23
 MAX_GAP_DAYS = 38
@@ -57,6 +57,8 @@ _REFERENCE_ID = re.compile(
 _REFERENCE_MARKER_SUFFIX = r"\b\s*(?:(?:nr|numer|no|number)\b\.?\s*)?[:#]?\s*\Z"
 _CONTRACT_PREFIX = re.compile(r"\b(?:polisa|polisy|policy|contract|umowa|umowy)" + _REFERENCE_MARKER_SUFFIX)
 _NON_CONTRACT_PREFIX = re.compile(r"\b(?:klient[au]?|customer|client|account|rachunku)" + _REFERENCE_MARKER_SUFFIX)
+_INSURANCE_WORD = re.compile(r"\b(?:ubezpieczeni\w*|polis[ayęą]|insurance)\b")
+_PREMIUM_WORD = re.compile(r"\b(?:sk[łl]adk[aięą]|premium)\b")
 _YEAR_CODE = re.compile(r"[12][0-9]{3}")
 _COMPACT_DATE = re.compile(r"[0-9]{4}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])")
 _PHONE_PREFIX = re.compile(r"(?:\btel\.?\s*[:=]?\s*\+?|\+48[\s-]*|\+)\Z")
@@ -133,7 +135,7 @@ class _Charge:
     display_label: str
     label_source: str
     amount: str
-    references: frozenset[str]
+    references: dict[str, bool]  # Whether each token is structured or explicitly contract-marked.
 
 
 def _text(value, maximum=MAX_TEXT):
@@ -204,26 +206,30 @@ def _is_reference_number(digits, whole_amount, phone_context):
 
 def _reference_tokens(amount, *values):
     whole_amount = amount.partition(".")[0]
-    references = set()
+    references = {}
     for value in values:
         folded = value.casefold()
         for match in _REMITTANCE_TOKEN.finditer(folded):
             token = match[0]
             prefix = folded[max(0, match.start() - 64):match.start()]
-            # A bare number needs an explicit contract marker. A structured
-            # ID needs a numeric run that passes the same metadata filters.
+            if _NON_CONTRACT_PREFIX.search(prefix):
+                continue
+            explicit = True
+            # Short numeric references require a contract marker. Longer
+            # unmarked numbers are candidates for insurance bridges only.
             if _REFERENCE_DIGITS.fullmatch(token):
-                if len(token) < 6 or not _CONTRACT_PREFIX.search(prefix):
+                explicit = _CONTRACT_PREFIX.search(prefix) is not None
+                if len(token) < (6 if explicit else 8):
                     continue
-            elif not _REFERENCE_ID.fullmatch(token) or _NON_CONTRACT_PREFIX.search(prefix):
+            elif not _REFERENCE_ID.fullmatch(token):
                 continue
             phone_context = bool(_PHONE_PREFIX.search(prefix) or _INLINE_PHONE.match(token))
             if any(_is_reference_number(digits, whole_amount, phone_context)
                    for digits in _REFERENCE_DIGITS.findall(token)):
-                references.add(token)
+                references[token] = explicit or references.get(token, False)
                 if len(references) == MAX_REFERENCE_TOKENS:
-                    return frozenset(references)
-    return frozenset(references)
+                    return references
+    return references
 
 
 def _scope(owner, selected_accounts, max_entries):
@@ -485,18 +491,19 @@ def _label_lanes(items):
     # dates and amounts when the label alone offers no cadence lane.
     by_reference = defaultdict(list)
     for item in items:
-        for reference in item.references:
-            by_reference[reference].append(item)
+        for reference, explicit in item.references.items():
+            if explicit:
+                by_reference[reference].append(item)
     candidates = [lane for _, charges in sorted(by_reference.items()) for lane in _monthly_lanes(charges)]
     matches = Counter(item.occurrence for lane in candidates for item in lane)
     return [lane for lane in candidates if all(matches[item.occurrence] == 1 for item in lane)]
 
 
-def _conflicting_references(groups, candidates):
+def _conflicting_references(lanes, candidates):
     labels_by_month = {}
     conflicts = set()
-    for (account, currency, _, label), items in groups.items():
-        for item in items:
+    for (account, currency, _, label), lane in lanes:
+        for item in lane:
             for reference in item.references:
                 key = (account, currency, reference)
                 if key in candidates:
@@ -512,28 +519,45 @@ def _within_bridge_drift(amount, baseline):
     return abs(amount - baseline) * 10 <= baseline
 
 
-def _bridge_runs(runs):
+def _has_bridge_context(reference, left_label, right_label, left, right):
+    if all(item.references[reference] for run in (left, right) for item in run):
+        return True
+
+    # A long number can be shared by a customer's unrelated services. Require
+    # insurance context on both labels, with at least one explicit insurance
+    # term because “premium” and “składka” also describe other payments.
+    left_insurance = _INSURANCE_WORD.search(left_label) is not None
+    right_insurance = _INSURANCE_WORD.search(right_label) is not None
+    return (
+        left_insurance and (right_insurance or _PREMIUM_WORD.search(right_label) is not None)
+        or right_insurance and _PREMIUM_WORD.search(left_label) is not None
+    )
+
+
+def _bridge_prefix_length(reference, runs):
     # Start the bridge sequence at the last price under the first label.
     # Price changes inside each label remain governed by the label detector.
     anchor = Fraction(runs[0][1][-1].amount)
-    for (left_key, left), (right_key, right) in zip(runs, runs[1:]):
+    for index, ((left_key, left), (right_key, right)) in enumerate(zip(runs, runs[1:]), 1):
         if left_key[3] == right_key[3] or not _same_monthly_cadence(left[-1], right[0]):
-            return None
+            return 0
+        if not _has_bridge_context(reference, left_key[3], right_key[3], left, right):
+            return 0
         previous, current = Fraction(left[-1].amount), Fraction(right[0].amount)
         if not _within_bridge_drift(current, anchor):
-            return None
+            return index
         # An exact return uses the same band as the outbound adjustment so
         # a 10% decrease followed by restoration is reversible.
         if not _within_bridge_drift(current, previous):
             if current != anchor or not _within_bridge_drift(previous, anchor):
-                return None
-    return [item for _, run in runs for item in run]
+                return 0
+    return len(runs)
 
 
-def _reference_bridges(groups, lanes):
+def _reference_bridges(lanes):
     by_reference = defaultdict(list)
     for index, ((account, currency, _, _), lane) in enumerate(lanes):
-        references = lane[0].references.intersection(*(item.references for item in lane[1:]))
+        references = set(lane[0].references).intersection(*(item.references for item in lane[1:]))
         for reference in references:
             by_reference[account, currency, reference].append(index)
 
@@ -541,16 +565,17 @@ def _reference_bridges(groups, lanes):
                   if len({lanes[index][0][3] for index in indices}) > 1}
     if not candidates:
         return
-    conflicts = _conflicting_references(groups, candidates)
+    conflicts = _conflicting_references(lanes, candidates)
     matches = Counter(index for key, indices in candidates.items() if key not in conflicts for index in indices)
     for key, indices in sorted(candidates.items()):
         if key in conflicts or any(matches[index] != 1 for index in indices):
             continue
-        runs = sorted((lanes[index] for index in indices), key=lambda run: run[1][0].day)
-        # Keep every original label lane when any boundary is unsupported.
-        combined = _bridge_runs(runs)
-        if combined is not None:
-            yield indices, key[1], combined
+        ordered = sorted(indices, key=lambda index: lanes[index][1][0].day)
+        runs = [lanes[index] for index in ordered]
+        length = _bridge_prefix_length(key[2], runs)
+        if length >= 2:
+            combined = [item for _, run in runs[:length] for item in run]
+            yield ordered[:length], key[1], combined
 
 
 def detect_recurring_charges(owner: str, entries: Iterable[RecurringEntry],
@@ -569,13 +594,15 @@ def detect_recurring_charges(owner: str, entries: Iterable[RecurringEntry],
     otherwise retain independently monthly fixed-amount histories. A reference
     can connect established runs with different labels, the same account,
     currency and cadence, and amount drift within ten percent at the bridge.
-    Later bridges also stay within the band of the first bridge's starting amount.
+    A bare number without a contract marker requires insurance context on both
+    labels. When a later price leaves the initial 10% band, the established
+    in-band prefix stays joined.
     """
     owner, accounts = _scope(owner, selected_accounts, max_entries)
     groups = _groups(owner, entries, accounts, max_entries)
     lanes = [(key, lane) for key, items in sorted(groups.items()) for lane in _label_lanes(items)]
     hints, used = [], set()
-    for indices, currency, lane in _reference_bridges(groups, lanes):
+    for indices, currency, lane in _reference_bridges(lanes):
         hints.append(_build_hint(currency, lane))
         used.update(indices)
     hints.extend(_build_hint(key[1], lane) for index, (key, lane) in enumerate(lanes) if index not in used)
