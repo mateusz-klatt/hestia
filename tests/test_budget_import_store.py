@@ -96,7 +96,7 @@ class BudgetImportStoreTests(unittest.TestCase):
         self.assertEqual(json.loads(tx.payload_json)["booking_date"], "2001-01-01")
         replay = self.store.import_snapshot(config, imported)
         self.assertTrue(replay["duplicate"])
-        for field in ("inserted", "updated", "preserved_api", "stale", "unresolved", "unchanged"):
+        for field in ("inserted", "updated", "preserved_api", "duplicates_of_api", "stale", "unresolved", "unchanged"):
             self.assertEqual(replay[field], 0)
         original_report = json.loads(self.rows(db.BudgetImportBatch)[0].report_json)
         self.assertEqual(original_report["inserted"], 1)
@@ -125,6 +125,7 @@ class BudgetImportStoreTests(unittest.TestCase):
         report = self.store.import_snapshot(config, observation)
         self.assertEqual(report["inserted"], 1)
         self.assertEqual(report["preserved_api"], 2)
+        self.assertEqual(report["duplicates_of_api"], 0)
         self.assertEqual(report["unresolved"], 2)
         old_ref = next(row for row in self.rows(db.BudgetTransaction) if row.entry_reference == "ref-1")
         self.assertEqual(old_ref.payload_json, api_tx.payload_json)
@@ -138,6 +139,52 @@ class BudgetImportStoreTests(unittest.TestCase):
                            row.failures, row.next_attempt, row.attempt_id, row.lease_until)
                           for row in self.rows(db.BudgetComponent)], component_before)
         self.assertEqual(quota_state(self.rows), quota_before)
+
+    def test_api_duplicate_with_different_remittance_keeps_api_payload_and_counts_in_report(self):
+        config = fixtures.configuration()
+        fixtures.prepare_selected(self.store, config)
+        api = fixtures.transaction(value_date="2026-11-21")
+        self.store.commit_snapshot("bank", fixtures.snapshot(api))
+        duplicate = self.imported({**api, "remittance_information": ["Offline display"]})
+        report = self.store.import_snapshot(config, duplicate)
+        self.assertEqual((report["preserved_api"], report["duplicates_of_api"], report["unresolved"]), (1, 1, 0))
+        self.assertEqual(self.rows(db.BudgetImportUnresolved), [])
+        self.assertEqual(json.loads(self.rows(db.BudgetTransaction)[0].payload_json), api)
+        batch = self.rows(db.BudgetImportBatch)[0]
+        self.assertEqual(json.loads(batch.report_json)["duplicates_of_api"], 1)
+        self.assertEqual(self.store.import_snapshot(config, duplicate)["duplicates_of_api"], 0)
+
+    def test_api_financial_differences_remain_quarantined(self):
+        config = fixtures.configuration()
+        fixtures.prepare_selected(self.store, config)
+        api = fixtures.transaction(value_date="2026-11-21")
+        self.store.commit_snapshot("bank", fixtures.snapshot(api))
+        for change in ({"amount": "9"}, {"currency": "EUR"}, {"booking_date": "2026-11-21"},
+                       {"value_date": "2026-11-20"}, {"value_date": None},
+                       {"credit_debit_indicator": "CRDT"}, {"transaction_date": "2026-11-20"}):
+            with self.subTest(change=change):
+                imported = self.imported({**api, **change, "remittance_information": ["Offline display"]})
+                report = self.store.import_snapshot(config, imported)
+                self.assertEqual((report["preserved_api"], report["duplicates_of_api"], report["unresolved"]), (1, 0, 1))
+                self.assertEqual({row.reason for row in self.rows(db.BudgetImportUnresolved)}, {"api_preserved"})
+        self.assertEqual(json.loads(self.rows(db.BudgetTransaction)[0].payload_json), api)
+
+    def test_api_duplicate_requires_the_same_account(self):
+        config = fixtures.configuration(accounts=("synthetic-hash", "synthetic-other-hash"))
+        fixtures.prepare_selected(self.store, config)
+        observation = fixtures.snapshot()
+        observation.accounts += fixtures.snapshot(fixtures.transaction(), account_hash="synthetic-other-hash").accounts
+        self.store.commit_snapshot("bank", observation)
+        report = self.store.import_snapshot(config, self.imported(fixtures.transaction(), config=config))
+        self.assertEqual((report["inserted"], report["duplicates_of_api"], report["unresolved"]), (1, 0, 0))
+
+    def test_api_duplicate_comparison_fails_closed_on_invalid_stored_payload(self):
+        from hestia.budget.store import _matches_api_transaction
+
+        tx = fixtures.transaction()
+        for invalid in ("{", "[]", '{"currency":"PLN","currency":"PLN"}'):
+            with self.subTest(invalid=invalid):
+                self.assertFalse(_matches_api_transaction(invalid, tx))
 
     def test_strict_observation_order_and_equal_time_conflicts(self):
         config = fixtures.configuration()
@@ -200,6 +247,7 @@ class BudgetImportStoreTests(unittest.TestCase):
                 session.add(db.BudgetUnresolved(account_id=account.id, ordinal=i, payload_json=json.dumps(tx), observed_at=800))
         report = self.store.import_snapshot(config, self.imported(fixtures.transaction(), fetched_at=700))
         self.assertEqual((report["preserved_api"], report["unresolved"]), (1, 1))
+        self.assertEqual(report["duplicates_of_api"], 0)
         prior = self.rows(db.BudgetTransaction)[0]
         self.assertEqual(prior.source, "api")
         self.assertTrue(prior.uncertain)

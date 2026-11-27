@@ -804,6 +804,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
           onAccessLoss={barrier} onOpenMortgages={() => { openAuthorizedView("mortgages"); }} />
       ) : shownView === "quarantine" ? (
         <QuarantineView api={api} accounts={accounts} connections={connections} revision={revision}
+          canDismiss={authorization?.own_budget?.permissions.includes("budget.edit") === true}
           onAccessLoss={barrier} />
       ) : shownView === "rules" ? (
         <CategoriesView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}

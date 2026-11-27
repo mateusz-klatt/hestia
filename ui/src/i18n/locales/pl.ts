@@ -1099,7 +1099,11 @@ const pl: Partial<Messages> = {
   "budget.recurring.account": "Konto",
 
   "budget.quarantine.title": "Kwarantanna",
-  "budget.quarantine.intro": "Wyjaśnienie, dlaczego niektóre wpisy bankowe nie są uwzględnione w sumach okresu. Ten podgląd tylko do odczytu nie zawiera kwot ani opisów transakcji.",
+  "budget.quarantine.intro": "Wyjaśnienie, dlaczego niektóre wpisy bankowe nie są uwzględnione w sumach okresu.",
+  "budget.quarantine.dismissItem": "Usuń wpis z kwarantanny",
+  "budget.quarantine.dismissBatch": "Usuń wszystkie wpisy z tego importu",
+  "budget.quarantine.dismissBatchConfirm": "Potwierdzenie usunie wszystkie nierozwiązane wpisy z partii {batch} (łącznie {entries}), w tym wpisy spoza wyświetlonej listy. Ponowny import tego samego pliku ich nie przywróci.",
+  "budget.quarantine.dismissError": "Nie udało się usunąć wpisów z kwarantanny.",
   "budget.quarantine.summary": "Wpisy wyłączone z sum",
   "budget.quarantine.total": "Razem",
   "budget.quarantine.accounts": "Liczby według kont",

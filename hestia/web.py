@@ -265,6 +265,8 @@ _ROUTE_MIN_ROLE = {
     ("POST", "/api/budget/analytics/mortgage-save"): _ADMIN,
     ("POST", "/api/budget/analytics/mortgage-payment-set"): _ADMIN,
     ("POST", "/api/budget/analytics/inbox-mark"): _ADMIN,
+    ("POST", "/api/budget/analytics/quarantine-dismiss"): _ADMIN,
+    ("POST", "/api/budget/analytics/quarantine-dismiss-batch"): _ADMIN,
     ("POST", "/api/budget/receipts/parse-text"): _ADMIN,
     ("POST", "/api/budget/receipts/confirm"): _ADMIN,
     ("POST", "/api/budget/receipts/list"): _ADMIN,
