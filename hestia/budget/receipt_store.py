@@ -53,6 +53,8 @@ MAX_DRAFTS = 20
 MAX_ACTOR_DRAFTS = 3
 OWNER_DRAFT_RESERVE = 5
 MAX_CANDIDATES = 100
+_SUGGESTION_WINDOW_DAYS = 2
+_BANK_DATE_FIELDS = ("transaction_date", "booking_date", "value_date")
 MAX_GROUP_TX_CANDIDATES = 10
 MAX_GROUP_SPAN_DAYS = 14
 _GROUP_STRENGTH_ORDER = {"id": 0, "nip": 1, "distinctive": 2, "generic": 3, "none": 4}
@@ -137,9 +139,14 @@ def _date_distance(payload, receipt_date, *, document_kind=None, due_date=None, 
         start = _shift_clamped(target, -4)
         end = _shift_clamped(target, 4)
     distances = [abs((tx_date - target).days)
-                 for value in (payload.get("transaction_date"), payload.get("booking_date"), payload.get("value_date"))
+                 for value in map(payload.get, _BANK_DATE_FIELDS)
                  if _valid_date(value) and start <= (tx_date := date.fromisoformat(value)) <= end]
     return min(distances) if distances else None
+
+
+def _receipt_bank_distance(payload, row):
+    return _date_distance(payload, row.receipt_date, document_kind=getattr(row, "document_kind", None),
+                          due_date=getattr(row, "due_date", None))
 
 
 _TX_DIGIT_RUN_RE = re.compile(r"[0-9]+(?:[\s/.\-\u2010-\u2015]+[0-9]+)*")
@@ -1097,9 +1104,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 card_filtered = True
         return scoped, card_filtered
 
-    def _scope_accounts(self, session, owner, row, *, require_enabled_connection=False) -> tuple[set[str], bool]:
+    def _scope_accounts(self, session, owner, row, *, for_group=False) -> tuple[set[str], bool]:
+        # A suffix alone cannot restrict manual 1:1 matching when the payment method is missing.
+        rows = (row,) if for_group or row.payment_method is not None else ()
         return self._scope_accounts_for_rows(
-            session, owner, (row,), require_enabled_connection=require_enabled_connection,
+            session, owner, rows, require_enabled_connection=for_group,
         )
 
     @staticmethod
@@ -1110,12 +1119,10 @@ class BudgetReceiptStore(BudgetHTTPStore):
             or getattr(row, "evidence_for_receipt_id", None) is not None
         )
 
-    def _no_bank_data(self, session, owner, row, *, require_enabled_connection=False) -> bool:
+    def _no_bank_data(self, session, owner, row, *, for_group=False) -> bool:
         if not self._is_matchable(row):
             return False
-        scope_accounts, card_filtered = self._scope_accounts(
-            session, owner, row, require_enabled_connection=require_enabled_connection,
-        )
+        scope_accounts, card_filtered = self._scope_accounts(session, owner, row, for_group=for_group)
         if not scope_accounts:
             return False
         raw_payloads = session.scalars(select(Transaction.payload_json).where(
@@ -1219,6 +1226,44 @@ class BudgetReceiptStore(BudgetHTTPStore):
             Transaction.uncertain.is_(False), ~transfer_leg, *filters,
         )).all()
 
+    def _sole_debit_for_another_receipt(self, session, owner, row, total, debit_key, exact_debits):
+        payload = exact_debits[debit_key]
+        bank_dates = [date.fromisoformat(day) for day in map(payload.get, _BANK_DATE_FIELDS) if _valid_date(day)]
+        date_ranges = [
+            Receipt.receipt_date.between(
+                _shift_clamped(day, -_SUGGESTION_WINDOW_DAYS).isoformat(),
+                _shift_clamped(day, _SUGGESTION_WINDOW_DAYS).isoformat(),
+            )
+            for day in bank_dates
+        ]
+        peers = session.scalars(select(Receipt).where(
+            Receipt.owner == owner, Receipt.id != getattr(row, "id", None), Receipt.currency == row.currency,
+            Receipt.receipt_kind == "purchase", Receipt.linked_account_id.is_(None),
+            Receipt.evidence_for_receipt_id.is_(None), ~_receipt_grouped(owner, Receipt.id),
+            or_(Receipt.payment_method.is_(None), Receipt.payment_method.not_in(("cash", "mixed"))),
+            or_(*date_ranges),
+        ))
+        account_id, _ = debit_key
+        for peer in peers:
+            if _positive_money(peer.total_amount) != total:
+                continue
+            distance = _receipt_bank_distance(payload, peer)
+            if distance is None or distance > _SUGGESTION_WINDOW_DAYS:
+                continue
+            scope, _ = self._scope_accounts(session, owner, peer)
+            if account_id not in scope:
+                continue
+            # Another debit may be in this receipt's window or account scope only.
+            for other_key, other_payload in exact_debits.items():
+                if other_key == debit_key or other_key[0] not in scope:
+                    continue
+                other_distance = _receipt_bank_distance(other_payload, peer)
+                if other_distance is not None and other_distance <= _SUGGESTION_WINDOW_DAYS:
+                    break
+            else:
+                return True
+        return False
+
     def _candidates(self, session, owner, row, parsed, *, include_receipt_id=None):
         if (row.total_amount is None or row.currency is None or row.receipt_date is None
                 or row.payment_method in ("cash", "mixed")
@@ -1248,12 +1293,12 @@ class BudgetReceiptStore(BudgetHTTPStore):
         receipt_is_gateway = _is_gateway_receipt(session, row)
         linked_key = (getattr(row, "linked_account_id", None), getattr(row, "linked_entry_ref", None))
         ranked = []
+        exact_debits = {}
+        nearby_exact_count = 0
+        weak_candidate = None
         for transaction, tx_row_id in self._candidate_rows(session, owner, include_receipt_id=include_receipt_id):
-            if transaction.account_id not in scope_accounts:
-                continue
             tx_key = (transaction.account_id, transaction.entry_reference)
             id_hit = tx_key in unique_id_txs
-            invoice_id_hit = False
             try:
                 payload = _json(transaction.payload_json)
                 if (not isinstance(payload, dict) or payload.get("status") != "BOOK"
@@ -1263,7 +1308,22 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 tx_amount = canonical_money(payload.get("amount"))
                 if tx_amount != total and not (id_hit and fee_adjusted is not None and tx_amount == fee_adjusted):
                     continue
-                distance = _date_distance(payload, row.receipt_date, document_kind=doc_kind, due_date=due)
+            except (AnalyticsError, ValueError, TypeError, KeyError, RecursionError):
+                continue
+            try:
+                fingerprint = financial_fingerprint(payload)
+            except AnalyticsError:
+                continue
+            if direction == "DBIT" and tx_amount == total and tx_key != linked_key:
+                # Peer receipts can have different account scopes and dates.
+                exact_debits[tx_key] = payload
+            if transaction.account_id not in scope_accounts:
+                continue
+            distance = _receipt_bank_distance(payload, row)
+            if tx_key in exact_debits and distance is not None and distance <= _SUGGESTION_WINDOW_DAYS:
+                nearby_exact_count += 1
+            try:
+                invoice_id_hit = False
                 if tx_amount == total and (
                     (invoice_pattern is not None and remittance_has_invoice_number(invoice_pattern, payload))
                     or (distance is None and tx_key in late_id_txs)
@@ -1276,13 +1336,6 @@ class BudgetReceiptStore(BudgetHTTPStore):
                         distance = wide_distance
                 if distance is None:
                     continue
-            except (AnalyticsError, ValueError, TypeError, KeyError, RecursionError):
-                continue
-            try:
-                fingerprint = financial_fingerprint(payload)
-            except AnalyticsError:
-                continue
-            try:
                 creditor, debtor = resolved_party_names(
                     session, owner, transaction.account_id, transaction.entry_reference, payload, fingerprint)
                 evidence = link_evidence(
@@ -1303,21 +1356,37 @@ class BudgetReceiptStore(BudgetHTTPStore):
             nip_hit = match["nip_hit"]
             distinctive_score = match["distinctive_score"]
             generic_score = match["generic_score"]
-            is_current_link = (transaction.account_id, transaction.entry_reference) == linked_key
+            gateway_evidence = receipt_is_gateway and match["bank_has_gateway"]
+            merchant_evidence = hit or generic_score > 0
+            if strength == "none" and receipt_is_gateway and (
+                distance <= _SUGGESTION_WINDOW_DAYS if gateway_evidence else merchant_evidence
+            ):
+                # Generic is the existing manual suggestion strength for supporting text evidence.
+                strength = "generic"
+            is_current_link = tx_key == linked_key
             candidate = {
                 "account_id": transaction.account_id,
                 "entry_reference": entry_reference_digest(transaction.entry_reference),
-                "amount": canonical_money(payload["amount"]), "currency": payload["currency"],
+                "amount": tx_amount, "currency": payload["currency"],
                 "credit_debit_indicator": direction,
                 "transaction_date": evidence["transaction_date"],
                 "booking_date": evidence["booking_date"], "value_date": evidence["value_date"],
                 "merchant_token_hit": hit, "match_strength": strength, "date_distance": distance,
                 "candidate_token": token,
             }
-            ranked.append((
+            item = (
                 not is_current_link, not (id_hit or invoice_id_hit), not nip_hit, -distinctive_score, -generic_score, distance,
                 transaction.entry_reference, transaction.account_id, candidate,
-            ))
+            )
+            if tx_key in exact_debits and strength == "none" and not (merchant_evidence or gateway_evidence):
+                if distance <= _SUGGESTION_WINDOW_DAYS:
+                    weak_candidate = (tx_key, item)
+            else:
+                ranked.append(item)
+        if weak_candidate is not None and nearby_exact_count == 1:
+            tx_key, item = weak_candidate
+            if not self._sole_debit_for_another_receipt(session, owner, row, total, tx_key, exact_debits):
+                ranked.append(item)
         # Rank across all matching rows before slicing MAX_CANDIDATES so hits and current link survive the cap.
         ranked.sort(key=lambda item: item[:7])
         if not ranked and self._extended_matching:
@@ -1942,7 +2011,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 "anchor_receipt_id": anchor.id, "transactions": [], "proposals": [],
                 "eligible_receipts": [], "eligible_evidence": [],
             }
-        scope_accounts, _ = self._scope_accounts(session, owner, anchor, require_enabled_connection=True)
+        scope_accounts, _ = self._scope_accounts(session, owner, anchor, for_group=True)
         if not scope_accounts:
             return {
                 "anchor_receipt_id": anchor.id, "transactions": [], "proposals": [],
@@ -1980,11 +2049,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
             for ev_row in evidence_pool_all
         }
         ev_scopes = {
-            ev_row.id: self._scope_accounts(session, owner, ev_row, require_enabled_connection=True)[0]
+            ev_row.id: self._scope_accounts(session, owner, ev_row, for_group=True)[0]
             for ev_row in evidence_pool_all
         }
         peer_scopes = {
-            peer.id: self._scope_accounts(session, owner, peer, require_enabled_connection=True)[0]
+            peer.id: self._scope_accounts(session, owner, peer, for_group=True)[0]
             for peer in peer_pool_all
         }
         ranked_txs = []
@@ -2223,9 +2292,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             if result["transactions"]:
                 result["no_bank_data"] = False
             elif _group_member_eligible(row, allow_imported=True) and not _receipt_in_group(session, owner, row.id):
-                result["no_bank_data"] = self._no_bank_data(
-                    session, owner, _receipt_preview(row), require_enabled_connection=True,
-                )
+                result["no_bank_data"] = self._no_bank_data(session, owner, _receipt_preview(row), for_group=True)
             else:
                 result["no_bank_data"] = False
             return result

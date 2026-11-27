@@ -392,6 +392,7 @@ class ReconcileEdgeTests(AnalyticsCase):
                 self.assertIsNone(receipt_reconcile.creditor_name(
                     session, "owner", self.accounts["b"], "credit", fingerprint))
         receipts = BudgetReceiptStore(self.sessions, clock=lambda: self.now, cursor_secret=b"receipts-only")
+        self.change_transaction(remittance_information=["BIEDRONKA"])
         parsed = receipts.parse_text("owner", receipt_text())
         receipts.confirm("owner", confirm_values(parsed, link={
             "account_id": self.accounts["a"], "entry_reference": "debit"}))
@@ -460,6 +461,8 @@ class StoreEdgeTests(AnalyticsCase):
                              value_date="2026-11-30", transaction_date="2026-11-30")
         self.add_transaction("a", "text-remit", amount="100", booking_date="2026-11-30",
                              remittance_information="Synthetic")
+        self.change_transaction(amount="101")
+        self.change_transaction("d", "debit-2", amount="101")
         preview = SimpleNamespace(
             total_amount="not-money", currency="PLN", receipt_date="2026-11-30", payment_method="card",
             receipt_kind="purchase", raw_shop_name="SKLEP", raw_nip=None)
@@ -484,7 +487,8 @@ class StoreEdgeTests(AnalyticsCase):
 
     def test_maximum_unicode_reference_is_a_candidate_and_confirms(self):
         reference = "Ż" * 1024
-        self.add_transaction("a", reference, amount="100", booking_date="2026-11-30")
+        self.add_transaction("a", reference, amount="100", booking_date="2026-11-30",
+                             remittance_information=["BIEDRONKA"])
         parsed = self.draft()
         digest = hashlib.sha256(reference.encode("utf-8")).hexdigest()
         candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == digest)
@@ -510,6 +514,7 @@ class StoreEdgeTests(AnalyticsCase):
         token = base64.urlsafe_b64encode(blob).rstrip(b"=").decode("ascii")
         self.assertRaises(ReceiptError, self.receipts._open_candidate_token, token)
 
+        self.change_transaction(remittance_information=["BIEDRONKA"])
         parsed = self.draft()
         digest = hashlib.sha256(b"debit").hexdigest()
         candidate = next(item for item in parsed["candidates"] if item["entry_reference"] == digest)

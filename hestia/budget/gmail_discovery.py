@@ -8,13 +8,14 @@ from itertools import chain, islice
 from .gmail_document import ImportedDocument, extract_document
 from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
 from .gmail_payment import _CURRENCY, _body_marker, _subject_rejected, confirms_order_cancellation, purchase_payment_scope
-from .gmail_trust import mime_parts
+from .gmail_trust import classify_sender, mime_parts
 from .gmail_worker import WorkerRejected
 from .receipt_parser import fold_text
 
 # A discovery hit may contain two body alternatives and several small PDFs.
 # Limit worker calls even if a single Gmail message contains many attachments.
 _MAX_PARTS = 8
+_MAX_DISCOVERY_PDF_BYTES = 2 * 1024 * 1024
 _NOTICE = re.compile(
     r"\b(?:(?:faktura |invoice )?pro[ -]?forma|quotation|payment reminder"
     r"|przypomnienie o płatności)\b", re.IGNORECASE,
@@ -73,7 +74,7 @@ def _extract_purchase(text, *, pdf=False):
 
 def discover_document(processor, message, pending, *, inline_outer=None, attachments_only=False):
     """Return an uncommitted candidate from one original envelope, pending a unique bank match."""
-    from .gmail_message import _document_parts, _document_payload, _is_pdf_part
+    from .gmail_message import _document_parts, _document_payload, _is_pdf_part, _parse_failed
 
     subjects = message.get_all("Subject", ())
     if any(confirms_order_cancellation(str(subject)) or _subject_rejected(str(subject), None)
@@ -81,18 +82,33 @@ def discover_document(processor, message, pending, *, inline_outer=None, attachm
            or _body_reversal(str(subject))
            for subject in subjects):
         return replace(pending, outcome="skipped_non_receipt")
-    parts = _document_parts(message)
+    parts = ((kind, part, message) for kind, part in _document_parts(message))
     if inline_outer is not None:
-        parts = chain(parts, (("pdf", part) for part in mime_parts(inline_outer) if _is_pdf_part(part)))
+        parts = chain(parts, (("pdf", part, inline_outer) for part in mime_parts(inline_outer) if _is_pdf_part(part)))
     parts = list(islice(parts, _MAX_PARTS + 1))
-    if len(parts) > _MAX_PARTS or (attachments_only and not any(kind == "pdf" for kind, _ in parts)):
+    if len(parts) > _MAX_PARTS:
         return None
+    # Check the decoded PDFs before sending any part of an untrusted discovery hit to the worker.
+    pdf_payloads = {part: part.get_payload(decode=True) or b"" for kind, part, _ in parts if kind == "pdf"}
+    if attachments_only and not pdf_payloads:
+        return None
+    oversized_envelopes = {envelope for kind, part, envelope in parts
+                           if kind == "pdf" and len(pdf_payloads[part]) > _MAX_DISCOVERY_PDF_BYTES}
+    settings = processor.settings
+    for envelope in oversized_envelopes:
+        if attachments_only or classify_sender(
+            envelope.raw_items(), settings.sender_allowlist, settings.spouse_forward_senders,
+            getattr(settings, "owner_mailbox", None),
+            document_senders=getattr(settings, "document_senders", ()),
+            require_authentication=processor.require_auth,
+        ) != "direct_allowlist":
+            return _parse_failed(pending, "discovery_pdf_too_large")
     selected = None
     source_kind = "email"
     payment_lines = []
-    for kind, part in parts:
+    for kind, part, _ in parts:
         try:
-            payload = _document_payload(kind, part)
+            payload = _document_payload(kind, part, decoded=pdf_payloads.get(part))
             if not payload:
                 continue
             text = processor.worker.parse(kind, payload)
