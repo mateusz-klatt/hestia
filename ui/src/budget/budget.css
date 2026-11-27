@@ -416,6 +416,8 @@
   .budget-link-indicator[aria-expanded="true"] {
     flex-basis: 100%;
     width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
     justify-content: flex-start;
     align-items: flex-start;
     border-radius: .75rem;
@@ -433,6 +435,13 @@
   }
   .budget-link-indicator[aria-expanded="true"] .budget-link-primary {
     max-width: 100%;
+  }
+  .budget-link-indicator[aria-expanded="true"] .budget-link-meta {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }
 .budget-one-off { font-style: italic; }

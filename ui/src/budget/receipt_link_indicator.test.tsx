@@ -161,8 +161,9 @@ describe("LinkedTransactionIndicator and ReceiptsView bank link indicators", () 
     expect(css).not.toMatch(/\.budget-link-meta\s*\{[^}]*text-overflow:\s*ellipsis/);
     const narrowStart = css.indexOf("@media (max-width: 480px)");
     const narrowBlock = css.slice(narrowStart, css.indexOf(".budget-one-off", narrowStart));
-    expect(narrowBlock).toMatch(/\.budget-link-indicator\[aria-expanded="true"\]\s*\{[^}]*flex-basis:\s*100%;[^}]*width:\s*100%;[^}]*white-space:\s*normal;/);
+    expect(narrowBlock).toMatch(/\.budget-link-indicator\[aria-expanded="true"\]\s*\{[^}]*flex-basis:\s*100%;[^}]*width:\s*100%;[^}]*max-width:\s*100%;[^}]*box-sizing:\s*border-box;[^}]*white-space:\s*normal;/);
     expect(narrowBlock).toMatch(/\.budget-link-indicator\[aria-expanded="true"\]\s+\.budget-link-detail\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;[^}]*max-width:\s*none;/);
+    expect(narrowBlock).toMatch(/\.budget-link-indicator\[aria-expanded="true"\]\s+\.budget-link-meta\s*\{[^}]*flex:\s*0 1 auto;[^}]*min-width:\s*0;[^}]*max-width:\s*100%;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/);
   });
 
   it("renders inline bank link indicator on linked receipts in Paragony i dowody and omits it when unlinked", async () => {
