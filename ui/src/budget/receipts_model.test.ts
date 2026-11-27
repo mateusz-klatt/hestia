@@ -36,6 +36,7 @@ import {
   isGmailImportSource,
   isGroupDateSpanValid,
   isGroupMemberEligible,
+  isReceiptDraftDirty,
   isReceiptGrouped,
   mergeGroupPoolMembers,
   positiveGroupFee,
@@ -1480,5 +1481,31 @@ describe("receipts_model", () => {
     expect(findNextUnconfirmedReceiptId([r1], "r2", { wrap: true, startIndex: 1 })).toBe("r1");
     const allConfirmed = rows.map((r) => ({ ...r, status: "confirmed" as const }));
     expect(findNextUnconfirmedReceiptId(allConfirmed, "r1", { wrap: true })).toBeNull();
+  });
+
+  it("detects dirty receipt drafts against detail baseline while ignoring link-choice-only changes", () => {
+    const baseDetail = detailOf({
+      receipt_id: "dirty-1",
+      currency: null,
+      payment_method: null,
+      receipt_time: null,
+      raw_nip: null,
+    });
+    const clean = draftFromDetail(baseDetail, []);
+    expect(isReceiptDraftDirty(baseDetail, clean)).toBe(false);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, linkChoice: "unlink" })).toBe(false);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, receiptId: "other-id", rawShopName: "Changed" })).toBe(false);
+
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, rawShopName: "Edited Shop" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, rawNip: "5261040828" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, receiptKind: "refund" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, receiptDate: "2026-11-15" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, receiptTime: "10:15" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, totalAmount: "43.00" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, currency: "EUR" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, paymentMethod: "cash" })).toBe(true);
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, lines: [] })).toBe(true);
+    const editedLine = clean.lines.map((line, idx) => (idx === 0 ? { ...line, raw_name: "Edited Milk" } : line));
+    expect(isReceiptDraftDirty(baseDetail, { ...clean, lines: editedLine })).toBe(true);
   });
 });

@@ -939,6 +939,47 @@ export function draftFromDetail(
   };
 }
 
+/**
+ * True when any editable receipt field or line in `draft` differs from the clean baseline
+ * derived from `detail` (excluding `linkChoice`, which is tracked separately in session memory
+ * so bank-evidence drift refreshes can still invalidate stale tokens).
+ */
+export function isReceiptDraftDirty(
+  detail: ReceiptDetail,
+  draft: ReceiptConfirmDraft,
+): boolean {
+  if (draft.receiptId !== detail.receipt_id) return false;
+  const baseline = draftFromDetail(detail, []);
+  if (draft.rawShopName !== baseline.rawShopName) return true;
+  if (draft.rawNip !== baseline.rawNip) return true;
+  if (draft.receiptKind !== baseline.receiptKind) return true;
+  if (draft.receiptDate !== baseline.receiptDate) return true;
+  if (draft.receiptTime !== baseline.receiptTime) return true;
+  if (draft.totalAmount !== baseline.totalAmount) return true;
+  if (draft.currency !== baseline.currency) return true;
+  if (draft.paymentMethod !== baseline.paymentMethod) return true;
+  if (draft.lines.length !== baseline.lines.length) return true;
+  for (let i = 0; i < baseline.lines.length; i += 1) {
+    const orig = baseline.lines[i];
+    const next = draft.lines[i];
+    if (orig === undefined || next === undefined) return true;
+    if (
+      orig.line_kind !== next.line_kind
+      || orig.raw_name !== next.raw_name
+      || orig.ptu_code !== next.ptu_code
+      || orig.quantity !== next.quantity
+      || orig.raw_unit !== next.raw_unit
+      || orig.unit_price_raw !== next.unit_price_raw
+      || orig.gross_line_total !== next.gross_line_total
+      || orig.discount_amount !== next.discount_amount
+      || orig.net_line_total !== next.net_line_total
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Keeps link choices valid after field edits: disables stale tokens without silently picking unlink. */
 export function reconcileLinkChoice(
   detail: ReceiptDetail,

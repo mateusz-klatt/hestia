@@ -3366,4 +3366,246 @@ describe("ReceiptsView", () => {
     await settle();
     expect(vi.mocked(clients.rApi.receiptsList).mock.calls.length).toBe(callsBeforeUnmount);
   });
+
+  it("keeps the drawer open when search omits a receipt with a dirty draft and applies deferred reconciliation on discard or save", async () => {
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const r1 = receiptSummary({ receipt_id: "dirty-s1", status: "needs_review", raw_shop_name: "Lidl Draft One", total_amount: "12.50", version: 1 });
+    const r2 = receiptSummary({ receipt_id: "dirty-s2", status: "needs_review", raw_shop_name: "Biedronka Survivor", total_amount: "12.50", version: 1 });
+    const r3 = receiptSummary({ receipt_id: "dirty-s3", status: "needs_review", raw_shop_name: "Carrefour Last", total_amount: "12.50", version: 1 });
+
+    let searchResults: ReceiptSummary[] = [r2];
+    const clients = fakeClients([r1, r2, r3]);
+    vi.mocked(clients.rApi.receiptsSearch).mockImplementation(() => ok<ReceiptListResult>({
+      receipts: searchResults,
+      next_cursor: null,
+    }));
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = [r1, r2, r3].find((row) => row.receipt_id === id) ?? r1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...match, lines: singleLine }), candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => {
+      const match = [r1, r2, r3].find((row) => row.receipt_id === req.receipt_id) ?? r1;
+      return ok({
+        ok: true,
+        receipt: receiptDetail({
+          ...match,
+          status: "confirmed",
+          raw_shop_name: req.raw_shop_name ?? match.raw_shop_name,
+          version: req.expected_version + 1,
+          lines: singleLine,
+        }),
+      });
+    });
+
+    await renderReceipts(clients);
+    await click(openDetailById("dirty-s1"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+
+    // Edit r1 so its draft is dirty, then search for something that omits r1.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Unsaved Merchant Edit");
+    await typeInto(inputByName("query"), "Biedronka");
+    await submit(host.querySelector(".budget-range"));
+
+    // List updated to [r2], but drawer MUST stay on r1 with unsaved edits preserved and Prev/Next disabled.
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(1);
+    expect(host.querySelector('[data-receipt-id="dirty-s2"]')).not.toBeNull();
+    expect(dialog().textContent).toContain("Lidl Draft One");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Unsaved Merchant Edit");
+    expect(button("Previous", dialog()).disabled).toBe(true);
+    expect(button("Next", dialog()).disabled).toBe(true);
+
+    // Reverting the edit (discard) makes the draft clean -> deferred reconciliation switches cleanly to r2.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Lidl Draft One");
+    await settle();
+    expect(dialog().textContent).toContain("Biedronka Survivor");
+    expect(dialog().textContent).not.toContain("Lidl Draft One");
+
+    // Also verify saving a dirty omitted receipt reconciles cleanly after save (closes when search returns empty).
+    await typeInto(inputByName("raw_shop_name", dialog()), "Biedronka Edited");
+    searchResults = [];
+    await typeInto(inputByName("query"), "NoMatchAtAll");
+    await submit(host.querySelector(".budget-range"));
+    expect(host.querySelectorAll(".budget-receipt-row")).toHaveLength(0);
+    expect(dialog().textContent).toContain("Biedronka Survivor");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Biedronka Edited");
+
+    await click(button("Confirm receipt", dialog()));
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
+      receipt_id: "dirty-s2",
+      raw_shop_name: "Biedronka Edited",
+    }));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("skips post-save detail reload when the user starts a newer dirty draft during the refetch and preserves the draft", async () => {
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const v1 = receiptSummary({ receipt_id: "draft-v", status: "needs_review", raw_shop_name: "Initial Shop", total_amount: "12.50", version: 1 });
+    const v2 = { ...v1, status: "confirmed" as const, raw_shop_name: "Saved V2 Shop", version: 2 };
+    const v3Server = { ...v2, raw_shop_name: "Server Concurrent V3", version: 3 };
+
+    const pendingPostSaveRefresh = deferred<ReceiptListResult>();
+    let listCalls = 0;
+    let detailCalls = 0;
+    const clients = fakeClients([v1]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation(() => {
+      listCalls += 1;
+      if (listCalls === 1) return ok<ReceiptListResult>({ receipts: [v1], next_cursor: null });
+      if (listCalls === 2) return pendingPostSaveRefresh.promise;
+      return ok<ReceiptListResult>({ receipts: [v3Server], next_cursor: null });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation(() => {
+      detailCalls += 1;
+      if (detailCalls === 1) return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...v1, lines: singleLine }), candidates: [] });
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...v3Server, lines: singleLine }), candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt)
+      .mockImplementationOnce(() => ok({ ok: true, receipt: receiptDetail({ ...v2, lines: singleLine }) }))
+      .mockImplementationOnce(() => fail(409, "budget_receipt_conflict"));
+
+    await renderReceipts(clients);
+    await click(openDetailById("draft-v"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+
+    // Save v1 -> v2 while post-save list refetch stays pending.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Saved V2 Shop");
+    await act(async () => {
+      button("Confirm receipt", dialog()).click();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(dialog().textContent).toContain("Version 2");
+    expect(detailCalls).toBe(1);
+
+    // Start editing a newer v3 draft BEFORE the post-save refetch settles.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Newer Unsaved V3 Draft");
+
+    // Post-save refetch finishes -> MUST skip detail reload and keep "Newer Unsaved V3 Draft" intact.
+    await act(async () => {
+      pendingPostSaveRefresh.resolve({ ok: true, data: { receipts: [v2], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+    expect(detailCalls).toBe(1);
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Newer Unsaved V3 Draft");
+
+    // Submitting the newer draft uses version 2; if the server bumped concurrently, 409 reloads fresh server v3.
+    await click(button("Confirm receipt", dialog()));
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
+      receipt_id: "draft-v",
+      expected_version: 2,
+      raw_shop_name: "Newer Unsaved V3 Draft",
+    }));
+    expect(detailCalls).toBe(2);
+    expect(dialog().textContent).toContain("Version 3");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Server Concurrent V3");
+  });
+
+  it("tracks refresh reconciliation per drawer ID so confirming A, closing A, and grouping B still reconciles B", async () => {
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const a = receiptSummary({ receipt_id: "per-id-a", status: "needs_review", linked: false, raw_shop_name: "Receipt Alpha", total_amount: "12.50", version: 1 });
+    const b = receiptSummary({ receipt_id: "per-id-b", status: "confirmed", linked: false, raw_shop_name: "Receipt Beta", total_amount: "20.00", version: 2 });
+    const b2 = receiptSummary({ receipt_id: "per-id-b2", status: "confirmed", linked: false, raw_shop_name: "Receipt Beta Partner", total_amount: "30.00", version: 2 });
+    const c = receiptSummary({ receipt_id: "per-id-c", status: "confirmed", linked: false, raw_shop_name: "Receipt Gamma Survivor", total_amount: "15.00", version: 1 });
+    const groupTx = {
+      account_id: "local-a",
+      entry_reference: "d".repeat(64),
+      amount: "50.00",
+      currency: "PLN",
+      credit_debit_indicator: "DBIT" as const,
+      transaction_date: "2026-11-14",
+      booking_date: "2026-11-14",
+      value_date: "2026-11-14",
+      merchant_token_hit: false,
+      match_strength: "none" as const,
+      date_distance: 0,
+      evidence_fingerprint: "fp-per-id",
+      candidate_token: "tok-per-id",
+    };
+
+    const pendingConfirmARefresh = deferred<ReceiptListResult>();
+    let unlinkedListCalls = 0;
+    const clients = fakeClients([a, b, b2, c]);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation((req) => {
+      if (req?.linked !== false) {
+        return ok<ReceiptListResult>({ receipts: [a, b, b2, c], next_cursor: null });
+      }
+      unlinkedListCalls += 1;
+      if (unlinkedListCalls === 1) {
+        return ok<ReceiptListResult>({ receipts: [a, b, b2, c], next_cursor: null });
+      }
+      if (unlinkedListCalls === 2) {
+        return pendingConfirmARefresh.promise;
+      }
+      return ok<ReceiptListResult>({ receipts: [{ ...a, status: "confirmed", version: 2 }, c], next_cursor: null });
+    });
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = [a, b, b2, c].find((row) => row.receipt_id === id) ?? a;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...match, lines: singleLine }), candidates: [], group_candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => ok({
+      ok: true,
+      receipt: receiptDetail({ ...a, status: "confirmed", version: req.expected_version + 1, lines: singleLine }),
+    }));
+    clients.rApi.receiptGroupCandidates = vi.fn<NonNullable<ReceiptsApi["receiptGroupCandidates"]>>(() => ok<ReceiptGroupCandidatesResult>({
+      anchor_receipt_id: "per-id-b",
+      transactions: [groupTx],
+      proposals: [],
+      eligible_receipts: [b, b2],
+      eligible_evidence: [],
+      no_bank_data: false,
+    }));
+    clients.rApi.linkReceiptGroup = vi.fn<NonNullable<ReceiptsApi["linkReceiptGroup"]>>(() => ok<ReceiptGroupLinkResult>({
+      ok: true,
+      group: { group_id: "grp-beta", group_version: 1, group_status: "confirmed", member_count: 2, evidence_receipt_id: null, fee_amount: null },
+      members: [{ ...b, linked: true, version: 3 }, { ...b2, linked: true, version: 3 }],
+      evidence: null,
+      linked_account_id: "local-a",
+      linked_entry_ref: "d".repeat(64),
+    }));
+
+    await renderReceipts(clients);
+    await choose(selectByName("linked"), "unlinked");
+    await settle();
+    expect(unlinkedListCalls).toBe(1);
+
+    // 1. Confirm A -> starts quiet refetch #1 (deferred only for A, stays pending).
+    await click(openDetailById("per-id-a"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+    await act(async () => {
+      button("Confirm receipt", dialog()).click();
+      await Promise.resolve();
+    });
+    await settle();
+    expect(unlinkedListCalls).toBe(2);
+
+    // 2. Close A while refresh #1 is still in flight, then open B and group B + B2.
+    await click(button("Close", dialog()));
+    await click(openDetailById("per-id-b"));
+    await click(button("Group with other receipts", dialog()));
+    const groupModal = [...host.querySelectorAll<HTMLElement>('[role="dialog"]')].at(-1);
+    if (groupModal === undefined) throw new Error("Expected group controller modal");
+    const txRadio = groupModal.querySelector<HTMLInputElement>('input[name="group_tx_choice"][value="0"]');
+    if (txRadio === null) throw new Error("Expected tx choice");
+    await click(txRadio);
+    for (const box of groupModal.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')) {
+      if (!box.checked) await click(box);
+    }
+    await click(button("Confirm group link", groupModal));
+    // Coalesced onto A's in-flight refresh (#2), so no overlapping request fired yet.
+    expect(unlinkedListCalls).toBe(2);
+
+    // 3. Resolve A's refresh -> dirty follow-up pass (#3) runs and MUST reconcile B (switching to C).
+    await act(async () => {
+      pendingConfirmARefresh.resolve({ ok: true, data: { receipts: [{ ...a, status: "confirmed", version: 2 }, b, b2, c], next_cursor: null } });
+      await Promise.resolve();
+    });
+    await settle();
+    await settle();
+
+    expect(unlinkedListCalls).toBe(3);
+    expect(host.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    expect(dialog().textContent).toContain("Receipt Gamma Survivor");
+    expect(dialog().textContent).not.toContain("Receipt Beta");
+    expect(host.textContent).toContain("Receipt group linked.");
+  });
 });
