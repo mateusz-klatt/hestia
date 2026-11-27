@@ -134,7 +134,8 @@ from .budget.loan_references import MAX_MATCH_REFERENCES
 # 0.65.0: optional multi-status filter on receipt lists (zero migration).
 # 0.66.0: Gmail worker_crash and discovery_pdf_too_large parse diagnostics.
 # 0.67.0: owner-private receipt transaction search and a manual selection on receipt confirmation.
-CONTRACT_VERSION = "0.67.0"
+# 0.69.0: receipt evidence suggestions and owner-confirmed attachment.
+CONTRACT_VERSION = "0.69.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
