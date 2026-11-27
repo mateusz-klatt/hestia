@@ -805,6 +805,7 @@ describe("ReceiptsView", () => {
       }));
 
     await click(button("Close", dialog()));
+    await click(button("Discard", dialog()));
     await click(button("Details"));
     const d4 = dialog();
     expect(linkRadio("candidate:0", d4).checked).toBe(false);
@@ -821,6 +822,7 @@ describe("ReceiptsView", () => {
 
     // 5. Server 409 budget_receipt_stale_source (ledger update while fields untouched) reloads detail and explains.
     await click(button("Close", dialog()));
+    await click(button("Discard", dialog()));
     await click(button("Details"));
     await click(linkRadio("candidate:0", dialog()));
     vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => fail(409, "budget_receipt_stale_source"));
@@ -3763,5 +3765,131 @@ describe("ReceiptsView", () => {
     });
     await settle();
     expect(listCalls).toBe(4);
+  });
+
+  it("guards sync Prev/Next, list selection, and Close with an inline Save/Discard prompt and navigates only after Save succeeds or Discard is clicked", async () => {
+    const singleLine = receiptDetail().lines.slice(0, 1);
+    const g1 = receiptSummary({ receipt_id: "g-1", status: "needs_review", raw_shop_name: "Sklep Pierwszy", total_amount: "12.50", version: 1 });
+    const g2 = receiptSummary({ receipt_id: "g-2", status: "needs_review", raw_shop_name: "Sklep Drugi", total_amount: "12.50", version: 1 });
+    const g3 = receiptSummary({ receipt_id: "g-3", status: "needs_review", raw_shop_name: "Sklep Trzeci", total_amount: "12.50", version: 1 });
+    let rows: ReceiptSummary[] = [g1, g2, g3];
+
+    const clients = fakeClients(rows);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation(() => ok<ReceiptListResult>({ receipts: rows, next_cursor: null }));
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      const match = rows.find((row) => row.receipt_id === id) ?? g1;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail({ ...match, lines: singleLine }), candidates: [] });
+    });
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementation((req) => {
+      const match = rows.find((row) => row.receipt_id === req.receipt_id) ?? g1;
+      const updated = receiptDetail({
+        ...match,
+        status: "confirmed",
+        raw_shop_name: req.raw_shop_name ?? match.raw_shop_name,
+        version: req.expected_version + 1,
+        lines: singleLine,
+      });
+      rows = rows.map((row) => (row.receipt_id === updated.receipt_id ? updated : row));
+      return ok({ ok: true, receipt: updated });
+    });
+
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailById("g-1", "Szczegóły"));
+    await click(inputByName("auto_advance_on_confirm", dialog()));
+
+    // 1. Sync Next with dirty draft -> stays on g-1, shows inline Polish prompt, navigates only after Discard.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Szkic Pierwszy");
+    await click(button("Następny", dialog()));
+    expect(dialog().textContent).toContain("Sklep Pierwszy");
+    expect(dialog().textContent).not.toContain("Sklep Drugi");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Szkic Pierwszy");
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+    expect(button("Zapisz", dialog()).disabled).toBe(false);
+    expect(button("Odrzuć", dialog()).disabled).toBe(false);
+
+    await click(button("Odrzuć", dialog()));
+    expect(dialog().textContent).toContain("Sklep Drugi");
+    expect(dialog().textContent).not.toContain("Masz niezapisane zmiany");
+
+    // 2. Sync Previous with dirty draft -> Save saves g-2 and then navigates to g-1.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Zapisany Drugi");
+    await click(button("Poprzedni", dialog()));
+    expect(dialog().textContent).toContain("Sklep Drugi");
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+
+    await click(button("Zapisz", dialog()));
+    expect(clients.rApi.confirmReceipt).toHaveBeenLastCalledWith(expect.objectContaining({
+      receipt_id: "g-2",
+      raw_shop_name: "Zapisany Drugi",
+    }));
+    expect(dialog().textContent).toContain("Sklep Pierwszy");
+    expect(host.textContent).toContain("Zapisany Drugi");
+
+    // 3. Selecting another row in the list with dirty draft -> stays on g-1 until Discard.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Szkic Przy Liście");
+    await click(openDetailById("g-3", "Szczegóły"));
+    expect(dialog().textContent).toContain("Sklep Pierwszy");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Szkic Przy Liście");
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+    await click(button("Odrzuć", dialog()));
+    expect(dialog().textContent).toContain("Sklep Trzeci");
+
+    // 4. Close with dirty draft -> Save failure (409) keeps drawer open with draft; Discard closes drawer.
+    await typeInto(inputByName("raw_shop_name", dialog()), "Szkic Trzeci");
+    await click(button("Zamknij", dialog()));
+    expect(dialog().textContent).toContain("Sklep Trzeci");
+    expect(dialog().textContent).toContain("Masz niezapisane zmiany");
+
+    vi.mocked(clients.rApi.confirmReceipt).mockImplementationOnce(() => fail(409, "budget_receipt_conflict"));
+    await click(button("Zapisz", dialog()));
+    expect(dialog().textContent).toContain("Sklep Trzeci");
+    expect(inputByName("raw_shop_name", dialog()).value).toBe("Szkic Trzeci");
+    expect(dialog().textContent).toContain("Dokument zmienił się w międzyczasie");
+
+    await click(button("Odrzuć", dialog()));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("closes the drawer with Dokument został usunięty when post-refresh probe or detail reload returns 404 after a lost-response delete", async () => {
+    const r1 = receiptSummary({ receipt_id: "del-lost-1", status: "confirmed", raw_shop_name: "Usunięty Paragon", total_amount: "12.50", version: 2 });
+    const r2 = receiptSummary({ receipt_id: "del-lost-2", status: "confirmed", raw_shop_name: "Drugi Paragon", total_amount: "12.50", version: 2 });
+
+    let serverRows: ReceiptSummary[] = [r1, r2];
+    const deletedIds = new Set<string>();
+    const clients = fakeClients(serverRows);
+    vi.mocked(clients.rApi.receiptsList).mockImplementation(() => ok<ReceiptListResult>({ receipts: serverRows, next_cursor: null }));
+    vi.mocked(clients.rApi.receiptDetail).mockImplementation((id) => {
+      if (deletedIds.has(id)) return fail(404, "budget_receipt_not_found");
+      const match = serverRows.find((row) => row.receipt_id === id) ?? r2;
+      return ok<ReceiptDetailResult>({ receipt: receiptDetail(match), candidates: [] });
+    });
+    vi.mocked(clients.rApi.deleteReceipt).mockImplementationOnce((req) => {
+      // Server commits the delete, then the HTTP response is lost due to a network error.
+      deletedIds.add(req.receipt_id);
+      serverRows = serverRows.filter((row) => row.receipt_id !== req.receipt_id);
+      return fail(0, "budget_network_error");
+    });
+
+    await renderReceipts(clients, { locale: "pl", revision: 1 });
+    await click(openDetailById("del-lost-1", "Szczegóły"));
+    expect(dialog().textContent).toContain("Usunięty Paragon");
+
+    await click(button("Usuń dokument", dialog()));
+    await click(button("Tak, usuń", dialog()));
+
+    // Refreshed list drops del-lost-1 and the 404 detail probe closes the drawer with "Dokument został usunięty".
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.textContent).toContain("Dokument został usunięty");
+    expect(host.querySelector('[data-receipt-id="del-lost-1"]')).toBeNull();
+
+    // Also verify the drawer's own detail reload returning 404 (even with a dirty draft) closes with the same notice.
+    await click(openDetailById("del-lost-2", "Szczegóły"));
+    await typeInto(inputByName("raw_shop_name", dialog()), "Brudny Szkic Usuniętego");
+    deletedIds.add("del-lost-2");
+    serverRows = [];
+
+    await renderReceipts(clients, { locale: "pl", revision: 2 });
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.textContent).toContain("Dokument został usunięty");
   });
 });

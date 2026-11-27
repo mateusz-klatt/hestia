@@ -370,9 +370,21 @@ interface PendingDrawerReconcile {
   preserveNotice: string | null;
 }
 
+type DrawerNavigationTarget =
+  | {
+      kind: "open";
+      receiptId: string;
+      trigger?: HTMLButtonElement | undefined;
+      preserveNotice?: string | null | undefined;
+    }
+  | { kind: "close"; preserveNotice?: string | null | undefined }
+  | { kind: "navigate"; direction: "prev" | "next"; preserveNotice?: string | null | undefined };
+
 interface QuietRefreshOptions {
-  /** Suppresses automatic post-refresh reconciliation only while this specific receipt remains open. */
+  /** Suppresses automatic post-refresh reconciliation only while this specific receipt remains open (caller reconciles). */
   deferReconcileForId?: string | null;
+  /** Suppresses automatic switch/close while keeping a 404 probe active when this receipt disappears (e.g., mutation error). */
+  probeIfMissingForId?: string | null;
   reloadDetailForId?: string | null;
   preserveNotice?: string | null;
 }
@@ -382,6 +394,7 @@ interface ActiveRefreshState {
   dirty: boolean;
   generation: number;
   deferredReconcileIds: Set<string>;
+  probeIfMissingIds: Set<string>;
   reconcileOptionsById: Map<string, PendingDrawerReconcile>;
 }
 
@@ -417,6 +430,10 @@ export function ReceiptsView({
   const [detailState, setDetailState] = useState<DetailState>({ kind: "loading" });
   const [detailRefresh, setDetailRefresh] = useState(0);
   const [imageState, setImageState] = useState<ImageState>({ kind: "none" });
+  const [pendingNavPrompt, setPendingNavPrompt] = useState<{
+    receiptId: string;
+    target: DrawerNavigationTarget;
+  } | null>(null);
   const [pendingMap, setPendingMap] = useState<ReadonlyMap<string, ReceiptActionKind>>(() => store.snapshot());
   const [selectedForBulk, setSelectedForBulk] = useState<ReadonlySet<string>>(() => new Set());
   const [groupControllerTarget, setGroupControllerTarget] = useState<ReceiptGroupControllerTarget | null>(null);
@@ -478,7 +495,9 @@ export function ReceiptsView({
   const openReceiptIndexRef = useRef<number>(0);
   const navGenerationRef = useRef(0);
   const drawerSessionRef = useRef(0);
+  const detailProbeGenRef = useRef(0);
   const dirtyDraftReceiptIdRef = useRef<string | null>(null);
+  const pendingNavRef = useRef<DrawerNavigationTarget | null>(null);
   const pendingDrawerReconcileRef = useRef<Map<string, PendingDrawerReconcile>>(new Map());
   const autoAdvanceVisitedRef = useRef<Map<string, ReceiptStatus>>(new Map());
 
@@ -571,6 +590,10 @@ export function ReceiptsView({
 
   const isMounted = useCallback((): boolean => mounted.current, []);
 
+  const isStillOpen = useCallback((receiptId: string): boolean => (
+    openReceiptIdRef.current === receiptId
+  ), []);
+
   const isDraftDirtyFor = useCallback((receiptId: string): boolean => (
     dirtyDraftReceiptIdRef.current === receiptId
   ), []);
@@ -588,9 +611,13 @@ export function ReceiptsView({
     if (prevId !== null) {
       pendingDrawerReconcileRef.current.delete(prevId);
       activeRefreshRef.current?.deferredReconcileIds.delete(prevId);
+      activeRefreshRef.current?.probeIfMissingIds.delete(prevId);
     }
     dirtyDraftReceiptIdRef.current = null;
+    pendingNavRef.current = null;
+    setPendingNavPrompt(null);
     drawerSessionRef.current += 1;
+    detailProbeGenRef.current += 1;
     detailGeneration.current += 1;
     navGenerationRef.current += 1;
     openReceiptIdRef.current = null;
@@ -656,36 +683,232 @@ export function ReceiptsView({
     return false;
   }, [onAccessLoss, clearAllReceiptsState, revision]);
 
-  const openReceipt = useCallback((receiptId: string, trigger?: HTMLButtonElement) => {
-    const prevId = openReceiptIdRef.current;
-    if (bulkProgressRef.current !== null
-      || groupControllerOpenRef.current
-      || (prevId !== null && store.get(prevId) !== null)
-      || prevId === receiptId) return;
-    if (prevId !== null) {
-      pendingDrawerReconcileRef.current.delete(prevId);
-      activeRefreshRef.current?.deferredReconcileIds.delete(prevId);
-    } else {
-      receiptDrawerTriggerRef.current = trigger ?? null;
-      autoAdvanceVisitedRef.current.clear();
+  const closeDrawerAsDeleted = useCallback((receiptId: string) => {
+    if (openReceiptIdRef.current !== receiptId) return;
+    receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
+    receiptFloorGenRef.current.set(receiptId, ++detailGeneration.current);
+    setSelectedForBulk((current) => {
+      if (!current.has(receiptId)) return current;
+      const next = new Set(current);
+      next.delete(receiptId);
+      return next;
+    });
+    const trigger = receiptDrawerTriggerRef.current;
+    resetDrawer();
+    setNotice(t("budget.receipts.deletedNotice"));
+    if (trigger?.isConnected === true) trigger.focus({ preventScroll: true });
+  }, [actorKey, resetDrawer]);
+
+  const probeMissingOpenReceipt = useCallback((receiptId: string) => {
+    const session = drawerSessionRef.current;
+    const probeGen = ++detailProbeGenRef.current;
+    void receiptsApi.receiptDetail(receiptId).then((result: BudgetResult<ReceiptDetailResult>) => {
+      if (
+        checkBarrier(result)
+        || !isMounted()
+        || detailProbeGenRef.current !== probeGen
+        || openReceiptIdRef.current !== receiptId
+        || drawerSessionRef.current !== session
+      ) {
+        return;
+      }
+      if (!result.ok && result.status === 404) {
+        closeDrawerAsDeleted(receiptId);
+      }
+    });
+  }, [checkBarrier, closeDrawerAsDeleted, isMounted, receiptsApi]);
+
+  const fetchNextPage = useCallback((): Promise<LoadMoreOutcome> => {
+    if (loadMorePromiseRef.current !== null) return loadMorePromiseRef.current;
+    const cur = listStateRef.current;
+    if (cur.kind !== "ready" || cur.loadingMore || cur.nextCursor === null) {
+      return Promise.resolve({ kind: "noop" });
     }
-    dirtyDraftReceiptIdRef.current = null;
-    pendingDrawerReconcileRef.current.delete(receiptId);
-    drawerSessionRef.current += 1;
-    if (listStateRef.current.kind === "ready") {
-      const shown = filterReceiptRows(listStateRef.current.rows, filterRef.current, searchModeRef.current);
-      const idx = shown.findIndex((row) => row.receipt_id === receiptId);
-      if (idx >= 0) openReceiptIndexRef.current = idx;
+    const cursor = cur.nextCursor;
+    const token = listGeneration.current;
+    const activeFilter = filterRef.current;
+    const activeSearchMode = searchModeRef.current;
+    updateListState((current) => (current.kind === "ready"
+      ? { ...current, loadingMore: true, loadMoreError: false }
+      : current));
+    const request = activeSearchMode
+      ? receiptsApi.receiptsSearch({ query: activeFilter.query.trim(), limit: RECEIPT_PAGE_LIMIT, cursor })
+      : receiptsApi.receiptsList(buildReceiptListRequest(activeFilter, cursor));
+    const pending: Promise<LoadMoreOutcome> = request.then((result): LoadMoreOutcome => {
+      if (loadMorePromiseRef.current === pending) loadMorePromiseRef.current = null;
+      if (checkBarrier(result) || !isMounted() || token !== listGeneration.current) {
+        return { kind: "stale_or_aborted" };
+      }
+      if (!result.ok) {
+        if (isStaleCursorError(result) && !staleCursorReloadedRef.current) {
+          staleCursorReloadedRef.current = true;
+          setNotice(t("budget.receipts.cursorExpiredNotice"));
+          setListRefresh((current) => current + 1);
+          return { kind: "error" };
+        }
+        updateListState((current) => (current.kind === "ready"
+          ? {
+              ...current,
+              loadingMore: false,
+              loadMoreError: true,
+              nextCursor: isStaleCursorError(result) ? null : current.nextCursor,
+            }
+          : current));
+        return { kind: "error" };
+      }
+      staleCursorReloadedRef.current = false;
+      const nextState = updateListState((current) => {
+        if (current.kind !== "ready") return current;
+        const merged = mergeReceiptRows(current.rows, result.data.receipts);
+        const next = result.data.next_cursor;
+        const exhausted = next === null || next === cursor || merged.length === current.rows.length;
+        return {
+          kind: "ready",
+          rows: merged,
+          nextCursor: exhausted ? null : next,
+          loadingMore: false,
+          loadMoreError: false,
+          refreshing: false,
+          refreshError: false,
+        };
+      });
+      if (nextState.kind !== "ready") return { kind: "stale_or_aborted" };
+      return { kind: "loaded", rows: nextState.rows, nextCursor: nextState.nextCursor };
+    });
+    loadMorePromiseRef.current = pending;
+    return pending;
+  }, [receiptsApi, checkBarrier, isMounted, updateListState]);
+
+  /** Single unified guard for ALL drawer navigation paths (sync/async Prev/Next, auto-advance, list selection, close). */
+  const requestDrawerNavigation = useCallback((
+    target: DrawerNavigationTarget,
+    options?: { force?: boolean },
+  ): boolean => {
+    const runGuarded = (navTarget: DrawerNavigationTarget, force: boolean): boolean => {
+      const currentId = openReceiptIdRef.current;
+      if (bulkProgressRef.current !== null || groupControllerOpenRef.current) return false;
+      if (currentId !== null && store.get(currentId) !== null) return false;
+      if (navTarget.kind === "open" && currentId === navTarget.receiptId) return false;
+
+      let resolvedTarget: DrawerNavigationTarget = navTarget;
+      if (navTarget.kind === "navigate") {
+        if (currentId === null) return false;
+        const curList = listStateRef.current;
+        if (curList.kind !== "ready") return false;
+        const shown = filterReceiptRows(curList.rows, filterRef.current, searchModeRef.current);
+        const directTarget = findAdjacentReceiptId(shown, currentId, navTarget.direction);
+        if (directTarget !== null) {
+          resolvedTarget = {
+            kind: "open",
+            receiptId: directTarget,
+            preserveNotice: navTarget.preserveNotice,
+          };
+        } else if (
+          navTarget.direction === "prev"
+          || curList.nextCursor === null
+          || !shown.some((row) => row.receipt_id === currentId)
+        ) {
+          return false;
+        }
+      }
+
+      if (!force && currentId !== null && isDraftDirtyFor(currentId)) {
+        pendingNavRef.current = resolvedTarget;
+        setPendingNavPrompt({ receiptId: currentId, target: resolvedTarget });
+        return false;
+      }
+
+      pendingNavRef.current = null;
+      setPendingNavPrompt(null);
+
+      if (resolvedTarget.kind === "close") {
+        const trigger = receiptDrawerTriggerRef.current;
+        resetDrawer();
+        if (resolvedTarget.preserveNotice != null) {
+          setNotice(resolvedTarget.preserveNotice);
+        }
+        if (trigger?.isConnected === true) trigger.focus({ preventScroll: true });
+        return true;
+      }
+
+      if (resolvedTarget.kind === "open") {
+        if (currentId !== null) {
+          pendingDrawerReconcileRef.current.delete(currentId);
+          activeRefreshRef.current?.deferredReconcileIds.delete(currentId);
+          activeRefreshRef.current?.probeIfMissingIds.delete(currentId);
+        } else {
+          receiptDrawerTriggerRef.current = resolvedTarget.trigger ?? null;
+          autoAdvanceVisitedRef.current.clear();
+        }
+        dirtyDraftReceiptIdRef.current = null;
+        pendingDrawerReconcileRef.current.delete(resolvedTarget.receiptId);
+        drawerSessionRef.current += 1;
+        detailProbeGenRef.current += 1;
+        if (listStateRef.current.kind === "ready") {
+          const shown = filterReceiptRows(listStateRef.current.rows, filterRef.current, searchModeRef.current);
+          const idx = shown.findIndex((row) => row.receipt_id === resolvedTarget.receiptId);
+          if (idx >= 0) openReceiptIndexRef.current = idx;
+        }
+        navGenerationRef.current += 1;
+        openReceiptIdRef.current = resolvedTarget.receiptId;
+        loadedReceiptIdRef.current = null;
+        latestReadyCandidatesRef.current = null;
+        latestDetailVersionRef.current = null;
+        setDetailState({ kind: "loading" });
+        setNotice(resolvedTarget.preserveNotice ?? null);
+        setSelectedId(resolvedTarget.receiptId);
+        return true;
+      }
+
+      if (currentId === null) return false;
+      const curList = listStateRef.current;
+      if (curList.kind !== "ready" || curList.nextCursor === null) return false;
+      const startListGen = listGeneration.current;
+      const startNavGen = ++navGenerationRef.current;
+      const startSession = drawerSessionRef.current;
+      const isNavStillActive = (): boolean => (
+        isMounted()
+        && listGeneration.current === startListGen
+        && navGenerationRef.current === startNavGen
+        && openReceiptIdRef.current === currentId
+        && drawerSessionRef.current === startSession
+      );
+      void (async () => {
+        let nextCursor: string | null = curList.nextCursor;
+        while (nextCursor !== null) {
+          const outcome = await fetchNextPage();
+          if (!isNavStillActive()) return;
+          if (outcome.kind !== "loaded") return;
+          nextCursor = outcome.nextCursor;
+          const nextShown = filterReceiptRows(outcome.rows, filterRef.current, searchModeRef.current);
+          const nextTarget = findAdjacentReceiptId(nextShown, currentId, "next");
+          if (nextTarget !== null) {
+            runGuarded(
+              { kind: "open", receiptId: nextTarget, preserveNotice: resolvedTarget.preserveNotice },
+              false,
+            );
+            return;
+          }
+        }
+      })();
+      return true;
+    };
+
+    return runGuarded(target, options?.force === true);
+  }, [fetchNextPage, isDraftDirtyFor, isMounted, resetDrawer, store]);
+
+  const discardPendingNavigation = useCallback(() => {
+    const currentId = openReceiptIdRef.current;
+    const pending = pendingNavRef.current;
+    pendingNavRef.current = null;
+    setPendingNavPrompt(null);
+    if (currentId !== null && dirtyDraftReceiptIdRef.current === currentId) {
+      dirtyDraftReceiptIdRef.current = null;
     }
-    navGenerationRef.current += 1;
-    openReceiptIdRef.current = receiptId;
-    loadedReceiptIdRef.current = null;
-    latestReadyCandidatesRef.current = null;
-    latestDetailVersionRef.current = null;
-    setDetailState({ kind: "loading" });
-    setNotice(null);
-    setSelectedId(receiptId);
-  }, [store]);
+    if (pending !== null) {
+      requestDrawerNavigation(pending, { force: true });
+    }
+  }, [requestDrawerNavigation]);
 
   const reconcileDrawerAfterRefresh = useCallback((
     refreshedRows: readonly ReceiptSummary[],
@@ -720,20 +943,17 @@ export function ReceiptsView({
       openReceiptIndexRef.current,
     );
     if (fallbackId !== null) {
-      openReceipt(fallbackId);
-      if (options?.preserveNotice != null) {
-        setNotice(options.preserveNotice);
-      }
-      return "switched";
+      return requestDrawerNavigation({
+        kind: "open",
+        receiptId: fallbackId,
+        preserveNotice: options?.preserveNotice,
+      }) ? "switched" : "deferred";
     }
-    const trigger = receiptDrawerTriggerRef.current;
-    resetDrawer();
-    if (options?.preserveNotice != null) {
-      setNotice(options.preserveNotice);
-    }
-    if (trigger?.isConnected === true) trigger.focus({ preventScroll: true });
-    return "closed";
-  }, [deferDrawerReconcile, isDraftDirtyFor, openReceipt, resetDrawer]);
+    return requestDrawerNavigation({
+      kind: "close",
+      preserveNotice: options?.preserveNotice,
+    }) ? "closed" : "deferred";
+  }, [deferDrawerReconcile, isDraftDirtyFor, requestDrawerNavigation]);
 
   const handleDraftDirtyChange = useCallback((receiptId: string, dirty: boolean) => {
     if (openReceiptIdRef.current !== receiptId) return;
@@ -743,6 +963,8 @@ export function ReceiptsView({
     }
     if (dirtyDraftReceiptIdRef.current !== receiptId) return;
     dirtyDraftReceiptIdRef.current = null;
+    pendingNavRef.current = null;
+    setPendingNavPrompt(null);
     const pending = pendingDrawerReconcileRef.current.get(receiptId);
     if (pending === undefined) return;
     pendingDrawerReconcileRef.current.delete(receiptId);
@@ -770,8 +992,12 @@ export function ReceiptsView({
       if (opts.deferReconcileForId != null) {
         target.deferredReconcileIds.add(opts.deferReconcileForId);
       }
+      if (opts.probeIfMissingForId != null) {
+        target.probeIfMissingIds.add(opts.probeIfMissingForId);
+      }
       if (opts.reloadDetailForId != null) {
         target.deferredReconcileIds.delete(opts.reloadDetailForId);
+        target.probeIfMissingIds.delete(opts.reloadDetailForId);
       }
       const targetId = opts.reloadDetailForId ?? openReceiptIdRef.current;
       if (targetId !== null && (opts.reloadDetailForId === targetId || opts.preserveNotice != null)) {
@@ -795,6 +1021,7 @@ export function ReceiptsView({
       dirty: false,
       generation: ++listGeneration.current,
       deferredReconcileIds: new Set<string>(),
+      probeIfMissingIds: new Set<string>(),
       reconcileOptionsById: new Map<string, PendingDrawerReconcile>(),
     };
     mergeRefreshOptions(state, options);
@@ -894,7 +1121,7 @@ export function ReceiptsView({
             ? { ...current, refreshing: false, refreshError: true }
             : { kind: "error" }));
           const openId = openReceiptIdRef.current;
-          if (openId !== null && !state.deferredReconcileIds.has(openId)) {
+          if (openId !== null && !state.deferredReconcileIds.has(openId) && !state.probeIfMissingIds.has(openId)) {
             const opts = state.reconcileOptionsById.get(openId);
             if (opts?.reloadDetail === true) {
               if (isDraftDirtyFor(openId)) {
@@ -926,12 +1153,17 @@ export function ReceiptsView({
           refreshError: false,
         }));
         const openId = openReceiptIdRef.current;
-        if (openId !== null && !state.deferredReconcileIds.has(openId) && store.get(openId) === null) {
-          const opts = state.reconcileOptionsById.get(openId);
-          reconcileDrawerAfterRefresh(collected, {
-            reloadDetailForId: opts?.reloadDetail === true ? openId : null,
-            preserveNotice: opts?.preserveNotice ?? null,
-          });
+        if (openId !== null && store.get(openId) === null && !state.deferredReconcileIds.has(openId)) {
+          if (!state.probeIfMissingIds.has(openId)) {
+            const opts = state.reconcileOptionsById.get(openId);
+            reconcileDrawerAfterRefresh(collected, {
+              reloadDetailForId: opts?.reloadDetail === true ? openId : null,
+              preserveNotice: opts?.preserveNotice ?? null,
+            });
+          }
+          if (isStillOpen(openId) && !collected.some((row) => row.receipt_id === openId)) {
+            probeMissingOpenReceipt(openId);
+          }
         }
         return { kind: "loaded", rows: collected, nextCursor: finalNextCursor };
       };
@@ -968,6 +1200,8 @@ export function ReceiptsView({
     deferDrawerReconcile,
     isDraftDirtyFor,
     isMounted,
+    isStillOpen,
+    probeMissingOpenReceipt,
     updateListState,
     reconcileDrawerAfterRefresh,
     store,
@@ -980,11 +1214,13 @@ export function ReceiptsView({
       cancelSearchDebounce();
       listGeneration.current += 1;
       detailGeneration.current += 1;
+      detailProbeGenRef.current += 1;
       imageGeneration.current += 1;
       navGenerationRef.current += 1;
       loadMorePromiseRef.current = null;
       activeRefreshRef.current = null;
       dirtyDraftReceiptIdRef.current = null;
+      pendingNavRef.current = null;
       pendingDrawerReconcileRef.current.clear();
       bulkCancelledRef.current = true;
       bulkRunGenRef.current += 1;
@@ -1165,24 +1401,18 @@ export function ReceiptsView({
         // Reload list after every settled mutation (including error) in case a server write committed before response loss.
         void quietRefetchLoadedRange();
         if (openReceiptIdRef.current === event.receiptId) {
-          if (isDraftDirtyFor(event.receiptId)) {
-            deferDrawerReconcile(event.receiptId, {
-              reloadDetail: true,
-              preserveNotice: event.outcome === "not_found" ? t("budget.receipts.notFound") : null,
-            });
+          if (event.outcome === "deleted" || event.outcome === "not_found") {
+            closeDrawerAsDeleted(event.receiptId);
+          } else if (isDraftDirtyFor(event.receiptId)) {
+            deferDrawerReconcile(event.receiptId, { reloadDetail: true, preserveNotice: null });
           } else {
             receiptFloorGenRef.current.set(event.receiptId, ++detailGeneration.current);
-            if (event.outcome === "deleted" || event.outcome === "not_found") {
-              resetDrawer();
-              if (event.outcome === "not_found") setNotice(t("budget.receipts.notFound"));
-            } else {
-              setDetailRefresh((current) => current + 1);
-            }
+            setDetailRefresh((current) => current + 1);
           }
         }
       }
     });
-  }, [store, quietRefetchLoadedRange, deferDrawerReconcile, isDraftDirtyFor, resetDrawer]);
+  }, [store, quietRefetchLoadedRange, closeDrawerAsDeleted, deferDrawerReconcile, isDraftDirtyFor]);
 
   useEffect(() => {
     if (disabledAtRevision === revision) {
@@ -1217,6 +1447,9 @@ export function ReceiptsView({
       const openId = openReceiptIdRef.current;
       if (openId !== null && store.get(openId) === null) {
         reconcileDrawerAfterRefresh(result.data.receipts);
+        if (isStillOpen(openId) && !result.data.receipts.some((row) => row.receipt_id === openId)) {
+          probeMissingOpenReceipt(openId);
+        }
       }
     });
     return () => {
@@ -1225,68 +1458,20 @@ export function ReceiptsView({
       }
       loadMorePromiseRef.current = null;
     };
-  }, [receiptsApi, filter, searchMode, revision, listRefresh, disabledAtRevision, checkBarrier, updateListState, reconcileDrawerAfterRefresh, store]);
-
-  const fetchNextPage = useCallback((): Promise<LoadMoreOutcome> => {
-    if (loadMorePromiseRef.current !== null) return loadMorePromiseRef.current;
-    const cur = listStateRef.current;
-    if (cur.kind !== "ready" || cur.loadingMore || cur.nextCursor === null) {
-      return Promise.resolve({ kind: "noop" });
-    }
-    const cursor = cur.nextCursor;
-    const token = listGeneration.current;
-    const activeFilter = filterRef.current;
-    const activeSearchMode = searchModeRef.current;
-    updateListState((current) => (current.kind === "ready"
-      ? { ...current, loadingMore: true, loadMoreError: false }
-      : current));
-    const request = activeSearchMode
-      ? receiptsApi.receiptsSearch({ query: activeFilter.query.trim(), limit: RECEIPT_PAGE_LIMIT, cursor })
-      : receiptsApi.receiptsList(buildReceiptListRequest(activeFilter, cursor));
-    const pending: Promise<LoadMoreOutcome> = request.then((result): LoadMoreOutcome => {
-      if (loadMorePromiseRef.current === pending) loadMorePromiseRef.current = null;
-      if (checkBarrier(result) || !mounted.current || token !== listGeneration.current) {
-        return { kind: "stale_or_aborted" };
-      }
-      if (!result.ok) {
-        if (isStaleCursorError(result) && !staleCursorReloadedRef.current) {
-          staleCursorReloadedRef.current = true;
-          setNotice(t("budget.receipts.cursorExpiredNotice"));
-          setListRefresh((current) => current + 1);
-          return { kind: "error" };
-        }
-        updateListState((current) => (current.kind === "ready"
-          ? {
-              ...current,
-              loadingMore: false,
-              loadMoreError: true,
-              nextCursor: isStaleCursorError(result) ? null : current.nextCursor,
-            }
-          : current));
-        return { kind: "error" };
-      }
-      staleCursorReloadedRef.current = false;
-      const nextState = updateListState((current) => {
-        if (current.kind !== "ready") return current;
-        const merged = mergeReceiptRows(current.rows, result.data.receipts);
-        const next = result.data.next_cursor;
-        const exhausted = next === null || next === cursor || merged.length === current.rows.length;
-        return {
-          kind: "ready",
-          rows: merged,
-          nextCursor: exhausted ? null : next,
-          loadingMore: false,
-          loadMoreError: false,
-          refreshing: false,
-          refreshError: false,
-        };
-      });
-      if (nextState.kind !== "ready") return { kind: "stale_or_aborted" };
-      return { kind: "loaded", rows: nextState.rows, nextCursor: nextState.nextCursor };
-    });
-    loadMorePromiseRef.current = pending;
-    return pending;
-  }, [receiptsApi, checkBarrier, updateListState]);
+  }, [
+    receiptsApi,
+    filter,
+    searchMode,
+    revision,
+    listRefresh,
+    disabledAtRevision,
+    checkBarrier,
+    isStillOpen,
+    probeMissingOpenReceipt,
+    updateListState,
+    reconcileDrawerAfterRefresh,
+    store,
+  ]);
 
   const loadMore = useCallback(() => {
     void fetchNextPage();
@@ -1305,6 +1490,7 @@ export function ReceiptsView({
     const targetId = selectedId;
     if (loadedReceiptIdRef.current === targetId && isDraftDirtyFor(targetId)) {
       deferDrawerReconcile(targetId, { reloadDetail: true, preserveNotice: null });
+      probeMissingOpenReceipt(targetId);
       return;
     }
     const token = ++detailGeneration.current;
@@ -1317,17 +1503,16 @@ export function ReceiptsView({
       const floorToken = receiptFloorGenRef.current.get(targetId) ?? 0;
       if (checkBarrier(result) || !isMounted() || token !== detailGeneration.current
         || token <= floorToken || openReceiptIdRef.current !== targetId) return;
+      if (!result.ok && result.status === 404) {
+        closeDrawerAsDeleted(targetId);
+        void quietRefetchLoadedRange();
+        return;
+      }
       if (isDraftDirtyFor(targetId)) {
         deferDrawerReconcile(targetId, { reloadDetail: true, preserveNotice: null });
         return;
       }
       if (!result.ok) {
-        if (result.status === 404) {
-          resetDrawer();
-          setNotice(t("budget.receipts.notFound"));
-          void quietRefetchLoadedRange();
-          return;
-        }
         loadedReceiptIdRef.current = null;
         latestReadyCandidatesRef.current = null;
         setDetailState({ kind: "error" });
@@ -1384,10 +1569,11 @@ export function ReceiptsView({
     detailRefresh,
     checkBarrier,
     clearImage,
+    closeDrawerAsDeleted,
     deferDrawerReconcile,
     isDraftDirtyFor,
     isMounted,
-    resetDrawer,
+    probeMissingOpenReceipt,
     quietRefetchLoadedRange,
   ]);
 
@@ -1398,63 +1584,15 @@ export function ReceiptsView({
     latestReadyCandidatesRef.current?.receiptId === receiptId ? latestReadyCandidatesRef.current.candidates : null
   ), []);
 
-  const closeDetail = useCallback(() => {
-    if (groupControllerOpenRef.current
-      || (openReceiptIdRef.current !== null && store.get(openReceiptIdRef.current) !== null)) return;
-    const trigger = receiptDrawerTriggerRef.current;
-    resetDrawer();
-    if (trigger?.isConnected === true) trigger.focus({ preventScroll: true });
-  }, [store, resetDrawer]);
-
-  const navigateDetail = useCallback(async (direction: "prev" | "next") => {
-    const currentId = openReceiptIdRef.current;
-    if (currentId === null || bulkProgressRef.current !== null || groupControllerOpenRef.current) return;
-    if (store.get(currentId) !== null) return;
-    const curList = listStateRef.current;
-    if (curList.kind !== "ready") return;
-    const shown = filterReceiptRows(curList.rows, filterRef.current, searchModeRef.current);
-    const directTarget = findAdjacentReceiptId(shown, currentId, direction);
-    if (directTarget !== null) {
-      openReceipt(directTarget);
-      return;
-    }
-    if (direction === "prev" || curList.nextCursor === null) return;
-    if (!shown.some((row) => row.receipt_id === currentId)) return;
-
-    const startListGen = listGeneration.current;
-    const startNavGen = ++navGenerationRef.current;
-    const startSession = drawerSessionRef.current;
-    const canCommitAsyncNav = (): boolean => (
-      isMounted()
-      && listGeneration.current === startListGen
-      && navGenerationRef.current === startNavGen
-      && openReceiptIdRef.current === currentId
-      && drawerSessionRef.current === startSession
-      && !isDraftDirtyFor(currentId)
-    );
-    let nextCursor: string | null = curList.nextCursor;
-    while (nextCursor !== null) {
-      const outcome = await fetchNextPage();
-      if (!canCommitAsyncNav()) {
-        return;
-      }
-      if (outcome.kind !== "loaded") return;
-      nextCursor = outcome.nextCursor;
-      const nextShown = filterReceiptRows(outcome.rows, filterRef.current, searchModeRef.current);
-      const nextTarget = findAdjacentReceiptId(nextShown, currentId, "next");
-      if (nextTarget !== null) {
-        if (!canCommitAsyncNav()) return;
-        openReceipt(nextTarget);
-        return;
-      }
-    }
-  }, [store, isMounted, isDraftDirtyFor, openReceipt, fetchNextPage]);
-
   const handleConfirmed = useCallback(async (
     updated: ReceiptDetail,
     previous: Pick<ReceiptDetail, "status" | "version">,
+    options?: { continuePendingNav?: boolean },
   ) => {
     const session = drawerSessionRef.current;
+    const pendingNav = options?.continuePendingNav === true ? pendingNavRef.current : null;
+    pendingNavRef.current = null;
+    setPendingNavPrompt(null);
     const isSameDrawerSession = (): boolean => (
       isMounted()
       && openReceiptIdRef.current === updated.receipt_id
@@ -1492,6 +1630,9 @@ export function ReceiptsView({
     const confirmNotice = serverChanged ? t("budget.receipts.confirmSuccess") : null;
     if (refreshOutcome.kind === "stale_or_aborted") return;
     if (refreshOutcome.kind === "error") {
+      if (pendingNav !== null) {
+        if (requestDrawerNavigation({ ...pendingNav, preserveNotice: confirmNotice })) return;
+      }
       if (isDraftDirtyFor(updated.receipt_id)) {
         deferDrawerReconcile(updated.receipt_id, { reloadDetail: true, preserveNotice: confirmNotice });
       } else {
@@ -1505,8 +1646,31 @@ export function ReceiptsView({
     let latestCursor: string | null = refreshOutcome.nextCursor;
     let latestShown = filterReceiptRows(latestRows, filterRef.current, searchModeRef.current);
 
+    if (pendingNav !== null) {
+      if (requestDrawerNavigation({ ...pendingNav, preserveNotice: confirmNotice })) return;
+      if (isDraftDirtyFor(updated.receipt_id)) {
+        deferDrawerReconcile(updated.receipt_id, { reloadDetail: true, preserveNotice: confirmNotice });
+        if (!latestRows.some((row) => row.receipt_id === updated.receipt_id)) {
+          probeMissingOpenReceipt(updated.receipt_id);
+        }
+        if (confirmNotice !== null) setNotice(confirmNotice);
+        return;
+      }
+      const selection = reconcileDrawerAfterRefresh(latestRows, {
+        reloadDetailForId: updated.receipt_id,
+        preserveNotice: confirmNotice,
+      });
+      if ((selection === "kept" || selection === "deferred") && confirmNotice !== null) {
+        setNotice(confirmNotice);
+      }
+      return;
+    }
+
     if (isDraftDirtyFor(updated.receipt_id)) {
       deferDrawerReconcile(updated.receipt_id, { reloadDetail: true, preserveNotice: confirmNotice });
+      if (!latestRows.some((row) => row.receipt_id === updated.receipt_id)) {
+        probeMissingOpenReceipt(updated.receipt_id);
+      }
       if (confirmNotice !== null) setNotice(confirmNotice);
       return;
     }
@@ -1534,8 +1698,7 @@ export function ReceiptsView({
 
     const forwardTarget = findVisibleNextUnconfirmed(latestShown, false);
     if (forwardTarget !== null) {
-      openReceipt(forwardTarget);
-      if (confirmNotice !== null) setNotice(confirmNotice);
+      requestDrawerNavigation({ kind: "open", receiptId: forwardTarget, preserveNotice: confirmNotice });
       return;
     }
 
@@ -1559,8 +1722,7 @@ export function ReceiptsView({
         latestShown = filterReceiptRows(latestRows, filterRef.current, searchModeRef.current);
         const nextForward = findVisibleNextUnconfirmed(latestShown, false);
         if (nextForward !== null) {
-          openReceipt(nextForward);
-          if (confirmNotice !== null) setNotice(confirmNotice);
+          requestDrawerNavigation({ kind: "open", receiptId: nextForward, preserveNotice: confirmNotice });
           return;
         }
       } while (latestCursor !== null);
@@ -1568,8 +1730,7 @@ export function ReceiptsView({
 
     const wrappedTarget = findVisibleNextUnconfirmed(latestShown, true);
     if (wrappedTarget !== null) {
-      openReceipt(wrappedTarget);
-      if (confirmNotice !== null) setNotice(confirmNotice);
+      requestDrawerNavigation({ kind: "open", receiptId: wrappedTarget, preserveNotice: confirmNotice });
       return;
     }
 
@@ -1586,20 +1747,17 @@ export function ReceiptsView({
       return;
     }
 
-    const trigger = receiptDrawerTriggerRef.current;
-    resetDrawer();
-    setNotice(t("budget.receipts.allConfirmed"));
-    if (trigger?.isConnected === true) trigger.focus({ preventScroll: true });
+    requestDrawerNavigation({ kind: "close", preserveNotice: t("budget.receipts.allConfirmed") });
   }, [
     actorKey,
     deferDrawerReconcile,
     fetchNextPage,
     isDraftDirtyFor,
     isMounted,
-    openReceipt,
+    probeMissingOpenReceipt,
     quietRefetchLoadedRange,
     reconcileDrawerAfterRefresh,
-    resetDrawer,
+    requestDrawerNavigation,
   ]);
 
   const resolveDetailDraft = useCallback((
@@ -2153,7 +2311,13 @@ export function ReceiptsView({
                         <button
                           type="button"
                           disabled={bulkBusy || (anyPending && rowPending === null)}
-                          onClick={(event) => { openReceipt(row.receipt_id, event.currentTarget); }}
+                          onClick={(event) => {
+                            requestDrawerNavigation({
+                              kind: "open",
+                              receiptId: row.receipt_id,
+                              trigger: event.currentTarget,
+                            });
+                          }}
                         >
                           {t("budget.receipts.open")}
                         </button>
@@ -2216,16 +2380,18 @@ export function ReceiptsView({
             loadingMore={loadingMoreList}
             autoAdvance={autoAdvance}
             onAutoAdvanceChange={updateAutoAdvance}
-            onPrev={() => { void navigateDetail("prev"); }}
-            onNext={() => { void navigateDetail("next"); }}
+            onPrev={() => { requestDrawerNavigation({ kind: "navigate", direction: "prev" }); }}
+            onNext={() => { requestDrawerNavigation({ kind: "navigate", direction: "next" }); }}
+            unsavedPromptVisible={pendingNavPrompt?.receiptId === selectedId}
+            onDiscardPendingNav={discardPendingNavigation}
             isOpenReceipt={(receiptId) => openReceiptIdRef.current === receiptId}
             getLatestCandidates={getLatestCandidates}
             resolveDetailDraft={resolveDetailDraft}
             onDraftDirtyChange={handleDraftDirtyChange}
             onLinkChoiceTouched={recordLinkChoiceTouched}
             onAccessLoss={checkBarrier}
-            onClose={closeDetail}
-            onOpenReceipt={openReceipt}
+            onClose={() => { requestDrawerNavigation({ kind: "close" }); }}
+            onOpenReceipt={(receiptId) => { requestDrawerNavigation({ kind: "open", receiptId }); }}
             onOpenGroupCandidates={(detail, trigger) => {
               if (bulkBusy) return;
               groupReturnFocusRef.current = trigger;
@@ -2239,7 +2405,7 @@ export function ReceiptsView({
               updateGroupControllerTarget({ kind: "proposal", anchor: detail, proposal });
             }}
             onRetryDetail={() => { setDetailRefresh((current) => current + 1); }}
-            onConfirmed={(updated, previous) => { void handleConfirmed(updated, previous); }}
+            onConfirmed={(updated, previous, opts) => { void handleConfirmed(updated, previous, opts); }}
             onGroupUnlinked={(receiptId) => {
               updateGroupControllerTarget(null);
               receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
@@ -2263,6 +2429,8 @@ export function ReceiptsView({
               if (dirtyDraftReceiptIdRef.current === receiptId) {
                 dirtyDraftReceiptIdRef.current = null;
               }
+              pendingNavRef.current = null;
+              setPendingNavPrompt(null);
               pendingDrawerReconcileRef.current.delete(receiptId);
               recordLinkChoiceTouched(receiptId, { kind: "empty" });
               const floorToken = ++detailGeneration.current;
@@ -2270,20 +2438,8 @@ export function ReceiptsView({
               setDetailRefresh((current) => current + 1);
             }}
             onNotFound={(receiptId) => {
-              receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
-              const floorToken = ++detailGeneration.current;
-              receiptFloorGenRef.current.set(receiptId, floorToken);
-              setSelectedForBulk((current) => {
-                if (!current.has(receiptId)) return current;
-                const next = new Set(current);
-                next.delete(receiptId);
-                return next;
-              });
-              const trigger = receiptDrawerTriggerRef.current;
-              resetDrawer();
-              setNotice(t("budget.receipts.notFound"));
+              closeDrawerAsDeleted(receiptId);
               void quietRefetchLoadedRange();
-              if (trigger?.isConnected === true) trigger.focus({ preventScroll: true });
             }}
             onDeleted={(receiptId, dissolvedGroup = false) => {
               receiptLinkMemoryRef.current.delete(`${actorKey}:${receiptId}`);
@@ -2302,7 +2458,7 @@ export function ReceiptsView({
               if (trigger?.isConnected === true) trigger.focus({ preventScroll: true });
             }}
             onMutationError={() => {
-              void quietRefetchLoadedRange({ deferReconcileForId: openReceiptIdRef.current });
+              void quietRefetchLoadedRange({ probeIfMissingForId: openReceiptIdRef.current });
             }}
           />
         );
@@ -2385,6 +2541,8 @@ interface DrawerProps {
   onAutoAdvanceChange: (enabled: boolean) => void;
   onPrev: () => void;
   onNext: () => void;
+  unsavedPromptVisible: boolean;
+  onDiscardPendingNav: () => void;
   isOpenReceipt: (receiptId: string) => boolean;
   getLatestCandidates: (receiptId: string) => readonly ReceiptCandidate[] | null;
   resolveDetailDraft: (
@@ -2399,7 +2557,11 @@ interface DrawerProps {
   onOpenGroupCandidates: (detail: ReceiptDetail, trigger: HTMLButtonElement | null) => void;
   onReviewGroupProposal: (detail: ReceiptDetail, proposal: ReceiptGroupCandidate, trigger: HTMLButtonElement | null) => void;
   onRetryDetail: () => void;
-  onConfirmed: (receipt: ReceiptDetail, previous: Pick<ReceiptDetail, "status" | "version">) => void;
+  onConfirmed: (
+    receipt: ReceiptDetail,
+    previous: Pick<ReceiptDetail, "status" | "version">,
+    options?: { continuePendingNav?: boolean },
+  ) => void;
   onGroupUnlinked: (receiptId: string) => void;
   onConflictOrStale: (receiptId: string) => void;
   onReloadLatestVersion: (receiptId: string) => void;
@@ -2626,6 +2788,8 @@ function ReceiptDetailDrawer({
   onAutoAdvanceChange,
   onPrev,
   onNext,
+  unsavedPromptVisible,
+  onDiscardPendingNav,
   isOpenReceipt,
   getLatestCandidates,
   resolveDetailDraft,
@@ -2767,7 +2931,12 @@ function ReceiptDetailDrawer({
     });
   };
 
-  const submitConfirm = async (detail: ReceiptDetail, candidates: readonly ReceiptCandidate[], draft: ReceiptConfirmDraft) => {
+  const submitConfirm = async (
+    detail: ReceiptDetail,
+    candidates: readonly ReceiptCandidate[],
+    draft: ReceiptConfirmDraft,
+    options?: { continuePendingNav?: boolean },
+  ) => {
     if (isReceiptGrouped(detail)) return;
     const currentCandidates = getLatestCandidates(detail.receipt_id) ?? candidates;
     const built = buildConfirmRequest(detail, draft, currentCandidates, t("budget.receipts.summaryLineDefault"));
@@ -2836,7 +3005,7 @@ function ReceiptDetailDrawer({
         return;
       }
       releaseLock();
-      onConfirmed(result.data.receipt, { status: detail.status, version: detail.version });
+      onConfirmed(result.data.receipt, { status: detail.status, version: detail.version }, options);
     } finally {
       releaseLock(handledInMountedDrawer ? undefined : outcome);
     }
@@ -3884,6 +4053,31 @@ function ReceiptDetailDrawer({
                   ) : (
                     <p className="budget-notice" role="alert">{actionError}</p>
                   )}
+
+                  {unsavedPromptVisible ? (
+                    <div className="budget-notice budget-entries-action budget-receipt-unsaved-prompt" role="alert">
+                      <span>{t("budget.receipts.unsavedChangesPrompt")}</span>
+                      <div className="budget-actions">
+                        <button
+                          type="button"
+                          className="budget-primary"
+                          disabled={actionBusy !== null || activeDraft.linkChoice === ""}
+                          onClick={() => {
+                            void submitConfirm(detail, candidates, activeDraft, { continuePendingNav: true });
+                          }}
+                        >
+                          {t("budget.receipts.unsavedChangesSave")}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={actionBusy !== null}
+                          onClick={onDiscardPendingNav}
+                        >
+                          {t("budget.receipts.unsavedChangesDiscard")}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
 
                   <div className="budget-actions">
                     <button
