@@ -26,11 +26,14 @@ from unittest import mock
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.web_middlewares import middleware
 
-from hestia import auth, authz, db, proxy, store_sql, web
+from hestia import api_contract, auth, authz, db, proxy, store_sql, web
 from hestia.automations import AutomationEngine, AutomationStore, rule_vocab
 from hestia.budget import household, household_api
 from hestia.protocol import Frame, build_frame, tlv
 
+
+_CONTRACT_MAJOR, _CONTRACT_MINOR, _ = (int(part) for part in api_contract.CONTRACT_VERSION.split("."))
+_FUTURE_CONTRACT_VERSION = f"{_CONTRACT_MAJOR}.{_CONTRACT_MINOR + 1}.0"
 
 DOOR_EVENT_NODE12 = build_frame(
     0x1E, 0x09,
@@ -1135,7 +1138,7 @@ class DiscoveryTests(_WebTestBase):
             self.assertNotIn("crib_battery_ok", old_globs)
 
     def test_discovery_rejects_invalid_or_future_contract_version(self):
-        for bad in ("invalid", "1.0.0", "0.63.0", "0.01.0"):
+        for bad in ("invalid", "1.0.0", _FUTURE_CONTRACT_VERSION, "0.01.0"):
             with self.subTest(bad=bad):
                 status, _, body = _get(self.web.address, "/api/discovery",
                                        headers={"X-Hestia-Contract-Version": bad})
@@ -2092,9 +2095,9 @@ class SSEHandlerTests(_WebTestBase):
     def test_events_rejects_invalid_future_or_mismatched_contract_version(self):
         cases = (
             ("/api/events", {"X-Hestia-Contract-Version": "invalid"}),
-            ("/api/events", {"X-Hestia-Contract-Version": "0.63.0"}),
+            ("/api/events", {"X-Hestia-Contract-Version": _FUTURE_CONTRACT_VERSION}),
             ("/api/events?contract_version=invalid", {}),
-            ("/api/events?contract_version=0.63.0", {}),
+            (f"/api/events?contract_version={_FUTURE_CONTRACT_VERSION}", {}),
             ("/api/events?contract_version=0.60.0&contract_version=0.62.0", {}),
             ("/api/events?contract_version=0.62.0", {"X-Hestia-Contract-Version": "0.60.0"}),
         )

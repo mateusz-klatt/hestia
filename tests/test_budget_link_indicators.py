@@ -19,6 +19,8 @@ from tests.test_budget_analytics_store import AnalyticsCase
 _HEADER = "X-Hestia-Contract-Version"
 _V60 = "0.60.0"
 _V59 = "0.59.0"
+_MAJOR, _MINOR, _ = (int(part) for part in api_contract.CONTRACT_VERSION.split("."))
+_FUTURE_VERSION = f"{_MAJOR}.{_MINOR + 1}.0"
 
 _R_1TO1 = "30000000-0000-4000-8000-000000000001"
 _R_SHOP_ONLY = "30000000-0000-4000-8000-000000000002"
@@ -658,7 +660,7 @@ class LinkIndicatorsHTTPTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("receipt", (await post_resp.json())["transactions"][0])
 
         # Invalid or future contract version returns 400.
-        for bad in ("0.62.0", "bad"):
+        for bad in (_FUTURE_VERSION, "bad"):
             resp = await self.client.get(analytics_api.PREFIX + "/transactions",
                                          params={"period": "2026-11"},
                                          headers=self.headers() | {_HEADER: bad})
