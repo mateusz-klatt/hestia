@@ -1,17 +1,16 @@
 """Synthetic unit and integration tests for Gmail shop order itemization."""
-from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from sqlalchemy import select
 
 from hestia import db
 from hestia.budget import gmail_message
-from hestia.budget.gmail_payment import ImportedPayment, inspect_payment
+from hestia.budget.gmail_payment import ImportedPayment
 from hestia.budget.gmail_shop_items import extract_shop_items, inspect_shop_items
 from hestia.budget.gmail_store import GmailStore, PendingMessage, PendingPayment
 from hestia.budget.gmail_trust import PaymentSender
@@ -433,29 +432,16 @@ class MerchantProductTableIntegrationTests(unittest.TestCase):
             stored = session.scalars(select(db.BudgetReceipt)).one()
             self.assertIsNone(stored.raw_ocr_text)
 
-    def test_message_processor_with_explicit_expected_total_and_safe_fallback_before_payment_fix(self):
+    def _process(self, message):
         processor, _worker = self._processor()
+        run = Mock()
+        metadata = _metadata(message)
+        metadata["internalDate"] = str(int(datetime(2026, 11, 26, tzinfo=UTC).timestamp() * 1000))
+        run.message.side_effect = metadata, _raw(message)
+        return processor.process(run, MESSAGE_ID, GMAIL_HASH)
 
-        def process(message):
-            run = Mock()
-            metadata = _metadata(message)
-            metadata["internalDate"] = str(int(datetime(2026, 11, 26, tzinfo=UTC).timestamp() * 1000))
-            run.message.side_effect = metadata, _raw(message)
-            return processor.process(run, MESSAGE_ID, GMAIL_HASH)
-
-        # Before gmail_payment.py picks Kwota do zapłaty (45), total=40 fails shop reconciliation cleanly.
-        unpatched = _email("orders@shop.example.test", TABLE_ORDER_HTML, subtype="html")
-        pending_unpatched = process(unpatched)
-        self.assertEqual((pending_unpatched.outcome, pending_unpatched.payment.fields.total_amount,
-                          pending_unpatched.payment.items), ("imported", "40", ()))
-
-        # With expected grand total 45 supplied explicitly by payment extraction, HTML and alternatives reconcile.
-        def fake_inspect_payment(text, *, subjects, merchant, gateway, provider=None):
-            inspected = inspect_payment(text, subjects=subjects, merchant=merchant, gateway=gateway, provider=provider)
-            if inspected.payment is None:
-                return inspected
-            return replace(inspected, payment=replace(inspected.payment, total_amount="45"))
-
+    def test_message_processor_uses_amount_due_and_reconciles_order_items(self):
+        html = _email("orders@shop.example.test", TABLE_ORDER_HTML, subtype="html")
         plain_and_html = _email("orders@shop.example.test", TABLE_ORDER_REALISTIC)
         plain_and_html.add_alternative(TABLE_ORDER_HTML, subtype="html")
         plain_and_summary_html = _email("orders@shop.example.test", TABLE_ORDER_REALISTIC)
@@ -463,17 +449,22 @@ class MerchantProductTableIntegrationTests(unittest.TestCase):
         plain_and_conflicting_html = _email("orders@shop.example.test", TABLE_ORDER_REALISTIC)
         plain_and_conflicting_html.add_alternative(TABLE_ORDER_HTML.replace("Groch", "Fasola"), subtype="html")
         forwarded = _email(OWNER, "Notatka")
-        forwarded.add_attachment(_email("orders@shop.example.test", TABLE_ORDER_HTML, subtype="html"))
+        forwarded.add_attachment(html)
 
-        with patch.object(gmail_message, "inspect_payment", side_effect=fake_inspect_payment):
-            for message, expected_count in (
-                    (unpatched, 4),
-                    (plain_and_html, 4),
-                    (plain_and_summary_html, 4),
-                    (plain_and_conflicting_html, 0),
-                    (forwarded, 4),
-            ):
-                with self.subTest(expected_count=expected_count, multipart=message.is_multipart()):
-                    pending = process(message)
-                    self.assertEqual((pending.outcome, pending.payment.fields.total_amount,
-                                      len(pending.payment.items)), ("imported", "45", expected_count))
+        for name, message in (("html", html), ("alternatives", plain_and_html),
+                              ("summary", plain_and_summary_html), ("conflict", plain_and_conflicting_html),
+                              ("forward", forwarded)):
+            with self.subTest(message=name):
+                pending = self._process(message)
+                self.assertEqual((pending.outcome, pending.payment.fields.total_amount), ("imported", "45"))
+                self.assertEqual(
+                    [(line["raw_name"], line["net_line_total"]) for line in pending.payment.items],
+                    [] if name == "conflict" else
+                    [("Ryż", "30"), ("Groch", "10"), ("Koszt spakowania", "4"), ("Kaucja", "1")],
+                )
+
+    def test_message_processor_retains_amount_due_without_items_when_subtotal_disagrees(self):
+        body = TABLE_ORDER.replace("Wartość zamówienia\n40,00 zł", "Wartość zamówienia\n39,00 zł")
+        pending = self._process(_email("orders@shop.example.test", body))
+        self.assertEqual((pending.outcome, pending.payment.fields.total_amount, pending.payment.items),
+                         ("imported", "45", ()))
