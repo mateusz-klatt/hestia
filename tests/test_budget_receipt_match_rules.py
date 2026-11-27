@@ -189,6 +189,13 @@ class ReceiptMatchTests(fixtures.AnalyticsCase):
         self.assertFalse(candidate["merchant_token_hit"])
         self.assertFalse(self.receipts.detail("owner", identifier)["receipt"]["linked"])
 
+        saved = self.receipts.confirm("owner", self.confirmation(identifier, candidate))["receipt"]
+        self.assertEqual(saved["rounding_delta"], "0.09")
+        self.change_transaction("a", "card-charge", remittance_information=["Płatność kartą Fikcyjna Apteka"])
+        with self.sessions.begin() as session:
+            self.assertEqual(reconcile_receipt_links(session, "owner", self.now), 1)
+        self.assertEqual(self.receipts.detail("owner", identifier)["receipt"]["status"], "needs_review")
+
     def test_round_up_strength_confirm_and_reconciliation(self):
         identifier = self.add_receipt()
         self.add_card()
