@@ -37,6 +37,7 @@ from . import quarantine as quarantine_mod
 from .analytics_core import AnalyticsError
 from .analytics_store import BudgetAnalyticsStore, _CATEGORY_LIMIT_FIELDS, _dict
 from .client import _reject_constant, _unique_error_fields
+from .loan_references import loan_reference_candidates
 from .mortgage_reminders import MAX_PAID_MONTHS, MAX_SCHEDULES, MortgageSchedule
 from .receipt_parser import redact_digit_field
 from .scheduler import shared_state
@@ -468,7 +469,7 @@ def _mortgage_models(owner, schedules):
             currency=item["currency"], due_day=item["due_day"], start_date=item["start_date"],
             destination_kind=item["destination_kind"], end_date=item["end_date"],
             remind_days_before=item["remind_days_before"], paid_months=frozenset(item["paid_months"]),
-            enabled=item["enabled"],
+            enabled=item["enabled"], match_references=item.get("match_references"),
         )
         for item in schedules
     ]
@@ -1119,6 +1120,19 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                     "total_hints": len(hints), "truncated": len(hints) > MAX_RECURRING_HINTS,
                     "hints": [_wire_recurring(item) for item in page]}
 
+    def mortgage_reference_candidates(self, owner):
+        """List distinct masked references from the owner's recurring hints."""
+        with _read_lock, self._read(owner) as session:
+            hints = _snapshot_recurring(self._projection(session, owner))
+            candidates = {}
+            for hint in hints:
+                for candidate in loan_reference_candidates(hint.label):
+                    candidate["label"] = candidate["label"][:256]
+                    candidates.setdefault(candidate["hash"], candidate)
+                    if len(candidates) == MAX_RECURRING_HINTS:
+                        return {"candidates": list(candidates.values())}
+            return {"candidates": list(candidates.values())}
+
     def spending_limits(self, owner, period, *, currency=None):
         from .spending_limits import RULE_VERSION
 
@@ -1180,14 +1194,14 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             raise AnalyticsError(_DATA_ERROR, 500) from None
         return schedules, ledger_as_of, reminders
 
-    def mortgages(self, owner):
+    def mortgages(self, owner, *, include_match_references=False):
         """Evaluate owner-private mortgage schedules against server UTC today in one read snapshot."""
         from .mortgage_reminders import RULE_VERSION
 
         evaluation_date = datetime.fromtimestamp(self._now(), timezone.utc).date().isoformat()
         with _read_lock, self._read(owner) as session:
             schedules, ledger_as_of, reminders = self._mortgage_reminders_in_session(session, owner, evaluation_date)
-            return {
+            result = {
                 "evaluation_date": evaluation_date,
                 "evaluation_timezone": "UTC",
                 "ledger_as_of": ledger_as_of,
@@ -1196,6 +1210,12 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 "schedules": schedules,
                 "reminders": [_wire_mortgage_reminder(item) for item in reminders],
             }
+            if include_match_references:
+                result["match_references_supported"] = True
+            else:
+                for schedule in schedules:
+                    schedule.pop("match_references")
+            return result
 
     @staticmethod
     def _forecast_account_timestamps(session, owner):
@@ -1229,7 +1249,7 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
             marks.append(month)
         return [self._mortgage_schedule_dict(row, paid[row.id]) for row in rows]
 
-    def forecast(self, owner, *, months=None, currency=None):
+    def forecast(self, owner, *, months=None, currency=None, include_match_references=True):
         """Project private commitments from one read-only SQLite snapshot."""
         months, currency = _forecast_query(months, currency)
         try:
@@ -1243,13 +1263,18 @@ class BudgetAnalyticsViews(BudgetAnalyticsStore):
                 hints = _snapshot_recurring(snapshot)
                 baselines, estimator, conflicts = forecast_mod.baselines_for_snapshot(
                     snapshot, evaluation_date, hints, schedule_models, account_timestamps=account_timestamps)
-                return forecast_mod.evaluate_forecast(
+                result = forecast_mod.evaluate_forecast(
                     owner=owner, evaluation_date=evaluation_date, months=months, currency=currency,
                     account_timestamps=account_timestamps, excluded_accounts=snapshot["counts"]["excluded_accounts"],
                     schedules=schedule_models, hints=hints,
                     snapshot_digest=snapshot["digest"], schedules_version=schedules_version,
                     baselines=baselines, baseline_estimator=estimator, baseline_conflicts=conflicts,
                 )
+            if not include_match_references:
+                for match in result["deduplications"]:
+                    match.pop("match_type", None)
+                    match.pop("amount_delta", None)
+            return result
         except forecast_mod.ForecastLimitError:
             raise AnalyticsError(_LIMIT_ERROR, 413) from None
         except forecast_mod.ForecastDataError:

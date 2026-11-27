@@ -352,8 +352,8 @@ export function ForecastView({ api, accounts, connections = [], locale, revision
             <details className="budget-recurring-evidence">
               <summary>{t("budget.forecast.merged")}</summary>
               <ul className="budget-entry-list">
-                {data.deduplications.map((item) => (
-                  <li key={`${item.schedule_id}/${item.matched_due_date}`} className="budget-entry">
+                {data.deduplications.map((item, index) => (
+                  <li key={`${item.schedule_id}/${item.matched_due_date}/${String(index)}`} className="budget-entry">
                     <div className="budget-recurring-main">
                       <span className="budget-entry-text">{item.recurring_label} → {item.schedule_label}</span>
                       <strong className="budget-recurring-amount">{formatAmount(item.amount, item.currency, locale)}</strong>
@@ -361,6 +361,12 @@ export function ForecastView({ api, accounts, connections = [], locale, revision
                     <div className="budget-entry-facts">
                       <span>{t("budget.forecast.matchedDue", { date: item.matched_due_date })}</span>
                       <span>{t("budget.forecast.lastObserved", { date: item.last_observed_date })}</span>
+                      {typeof item.amount_delta === "string" ? (
+                        <span>{t("budget.forecast.amountDifference", {
+                          amount: formatAmount(item.amount_delta, item.currency, locale),
+                        })}</span>
+                      ) : null}
+                      {item.match_type === "inferred" ? <span className="budget-chip">{t("budget.forecast.inferredMatch")}</span> : null}
                       {item.account_stale ? <span className="budget-chip">{t("budget.forecast.accountStale")}</span> : null}
                     </div>
                   </li>

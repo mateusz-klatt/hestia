@@ -59,12 +59,34 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.63.0")
+        self.assertEqual(document["info"]["version"], "0.64.0")
+        # 0.64.0 additive mortgage references and forecast matching audit.
+        analytics = "/api/budget/analytics/"
+        candidates = document["paths"].pop(analytics + "mortgage-reference-candidates")["get"]
+        self.assertEqual(candidates["x-required-permission"], "budget.view")
+        self.assertTrue(candidates["parameters"][0]["required"])
+        document["paths"][analytics + "mortgages"]["get"]["parameters"].pop()
+        document["paths"][analytics + "forecast"]["get"]["parameters"].pop()
+        document["paths"][analytics + "mortgage-save"]["post"].pop("parameters")
+        for schema in ("BudgetAnalyticsMortgageSaveRequest", "BudgetAnalyticsMortgageSchedule",
+                       "BudgetAnalyticsMortgageScheduleSaved"):
+            schemas[schema]["properties"].pop("match_references")
+        schemas["BudgetAnalyticsMortgages"]["properties"].pop("match_references_supported")
+        schemas["BudgetAnalyticsForecastDeduplication"]["properties"].pop("match_type")
+        schemas["BudgetAnalyticsForecastDeduplication"]["properties"].pop("amount_delta")
+        for schema in ("BudgetAnalyticsMortgageMatchReference", "BudgetAnalyticsMortgageReferenceCandidate",
+                       "BudgetAnalyticsMortgageReferenceCandidates"):
+            schemas.pop(schema)
+        document["info"]["version"] = "0.63.0"
+        canonical_0_63 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_63).hexdigest(),
+                         "bad13c2c6189d7ed404ba6955cdeed4d6f1af7ab3b04daba23e383effbb39f77")
+
         # 0.63.0 additive quarantine dismissals and per-batch dismissal metadata.
-        analytics_prefix = "/api/budget/analytics/quarantine"
-        document["paths"][analytics_prefix]["get"]["parameters"].pop()
+        quarantine_path = analytics + "quarantine"
+        document["paths"][quarantine_path]["get"]["parameters"].pop()
         for suffix in ("-dismiss", "-dismiss-batch"):
-            document["paths"].pop(analytics_prefix + suffix)
+            document["paths"].pop(quarantine_path + suffix)
         for suffix in ("BatchRequest", "ImportKey", "Dismissal", "DismissResult"):
             schemas.pop("BudgetAnalyticsQuarantine" + suffix)
         for field in ("import_key", "unresolved_count"):

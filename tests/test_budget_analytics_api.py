@@ -107,12 +107,13 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
                                "read": True, "expected_reads_version": "0" * 64},
                 "transactions-by-keys": {"row_keys": [f"{self.alice_id}/{self.debit['entry_reference']}"]}}
 
-    async def test_all_twelve_reads_are_private_local_bounded_and_match_wire_models(self):
+    async def test_all_reads_are_private_local_bounded_and_match_wire_models(self):
         models = {"overview": api_contract.BudgetAnalyticsOverview, "transactions": api_contract.BudgetAnalyticsTransactions,
                   "categories": api_contract.BudgetAnalyticsCategories, "rules": api_contract.BudgetAnalyticsRules,
                   "transfers": api_contract.BudgetAnalyticsTransfers, "recurring": api_contract.BudgetAnalyticsRecurring,
                   "spending-limits": api_contract.BudgetAnalyticsSpendingLimits,
                   "mortgages": api_contract.BudgetAnalyticsMortgages,
+                  "mortgage-reference-candidates": api_contract.BudgetAnalyticsMortgageReferenceCandidates,
                   "inbox": api_contract.BudgetAnalyticsInbox,
                   "quarantine": api_contract.BudgetAnalyticsQuarantine,
                   "forecast": api_contract.BudgetAnalyticsForecast,
@@ -124,7 +125,10 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
              mock.patch.object(runtime, "credentials") as credentials, \
              mock.patch("urllib.request.OpenerDirector.open") as http, mock.patch.object(web, "_audit") as audit:
             for operation, model in models.items():
-                response = await self.get(operation)
+                headers = self.headers()
+                if operation == "mortgage-reference-candidates":
+                    headers["X-Hestia-Contract-Version"] = "0.64.0"
+                response = await self.get(operation, headers=headers)
                 self.assertEqual(response.status, 200, await response.text())
                 self.assert_private_headers(response)
                 body = await response.json()
@@ -178,9 +182,12 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
 
     async def test_queries_and_json_are_strict_and_missing_fingerprints_cannot_write(self):
         for operation in analytics_api.READS:
+            headers = self.headers()
+            if operation == "mortgage-reference-candidates":
+                headers["X-Hestia-Contract-Version"] = "0.64.0"
             for params in ({"unexpected": "x", **(PERIOD if operation in analytics_api._QUERY_FIELDS else {})},
                            MultiDict([("period", "2026-11"), ("period", "2026-10")])):
-                response = await self.get(operation, params=params)
+                response = await self.get(operation, params=params, headers=headers)
                 self.assertEqual(response.status, 400)
         for params in ({}, {"period": ""}, {"period": "x" * 129}, {**PERIOD, "limit": "0"},
                        {**PERIOD, "limit": "201"}, {**PERIOD, "limit": "-1"},

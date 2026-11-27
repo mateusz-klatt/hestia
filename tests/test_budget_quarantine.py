@@ -630,6 +630,10 @@ class QuarantineHTTPAPITests(unittest.IsolatedAsyncioTestCase):
         read = await self.get("quarantine", headers=headers)
         self.assertEqual(read.status, 200)
         report = await read.json()
+        current_headers = headers | {"X-Hestia-Contract-Version": "0.64.0"}
+        current = await self.get("quarantine", headers=current_headers)
+        self.assertEqual(current.status, 200)
+        self.assertEqual(await current.json(), report)
         self.assertTrue(report["truncated"])
         self.assertEqual(report["summary"]["import_unresolved_count"], 202)
         api_contract.BudgetAnalyticsQuarantine.model_validate(report)

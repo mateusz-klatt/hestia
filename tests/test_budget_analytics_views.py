@@ -885,7 +885,7 @@ class ForecastProjectionTests(ProjectionCase):
         projected = self.store.forecast("owner", months="1")
         self.assertEqual([(item["label"], item["amount"], item["expected_date"])
                           for item in projected["months"][0]["items"]],
-                         [("Synthetic insurance POL-123456", "145.58", "2026-10-10")])
+                         [("Synthetic insurance ••••3456", "145.58", "2026-10-10")])
 
         self.now = datetime(2026, 11, 22, tzinfo=timezone.utc).timestamp()
         self.add_transaction("a", "fresh", amount="5", booking_date="2026-11-20",

@@ -28,8 +28,10 @@ _TRANSACTIONS_BY_KEYS_OP = "transactions-by-keys"
 _QUARANTINE_DISMISS_OP = "quarantine-dismiss"
 _QUARANTINE_DISMISS_BATCH_OP = "quarantine-dismiss-batch"
 _QUARANTINE_WRITES = frozenset({_QUARANTINE_DISMISS_OP, _QUARANTINE_DISMISS_BATCH_OP})
+_MORTGAGE_CANDIDATES_OP = "mortgage-reference-candidates"
 READS = ("overview", "transactions", "categories", "rules", "transfers", "recurring", "spending-limits",
-         "mortgages", "inbox", "quarantine", "forecast", _MONTHLY_BUDGET_OP, _MONTHLY_BUDGET_CHARTS_OP)
+         "mortgages", _MORTGAGE_CANDIDATES_OP, "inbox", "quarantine", "forecast",
+         _MONTHLY_BUDGET_OP, _MONTHLY_BUDGET_CHARTS_OP)
 WRITES = {
     "category-create": (api_contract.BudgetAnalyticsCategoryCreateRequest, "create_category", "category"),
     "category-update": (api_contract.BudgetAnalyticsCategoryUpdateRequest, "update_category", "category"),
@@ -73,12 +75,16 @@ _CONTRACT_VERSION = re.compile(r"0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\Z")
 _APPOINTMENTS_INBOX_VERSION = (0, 58, 0)
 _LINK_INDICATORS_VERSION = (0, 60, 0)
 _QUARANTINE_DISMISS_VERSION = (0, 63, 0)
+_MORTGAGE_REFERENCES_VERSION = (0, 64, 0)
+_NEGOTIATED_OPS = frozenset({
+    "inbox", "inbox-mark", "transactions", _TRANSACTIONS_BY_KEYS_OP, "mortgages",
+    _MORTGAGE_CANDIDATES_OP, "mortgage-save", "forecast", "quarantine", *_QUARANTINE_WRITES,
+})
 _CURRENT_VERSION = tuple(int(part) for part in api_contract.CONTRACT_VERSION.split("."))
 
 
 def _contract_version(request, operation):
-    if operation not in ("inbox", "inbox-mark", "transactions", _TRANSACTIONS_BY_KEYS_OP, "quarantine",
-                         *_QUARANTINE_WRITES):
+    if operation not in _NEGOTIATED_OPS:
         return (0, 0, 0)
     values = request.headers.getall(_CONTRACT_HEADER, [])
     if not values:
@@ -195,12 +201,16 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
             if request.method == "GET":
                 version = _contract_version(request, operation)
                 query = _query(request, operation)
+                if operation == _MORTGAGE_CANDIDATES_OP and version < _MORTGAGE_REFERENCES_VERSION:
+                    raise api._Rejected(400, "budget_analytics_contract_version_invalid")
                 if operation == "inbox":
                     query = {**query, "include_appointments": version >= _APPOINTMENTS_INBOX_VERSION}
                 elif operation == "transactions" and version >= _LINK_INDICATORS_VERSION:
                     query = {**query, "include_receipts": True, "device_id": request.get(device_token.REQUEST_KEY)}
                 elif operation == "quarantine" and version >= _QUARANTINE_DISMISS_VERSION:
                     query["include_import_keys"] = True
+                elif operation in ("mortgages", "forecast"):
+                    query = {**query, "include_match_references": version >= _MORTGAGE_REFERENCES_VERSION}
                 result = await asyncio.to_thread(_read, owner, operation, query, secret)
                 if operation in _BOUNDED_READ_CAPS:
                     return web.Response(body=result, content_type="application/json", charset="utf-8",
@@ -220,13 +230,17 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                          if operation == _TRANSACTIONS_BY_KEYS_OP else WRITES[operation][0])
                 parsed = model.model_validate(body)
                 # Annotation: an omitted label stays, and null or "" clears it. Category update: an omitted
-                # parent_id stays, and null detaches. Other writes keep their defaults.
+                # parent_id stays, and null detaches. An omitted mortgage match_references keeps the links.
                 values = ({"entries": body["entries"]} if operation == "translation-import"
-                          else parsed.model_dump(exclude_unset=operation in ("annotation", "category-update")))
+                          else parsed.model_dump(
+                              exclude_unset=operation in ("annotation", "category-update", "mortgage-save")))
                 if operation == "inbox-mark":
                     values["include_appointments"] = version >= _APPOINTMENTS_INBOX_VERSION
                 elif operation == _TRANSACTIONS_BY_KEYS_OP and version >= _LINK_INDICATORS_VERSION:
                     values["include_receipts"] = True
+                elif (operation == "mortgage-save" and "match_references" in values
+                      and version < _MORTGAGE_REFERENCES_VERSION):
+                    raise AnalyticsError()
                 owner = api._principal(request, auth_enabled)
                 secret = api._secret(session_secret)
                 api._browser(request, owner, secret)
@@ -236,6 +250,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret):
                     result = await asyncio.to_thread(_read, owner, operation, values, secret)
                 else:
                     result = await api._settled_thread(lambda: _write(owner, operation, values, secret))
+                    if operation == "mortgage-save" and version < _MORTGAGE_REFERENCES_VERSION:
+                        result["schedule"].pop("match_references", None)
             return web.json_response(result, headers=api.PRIVATE_HEADERS)
         except AnalyticsError as exc:
             return api._error(exc.status, exc.code)

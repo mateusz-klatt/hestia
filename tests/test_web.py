@@ -2179,6 +2179,7 @@ SPOUSE_ROUTE_STATUS = {
     ("GET", "/api/budget/analytics/monthly-budget"): 403,
     ("GET", "/api/budget/analytics/monthly-budget/charts"): 403,
     ("GET", "/api/budget/analytics/mortgages"): 403,
+    ("GET", "/api/budget/analytics/mortgage-reference-candidates"): 403,
     ("GET", "/api/budget/analytics/overview"): 403,
     ("GET", "/api/budget/analytics/quarantine"): 403,
     ("GET", "/api/budget/analytics/recurring"): 403,
