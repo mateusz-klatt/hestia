@@ -195,6 +195,40 @@ class RecurringChargeDetectionTests(unittest.TestCase):
                 self.assertCountEqual([(h.amount, h.occurrence_count) for h in hints],
                                       [("105", 6)] if merged else [("100", 3), ("105", 3)])
 
+    def test_adjacent_whole_word_insurance_codes_qualify_premium_and_renewal_labels(self):
+        for old_label, new_label, merged in (
+            ("Składka OC", "Odnowienie OC", True),
+            ("Składka AC", "Odnowienia AC", True),
+            ("NNW składka", "Odnowienie NNW", True),
+            ("Polisa NNW", "Odnowienie NNW", True),
+            ("Zmiana w polisie", "Odnowienia", True),
+            ("AC", "AC bank", False),
+            ("Składka MOC", "Odnowienie NNWX", False),
+            ("Składka umowy OC", "Odnowienie umowy OC", False),
+            ("Rata kredytu", "Rata pożyczki", False),
+            ("Rata OC", "Rata AC", False),
+        ):
+            with self.subTest(old_label=old_label, new_label=new_label):
+                old = _premium_run(range(1, 4), f"{old_label} 812345678", amount="100")
+                new = _premium_run(range(4, 7), f"{new_label} 812345678", amount="105")
+                hints = detect_recurring_charges("owner", old + new, {"acc-1"})
+                self.assertCountEqual([(h.amount, h.occurrence_count) for h in hints],
+                                      [("105", 6)] if merged else [("100", 3), ("105", 3)])
+
+    def test_unrelated_service_does_not_prevent_a_renewal_on_either_side(self):
+        renewal = [("Składka 812345678", "145.58"), ("Odnowienie ubezpieczenia 812345678", "143.40")]
+        gas = [("Gaz 812345678", "145")]
+        for runs in (gas + renewal, renewal + gas):
+            with self.subTest(first=runs[0][0]):
+                entries = []
+                for index, (label, amount) in enumerate(runs):
+                    first_month = 1 + 3 * index
+                    entries += _premium_run(range(first_month, first_month + 3), label, amount=amount)
+                hints = detect_recurring_charges("owner", reversed(entries), {"acc-1"})
+                self.assertCountEqual([(h.label, h.amount, h.occurrence_count) for h in hints],
+                                      [("Odnowienie ubezpieczenia 812345678", "143.4", 6),
+                                       ("Gaz 812345678", "145", 3)])
+
     def test_reference_bridge_drift_is_at_most_ten_percent_of_the_previous_runs_last_amount(self):
         # The 10% limit applies at the label change and includes its exact endpoints.
         for current, merged in (("110", True), ("90", True), ("110.00000000000000000000000000001", False),
@@ -304,14 +338,27 @@ class RecurringChargeDetectionTests(unittest.TestCase):
         hints = detect_recurring_charges("owner", old + new + other, {"acc-1"})
         self.assertCountEqual([(h.amount, h.occurrence_count) for h in hints], [("110", 6), ("200", 3)])
 
-    def test_reference_drift_cannot_chain_past_the_first_bridge_amount(self):
+    def test_reference_drift_starts_a_fresh_anchor_after_the_previous_band_ends(self):
         entries = []
         for index, amount in enumerate(("100", "110", "121", "133.10")):
             first_month = 1 + index * 3
             entries += _premium_run(range(first_month, first_month + 3), f"Phase {index} POL-123456", amount=amount)
         hints = detect_recurring_charges("owner", entries, {"acc-1"})
         self.assertEqual([(h.amount, h.occurrence_count) for h in hints],
-                         [("110", 6), ("121", 3), ("133.1", 3)])
+                         [("110", 6), ("133.1", 6)])
+
+    def test_cadence_and_same_label_boundaries_keep_bridges_on_both_sides(self):
+        for later_day, later_counterparty in ((17, None), (10, "Renewal POL-123456")):
+            with self.subTest(later_day=later_day, later_counterparty=later_counterparty):
+                entries = (
+                    _premium_run(range(1, 4), "Original POL-123456", amount="100")
+                    + _premium_run(range(4, 7), "Renewal POL-123456", amount="105")
+                    + _premium_run(range(7, 10), "Following POL-123456", amount="106", day=later_day,
+                                   counterparty=later_counterparty)
+                    + _premium_run(range(10, 13), "Next term POL-123456", amount="108", day=later_day)
+                )
+                hints = detect_recurring_charges("owner", entries, {"acc-1"})
+                self.assertCountEqual([(h.amount, h.occurrence_count) for h in hints], [("105", 6), ("108", 6)])
 
     def test_reference_round_trip_returns_to_the_original_amount(self):
         for adjusted in ("90", "110"):
@@ -335,16 +382,16 @@ class RecurringChargeDetectionTests(unittest.TestCase):
                 )
                 hints = detect_recurring_charges("owner", entries, {"acc-1"})
                 self.assertEqual([(h.amount, h.occurrence_count) for h in sorted(hints, key=lambda h: h.first_date)],
-                                 [("100", 3), (previous, 3), (following, 3)])
+                                 [(previous, 6), (following, 3)])
 
-    def test_reference_in_anchor_band_still_rejects_a_twenty_point_drop(self):
+    def test_reference_in_anchor_band_keeps_the_prefix_before_a_twenty_point_drop(self):
         entries = (
             _premium_run(range(1, 4), "Old POL-123456", amount="100")
             + _premium_run(range(4, 7), "Renewal POL-123456", amount="110")
             + _premium_run(range(7, 10), "Next term POL-123456", amount="90")
         )
         hints = detect_recurring_charges("owner", entries, {"acc-1"})
-        self.assertCountEqual([(h.amount, h.occurrence_count) for h in hints], [("100", 3), ("110", 3), ("90", 3)])
+        self.assertCountEqual([(h.amount, h.occurrence_count) for h in hints], [("110", 6), ("90", 3)])
 
     def test_unbridgeable_reference_group_keeps_the_whole_variable_label_run(self):
         variable = (

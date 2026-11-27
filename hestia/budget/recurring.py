@@ -32,7 +32,7 @@ from fractions import Fraction
 import re
 import unicodedata
 
-RULE_VERSION = 6
+RULE_VERSION = 7
 MIN_OCCURRENCES = 3
 MIN_GAP_DAYS = 23
 MAX_GAP_DAYS = 38
@@ -57,8 +57,13 @@ _REFERENCE_ID = re.compile(
 _REFERENCE_MARKER_SUFFIX = r"\b\s*(?:(?:nr|numer|no|number)\b\.?\s*)?[:#]?\s*\Z"
 _CONTRACT_PREFIX = re.compile(r"\b(?:polisa|polisy|policy|contract|umowa|umowy)" + _REFERENCE_MARKER_SUFFIX)
 _NON_CONTRACT_PREFIX = re.compile(r"\b(?:klient[au]?|customer|client|account|rachunku)" + _REFERENCE_MARKER_SUFFIX)
-_INSURANCE_WORD = re.compile(r"\b(?:ubezpieczeni\w*|polis[ayęą]|insurance)\b")
-_PREMIUM_WORD = re.compile(r"\b(?:sk[łl]adk[aięą]|premium)\b")
+_PREMIUM_TERM = r"(?:sk[łl]adk[aięą]|odnowieni[ea]|premium)"
+_INSURANCE_CODE = r"(?:oc|ac|nnw)"
+_INSURANCE_CONTEXT = re.compile(
+    rf"\b(?:ubezpieczeni\w*|polis(?:[ayęą]|ie)|insurance|"
+    rf"{_PREMIUM_TERM}\s+{_INSURANCE_CODE}|{_INSURANCE_CODE}\s+{_PREMIUM_TERM})\b"
+)
+_PREMIUM_WORD = re.compile(rf"\b{_PREMIUM_TERM}\b")
 _YEAR_CODE = re.compile(r"[12][0-9]{3}")
 _COMPACT_DATE = re.compile(r"[0-9]{4}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])")
 _PHONE_PREFIX = re.compile(r"(?:\btel\.?\s*[:=]?\s*\+?|\+48[\s-]*|\+)\Z")
@@ -525,24 +530,25 @@ def _has_bridge_context(reference, left_label, right_label, left, right):
 
     # A long number can be shared by a customer's unrelated services. Require
     # insurance context on both labels, with at least one explicit insurance
-    # term because “premium” and “składka” also describe other payments.
-    left_insurance = _INSURANCE_WORD.search(left_label) is not None
-    right_insurance = _INSURANCE_WORD.search(right_label) is not None
+    # term or a coverage code next to a premium or renewal term.
+    left_insurance = _INSURANCE_CONTEXT.search(left_label) is not None
+    right_insurance = _INSURANCE_CONTEXT.search(right_label) is not None
     return (
         left_insurance and (right_insurance or _PREMIUM_WORD.search(right_label) is not None)
         or right_insurance and _PREMIUM_WORD.search(left_label) is not None
     )
 
 
-def _bridge_prefix_length(reference, runs):
-    # Start the bridge sequence at the last price under the first label.
-    # Price changes inside each label remain governed by the label detector.
-    anchor = Fraction(runs[0][1][-1].amount)
-    for index, ((left_key, left), (right_key, right)) in enumerate(zip(runs, runs[1:]), 1):
+def _bridge_prefix_end(reference, runs, start):
+    """Return the first run index after the bridge starting at start."""
+    anchor = Fraction(runs[start][1][-1].amount)
+    for index in range(start + 1, len(runs)):
+        left_key, left = runs[index - 1]
+        right_key, right = runs[index]
         if left_key[3] == right_key[3] or not _same_monthly_cadence(left[-1], right[0]):
-            return 0
+            return index
         if not _has_bridge_context(reference, left_key[3], right_key[3], left, right):
-            return 0
+            return index
         previous, current = Fraction(left[-1].amount), Fraction(right[0].amount)
         if not _within_bridge_drift(current, anchor):
             return index
@@ -550,7 +556,7 @@ def _bridge_prefix_length(reference, runs):
         # a 10% decrease followed by restoration is reversible.
         if not _within_bridge_drift(current, previous):
             if current != anchor or not _within_bridge_drift(previous, anchor):
-                return 0
+                return index
     return len(runs)
 
 
@@ -572,10 +578,13 @@ def _reference_bridges(lanes):
             continue
         ordered = sorted(indices, key=lambda index: lanes[index][1][0].day)
         runs = [lanes[index] for index in ordered]
-        length = _bridge_prefix_length(key[2], runs)
-        if length >= 2:
-            combined = [item for _, run in runs[:length] for item in run]
-            yield ordered[:length], key[1], combined
+        start = 0
+        while start < len(runs):
+            end = _bridge_prefix_end(key[2], runs, start)
+            if end - start >= 2:
+                combined = [item for _, run in runs[start:end] for item in run]
+                yield ordered[start:end], key[1], combined
+            start = end
 
 
 def detect_recurring_charges(owner: str, entries: Iterable[RecurringEntry],
@@ -595,8 +604,8 @@ def detect_recurring_charges(owner: str, entries: Iterable[RecurringEntry],
     can connect established runs with different labels, the same account,
     currency and cadence, and amount drift within ten percent at the bridge.
     A bare number without a contract marker requires insurance context on both
-    labels. When a later price leaves the initial 10% band, the established
-    in-band prefix stays joined.
+    labels. A rejected boundary leaves the established prefix joined and starts
+    a fresh walk with its own initial amount.
     """
     owner, accounts = _scope(owner, selected_accounts, max_entries)
     groups = _groups(owner, entries, accounts, max_entries)
