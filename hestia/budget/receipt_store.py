@@ -36,7 +36,8 @@ from .gmail_payment import _payee_key, bank_payee_texts, bank_ref_tokens, canoni
 from .gmail_store import (GATEWAY_REF_DOMAIN, _payment_payee_key, digest, receipt_ref_hmacs,
                           retain_imports, tombstone_receipt)
 from .receipt_group_solver import MAX_GROUP_POOL, MAX_GROUP_PROPOSALS, find_receipt_groups
-from .receipt_parser import (GATEWAY_PHRASE_TOKENS, _IBAN_MAX, _IBAN_MIN, _REMOVED, _STOP_TOKENS,
+from .receipt_parser import (GATEWAY_PHRASE_TOKENS, _IBAN_COUNTRY_SPECS, _IBAN_MAX, _IBAN_MIN,
+                             _REMOVED, _STOP_TOKENS,
                              CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES, ReceiptError,
                              _iban_checksum, chain_for, contains_gateway_marker, merchant_score_groups,
                              merchant_tokens, merchant_word_tokens, normalize_shop_name, parse_receipt,
@@ -196,21 +197,10 @@ def _payload_party_texts(payload):
     return texts
 
 
-_IBAN_COUNTRY_LENGTHS = {
-    "AD": 24, "AE": 23, "AL": 28, "AT": 20, "AZ": 28, "BA": 20, "BE": 16, "BG": 22, "BH": 22, "BR": 29,
-    "BY": 28, "CH": 21, "CR": 22, "CY": 28, "CZ": 24, "DE": 22, "DK": 18, "DO": 28, "EE": 20, "EG": 29,
-    "ES": 24, "FI": 18, "FO": 18, "FR": 27, "GB": 22, "GE": 22, "GI": 23, "GL": 18, "GR": 27, "GT": 28,
-    "HR": 21, "HU": 28, "IE": 22, "IL": 23, "IQ": 23, "IS": 26, "IT": 27, "JO": 30, "KW": 30, "KZ": 20,
-    "LB": 28, "LC": 32, "LI": 21, "LT": 20, "LU": 20, "LV": 21, "MC": 27, "MD": 24, "ME": 22, "MK": 19,
-    "MR": 27, "MT": 31, "MU": 30, "NL": 18, "NO": 15, "PK": 24, "PL": 28, "PS": 29, "PT": 25, "QA": 29,
-    "RO": 24, "RS": 22, "SA": 24, "SC": 31, "SE": 24, "SI": 19, "SK": 24, "SM": 27, "ST": 25, "SV": 28,
-    "TL": 23, "TN": 24, "TR": 26, "UA": 29, "VA": 22, "VG": 24, "XK": 20,
-}
-
-
 def _is_iban_candidate(compact):
+    country_length, _ = _IBAN_COUNTRY_SPECS.get(compact[:2], (None, ""))
     return _IBAN_MIN <= len(compact) <= _IBAN_MAX and (
-        len(compact) == _IBAN_COUNTRY_LENGTHS.get(compact[:2]) or _iban_checksum(compact)
+        len(compact) == country_length or _iban_checksum(compact)
     )
 
 
