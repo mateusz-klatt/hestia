@@ -1512,5 +1512,207 @@ class SpendingLimitsProjectionTests(ProjectionCase):
         self.assert_invalid(lambda: self.store.spending_limits("owner", "2026-11"))
 
 
+class CardRepaymentProjectionTests(ProjectionCase):
+    def confirm_kind(self, account, kind, *, confirmed=True):
+        with self.sessions.begin() as session:
+            acct = session.get(db.BudgetAccount, self.accounts[account])
+            acct.kind = kind
+            acct.kind_confirmed_at = self.now if confirmed else None
+
+    def test_bank_evidenced_card_repayment_reports_limits_pairing_and_negative_cases(self):
+        self.confirm_kind("a", "current")
+        self.confirm_kind("b", "credit_card")
+        self.confirm_kind("c", "savings")
+        self.confirm_kind("d", "other")
+        food = self.store.create_category("owner", "Shopping")
+        self.store.save_spending_limit("owner", category_id=food["id"], currency="PLN",
+                                       monthly_limit="1500", warning_percent=80, enabled=True, expected_version=0)
+        self.add_transaction("b", "card-buy", amount="1000", booking_date="2026-11-05", transaction_date="2026-11-05",
+                             remittance_information=["Zakup kartą - Sklep"])
+        self.annotation(account="b", reference="card-buy", category_id=food["id"], kind="expense")
+        self.add_transaction("a", "repay", amount="1000", booking_date="2026-11-10",
+                             remittance_information=["Spłata karty kredytowej"])
+        # Negative controls on selected accounts: ordinary MCC purchase, fee, and incoming CRDT refund wording.
+        self.add_transaction("b", "mcc-buy", amount="100", booking_date="2026-11-07", transaction_date="2026-11-07",
+                             remittance_information=["Spłata karty kredytowej - Sklep"])
+        self.metadata("b", "mcc-buy", {"mcc": "5411", "creditor_name": "Retailer"})
+        self.add_transaction("a", "fee", amount="20", booking_date="2026-11-08",
+                             remittance_information=["Opłata za spłatę karty kredytowej"])
+        self.add_transaction("a", "refund-in", amount="50", credit_debit_indicator="CRDT", booking_date="2026-11-09",
+                             remittance_information=["Zwrot spłaty karty kredytowej"])
+
+        self.store.clock = mock.Mock(return_value=datetime(2026, 11, 22, 12, 0, tzinfo=timezone.utc).timestamp())
+        cfg = json.dumps({"owner": {"income_category_ids": []}})
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            budget = self.store.monthly_budget("owner", period="2026-11", currency="PLN")
+            charts = self.store.monthly_budget_charts("owner", period="2026-11", currency="PLN", history="6")
+        api_contract.BudgetAnalyticsMonthlyBudget.model_validate(budget)
+        self.assertEqual(budget["summary"]["spent"], "1120")
+        self.assertEqual(charts["budget"]["summary"]["spent"], "1120")
+        self.assertEqual((budget["coverage"]["provisional"], budget["coverage"]["pending_transfer_rows"],
+                          budget["coverage"]["pending_row_keys"]), (False, 0, []))
+
+        overview = self.store.overview("owner", "2026-11")
+        pln = next(item for item in overview["currencies"] if item["currency"] == "PLN")
+        self.assertEqual((pln["expenses"], pln["transfer_debits"], pln["gross_debits"], pln["net_spending"]),
+                         ("1120", "1000", "2120", "1120"))
+
+        limits = self.store.spending_limits("owner", "2026-11")
+        self.assertEqual(limits["statuses"][0]["expenses"], "1000")
+
+        txs = {row["entry_reference"]: row for row in self.store.transactions("owner", "2026-11")["transactions"]}
+        self.assertEqual(txs["repay"]["effective"],
+                         {"kind": "transfer", "category_id": None, "source": "default", "rule_id": None})
+        self.assertEqual(txs["mcc-buy"]["effective"]["kind"], "expense")
+        self.assertEqual(txs["fee"]["effective"]["kind"], "expense")
+        self.assertEqual(txs["refund-in"]["effective"]["kind"], "unclassified_credit")
+        self.assertEqual(self.store.transfers("owner", "2026-11")["transfers"], [])
+
+        # If the matching CRDT leg arrives later on the card account, pairing still works and preserves totals.
+        self.add_transaction("b", "repay-crdt", amount="1000", credit_debit_indicator="CRDT", booking_date="2026-11-11",
+                             remittance_information=["Spłata otrzymana"])
+        suggested = self.store.transfers("owner", "2026-11")["transfers"]
+        self.assertEqual(len(suggested), 1)
+        self.assertEqual((suggested[0]["status"], suggested[0]["debit"]["entry_reference"],
+                          suggested[0]["credit"]["entry_reference"]), ("suggested", "repay", "repay-crdt"))
+        self.decide(debit=("a", "repay"), credit=("b", "repay-crdt"), source="heuristic")
+        accepted = self.output("repay", period="2026-11")
+        self.assertEqual(accepted["effective"], {"kind": "transfer", "category_id": None, "source": "transfer", "rule_id": None})
+
+    def test_repro_checking_and_savings_with_deselected_card_and_ambiguous_or_external_targets(self):
+        # Exact root review repro: checking ("a") + savings ("b") selected; credit card ("c") deselected;
+        # no structured creditor ID; memo "Spłata karty kredytowej".
+        self.confirm_kind("a", "current")
+        self.confirm_kind("b", "savings")
+        self.confirm_kind("c", "credit_card")
+        self.confirm_kind("d", "savings")
+        self.select_account("c", False)
+        self.select_account("d", False)
+
+        self.add_transaction("c", "card-buy", amount="1000", booking_date="2026-11-05", transaction_date="2026-11-05",
+                             remittance_information=["Sklep AGD"])
+        self.add_transaction("a", "ordinary-buy", amount="50", booking_date="2026-11-06", transaction_date="2026-11-06",
+                             remittance_information=["Pieczywo"])
+        self.add_transaction("a", "repay", amount="1000", booking_date="2026-11-10", transaction_date="2026-11-10",
+                             remittance_information=["Spłata karty kredytowej"])
+
+        self.store.clock = mock.Mock(return_value=datetime(2026, 11, 22, 12, 0, tzinfo=timezone.utc).timestamp())
+        cfg = json.dumps({"owner": {"income_category_ids": []}})
+
+        self.assertEqual(self.output("repay", period="2026-11")["effective"],
+                         {"kind": "expense", "category_id": None, "source": "default", "rule_id": None})
+        self.assertEqual(self.output("ordinary-buy", period="2026-11")["effective"]["kind"], "expense")
+        self.assertEqual(self.store.overview("owner", "2026-11")["currencies"][0]["expenses"], "1050")
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            repro_budget = self.store.monthly_budget("owner", period="2026-11", currency="PLN")
+            repro_charts = self.store.monthly_budget_charts("owner", period="2026-11", currency="PLN", history="6")
+        self.assertEqual(repro_budget["summary"]["spent"], "1050")
+        self.assertEqual(repro_charts["budget"]["summary"]["spent"], "1050")
+        self.assertTrue(repro_budget["coverage"]["provisional"])
+        self.assertEqual(repro_budget["coverage"]["pending_row_keys"], [f"{self.accounts['a']}/repay"])
+
+        # While card "c" is selected but unconfirmed (kind_confirmed_at=None), ordinary purchases remain usable
+        # and repayment stays expense + provisional until the card kind is confirmed.
+        self.select_account("c", True)
+        self.confirm_kind("c", "credit_card", confirmed=False)
+        self.assertEqual(self.output("card-buy", period="2026-11")["effective"]["kind"], "expense")
+        self.assertEqual(self.output("repay", period="2026-11")["effective"]["kind"], "expense")
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            unconfirmed_budget = self.store.monthly_budget("owner", period="2026-11", currency="PLN")
+        self.assertEqual((unconfirmed_budget["summary"]["spent"], unconfirmed_budget["coverage"]["provisional"]),
+                         ("2050", True))
+
+        # Confirming the selected owned credit card ("c") resolves counterpart card scope -> auto-transfer without double count.
+        self.confirm_kind("c", "credit_card", confirmed=True)
+        self.assertEqual(self.output("repay", period="2026-11")["effective"],
+                         {"kind": "transfer", "category_id": None, "source": "default", "rule_id": None})
+        self.assertEqual(self.store.overview("owner", "2026-11")["currencies"][0]["expenses"], "1050")
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            selected_budget = self.store.monthly_budget("owner", period="2026-11", currency="PLN")
+        self.assertEqual((selected_budget["summary"]["spent"], selected_budget["coverage"]["provisional"],
+                          selected_budget["coverage"]["pending_row_keys"]), ("1050", False, []))
+
+        # Adding a second credit card ("d", deselected OR selected) without creditor identity makes target ambiguous -> expense + provisional.
+        self.confirm_kind("d", "credit_card")
+        self.assertEqual(self.output("repay", period="2026-11")["effective"]["kind"], "expense")
+        self.select_account("d", True)
+        self.assertEqual(self.output("repay", period="2026-11")["effective"]["kind"], "expense")
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            ambig_budget = self.store.monthly_budget("owner", period="2026-11", currency="PLN")
+        self.assertEqual((ambig_budget["summary"]["spent"], ambig_budget["coverage"]["provisional"]), ("2050", True))
+
+        # Structured creditor identity matching selected card "c" resolves ambiguity -> auto-transfer.
+        self.identities("c", [identity("OWN-CARD-C")])
+        self.identities("d", [identity("OWN-CARD-D")])
+        self.metadata("a", "repay", {"creditor_accounts": [identity("OWN-CARD-C")]})
+        self.assertEqual(self.output("repay", period="2026-11")["effective"]["kind"], "transfer")
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            id_resolved_budget = self.store.monthly_budget("owner", period="2026-11", currency="PLN")
+        self.assertEqual((id_resolved_budget["summary"]["spent"], id_resolved_budget["coverage"]["provisional"]),
+                         ("1050", False))
+
+        # Explicit external creditor outside own portfolio -> stays expense + provisional, never auto-transfer.
+        with self.sessions.begin() as session:
+            session.get(db.BudgetTransactionMetadata, (self.accounts["a"], "repay")).payload_json = json.dumps(
+                {"creditor_accounts": [identity("EXTERNAL-OTHER-CARD")]}
+            )
+        self.assertEqual(self.output("repay", period="2026-11")["effective"]["kind"], "expense")
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            ext_budget = self.store.monthly_budget("owner", period="2026-11", currency="PLN")
+        self.assertEqual((ext_budget["summary"]["spent"], ext_budget["coverage"]["provisional"],
+                          ext_budget["coverage"]["pending_row_keys"]),
+                         ("2050", True, [f"{self.accounts['a']}/repay"]))
+
+    def test_posthoc_manual_overrides_and_single_or_deselected_scope_guards(self):
+        self.confirm_kind("a", "current")
+        self.confirm_kind("b", "credit_card")
+        self.confirm_kind("c", "savings")
+        self.confirm_kind("d", "other")
+        food = self.store.create_category("owner", "Unexpected Debit")
+        self.add_transaction("a", "repay", amount="600", booking_date="2026-11-10", transaction_date="2026-11-10",
+                             remittance_information=["Spłata karty kredytowej"])
+
+        self.store.clock = mock.Mock(return_value=datetime(2026, 11, 22, 12, 0, tzinfo=timezone.utc).timestamp())
+        cfg = json.dumps({"owner": {"income_category_ids": []}})
+
+        # Category assignment under kind="auto" resolves DBIT repayment to expense in that category.
+        ann = self.annotation(account="a", reference="repay", category_id=food["id"], kind="auto")
+        self.assertEqual(self.output("repay", period="2026-11")["effective"],
+                         {"kind": "expense", "category_id": food["id"], "source": "manual", "rule_id": None})
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            manual_budget = self.store.monthly_budget("owner", period="2026-11", currency="PLN")
+        self.assertEqual((manual_budget["summary"]["spent"], manual_budget["coverage"]["provisional"]), ("600", False))
+
+        # Clearing category with kind="auto" reverts back to auto-transfer default.
+        ann2 = self.annotation(account="a", reference="repay", category_id=None, kind="auto",
+                               expected_version=ann["version"])
+        self.assertEqual(self.output("repay", period="2026-11")["effective"]["kind"], "transfer")
+        self.annotation(account="a", reference="repay", mode="auto", category_id=None, kind="auto",
+                        expected_version=ann2["version"])
+
+        # Deselecting all other accounts falls back to expense + provisional=True.
+        for name in ("b", "c", "d"):
+            self.select_account(name, False)
+        single_row = self.output("repay", period="2026-11")
+        self.assertEqual(single_row["effective"]["kind"], "expense")
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            single_budget = self.store.monthly_budget("owner", period="2026-11", currency="PLN")
+        self.assertEqual((single_budget["summary"]["spent"], single_budget["coverage"]["provisional"],
+                          single_budget["coverage"]["pending_row_keys"]),
+                         ("600", True, [f"{self.accounts['a']}/repay"]))
+
+        # Re-enabling card "b" while creditor_accounts points to deselected "c" also keeps expense + provisional.
+        self.select_account("b", True)
+        self.identities("c", [identity("OFF-CARD-IBAN")])
+        self.metadata("a", "repay", {"creditor_accounts": [identity("OFF-CARD-IBAN")]})
+        desel_row = self.output("repay", period="2026-11")
+        self.assertEqual(desel_row["effective"]["kind"], "expense")
+        with mock.patch.dict(os.environ, {month_budget.MONTH_CONFIG_ENV: cfg}):
+            desel_budget = self.store.monthly_budget("owner", period="2026-11", currency="PLN")
+        self.assertEqual((desel_budget["summary"]["spent"], desel_budget["coverage"]["provisional"],
+                          desel_budget["coverage"]["pending_row_keys"]),
+                         ("600", True, [f"{self.accounts['a']}/repay"]))
+
+
 if __name__ == "__main__":
     unittest.main()

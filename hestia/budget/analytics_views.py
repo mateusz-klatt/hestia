@@ -164,29 +164,34 @@ def _annotation(row, financial_fp):
 
 
 def _effective(payload, metadata, annotation, categories, rules, *, texts=None, compiled=None,
-               account_secret=None, account_key_id=None, owner=None):
-    default = core.default_effective_kind(payload)
+               account_secret=None, account_key_id=None, owner=None, allow_bank_transfer=True, default_kind=None):
+    default = (core.default_effective_kind(payload, metadata, allow_bank_transfer=allow_bank_transfer)
+               if default_kind is None else default_kind)
     result = {"kind": default, "category_id": None, "source": "default", "rule_id": None}
     if annotation["mode"] == "manual":
         if not annotation["stale"]:
             if not core.compatible_kind(annotation["kind"], payload):
                 raise AnalyticsError()
-            result.update(kind=default if annotation["kind"] == "auto" else annotation["kind"],
-                          category_id=_category(annotation["category_id"], categories), source="manual")
+            category_id = _category(annotation["category_id"], categories)
+            kind = ("expense" if annotation["kind"] == "auto" and category_id is not None and default == "transfer"
+                    else (default if annotation["kind"] == "auto" else annotation["kind"]))
+            result.update(kind=kind, category_id=category_id, source="manual")
         return result
     if compiled is None:
         compiled, _ = core.compile_rules(rules)
     if texts is None:
         texts = core.match_texts(payload, metadata, account_secret=account_secret, account_key_id=account_key_id, owner=owner)
-    rule, kind = core.match_rule(compiled, payload, texts)
+    rule, kind = core.match_rule(compiled, payload, texts, default_kind=default)
     if rule is not None:
         result.update(kind=kind, category_id=_category(rule["category_id"], categories), source="rule", rule_id=rule["id"])
     return result
 
 
-def _records(ledger, identities, metadata, annotations, categories, rules, *, account_secret=None, account_key_id=None, owner=None):
+def _records(ledger, identities, metadata, annotations, categories, rules, *, account_secret=None, account_key_id=None, owner=None,
+             selected_accounts=frozenset(), selected_card_accounts=frozenset(), deselected_card_accounts=frozenset()):
     result = []
     owned = core.owned_identities(identities) if ledger else None
+    account_identities = {} if owned is None else {acct: frozenset(pairs) for acct, pairs in owned.items()}
     compiled, _ = core.compile_rules(rules)
     for row in ledger:
         payload, financial_fp = _payload(row.payload_json)
@@ -194,18 +199,24 @@ def _records(ledger, identities, metadata, annotations, categories, rules, *, ac
         sidecar = metadata.get(key)
         evidence = _metadata(sidecar.payload_json) if sidecar is not None and sidecar.ledger_fingerprint == financial_fp else None
         annotation = _annotation(annotations.get(key), financial_fp)
+        allow_bank_transfer = core.bank_card_transfer_allowed(
+            row.account_id, evidence, selected_accounts=selected_accounts, account_identities=account_identities,
+            selected_card_accounts=selected_card_accounts, deselected_card_accounts=deselected_card_accounts,
+        )
+        default_kind = core.default_effective_kind(payload, evidence, allow_bank_transfer=allow_bank_transfer)
         account_evidence = (None if account_secret is None else
                             core.counterparty_account_evidence(payload, evidence, account_secret, owner=owner))
         texts = core.match_texts(payload, evidence, account_secret=account_secret, account_key_id=account_key_id,
                                  account_evidence=account_evidence, owner=owner)
         effective = _effective(payload, evidence, annotation, categories, rules, texts=texts, compiled=compiled,
-                               account_secret=account_secret, account_key_id=account_key_id, owner=owner)
+                               account_secret=account_secret, account_key_id=account_key_id, owner=owner,
+                               allow_bank_transfer=allow_bank_transfer, default_kind=default_kind)
         result.append({"account_id": row.account_id, "entry_reference": row.entry_reference, "payload": payload,
                        "financial_fp": financial_fp,
                        "transfer_fp": core.pair_fingerprint(row.account_id, row.entry_reference, payload, evidence, identities,
                                                             financial=financial_fp, owned_ids=owned),
                        "metadata": evidence, "annotation": annotation, "effective": effective,
-                       "base_effective": dict(effective), "_match_texts": texts,
+                       "base_effective": dict(effective), "_default_kind": default_kind, "_match_texts": texts,
                        "_counterparty_accounts": account_evidence or (), "source": row.source,
                        "observed_at": row.observed_at, "api_observed_at": row.api_observed_at, "uncertain": row.uncertain,
                        "eligible": not row.uncertain and payload["status"] == "BOOK" and core.effective_date(payload) is not None,
@@ -256,9 +267,18 @@ def projection_snapshot(session, owner, *, classify=True, account_secret=None, a
     decisions = [_entity(row) for row in session.scalars(select(db.BudgetTransferDecision).where(
         db.BudgetTransferDecision.owner == owner).order_by(db.BudgetTransferDecision.id))]
     identities, identity_state, metadata, annotations = _auxiliary(session, owner, accounts)
+    selected_accounts = frozenset(row.id for row in accounts if row.enabled)
+    selected_card_accounts = frozenset(
+        row.id for row in accounts if row.enabled and row.kind == "credit_card" and row.kind_confirmed_at is not None
+    )
+    deselected_card_accounts = frozenset(
+        row.id for row in accounts if not row.enabled and row.kind == "credit_card"
+    )
     applied = rules if classify else ()
     records = _records(ledger, identities, metadata, annotations, {row["id"]: row for row in categories}, applied,
-                       account_secret=account_secret if classify else None, account_key_id=account_key_id, owner=owner)
+                       account_secret=account_secret if classify else None, account_key_id=account_key_id, owner=owner,
+                       selected_accounts=selected_accounts, selected_card_accounts=selected_card_accounts,
+                       deselected_card_accounts=deselected_card_accounts)
     account_state = [{"id": row.id, "connection_id": row.connection_id, "enabled": row.enabled,
                       "configured": row.configured, "control_version": row.control_version, "kind": row.kind,
                       "kind_confirmed_at": row.kind_confirmed_at} for row in accounts]
@@ -267,7 +287,10 @@ def projection_snapshot(session, owner, *, classify=True, account_secret=None, a
                 "counts": _scope_counts(session, owner, accounts), "_records": records, "_accounts": accounts}
     semantic = {"version": 1, "classification_version": core.CLASSIFICATION_VERSION, "owner": owner,
                 "counterparty_rule_key_id": account_key_id,
-                "accounts": [{"id": row.id, "enabled": row.enabled} for row in accounts], "identities": identity_state,
+                "accounts": [{"id": row.id, "enabled": row.enabled,
+                              "card": row.kind == "credit_card" and (not row.enabled or row.kind_confirmed_at is not None)}
+                             for row in accounts],
+                "identities": identity_state,
                 "ledger": [[row.account_id, row.entry_reference, record["payload"], row.uncertain, row.source]
                            for row, record in zip(ledger, records, strict=True)],
                 "metadata": sorted([[row.account_id, row.entry_reference, row.ledger_fingerprint,

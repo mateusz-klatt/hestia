@@ -171,9 +171,216 @@ class RecurringChargeDetectionTests(unittest.TestCase):
         self.assertCountEqual(evidence, [entry.entry_reference for entry in entries])
 
     def test_overlapping_variable_contracts_are_not_arbitrarily_combined(self):
-        entries = [_entry(f"{day}-{month}", f"2026-{month:02d}-{day:02d}", amount=str(base + month))
-                   for day, base in ((5, 10), (20, 100)) for month in range(1, 4)]
-        self.assertEqual(detect_recurring_charges("owner", entries, {"acc-1"}), ())
+        separated = [_entry(f"{day}-{month}", f"2026-{month:02d}-{day:02d}", amount=str(base + month))
+                     for day, base in ((5, 10), (20, 100)) for month in range(1, 4)]
+        hints = detect_recurring_charges("owner", separated, {"acc-1"})
+        self.assertEqual([(hint.amount, hint.occurrence_count) for hint in hints], [("103", 3), ("13", 3)])
+        evidence = [item.entry_reference for hint in hints for item in hint.evidence]
+        self.assertEqual(len(evidence), len(set(evidence)))
+        self.assertCountEqual(evidence, [entry.entry_reference for entry in separated])
+
+        for second_day in (14, 15):
+            with self.subTest(second_day=second_day):
+                ambiguous = [_entry(f"{day}-{month}", f"2026-{month:02d}-{day:02d}", amount=str(base + month))
+                             for day, base in ((10, 10), (second_day, 100)) for month in range(1, 4)]
+                self.assertEqual(detect_recurring_charges("owner", ambiguous, {"acc-1"}), ())
+
+    def test_same_account_price_change_lane_stays_merged_alongside_separate_lane(self):
+        # Report (1): day 10 shifts 93->107 while day 20 remains 50 on the same account.
+        for split_after, count in ((3, 6), (2, 4)):
+            with self.subTest(split_after=split_after):
+                entries = []
+                for month in range(1, count + 1):
+                    entries.append(_entry(f"a-{month}", f"2026-{month:02d}-10",
+                                          amount="93" if month <= split_after else "107"))
+                    entries.append(_entry(f"b-{month}", f"2026-{month:02d}-20", amount="50"))
+                hints = detect_recurring_charges("owner", entries, {"acc-1"})
+                self.assertEqual([(h.amount, h.occurrence_count, h.first_date, h.last_date) for h in hints],
+                                 [("107", count, "2026-01-10", f"2026-{count:02d}-10"),
+                                  ("50", count, "2026-01-20", f"2026-{count:02d}-20")])
+                self.assertEqual(detect_recurring_charges("owner", reversed(entries), {"acc-1"}), hints)
+
+        # Close cadence lanes (day 10 and day 15) fall back safely without double-counting 93 + 107.
+        for split_after, count in ((3, 6), (2, 4)):
+            with self.subTest(close_split=split_after):
+                entries = []
+                for month in range(1, count + 1):
+                    entries.append(_entry(f"c1-{month}", f"2026-{month:02d}-10",
+                                          amount="93" if month <= split_after else "107"))
+                    entries.append(_entry(f"c2-{month}", f"2026-{month:02d}-15", amount="50"))
+                hints = detect_recurring_charges("owner", entries, {"acc-1"})
+                self.assertEqual([(h.amount, h.occurrence_count) for h in hints], [("107", count), ("50", count)])
+
+        # Variable utility bill on day 10 alongside another contract (or changing second lane) on day 20.
+        utility_and_fixed = [
+            _entry("u1", "2026-01-10", amount="773.42", counterparty_name="Synthetic Energy"),
+            _entry("u2", "2026-02-10", amount="829.68", counterparty_name="Synthetic Energy"),
+            _entry("u3", "2026-03-10", amount="801.10", counterparty_name="Synthetic Energy"),
+            _entry("f1", "2026-01-20", amount="50", counterparty_name="Synthetic Energy"),
+            _entry("f2", "2026-02-20", amount="50", counterparty_name="Synthetic Energy"),
+            _entry("f3", "2026-03-20", amount="50", counterparty_name="Synthetic Energy"),
+        ]
+        hints = detect_recurring_charges("owner", utility_and_fixed, {"acc-1"})
+        self.assertEqual([(h.amount, h.occurrence_count) for h in hints], [("50", 3), ("801.1", 3)])
+
+        both_changed = [
+            _entry(f"p1-{m}", f"2026-{m:02d}-10", amount="93" if m <= 3 else "107") for m in range(1, 7)
+        ] + [
+            _entry(f"p2-{m}", f"2026-{m:02d}-20", amount="50" if m <= 3 else "55") for m in range(1, 7)
+        ]
+        self.assertEqual([(h.amount, h.occurrence_count) for h in detect_recurring_charges("owner", both_changed, {"acc-1"})],
+                         [("107", 6), ("55", 6)])
+
+    def test_cadence_lanes_handle_staggered_starts_weekend_shifts_and_three_lanes(self):
+        # Staggered start in non-leap March (Feb 10 -> Mar 20 is 38 days, disambiguated by day alignment).
+        staggered = [
+            _entry("s0", "2025-12-10", amount="93"),
+            _entry("s1", "2026-01-10", amount="93"),
+            _entry("s2", "2026-02-10", amount="93"),
+            _entry("s3", "2026-03-10", amount="107"),
+            _entry("s4", "2026-04-10", amount="107"),
+            _entry("s5", "2026-05-10", amount="107"),
+            _entry("t3", "2026-03-20", amount="50"),
+            _entry("t4", "2026-04-20", amount="50"),
+            _entry("t5", "2026-05-20", amount="50"),
+        ]
+        self.assertEqual([(h.amount, h.occurrence_count) for h in detect_recurring_charges("owner", staggered, {"acc-1"})],
+                         [("107", 6), ("50", 3)])
+
+        # Weekend shift (Feb 12) + leap-year month-end clamping alongside mid-month lane.
+        weekend = [
+            _entry("w1", "2026-01-10", amount="93"),
+            _entry("w2", "2026-02-12", amount="93"),
+            _entry("w3", "2026-03-10", amount="107"),
+            _entry("w4", "2026-04-10", amount="107"),
+        ] + [_entry(f"m{m}", f"2026-{m:02d}-20", amount="50") for m in range(1, 5)]
+        self.assertEqual([(h.amount, h.occurrence_count) for h in detect_recurring_charges("owner", weekend, {"acc-1"})],
+                         [("107", 4), ("50", 4)])
+
+        leap_parallel = [
+            _entry("e1", "2024-01-31", amount="93"),
+            _entry("e2", "2024-02-29", amount="93"),
+            _entry("e3", "2024-03-31", amount="107"),
+            _entry("e4", "2024-04-30", amount="107"),
+        ] + [_entry(f"p{m}", f"2024-{m:02d}-15", amount="50") for m in range(1, 5)]
+        self.assertEqual([(h.amount, h.occurrence_count) for h in detect_recurring_charges("owner", leap_parallel, {"acc-1"})],
+                         [("107", 4), ("50", 4)])
+
+        # Three parallel lanes on days 1, 11, 21 across leap Feb-Mar-Apr (raw gaps <= 11, but monthly 31-day span).
+        three_lanes = [
+            _entry(f"{day}-{m}", f"2024-{m:02d}-{day:02d}", amount=str(day + m))
+            for day in (1, 11, 21) for m in (2, 3, 4)
+        ]
+        self.assertEqual([(h.amount, h.occurrence_count) for h in detect_recurring_charges("owner", three_lanes, {"acc-1"})],
+                         [("15", 3), ("25", 3), ("5", 3)])
+
+        # Three contracts where peeling a close fixed lane (day 10) uncovers two variable lanes (day 5 and day 20).
+        three_mixed = (
+            [_entry(f"a-{m}", f"2026-{m:02d}-05", amount=str(10 + m)) for m in range(1, 4)]
+            + [_entry(f"b-{m}", f"2026-{m:02d}-10", amount="50") for m in range(1, 4)]
+            + [_entry(f"c-{m}", f"2026-{m:02d}-20", amount=str(100 + m)) for m in range(1, 4)]
+        )
+        self.assertEqual([(h.amount, h.occurrence_count) for h in detect_recurring_charges("owner", three_mixed, {"acc-1"})],
+                         [("103", 3), ("13", 3), ("50", 3)])
+
+    def test_rejects_submonthly_rhythms_daily_noise_and_ambiguous_fallback_chains(self):
+        # Biweekly 14-day traps (fixed, alternating amounts, variable amounts) and 3-month weekly trap.
+        biweekly_dates = ("2026-01-10", "2026-01-24", "2026-02-07", "2026-02-21", "2026-03-07", "2026-03-21")
+        biweekly_cases = [
+            [_entry(f"bf{i}", d, amount="49.99") for i, d in enumerate(biweekly_dates)],
+            [_entry(f"ba{i}", d, amount="10" if i % 2 == 0 else "20") for i, d in enumerate(biweekly_dates)],
+            [_entry(f"bv{i}", d, amount=str(10 + i)) for i, d in enumerate(biweekly_dates)],
+        ]
+        weekly_dates = (
+            "2026-02-07", "2026-02-14", "2026-02-21", "2026-02-28",
+            "2026-03-07", "2026-03-14", "2026-03-21", "2026-03-28",
+            "2026-04-04", "2026-04-11", "2026-04-18", "2026-04-25",
+        )
+        weekly_var = [_entry(f"wv{i}", d, amount=str(10 + i)) for i, d in enumerate(weekly_dates)]
+        daily = (
+            [_entry(f"d1-{d}", f"2026-01-{d:02d}", amount=str(10 + d)) for d in range(1, 32)]
+            + [_entry(f"d2-{d}", f"2026-02-{d:02d}", amount=str(10 + d)) for d in range(1, 29)]
+            + [_entry(f"d3-{d}", f"2026-03-{d:02d}", amount=str(10 + d)) for d in range(1, 32)]
+        )
+        # Stray duplicate inside one lane (Jan 10..Mar 10 + Feb 15 + Jan 20..Mar 20): lane with Feb 15 is < 3 items.
+        stray_mixed = [
+            _entry("s1", "2026-01-10", amount="11"), _entry("s2", "2026-02-10", amount="12"),
+            _entry("s-extra", "2026-02-15", amount="13"), _entry("s3", "2026-03-10", amount="14"),
+            _entry("p1", "2026-01-20", amount="101"), _entry("p2", "2026-02-20", amount="102"),
+            _entry("p3", "2026-03-20", amount="103"),
+        ]
+        stray_isolated = [
+            _entry("i0", "2026-04-01", amount="75"),
+            _entry("i1", "2026-04-10", amount="11"), _entry("i2", "2026-05-10", amount="12"),
+            _entry("i3", "2026-06-10", amount="13"),
+            _entry("j1", "2026-04-20", amount="101"), _entry("j2", "2026-05-20", amount="102"),
+            _entry("j3", "2026-06-20", amount="103"),
+        ]
+        for case in (*biweekly_cases, weekly_var, daily, stray_mixed, stray_isolated):
+            with self.subTest(first=case[0].entry_reference):
+                self.assertEqual(detect_recurring_charges("owner", case, {"acc-1"}), ())
+
+        # Established fixed contract preserved alongside a 2-month new contract; stray leftover fails recovery.
+        with_new_second = (
+            [_entry(f"f1-{m}", f"2026-{m:02d}-10", amount="10") for m in range(1, 4)]
+            + [_entry(f"f2-{m}", f"2026-{m:02d}-20", amount="20") for m in (2, 3)]
+        )
+        self.assertEqual([(h.amount, h.occurrence_count) for h in detect_recurring_charges("owner", with_new_second, {"acc-1"})],
+                         [("10", 3)])
+
+        with_stray_noise = (
+            [_entry(f"n1-{m}", f"2026-{m:02d}-10", amount="93") for m in range(1, 3)]
+            + [_entry(f"n2-{m}", f"2026-{m:02d}-10", amount="107") for m in range(3, 5)]
+            + [_entry(f"n3-{m}", f"2026-{m:02d}-15", amount="50") for m in range(1, 5)]
+            + [_entry("noise", "2026-03-25", amount="75")]
+        )
+        self.assertEqual([(h.amount, h.occurrence_count) for h in detect_recurring_charges("owner", with_stray_noise, {"acc-1"})],
+                         [("50", 4)])
+
+        # Ambiguous sequential merge candidates (1 ending lane could match 2 starting lanes, or 2 ending lanes match 1 starting).
+        ambig_one_to_two = (
+            [_entry(f"a-{m}", f"2026-{m:02d}-12", amount="93") for m in range(1, 4)]
+            + [_entry(f"b-{m}", f"2026-{m:02d}-10", amount="107") for m in range(4, 7)]
+            + [_entry(f"c-{m}", f"2026-{m:02d}-14", amount="120") for m in range(4, 7)]
+        )
+        self.assertEqual([(h.amount, h.occurrence_count) for h in detect_recurring_charges("owner", ambig_one_to_two, {"acc-1"})],
+                         [("107", 3), ("120", 3), ("93", 3)])
+
+        ambig_two_to_one = (
+            [_entry(f"x-{m}", f"2026-{m:02d}-10", amount="80") for m in range(1, 4)]
+            + [_entry(f"y-{m}", f"2026-{m:02d}-14", amount="93") for m in range(1, 4)]
+            + [_entry(f"z-{m}", f"2026-{m:02d}-12", amount="107") for m in range(4, 7)]
+        )
+        self.assertEqual([(h.amount, h.occurrence_count) for h in detect_recurring_charges("owner", ambig_two_to_one, {"acc-1"})],
+                         [("107", 3), ("80", 3), ("93", 3)])
+
+    def test_separates_multi_account_alternating_and_parallel_same_merchant_lanes(self):
+        # Report (2): alternating observed months across two accounts must never merge into a monthly cycle.
+        for amounts in (
+            ("93", "93", "107", "107", "107", "107"),
+            ("107", "107", "107", "107", "107", "107"),
+        ):
+            with self.subTest(amounts=amounts):
+                alternating = [
+                    _entry(f"alt-{month}", f"2026-{month:02d}-10",
+                           account_id="acc-1" if month % 2 == 1 else "acc-2", amount=amount)
+                    for month, amount in enumerate(amounts, 1)
+                ]
+                self.assertEqual(detect_recurring_charges("owner", alternating, {"acc-1", "acc-2"}), ())
+
+        # Two separate accounts both monthly with the same merchant stay separate even on the same day/amount.
+        separate_accounts = (
+            [_entry(f"a1-{m}", f"2026-{m:02d}-10", account_id="acc-1", amount="93" if m <= 3 else "107")
+             for m in range(1, 7)]
+            + [_entry(f"a2-{m}", f"2026-{m:02d}-10", account_id="acc-2", amount="50") for m in range(1, 7)]
+            + [_entry(f"a3-{m}", f"2026-{m:02d}-10", account_id="acc-3", amount="107") for m in range(1, 7)]
+        )
+        hints = detect_recurring_charges("owner", separate_accounts, {"acc-1", "acc-2", "acc-3"})
+        self.assertEqual([(h.account_ids, h.amount, h.occurrence_count) for h in hints], [
+            (("acc-1",), "107", 6),
+            (("acc-3",), "107", 6),
+            (("acc-2",), "50", 6),
+        ])
 
     def test_separates_currencies_exact_large_small_amounts_and_label_sources(self):
         large = "123456789012345678901234567890.00000001"
@@ -205,10 +412,16 @@ class RecurringChargeDetectionTests(unittest.TestCase):
 
     def test_tracks_multiple_selected_accounts_and_ignores_non_expense_zero_ineligible_and_unlabelled(self):
         entries = [
-            # Valid recurring across 2 selected accounts (e.g., card changed)
-            _entry("ok1", "2026-01-12", account_id="acc-2"),
+            # Independent valid recurring series on acc-1 and acc-2; 2 occurrences on acc-2 do not merge with acc-1
+            _entry("ok1", "2026-01-12", account_id="acc-1"),
             _entry("ok2", "2026-02-12", account_id="acc-1"),
-            _entry("ok3", "2026-03-12", account_id="acc-2"),
+            _entry("ok3", "2026-03-12", account_id="acc-1"),
+            _entry("other1", "2026-01-20", account_id="acc-2", amount="25"),
+            _entry("other2", "2026-02-20", account_id="acc-2", amount="25"),
+            _entry("other3", "2026-03-20", account_id="acc-2", amount="25"),
+            # Two extra entries with the same merchant on acc-3 must not merge into acc-1 or acc-2
+            _entry("non-monthly-1", "2026-01-15", account_id="acc-3"),
+            _entry("non-monthly-2", "2026-02-15", account_id="acc-3"),
             # Excluded, transfer, credit/refund/income, zero amount, ineligible, empty labels -> all ignored
             _entry("ex1", "2026-01-12", effective_kind="excluded", counterparty_name="Excluded"),
             _entry("ex2", "2026-02-12", effective_kind="excluded", counterparty_name="Excluded"),
@@ -231,11 +444,11 @@ class RecurringChargeDetectionTests(unittest.TestCase):
             # Opaque entry reference with control char is accepted cleanly
             _entry("ref\x00opaque", "2026-04-12", account_id="acc-1"),
         ]
-        hints = detect_recurring_charges("owner", entries, frozenset({"acc-1", "acc-2"}))
-        self.assertEqual(len(hints), 1)
-        self.assertEqual(hints[0].occurrence_count, 4)
-        self.assertEqual(hints[0].account_ids, ("acc-1", "acc-2"))
-        self.assertEqual(hints[0].evidence[-1].entry_reference, "ref\x00opaque")
+        hints = detect_recurring_charges("owner", entries, frozenset({"acc-1", "acc-2", "acc-3"}))
+        self.assertEqual(len(hints), 2)
+        self.assertEqual([(h.account_ids, h.amount, h.occurrence_count) for h in hints],
+                         [(("acc-2",), "25", 3), (("acc-1",), "49.99", 4)])
+        self.assertEqual(hints[1].evidence[-1].entry_reference, "ref\x00opaque")
 
     def test_rejects_same_day_duplicate_skipped_month_and_two_charges_in_one_month(self):
         same_day_duplicate = [
@@ -261,14 +474,17 @@ class RecurringChargeDetectionTests(unittest.TestCase):
     def test_output_is_invariant_across_input_permutations(self):
         base = [
             _entry("a1", "2026-01-10", account_id="acc-1", amount="29.99", counterparty_name="Alpha Sub"),
-            _entry("a2", "2026-02-10", account_id="acc-2", amount="29.990", counterparty_name="alpha sub"),
+            _entry("a2", "2026-02-10", account_id="acc-1", amount="29.990", counterparty_name="alpha sub"),
             _entry("a3", "2026-03-10", account_id="acc-1", amount="029.99", counterparty_name="ALPHA SUB"),
+            _entry("a4", "2026-01-10", account_id="acc-2", amount="29.99", counterparty_name="Alpha Sub"),
+            _entry("a5", "2026-02-10", account_id="acc-2", amount="29.990", counterparty_name="alpha sub"),
+            _entry("a6", "2026-03-10", account_id="acc-2", amount="029.99", counterparty_name="ALPHA SUB"),
             _entry("b1", "2026-01-20", account_id="acc-2", amount="12", currency="EUR", counterparty_name=None, description="Beta Plan"),
             _entry("b2", "2026-02-20", account_id="acc-2", amount="12.00", currency="EUR", counterparty_name=None, description="beta plan"),
             _entry("b3", "2026-03-20", account_id="acc-2", amount="12.0", currency="EUR", counterparty_name=None, description="BETA PLAN"),
         ]
         expected = detect_recurring_charges("owner", base, {"acc-1", "acc-2"})
-        self.assertEqual(len(expected), 2)
+        self.assertEqual(len(expected), 3)
         rng = random.Random(20261121)
         for _ in range(25):
             shuffled = list(base)
