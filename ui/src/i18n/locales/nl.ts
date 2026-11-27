@@ -521,6 +521,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "De gekozen banktransactie is al gekoppeld aan een ander document.",
   "budget.receipts.staleSource": "Het kandidaattoken is verlopen of ongeldig (grootboek of verkoper/NIP gewijzigd). Details opnieuw geladen — controleer de koppeling en bevestig opnieuw.",
   "budget.receipts.totalMismatch": "De som van de regels moet gelijk zijn aan het totaalbedrag.",
+  "budget.receipts.partialLinesRemainder": "Slechts een deel van de artikelen is herkend — het verschil van {amount} wordt als overige artikelen geboekt.",
+  "budget.receipts.partialLinesSummary": "Slechts een deel van de artikelen is herkend — alleen het totaalbedrag wordt opgeslagen.",
   "budget.receipts.invalidForm": "Controleer verkoper, geldige datum, positief totaal, valuta en NIP.",
   "budget.receipts.confirmError": "Bevestigen mislukt. Controleer uw gegevens en probeer opnieuw.",
   "budget.receipts.deleteAction": "Document verwijderen",

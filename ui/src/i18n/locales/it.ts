@@ -521,6 +521,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Il movimento bancario selezionato è già collegato a un altro documento.",
   "budget.receipts.staleSource": "Il token del candidato non è più valido (movimento aggiornato o esercente/NIP modificato). Dettagli ricaricati: controlla il collegamento e conferma di nuovo.",
   "budget.receipts.totalMismatch": "La somma delle righe deve coincidere con il totale.",
+  "budget.receipts.partialLinesRemainder": "Le voci sono state riconosciute solo in parte — la differenza di {amount} sarà registrata come altre voci.",
+  "budget.receipts.partialLinesSummary": "Le voci sono state riconosciute solo in parte — verrà salvato solo il totale.",
   "budget.receipts.invalidForm": "Controlla esercente, data valida, totale positivo, valuta e NIP.",
   "budget.receipts.confirmError": "Conferma non riuscita. Verifica i dati e riprova.",
   "budget.receipts.deleteAction": "Elimina documento",

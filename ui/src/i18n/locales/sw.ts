@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Muamala wa benki uliochaguliwa tayari umeunganishwa na waraka mwingine.",
   "budget.receipts.staleSource": "Tokeni ya kiungo cha mgombea si halali tena (daftari au muuzaji/NIP imebadilika). Maelezo yamepakiwa upya — kagua kiungo na uthibitishe tena.",
   "budget.receipts.totalMismatch": "Jumla ya mistari lazima ilingane na jumla ya waraka.",
+  "budget.receipts.partialLinesRemainder": "Ni baadhi tu ya bidhaa zilizotambuliwa — tofauti ya {amount} itarekodiwa kama bidhaa nyingine.",
+  "budget.receipts.partialLinesSummary": "Ni baadhi tu ya bidhaa zilizotambuliwa — ni jumla pekee itakayohifadhiwa.",
   "budget.receipts.invalidForm": "Kagua muuzaji, tarehe halali, jumla chanya, sarafu na NIP.",
   "budget.receipts.confirmError": "Uthibitisho umeshindikana. Kagua mabadiliko yako na jaribu tena.",
   "budget.receipts.deleteAction": "Futa waraka",

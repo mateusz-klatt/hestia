@@ -523,6 +523,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "所选银行交易已关联到其他凭证。",
   "budget.receipts.staleSource": "关联候选项令牌已失效（账本已更新或修改了商户/NIP）。详情已重新加载——请检查关联选项并再次确认。",
   "budget.receipts.totalMismatch": "明细之和必须等于凭证总额。",
+  "budget.receipts.partialLinesRemainder": "仅识别了部分明细，差额 {amount} 将记为其他项目。",
+  "budget.receipts.partialLinesSummary": "仅识别了部分明细，将只保存总金额。",
   "budget.receipts.invalidForm": "请检查商户、有效日期、正数总额、币种及NIP。",
   "budget.receipts.confirmError": "确认失败，请检查修改内容后重试。",
   "budget.receipts.deleteAction": "删除凭证",

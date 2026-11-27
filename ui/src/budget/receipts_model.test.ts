@@ -483,14 +483,92 @@ describe("receipts_model", () => {
       if (builtNoCand.ok) expect(builtNoCand.request.link).toBeNull();
     }
 
-    // 7. Total mismatch & invalid NIP rejected before network calls.
+    // 7. Changing the total invalidates the bank link. An invalid NIP still blocks confirmation.
     expect(buildConfirmRequest(reviewLinked, { ...draftKeep, totalAmount: "99.99" }, [cand])).toEqual({
       ok: false,
-      errorKey: "budget.receipts.totalMismatch",
+      errorKey: "budget.receipts.invalidForm",
     });
     expect(buildConfirmRequest(reviewLinked, { ...draftKeep, rawNip: "5261040829" }, [cand])).toEqual({
       ok: false,
       errorKey: "budget.receipts.invalidForm",
+    });
+  });
+
+  const ocrLines = ["10", "20", "30"].map<ReceiptDetail["lines"][number]>((amount, index) => ({
+    line_no: index + 1,
+    line_kind: "item",
+    raw_name: `Synthetic item ${String(index + 1)}`,
+    raw_name_key: `synthetic item ${String(index + 1)}`,
+    ptu_code: null,
+    quantity: "1",
+    raw_unit: null,
+    unit_price_raw: null,
+    gross_line_total: amount,
+    discount_amount: "0",
+    net_line_total: amount,
+  }));
+
+  it("confirms a partially read receipt with the original lines and a single positive remainder", () => {
+    const detail = detailOf({ status: "draft", total_amount: "67.01", lines: ocrLines });
+    const draft = draftFromDetail(detail);
+    const built = buildConfirmRequest(detail, draft, []);
+
+    expect(built.ok).toBe(true);
+    if (built.ok) {
+      expect(built.request.lines).toEqual([
+        ...draft.lines,
+        {
+          line_kind: "item",
+          raw_name: "Pozostałe / nierozpoznane pozycje",
+          ptu_code: null,
+          quantity: "1",
+          raw_unit: null,
+          unit_price_raw: null,
+          gross_line_total: "7.01",
+          discount_amount: "0",
+          net_line_total: "7.01",
+        },
+      ]);
+    }
+  });
+
+  it("confirms with a single total line when the OCR lines exceed the receipt total", () => {
+    const detail = detailOf({ status: "draft", total_amount: "52.99", lines: ocrLines });
+    const built = buildConfirmRequest(detail, draftFromDetail(detail), []);
+
+    expect(built.ok).toBe(true);
+    if (built.ok) {
+      expect(built.request.lines).toEqual([{
+        line_kind: "other",
+        raw_name: "Tylko suma",
+        ptu_code: null,
+        quantity: "1",
+        raw_unit: null,
+        unit_price_raw: null,
+        gross_line_total: "52.99",
+        discount_amount: "0",
+        net_line_total: "52.99",
+      }]);
+    }
+  });
+
+  it("keeps stored receipt lines when their sum equals the total", () => {
+    const detail = detailOf({ status: "draft", total_amount: "60.00", lines: ocrLines });
+    const built = buildConfirmRequest(detail, draftFromDetail(detail), []);
+
+    expect(built.ok).toBe(true);
+    if (built.ok) expect(built.request).not.toHaveProperty("lines");
+  });
+
+  it("uses a total-only line when appending a remainder would exceed the request line limit", () => {
+    const lines = Array.from({ length: 100 }, () => ocrLines).flat()
+      .map((line, index) => ({ ...line, line_no: index + 1 }));
+    const detail = detailOf({ status: "draft", total_amount: "6007.01", lines });
+    const built = buildConfirmRequest(detail, draftFromDetail(detail), []);
+
+    expect(built).toMatchObject({
+      ok: true,
+      request: { lines: [{ raw_name: "Tylko suma", net_line_total: "6007.01" }] },
     });
   });
 
@@ -786,7 +864,7 @@ describe("receipts_model", () => {
       expect("raw_nip" in shopCleared.request).toBe(false);
     }
 
-    // Zero-line OCR draft & needs_review are rejected (never synthesize lines for non-invoices).
+    // Bulk confirmation still rejects OCR drafts, needs_review and payment confirmations without lines.
     expect(buildPlainBulkConfirmRequest(detailOf({ status: "draft", source_kind: "local_ocr", document_kind: "receipt", lines: [] }), "Summary")).toEqual({
       ok: false,
       errorCode: "budget_receipt_invalid_request",

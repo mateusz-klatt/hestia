@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Выбранная банковская операция уже связана с другим документом.",
   "budget.receipts.staleSource": "Токен кандидата устарел (изменилась операция или продавец/NIP). Сведения обновлены — проверьте привязку и подтвердите снова.",
   "budget.receipts.totalMismatch": "Сумма позиций должна совпадать с общей суммой документа.",
+  "budget.receipts.partialLinesRemainder": "Позиции распознаны лишь частично — разница в размере {amount} будет записана как прочие позиции.",
+  "budget.receipts.partialLinesSummary": "Позиции распознаны лишь частично — будет сохранена только общая сумма.",
   "budget.receipts.invalidForm": "Проверьте продавца, дату, положительную сумму, валюту и NIP.",
   "budget.receipts.confirmError": "Не удалось подтвердить. Проверьте изменения и попробуйте снова.",
   "budget.receipts.deleteAction": "Удалить документ",

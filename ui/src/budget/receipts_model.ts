@@ -1086,6 +1086,32 @@ export function computeLinesDelta(lines: readonly ReceiptLineInput[], totalAmoun
   return subtractDecimals(netSum, total);
 }
 
+const MAX_RECEIPT_LINES = 300;
+
+type ReceiptTotalAdjustment = { kind: "remainder"; amount: string } | { kind: "summary" };
+
+function adjustmentForLineDelta(delta: string, lineCount: number): ReceiptTotalAdjustment {
+  if (delta.startsWith("-") && lineCount < MAX_RECEIPT_LINES) {
+    const amount = normalizeDecimalInput(delta.slice(1));
+    if (amount !== null) return { kind: "remainder", amount };
+  }
+  return { kind: "summary" };
+}
+
+export function receiptTotalAdjustment(
+  detail: Pick<ReceiptDetail, "document_kind" | "lines">,
+  draft: Pick<ReceiptConfirmDraft, "totalAmount" | "lines">,
+): ReceiptTotalAdjustment | null {
+  if (detail.document_kind === "payment_confirmation"
+    || (detail.document_kind === "invoice" && detail.lines.length === 0 && draft.lines.length === 0)) {
+    return null;
+  }
+  const total = normalizeDecimalInput(draft.totalAmount);
+  if (total === null || total === "0" || total.startsWith("-")) return null;
+  const delta = computeLinesDelta(draft.lines, total);
+  return delta === null || delta === "0" ? null : adjustmentForLineDelta(delta, draft.lines.length);
+}
+
 export function receiptHasRedactedLines(
   lines: readonly Pick<ReceiptLineInput, "raw_name" | "raw_unit">[],
 ): boolean {
@@ -1119,6 +1145,20 @@ export function haveConfirmLinesChanged(
   return false;
 }
 
+function synthesizeTotalLine(rawName: string, amount: string, lineKind: "item" | "other"): ReceiptLineInput {
+  return {
+    line_kind: lineKind,
+    raw_name: rawName,
+    ptu_code: null,
+    quantity: "1",
+    raw_unit: null,
+    unit_price_raw: null,
+    gross_line_total: amount,
+    discount_amount: "0",
+    net_line_total: amount,
+  };
+}
+
 function synthesizeInvoiceSummaryLine(
   detail: Pick<ReceiptDetail, "invoice_number" | "raw_shop_name">,
   draftShopName: string,
@@ -1136,17 +1176,7 @@ function synthesizeInvoiceSummaryLine(
       : "");
   const candidateName = invoiceName || rawShop || summaryFallbackName;
   const rawName = candidateName === "" || isRedactedValue(candidateName) ? "Document" : candidateName;
-  return {
-    line_kind: "other",
-    raw_name: rawName,
-    ptu_code: null,
-    quantity: "1",
-    raw_unit: null,
-    unit_price_raw: null,
-    gross_line_total: normalizedTotal,
-    discount_amount: "0",
-    net_line_total: normalizedTotal,
-  };
+  return synthesizeTotalLine(rawName, normalizedTotal, "other");
 }
 
 export function buildConfirmRequest(
@@ -1177,7 +1207,7 @@ export function buildConfirmRequest(
   if (total === null || (compareDecimalStrings(total, "0") ?? -1) <= 0) {
     return { ok: false, errorKey: "budget.receipts.invalidForm" };
   }
-  if (draft.lines.length > 300) return { ok: false, errorKey: "budget.receipts.invalidForm" };
+  if (draft.lines.length > MAX_RECEIPT_LINES) return { ok: false, errorKey: "budget.receipts.invalidForm" };
 
   const linesChanged = haveConfirmLinesChanged(detail.lines, draft.lines);
   if (linesChanged && receiptHasRedactedLines(detail.lines)) {
@@ -1243,8 +1273,17 @@ export function buildConfirmRequest(
     effectiveLines = [synthesizeInvoiceSummaryLine(detail, shopName, total, summaryFallbackName)];
     sendLines = true;
   } else {
-    const netSum = addDecimals(cleanLines.map((line) => line.net_line_total));
-    if (netSum !== total) return { ok: false, errorKey: "budget.receipts.totalMismatch" };
+    const delta = computeLinesDelta(cleanLines, total);
+    if (delta !== "0") {
+      if (delta === null || detail.document_kind === "payment_confirmation") {
+        return { ok: false, errorKey: "budget.receipts.totalMismatch" };
+      }
+      const adjustment = adjustmentForLineDelta(delta, cleanLines.length);
+      effectiveLines = adjustment.kind === "remainder"
+        ? [...cleanLines, synthesizeTotalLine("Pozostałe / nierozpoznane pozycje", adjustment.amount, "item")]
+        : [synthesizeTotalLine("Tylko suma", total, "other")];
+      sendLines = true;
+    }
   }
 
   if (draft.linkChoice === "") {
@@ -1516,18 +1555,6 @@ export function buildBulkConfirmRequest(
     draft.linkChoice = "unlink";
     draft.selectedCandidate = null;
   }
-  if (detail.lines.length === 0) {
-    if (detail.document_kind !== "invoice") {
-      return { ok: false, errorCode: "budget_receipt_total_mismatch" };
-    }
-    const normalizedTotal = detail.total_amount === null ? null : normalizeDecimalInput(detail.total_amount);
-    if (normalizedTotal === null) {
-      return { ok: false, errorCode: "budget_receipt_invalid_request" };
-    }
-    draft.lines.push(
-      synthesizeInvoiceSummaryLine(detail, detail.raw_shop_name ?? "", normalizedTotal, summaryFallbackName),
-    );
-  }
   const built = buildConfirmRequest(detail, draft, effectiveCandidates, summaryFallbackName);
   if (!built.ok) {
     return {
@@ -1540,7 +1567,7 @@ export function buildBulkConfirmRequest(
   return { ok: true, request: built.request, linkedById: idMatch !== null };
 }
 
-/** Builds a plain confirm (`link: null`) for an unlinked Gmail import; omits existing lines, synthesizing 1 summary line only for 0-line Gmail invoices. */
+/** Builds a plain confirm (`link: null`) for an unlinked Gmail import. */
 export function buildPlainBulkConfirmRequest(
   detail: ReceiptDetail,
   summaryFallbackName: string,
@@ -1712,18 +1739,6 @@ export function buildGroupPreConfirmRequest(
   draft.linkChoice = "unlink";
   draft.selectedCandidate = null;
   draft.keepBinding = null;
-  if (detail.lines.length === 0) {
-    if (detail.document_kind !== "invoice") {
-      return { ok: false, errorCode: "budget_receipt_total_mismatch" };
-    }
-    const normalizedTotal = detail.total_amount === null ? null : normalizeDecimalInput(detail.total_amount);
-    if (normalizedTotal === null) {
-      return { ok: false, errorCode: "budget_receipt_invalid_request" };
-    }
-    draft.lines.push(
-      synthesizeInvoiceSummaryLine(detail, detail.raw_shop_name ?? "", normalizedTotal, summaryFallbackName),
-    );
-  }
   const built = buildConfirmRequest(detail, draft, [], summaryFallbackName);
   if (!built.ok) {
     return {

@@ -523,6 +523,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "चयनित बैंक लेन-देन पहले से किसी अन्य दस्तावेज़ से लिंक है।",
   "budget.receipts.staleSource": "उम्मीदवार लिंक टोकन अब मान्य नहीं है (खाता बही बदली या व्यापारी/NIP बदला गया)। विवरण फिर लोड हुए — लिंक जाँचकर पुनः पुष्टि करें।",
   "budget.receipts.totalMismatch": "पंक्तियों का योग दस्तावेज़ के कुल के बराबर होना चाहिए।",
+  "budget.receipts.partialLinesRemainder": "केवल कुछ मदें पहचानी गईं — {amount} का अंतर अन्य मदों के रूप में दर्ज किया जाएगा।",
+  "budget.receipts.partialLinesSummary": "केवल कुछ मदें पहचानी गईं — सिर्फ़ कुल राशि सहेजी जाएगी।",
   "budget.receipts.invalidForm": "व्यापारी का नाम, मान्य तारीख, धनात्मक योग, मुद्रा और NIP जाँचें।",
   "budget.receipts.confirmError": "पुष्टि विफल रही। अपने बदलाव जाँचें और फिर कोशिश करें।",
   "budget.receipts.deleteAction": "दस्तावेज़ हटाएँ",

@@ -523,6 +523,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Transaksioni i zgjedhur bankar është tashmë i lidhur me një dokument tjetër.",
   "budget.receipts.staleSource": "Tokeni i kandidatit nuk vlen më (libri ose tregtari/NIP ndryshoi). Detajet u ringarkuan — rishikoni lidhjen dhe konfirmoni përsëri.",
   "budget.receipts.totalMismatch": "Shuma e rreshtave duhet të jetë e barabartë me totalin e dokumentit.",
+  "budget.receipts.partialLinesRemainder": "Vetëm disa zëra u njohën — diferenca prej {amount} do të regjistrohet si zëra të tjerë.",
+  "budget.receipts.partialLinesSummary": "Vetëm disa zëra u njohën — do të ruhet vetëm shuma totale.",
   "budget.receipts.invalidForm": "Kontrolloni emrin e tregtarit, datën e vlefshme, totalin pozitiv, monedhën dhe NIP.",
   "budget.receipts.confirmError": "Konfirmimi dështoi. Kontrolloni ndryshimet dhe provoni përsëri.",
   "budget.receipts.deleteAction": "Fshi dokumentin",

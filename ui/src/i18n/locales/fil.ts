@@ -523,6 +523,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Ang napiling transaksyon sa bangko ay naka-link na sa ibang dokumento.",
   "budget.receipts.staleSource": "Hindi na wasto ang token ng kandidato (nagbago ang ledger o tindahan/NIP). Na-reload ang detalye — suriin ang link at kumpirmahin ulit.",
   "budget.receipts.totalMismatch": "Ang kabuuan ng mga linya ay dapat katumbas ng kabuuang halaga.",
+  "budget.receipts.partialLinesRemainder": "Ilan lamang sa mga item ang nakilala — itatala ang diperensiyang {amount} bilang iba pang mga item.",
+  "budget.receipts.partialLinesSummary": "Ilan lamang sa mga item ang nakilala — ang kabuuang halaga lang ang ise-save.",
   "budget.receipts.invalidForm": "Suriin ang tindahan, wastong petsa, positibong kabuuan, salapi at NIP.",
   "budget.receipts.confirmError": "Nabigo ang pagkumpirma. Suriin ang iyong mga pagbabago at subukan ulit.",
   "budget.receipts.deleteAction": "Tanggalin ang dokumento",

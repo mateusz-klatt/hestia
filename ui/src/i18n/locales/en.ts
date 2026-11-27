@@ -544,6 +544,8 @@ const en = {
   "budget.receipts.txAlreadyLinked": "The selected bank transaction is already linked to another document.",
   "budget.receipts.staleSource": "The candidate link token is no longer valid (ledger updated or merchant/NIP edited). Details reloaded — review link choices and confirm again.",
   "budget.receipts.totalMismatch": "The sum of line items must equal the document total.",
+  "budget.receipts.partialLinesRemainder": "Items were only partially recognized — {amount} will be recorded as other items.",
+  "budget.receipts.partialLinesSummary": "Items were only partially recognized — only the total will be saved.",
   "budget.receipts.invalidForm": "Check merchant name, valid date, positive total, currency and tax ID.",
   "budget.receipts.confirmError": "Confirmation failed. Check your changes and try again.",
   "budget.receipts.deleteAction": "Delete document",

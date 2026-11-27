@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Pasirinkta banko operacija jau susieta su kitu dokumentu.",
   "budget.receipts.staleSource": "Kandidato susiejimo raktas nebegalioja (pasikeitė žurnalas arba prekybininkas/NIP). Duomenys įkelti iš naujo — patikrinkite susiejimą ir patvirtinkite dar kartą.",
   "budget.receipts.totalMismatch": "Eilučių suma turi būti lygi bendrai sumai.",
+  "budget.receipts.partialLinesRemainder": "Atpažinta tik dalis eilučių — {amount} skirtumas bus įrašytas kaip kitos eilutės.",
+  "budget.receipts.partialLinesSummary": "Atpažinta tik dalis eilučių — bus išsaugota tik bendra suma.",
   "budget.receipts.invalidForm": "Patikrinkite prekybininką, galiojančią datą, teigiamą sumą, valiutą ir NIP.",
   "budget.receipts.confirmError": "Patvirtinti nepavyko. Patikrinkite pakeitimus ir bandykite dar kartą.",
   "budget.receipts.deleteAction": "Ištrinti dokumentą",

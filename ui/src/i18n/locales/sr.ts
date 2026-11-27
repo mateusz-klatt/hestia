@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Изабрана банковна трансакција је већ повезана са другим документом.",
   "budget.receipts.staleSource": "Токен кандидата више не важи (књига или трговац/NIP су измењени). Детаљи су поново учитани — проверите везу и потврдите поново.",
   "budget.receipts.totalMismatch": "Збир ставки мора бити једнак укупном износу.",
+  "budget.receipts.partialLinesRemainder": "Ставке су делимично препознате — разлика од {amount} биће евидентирана као остале ставке.",
+  "budget.receipts.partialLinesSummary": "Ставке су делимично препознате — сачуваће се само укупан износ.",
   "budget.receipts.invalidForm": "Проверите назив трговца, важећи датум, позитиван износ, валуту и NIP.",
   "budget.receipts.confirmError": "Потврда није успела. Проверите измене и покушајте поново.",
   "budget.receipts.deleteAction": "Обриши документ",

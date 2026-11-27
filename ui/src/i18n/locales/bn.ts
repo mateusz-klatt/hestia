@@ -523,6 +523,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "নির্বাচিত ব্যাংক লেনদেন ইতিমধ্যেই অন্য নথির সাথে যুক্ত।",
   "budget.receipts.staleSource": "প্রার্থী লিংক টোকেন আর বৈধ নয় (খতিয়ান বদলেছে বা ব্যবসায়ী/NIP পরিবর্তিত হয়েছে)। বিবরণ পুনরায় লোড হয়েছে — লিংক নির্বাচন দেখে আবার নিশ্চিত করুন।",
   "budget.receipts.totalMismatch": "সারিগুলোর যোগফল নথির মোটের সমান হতে হবে।",
+  "budget.receipts.partialLinesRemainder": "কিছু আইটেম শনাক্ত করা গেছে — বাকি {amount} অন্যান্য আইটেম হিসেবে নথিভুক্ত হবে।",
+  "budget.receipts.partialLinesSummary": "কিছু আইটেম শনাক্ত করা গেছে — শুধু মোট পরিমাণ সংরক্ষিত হবে।",
   "budget.receipts.invalidForm": "ব্যবসায়ীর নাম, বৈধ তারিখ, ধনাত্মক মোট, মুদ্রা এবং NIP পরীক্ষা করুন।",
   "budget.receipts.confirmError": "নিশ্চিতকরণ ব্যর্থ হয়েছে। পরিবর্তনগুলো পরীক্ষা করে আবার চেষ্টা করুন।",
   "budget.receipts.deleteAction": "নথি মুছুন",
