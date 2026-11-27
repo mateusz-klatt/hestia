@@ -295,7 +295,8 @@ class BudgetOpenApiTests(unittest.TestCase):
                 self.assertEqual(names[0], "X-Budget-Grant")
                 self.assertTrue(methods["get"]["parameters"][0]["required"])
         self.assertEqual(set(receipts), {"/api/budget/receipts/" + name for name in
-                         ("parse-text", "confirm", "list", "search", "detail", "image", "delete",
+                         ("parse-text", "confirm", "list", "search", "detail", "group/detail",
+                          "group/candidates", "group/link", "group/unlink", "image", "delete",
                           "device-token/pair-code", "device-token/pair-code-cancel", "device-token/login",
                           "device-token/redeem", "device-token/list",
                           "device-token/revoke", "gmail-status", "gmail-grant", "gmail-sync", "gmail-revoke")})
@@ -754,7 +755,9 @@ class BudgetOpenApiTests(unittest.TestCase):
                               "BudgetTranslationImportRequest",
                               "BudgetReceiptParseTextRequest", "BudgetReceiptConfirmRequest", "BudgetReceiptLineInput",
                               "BudgetReceiptLinkRequest", "BudgetReceiptListRequest", "BudgetReceiptSearchRequest",
-                              "BudgetReceiptDeleteRequest", "BudgetReceiptDeviceBrowserRequest",
+                              "BudgetReceiptDeleteRequest", "BudgetReceiptGroupCandidatesRequest",
+                              "BudgetReceiptGroupMemberInput", "BudgetReceiptGroupLinkRequest",
+                              "BudgetReceiptGroupUnlinkRequest", "BudgetReceiptDeviceBrowserRequest",
                               "BudgetReceiptDeviceCancelRequest", "BudgetReceiptDeviceLoginRequest",
                               "BudgetReceiptDeviceRedeemRequest", "BudgetReceiptDeviceRevokeRequest", "BudgetReceiptGmailGrantRequest",
                               "BudgetReceiptGmailRevokeRequest", "BudgetReceiptGmailSyncRequest"})

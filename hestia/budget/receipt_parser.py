@@ -507,7 +507,7 @@ class ReceiptError(ValueError):
     CODES = frozenset({
         "budget_receipt_invalid_request", "budget_receipt_not_found", "budget_receipt_conflict",
         "budget_receipt_stale_source", "budget_receipt_tx_already_linked", "budget_receipt_total_mismatch",
-        "budget_receipt_quota_exceeded", "budget_receipt_unavailable",
+        "budget_receipt_quota_exceeded", "budget_receipt_unavailable", "budget_receipt_in_group",
     })
 
     def __init__(self, code="budget_receipt_invalid_request", status=400):

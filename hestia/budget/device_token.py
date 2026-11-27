@@ -55,6 +55,7 @@ CONFIRM_PATH = PREFIX + "/confirm"
 LIST_RECEIPTS_PATH = PREFIX + "/list"
 SEARCH_PATH = PREFIX + "/search"
 DETAIL_PATH = PREFIX + "/detail"
+GROUP_CANDIDATES_PATH = PREFIX + "/group/candidates"
 IMAGE_PATH = PREFIX + "/image"
 DELETE_PATH = PREFIX + "/delete"
 
@@ -64,6 +65,7 @@ ALLOWED = frozenset({
     ("POST", LIST_RECEIPTS_PATH),
     ("POST", SEARCH_PATH),
     ("GET", DETAIL_PATH),
+    ("POST", GROUP_CANDIDATES_PATH),
     ("GET", IMAGE_PATH),
     ("POST", DELETE_PATH),
     ("POST", REVOKE_PATH),
