@@ -1,12 +1,12 @@
 """Real Gmail message parsing, SQLite staging and owner-card reconciliation across syncs."""
 import json
 from dataclasses import replace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from sqlalchemy import delete, select
 
-from hestia import db
-from hestia.budget.gmail_card_import import waiting_key
+from hestia import authz, db
+from hestia.budget.gmail_card_import import stage, waiting_key
 from hestia.budget.gmail_client import GmailClient
 from hestia.budget.gmail_message import GmailMessageProcessor
 from hestia.budget.gmail_store import (
@@ -16,11 +16,13 @@ from hestia.budget.gmail_store import (
     GmailStore,
     _document_number_key,
     digest,
+    retain_imports,
 )
 from hestia.budget.gmail_sync import GmailSync
 from hestia.budget.gmail_trust import PaymentSender
 from hestia.budget.gmail_worker import _render, _validate_output
 from hestia.budget.receipt_reconcile import evidence_json, reconcile_receipt_links
+from hestia.budget.receipt_store import BudgetReceiptStore
 from tests.test_budget_analytics_store import AnalyticsCase
 from tests.test_budget_gmail_discovery import DOCUMENT, UNLISTED
 from tests.test_budget_gmail_message import (
@@ -705,3 +707,170 @@ class GmailCardImportTests(AnalyticsCase):
         self.add_card()
         self.commit(valid, malformed)
         self.assertEqual(self.rows(db.BudgetReceipt), [])
+
+
+    def test_staggered_expiry_keeps_conflicting_copies_until_both_expire(self):
+        for conflict in ("document_number", "shared_rfc"):
+            with self.subTest(conflict=conflict):
+                self._reset_state()
+                first = self.message("early-copy")
+                body = DOCUMENT.replace("7,50", "8,50")
+                if conflict == "shared_rfc":
+                    body = body.replace("TEST/42", "TEST/43")
+                later = self.message("later-copy", body=body, rfc_id=(
+                    "<early-copy@example.test>" if conflict == "shared_rfc" else None
+                ))
+                self.commit(first)
+                self.now += 60
+                self.commit(later)
+                self.now += IMPORT_TTL - 59
+                self._add_debit("only-survivor-could-match", amount="8.5")
+                self.gmail.retain(OWNER, 1)
+                self.gmail.retain(OWNER, 1, settle_cards=True)
+                self.assertEqual(self.rows(db.BudgetReceipt), [])
+                self.assertTrue(self.gmail.known(OWNER, first.gmail_id_hmac))
+                self.assertTrue(self.gmail.known(OWNER, later.gmail_id_hmac))
+
+                self.now += 59
+                self.gmail.retain(OWNER, 1, settle_cards=True)
+                self.assertEqual(self.rows(db.BudgetReceipt), [])
+                self.assertFalse(self.gmail.known(OWNER, first.gmail_id_hmac))
+                self.assertFalse(self.gmail.known(OWNER, later.gmail_id_hmac))
+
+    def test_global_expiry_follows_transitive_copy_edges_within_one_owner(self):
+        shared = "<shared@example.test>"
+        bridge = "<bridge@example.test>"
+        first = self.message("first", rfc_id=shared)
+        middle = DOCUMENT.replace("TEST/42", "TEST/43")
+        left = self.message("left", body=middle, rfc_id=shared)
+        right = self.message("right", body=middle, rfc_id=bridge)
+        last = self.message("last", body=DOCUMENT.replace("TEST/42", "TEST/44"), rfc_id=bridge)
+        with self.sessions.begin() as session:
+            for item in (first, left, right):
+                stage(session, OWNER, item, self.now)
+            stage(session, OWNER, last, self.now + 1)
+            stage(session, "other", first, self.now + 2)
+            retain_imports(session, None, self.now)
+        for item in (first, left, right, last):
+            self.assertTrue(self.gmail.known(OWNER, item.gmail_id_hmac))
+
+        with self.sessions.begin() as session:
+            retain_imports(session, None, self.now + 1)
+            self.assertIsNotNone(session.get(db.AppMeta, waiting_key("other", first.gmail_id_hmac)))
+        for item in (first, left, right, last):
+            self.assertFalse(self.gmail.known(OWNER, item.gmail_id_hmac))
+
+    def test_later_distinct_document_reopens_and_unlinks_an_automatic_confirmation(self):
+        for trusted in (False, True):
+            with self.subTest(trusted=trusted):
+                self._reset_state()
+                self.add_card()
+                self.commit(self.message("first"))
+                original_id = self.assert_linked_once("TEST/42")
+
+                self.now += 60
+                body = DOCUMENT.replace("TEST/42", "TEST/43")
+                challenger = (self._trusted_pdf_message("later", body) if trusted else self.message(
+                    "later", body="Receipt\nMerchant: Cedar Tools\nDate: 2026-11-23\nGrand Total: PLN 7.50",
+                ))
+                self.commit(challenger)
+
+                with self.sessions.begin() as session:
+                    row = session.get(db.BudgetReceipt, original_id)
+                    self.assertEqual((row.status, row.version), ("needs_review", 3))
+                    self.assertEqual((row.linked_account_id, row.linked_entry_ref, row.linked_fingerprint,
+                                      row.linked_evidence), (None, None, None, None))
+                    audit, = session.scalars(select(db.BudgetAnalyticsAudit).where(
+                        db.BudgetAnalyticsAudit.subject_id == original_id,
+                        db.BudgetAnalyticsAudit.action == "source_changed",
+                    ))
+                    self.assertTrue(json.loads(audit.before_json)["linked"])
+                    after = json.loads(audit.after_json)
+                    self.assertEqual((after["actor"], after["status"], after["linked"]),
+                                     ("gmail_import", "needs_review", False))
+                    # Receipt review can outlive the Gmail provenance ledger.
+                    session.execute(delete(db.BudgetGmailMessage).where(db.BudgetGmailMessage.receipt_id == original_id))
+
+                self.gmail.retain(OWNER, 1, settle_cards=True)
+                self.assertEqual({r.invoice_number: (r.status, r.linked_entry_ref) for r in self.rows(db.BudgetReceipt)},
+                                 {"TEST/42": ("needs_review", None), "TEST/43": ("imported", None)}
+                                 if trusted else {"TEST/42": ("needs_review", None)})
+                self.assertTrue(self.gmail.known(OWNER, challenger.gmail_id_hmac))
+
+    def test_later_distinct_document_preserves_an_owner_confirmation(self):
+        for preserve_auto_link in (False, True):
+            with self.subTest(preserve_auto_link=preserve_auto_link):
+                self._reset_state()
+                self.add_card()
+                first = self._trusted_pdf_message("owner-first", DOCUMENT)
+                self.gmail.commit(OWNER, 1, {}, [first], settle_cards=preserve_auto_link)
+                original, = self.rows(db.BudgetReceipt)
+                store = BudgetReceiptStore(self.sessions, clock=lambda: self.now, cursor_secret=b"card-review-test")
+                permissions = authz.LEGACY_RECEIPT_PERMISSIONS
+                link = None
+                if preserve_auto_link:
+                    permissions = permissions - {"budget.receipts.match"}
+                else:
+                    match, = store.detail(OWNER, original.id)["candidates"]
+                    link = {key: match[key] for key in ("account_id", "entry_reference", "candidate_token")}
+                with patch.object(authz, "LEGACY_RECEIPT_PERMISSIONS", permissions):
+                    store.confirm(OWNER, {
+                        "receipt_id": original.id, "expected_version": original.version,
+                        "receipt_kind": "purchase", "receipt_date": original.receipt_date, "receipt_time": None,
+                        "total_amount": original.total_amount, "currency": original.currency, "payment_method": "card",
+                        "link": link,
+                    })
+
+                self.now += 60
+                challenger = self.message("later", body=DOCUMENT.replace("TEST/42", "TEST/43"))
+                self.commit(challenger)
+                self.gmail.retain(OWNER, 1, settle_cards=True)
+
+                self.assertEqual(self.assert_linked_once("TEST/42"), original.id)
+                row, = self.rows(db.BudgetReceipt)
+                self.assertEqual((row.status, row.version), ("confirmed", original.version + 1))
+                self.assertEqual(json.loads(row.linked_evidence).get("gmail_card"), True if preserve_auto_link else None)
+                self.assertTrue(self.gmail.known(OWNER, challenger.gmail_id_hmac))
+                actions = [audit.action for audit in self.rows(db.BudgetAnalyticsAudit) if audit.subject_id == row.id]
+                self.assertEqual(actions, ["confirm"] * (2 if preserve_auto_link else 1))
+
+    def test_conflicting_copies_of_the_same_document_do_not_reopen_the_link(self):
+        self.add_card()
+        self.commit(self.message("first"))
+        original_id = self.assert_linked_once("TEST/42")
+        self.commit(self.message("copy-a"), self.message("copy-b", body=DOCUMENT.replace("7,50", "8,50")))
+        self.assertEqual(self.assert_linked_once("TEST/42"), original_id)
+        row, = self.rows(db.BudgetReceipt)
+        self.assertEqual((row.status, row.version), ("confirmed", 2))
+
+    def test_review_claim_cannot_reopen_another_automatic_confirmation(self):
+        self.add_card()
+        wide = DOCUMENT + "Termin płatności: 10.12.2026\n"
+        self.commit(self.message("wide", body=wide))
+        self._add_debit("later-debit", day="2026-12-09")
+        later = DOCUMENT.replace("TEST/42", "TEST/43").replace("23.11.2026", "09.12.2026")
+        self.commit(self.message("later-charge", body=later))
+        competitor = self.message("overlap", body=DOCUMENT.replace("TEST/42", "TEST/44"))
+        self.commit(competitor)
+        self.gmail.retain(OWNER, 1, settle_cards=True)
+        self.assertEqual({r.invoice_number: (r.status, r.linked_entry_ref) for r in self.rows(db.BudgetReceipt)},
+                         {"TEST/42": ("needs_review", None), "TEST/43": ("confirmed", "later-debit")})
+
+    def test_unmarked_version_two_invoice_claims_a_debit_without_ever_confirming(self):
+        invoice = self._trusted_pdf_message("older-invoice", DOCUMENT)
+        self.commit(invoice)
+        with self.sessions.begin() as session:
+            row = session.scalar(select(db.BudgetReceipt))
+            row.version = 2
+            original_id = row.id
+
+        self.add_card()
+        self.gmail.retain(OWNER, 1, settle_cards=True)
+        challenger = self.message("later", body=DOCUMENT.replace("TEST/42", "TEST/43"))
+        self.commit(challenger)
+        self.gmail.retain(OWNER, 1, settle_cards=True)
+
+        row, = self.rows(db.BudgetReceipt)
+        self.assertEqual((row.id, row.status, row.version, row.linked_entry_ref),
+                         (original_id, "imported", 2, None))
+        self.assertTrue(self.gmail.known(OWNER, challenger.gmail_id_hmac))

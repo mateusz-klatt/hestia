@@ -6,16 +6,18 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, case, delete, func, or_, select, tuple_
 
-from ..db import AppMeta, BudgetGmailMessage, BudgetReceipt, BudgetReceiptLine
+from ..db import AppMeta, BudgetAnalyticsAudit, BudgetGmailMessage, BudgetReceipt, BudgetReceiptLine
 from .analytics_core import AnalyticsError, canonical_money
 from .gmail_document import ImportedDocument
 from .gmail_payment import _payee_key
 from .receipt_parser import merchant_word_tokens
-from .receipt_reconcile import audit_payload, evidence_json, write_audit
+from .receipt_reconcile import _latch_receipt_source_changed, audit_payload, evidence_json, write_audit
 
 _PREFIX = "budget_gmail_card_wait:"
+_GMAIL_IMPORT_ACTOR = "gmail_import"
+_LINK_BATCH_SIZE = 400
 _WARSAW = ZoneInfo("Europe/Warsaw")
 
 
@@ -31,11 +33,47 @@ def forget_waiting(session, owner):
     session.execute(delete(AppMeta).where(AppMeta.key.startswith(_prefix(owner))))
 
 
-def expire_waiting(session, owner, now):
+def _waiting_filter(owner):
     prefix = _PREFIX if owner is None else _prefix(owner)
-    session.execute(delete(AppMeta).where(AppMeta.key.startswith(prefix),
-                                          func.json_extract(AppMeta.value, "$.expires") <= now),
-                    execution_options={"synchronize_session": False})
+    return AppMeta.key.startswith(prefix, autoescape=True)
+
+
+def _staged_groups(session, owner):
+    groups = defaultdict(list)
+    rows = session.scalars(select(AppMeta).where(_waiting_filter(owner)).order_by(AppMeta.key))
+    for meta in rows:
+        data = json.loads(meta.value)
+        reference = data["provenance"]["number_hmac"] or data["rfc"] or meta.key
+        owner_key = meta.key.rsplit(":", 1)[0]
+        groups[owner_key, data["provenance"]["seller_key"], reference].append((meta, data))
+    return groups
+
+
+def expire_waiting(session, owner, now):
+    """Expire complete document and RFC copy clusters together."""
+    matches = _waiting_filter(owner)
+    expires = func.json_extract(case((matches, AppMeta.value)), "$.expires")
+    if session.scalar(select(AppMeta.key).where(matches, expires <= now).limit(1)) is None:
+        return
+
+    groups = _staged_groups(session, owner)
+    groups_by_rfc = _groups_by_rfc(groups)
+    remaining = set(groups)
+    while remaining:
+        pending = [remaining.pop()]
+        cluster = []
+        while pending:
+            group = pending.pop()
+            copies = groups[group]
+            cluster.extend(copies)
+            for _, data in copies:
+                for neighbor in groups_by_rfc.pop((group[0], data["rfc"]), ()):
+                    if neighbor in remaining:
+                        remaining.remove(neighbor)
+                        pending.append(neighbor)
+        if all(data["expires"] <= now for _, data in cluster):
+            for meta, _ in cluster:
+                session.delete(meta)
 
 
 def stage(session, owner, item, expires_at):
@@ -78,13 +116,13 @@ def _matching_variants(copies):
     return variants
 
 
-def _shared_rfcs(waiting):
+def _groups_by_rfc(groups):
     groups_by_rfc = defaultdict(set)
-    for key, copies in waiting.items():
-        for _, data, _ in copies:
+    for key, copies in groups.items():
+        for _, data in copies:
             if data["rfc"] is not None:
-                groups_by_rfc[data["rfc"]].add(key)
-    return {rfc for rfc, keys in groups_by_rfc.items() if len(keys) > 1}
+                groups_by_rfc[key[0], data["rfc"]].add(key)
+    return groups_by_rfc
 
 
 def receipt_document(receipt):
@@ -105,20 +143,39 @@ def _record(session, owner, key, data, now, outcome, receipt_id=None):
                                    trust_path=data["trust"], outcome=outcome, created_at=now, receipt_id=receipt_id))
 
 
+def _gmail_receipt_audit(action):
+    return select(BudgetAnalyticsAudit.id).where(
+        BudgetAnalyticsAudit.owner == BudgetReceipt.owner,
+        BudgetAnalyticsAudit.subject_type == "receipt",
+        BudgetAnalyticsAudit.subject_id == BudgetReceipt.id,
+        BudgetAnalyticsAudit.action == action,
+        func.json_extract(BudgetAnalyticsAudit.after_json, "$.actor") == _GMAIL_IMPORT_ACTOR,
+        func.json_extract(BudgetAnalyticsAudit.after_json, "$.version") == BudgetReceipt.version,
+    )
+
+
 def _pending_receipts(session, owner):
     from .gmail_store import _document_number_key
 
-    auto_promoted = and_(
-        BudgetReceipt.version == 2,
-        BudgetReceipt.document_kind == "invoice",
-        func.json_extract(AppMeta.value, "$.auto_promoted_version") == 2,
+    imported = BudgetReceipt.status == "imported"
+    version_two_invoice = and_(BudgetReceipt.version == 2, BudgetReceipt.document_kind == "invoice")
+    auto_promoted = and_(version_two_invoice, func.json_extract(AppMeta.value, "$.auto_promoted_version") == 2)
+    auto_eligible = and_(imported, or_(BudgetReceipt.version == 1, auto_promoted))
+    pending = and_(imported, BudgetGmailMessage.receipt_id.is_not(None),
+                   or_(BudgetReceipt.version == 1, version_two_invoice))
+    # Keep an unlinked receipt in the graph after reopening it, even if its Gmail ledger entry has expired.
+    reopened = and_(
+        BudgetReceipt.status == "needs_review",
+        _gmail_receipt_audit("source_changed").where(
+            func.json_extract(BudgetAnalyticsAudit.before_json, "$.linked") == 1,
+            func.json_extract(BudgetAnalyticsAudit.after_json, "$.linked") == 0,
+        ).exists(),
     )
-    return session.execute(select(BudgetReceipt, BudgetGmailMessage.internal_date).join(
+    return session.execute(select(BudgetReceipt, BudgetGmailMessage.internal_date, auto_eligible).outerjoin(
         BudgetGmailMessage, (BudgetGmailMessage.receipt_id == BudgetReceipt.id)
         & (BudgetGmailMessage.owner == BudgetReceipt.owner)).outerjoin(
         AppMeta, AppMeta.key == _document_number_key(BudgetReceipt.id)).where(
-        BudgetReceipt.owner == owner, BudgetReceipt.status == "imported",
-        or_(BudgetReceipt.version == 1, auto_promoted),
+        BudgetReceipt.owner == owner, or_(pending, reopened),
         BudgetReceipt.gateway.is_(None), BudgetReceipt.evidence_for_receipt_id.is_(None),
         BudgetReceipt.linked_account_id.is_(None), BudgetReceipt.forwarded_manually == 0,
         BudgetReceipt.raw_shop_name.is_not(None), BudgetReceipt.total_amount.is_not(None),
@@ -139,7 +196,7 @@ def _confirm(session, owner, receipt, match, now):
     receipt.linked_fingerprint, receipt.linked_evidence = match.fingerprint, evidence_json(match.evidence)
     receipt.version += 1
     receipt.updated_at = now
-    write_audit(session, owner, receipt, "confirm", before, audit_payload(receipt, "confirm", "gmail_import"), now)
+    write_audit(session, owner, receipt, "confirm", before, audit_payload(receipt, "confirm", _GMAIL_IMPORT_ACTOR), now)
 
 
 def _existing_document(session, owner, invoice, provenance):
@@ -176,18 +233,12 @@ def _duplicate_rfc(store, session, owner, rfc_hmac):
 
 
 def _waiting_documents(store, session, owner, now):
-    staged = defaultdict(list)
-    rows = session.scalars(select(AppMeta).where(AppMeta.key.startswith(_prefix(owner))).order_by(AppMeta.key))
-    for meta in rows:
-        data = json.loads(meta.value)
-        invoice = ImportedDocument(**data["invoice"])
-        reference = data["provenance"]["number_hmac"] or data["rfc"] or meta.key
-        key = data["provenance"]["seller_key"], reference
-        staged[key].append((meta, data, invoice))
-    shared_rfcs = _shared_rfcs(staged)
+    staged = _staged_groups(session, owner)
+    shared_rfcs = {rfc for (_, rfc), keys in _groups_by_rfc(staged).items() if len(keys) > 1}
     groups = {}
     pruned = []
-    for key, copies in staged.items():
+    for key, rows in staged.items():
+        copies = [(meta, data, ImportedDocument(**data["invoice"])) for meta, data in rows]
         # Pruning a conflicting copy could make the remaining copy look corroborated.
         if len(_matching_variants(copies)) > 1:
             groups[key] = copies
@@ -247,6 +298,71 @@ def _waiting_candidates(session, owner, copies, *, shared_rfcs):
     return not contested, candidates
 
 
+def _document_identifiers(seller, number, number_hmac, rfcs):
+    identifiers = {("rfc", rfc) for rfc in rfcs if rfc is not None}
+    if number:
+        identifiers.add(("invoice", seller, number.casefold()))
+    if number_hmac:
+        identifiers.add(("number_hmac", seller, number_hmac))
+    return identifiers
+
+
+def _receipt_identifiers(session, owner, receipt):
+    from .gmail_store import _document_number_key
+
+    meta = session.get(AppMeta, _document_number_key(receipt.id))
+    provenance = json.loads(meta.value) if meta is not None else {}
+    rfcs = session.scalars(select(BudgetGmailMessage.rfc_message_id_hmac).where(
+        BudgetGmailMessage.owner == owner, BudgetGmailMessage.receipt_id == receipt.id,
+    ))
+    return _document_identifiers(
+        provenance.get("seller_key") or _payee_key(receipt.raw_shop_name or ""), receipt.invoice_number,
+        provenance.get("number_hmac"), rfcs,
+    )
+
+
+def _has_distinct_claim(session, owner, row, claimers, receipts, waiting):
+    original = _receipt_identifiers(session, owner, row)
+    for kind, key in claimers:
+        if kind == "receipt":
+            receipt = receipts[key]
+            if receipt.status != "imported":
+                continue
+            identifiers = _receipt_identifiers(session, owner, receipt)
+        else:
+            identifiers = set()
+            for _, data, invoice in waiting[key]:
+                provenance = data["provenance"]
+                identifiers.update(_document_identifiers(
+                    provenance["seller_key"], invoice.invoice_number, provenance["number_hmac"], [data["rfc"]],
+                ))
+        if original.isdisjoint(identifiers):
+            return True
+    return False
+
+
+def _reopen_competing_links(session, owner, now, claims, receipts, waiting):
+    blocked_keys = [key for key, claimers in claims.items() if None in claimers.values()]
+    evidence = case((func.json_valid(BudgetReceipt.linked_evidence), BudgetReceipt.linked_evidence))
+    # Manual relinks replace the marker. A manual confirmation that preserves the bank link
+    # still increments the version and cannot start from an imported receipt with a link.
+    auto_confirmed = _gmail_receipt_audit("confirm").where(
+        func.json_extract(BudgetAnalyticsAudit.before_json, "$.status") == "imported",
+        func.json_extract(BudgetAnalyticsAudit.after_json, "$.linked") == 1,
+    ).exists()
+    for start in range(0, len(blocked_keys), _LINK_BATCH_SIZE):
+        keys = blocked_keys[start:start + _LINK_BATCH_SIZE]
+        rows = session.scalars(select(BudgetReceipt).where(
+            BudgetReceipt.owner == owner, BudgetReceipt.status == "confirmed",
+            tuple_(BudgetReceipt.linked_account_id, BudgetReceipt.linked_entry_ref).in_(keys),
+            func.json_type(evidence, "$.gmail_card") == "true", auto_confirmed,
+        ))
+        for row in rows:
+            key = row.linked_account_id, row.linked_entry_ref
+            if _has_distinct_claim(session, owner, row, claims[key], receipts, waiting):
+                _latch_receipt_source_changed(session, owner, row, now, unlink=True, actor=_GMAIL_IMPORT_ACTOR)
+
+
 def settle(store, session, owner, now):
     # The receipt candidate store also uses Gmail ledger retention.
     from .gmail_card_match import card_purchase_candidates
@@ -255,30 +371,36 @@ def settle(store, session, owner, now):
     claims = defaultdict(dict)
     claims_by_document = defaultdict(set)
     receipts = {}
-    for receipt, stamp in _pending_receipts(session, owner):
+    claim_only = set()
+    for receipt, stamp, auto_eligible in _pending_receipts(session, owner):
         document = ("receipt", receipt.id)
         receipts[receipt.id] = receipt
+        if not auto_eligible:
+            claim_only.add(document)
         candidates = card_purchase_candidates(
-            session, owner, receipt_document(receipt), received_date=_received_date(stamp),
+            session, owner, receipt_document(receipt), received_date=None if stamp is None else _received_date(stamp),
             include_receipt_id=receipt.id,
         )
         _record_claims(claims, claims_by_document, document, candidates)
 
     waiting, shared_rfcs = _waiting_documents(store, session, owner, now)
-    contested = set()
     for key, copies in waiting.items():
         document = ("waiting", key)
         can_settle, candidates = _waiting_candidates(session, owner, copies, shared_rfcs=shared_rfcs)
         _record_claims(claims, claims_by_document, document, candidates)
         if not can_settle:
-            contested.add(document)
+            claim_only.add(document)
+
+    # The graph was built with the earlier links still occupied. Keep those claims
+    # unavailable for this pass even when the original receipt is reopened.
+    _reopen_competing_links(session, owner, now, claims, receipts, waiting)
 
     created = 0
     for claimers in claims.values():
         if len(claimers) != 1:
             continue
         document, match = next(iter(claimers.items()))
-        if match is None or document in contested or len(claims_by_document[document]) != 1:
+        if match is None or document in claim_only or len(claims_by_document[document]) != 1:
             continue
         kind, key = document
         if kind == "receipt":
