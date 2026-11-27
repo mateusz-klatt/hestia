@@ -9,12 +9,14 @@ source.
 
 A hint requires at least three observed monthly occurrences across at least
 three distinct calendar months with consecutive gaps in [23, 38] days. A monthly
-history may change its amount. Overlapping charges on the same account first
-separate unambiguous monthly cadence lanes before allowing amount transitions,
-and otherwise retain independently monthly fixed-amount histories. Other
-short-gap clusters (weekly/bi-weekly charges, frequent purchases, duplicate
-charges) are rejected. Hints show every observed occurrence as evidence and
-never assert that a subscription is unwanted or unused.
+history may change its amount. A stable reference can connect established
+histories at a label change when the cadence and amounts agree. Overlapping
+charges on the same account first separate unambiguous monthly cadence lanes
+before allowing amount transitions, and otherwise retain independent fixed-amount
+histories. Other short-gap clusters (weekly/bi-weekly charges, frequent
+purchases, duplicate charges) are rejected. Hints show every observed
+occurrence as evidence and never assert that a subscription is unwanted or
+unused.
 
 Errors carry fixed messages and never echo amounts, references, descriptions or
 identifiers.
@@ -22,13 +24,15 @@ identifiers.
 from __future__ import annotations
 
 import calendar
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
+from fractions import Fraction
 import re
 import unicodedata
 
-RULE_VERSION = 3
+RULE_VERSION = 7
 MIN_OCCURRENCES = 3
 MIN_GAP_DAYS = 23
 MAX_GAP_DAYS = 38
@@ -36,6 +40,7 @@ MAX_ENTRIES = 100_000
 MAX_TEXT = 1024
 MAX_DESCRIPTION = 512 * 1024
 MAX_AMOUNT = 80
+MAX_REFERENCE_TOKENS = 8
 LABEL_SOURCES = ("counterparty_name", "description")
 EFFECTIVE_KINDS = frozenset({"expense", "income", "refund", "excluded", "unclassified_credit", "transfer"})
 
@@ -44,6 +49,25 @@ _CURRENCY = re.compile(r"[A-Z]{3}", re.ASCII)
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", re.ASCII)
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}", re.ASCII)
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_REMITTANCE_TOKEN = re.compile(r"\w+(?:(?:[-/]|(?<=\d)[.,](?=\d))\w+)*")
+_REFERENCE_DIGITS = re.compile(r"[0-9]+")
+_REFERENCE_ID = re.compile(
+    r"(?=[a-z0-9/-]{5,40}\Z)(?=.*[a-z])(?=.*[0-9]{4})[a-z0-9]+(?:[-/][a-z0-9]+)*"
+)
+_REFERENCE_MARKER_SUFFIX = r"\b\s*(?:(?:nr|numer|no|number)\b\.?\s*)?[:#]?\s*\Z"
+_CONTRACT_PREFIX = re.compile(r"\b(?:polisa|polisy|policy|contract|umowa|umowy)" + _REFERENCE_MARKER_SUFFIX)
+_NON_CONTRACT_PREFIX = re.compile(r"\b(?:klient[au]?|customer|client|account|rachunku)" + _REFERENCE_MARKER_SUFFIX)
+_PREMIUM_TERM = r"(?:sk[łl]adk[aięą]|odnowieni[ea]|premium)"
+_INSURANCE_CODE = r"(?:oc|ac|nnw)"
+_INSURANCE_CONTEXT = re.compile(
+    rf"\b(?:ubezpieczeni\w*|polis(?:[ayęą]|ie)|insurance|"
+    rf"{_PREMIUM_TERM}\s+{_INSURANCE_CODE}|{_INSURANCE_CODE}\s+{_PREMIUM_TERM})\b"
+)
+_PREMIUM_WORD = re.compile(rf"\b{_PREMIUM_TERM}\b")
+_YEAR_CODE = re.compile(r"[12][0-9]{3}")
+_COMPACT_DATE = re.compile(r"[0-9]{4}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])")
+_PHONE_PREFIX = re.compile(r"(?:\btel\.?\s*[:=]?\s*\+?|\+48[\s-]*|\+)\Z")
+_INLINE_PHONE = re.compile(r"tel[-/]?[0-9]")
 
 
 class RecurringInputError(ValueError):
@@ -107,14 +131,16 @@ class RecurringHint:
     rule_version: int = RULE_VERSION
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class _Charge:
     day: int
     day_of_month: int
     year_month: tuple[int, int]
     occurrence: RecurringOccurrence
     display_label: str
+    label_source: str
     amount: str
+    references: dict[str, bool]  # Whether each token is structured or explicitly contract-marked.
 
 
 def _text(value, maximum=MAX_TEXT):
@@ -172,6 +198,45 @@ def _label(counterparty_name, description):
     return ("description", cleaned, cleaned.casefold()) if cleaned else None
 
 
+def _is_reference_number(digits, whole_amount, phone_context):
+    return (
+        4 <= len(digits) <= 32
+        and len(digits) != 26  # Polish NRB, including the numeric part of a PL IBAN.
+        and _YEAR_CODE.fullmatch(digits) is None
+        and _COMPACT_DATE.fullmatch(digits) is None
+        and digits.lstrip("0") != whole_amount
+        and not (phone_context and len(digits) in (9, 11))
+    )
+
+
+def _reference_tokens(amount, *values):
+    whole_amount = amount.partition(".")[0]
+    references = {}
+    for value in values:
+        folded = value.casefold()
+        for match in _REMITTANCE_TOKEN.finditer(folded):
+            token = match[0]
+            prefix = folded[max(0, match.start() - 64):match.start()]
+            if _NON_CONTRACT_PREFIX.search(prefix):
+                continue
+            explicit = True
+            # Short numeric references require a contract marker. Longer
+            # unmarked numbers are candidates for insurance bridges only.
+            if _REFERENCE_DIGITS.fullmatch(token):
+                explicit = _CONTRACT_PREFIX.search(prefix) is not None
+                if len(token) < (6 if explicit else 8):
+                    continue
+            elif not _REFERENCE_ID.fullmatch(token):
+                continue
+            phone_context = bool(_PHONE_PREFIX.search(prefix) or _INLINE_PHONE.match(token))
+            if any(_is_reference_number(digits, whole_amount, phone_context)
+                   for digits in _REFERENCE_DIGITS.findall(token)):
+                references[token] = explicit or references.get(token, False)
+                if len(references) == MAX_REFERENCE_TOKENS:
+                    return references
+    return references
+
+
 def _scope(owner, selected_accounts, max_entries):
     owner = _text(owner)
     if not isinstance(selected_accounts, (set, frozenset)):
@@ -203,9 +268,11 @@ def _validated_charge(owner, entry, accounts, seen):
         return None
     source, display, normalized = merchant
     occurrence = RecurringOccurrence(entry.account_id, entry.entry_reference, entry.date, entry.fingerprint)
+    reference_texts = (entry.description, display) if source == "counterparty_name" else (entry.description,)
+    references = _reference_tokens(amount, *reference_texts)
     return (
         (entry.account_id, entry.currency, source, normalized),
-        _Charge(day, day_of_month, year_month, occurrence, display, amount),
+        _Charge(day, day_of_month, year_month, occurrence, display, source, amount, references),
     )
 
 
@@ -234,37 +301,25 @@ def _clusters(items):
     return clusters
 
 
-def _build_hint(key, cluster, min_gap, max_gap, distinct_months):
-    _, currency, source, normalized = key
+def _build_hint(currency, cluster):
+    latest = cluster[-1]
+    gaps = [right.day - left.day for left, right in zip(cluster, cluster[1:])]
     return RecurringHint(
-        label=cluster[-1].display_label,
-        normalized_label=normalized,
-        label_source=source,
-        amount=cluster[-1].amount,
+        label=latest.display_label,
+        normalized_label=latest.display_label.casefold(),
+        label_source=latest.label_source,
+        amount=latest.amount,
         currency=currency,
         cadence="monthly",
         occurrence_count=len(cluster),
-        distinct_months=distinct_months,
+        distinct_months=len({item.year_month for item in cluster}),
         first_date=cluster[0].occurrence.date,
         last_date=cluster[-1].occurrence.date,
-        min_gap_days=min_gap,
-        max_gap_days=max_gap,
+        min_gap_days=min(gaps),
+        max_gap_days=max(gaps),
         account_ids=tuple(sorted({item.occurrence.account_id for item in cluster})),
         evidence=tuple(item.occurrence for item in cluster),
     )
-
-
-def _hint_from_cluster(key, cluster):
-    if len(cluster) < MIN_OCCURRENCES:
-        return None
-    gaps = [right.day - left.day for left, right in zip(cluster, cluster[1:])]
-    min_gap, max_gap = min(gaps), max(gaps)
-    if min_gap < MIN_GAP_DAYS:
-        return None
-    distinct_months = len({item.year_month for item in cluster})
-    if distinct_months < MIN_OCCURRENCES:
-        return None
-    return _build_hint(key, cluster, min_gap, max_gap, distinct_months)
 
 
 def _dom_distance(left: _Charge, right: _Charge) -> int:
@@ -344,11 +399,11 @@ def _cadence_lanes(cluster, raw_gaps):
     return None
 
 
-def _can_chain_lanes(left, right):
+def _same_monthly_cadence(left, right):
     return (
-        left[-1].year_month < right[0].year_month
-        and MIN_GAP_DAYS <= right[0].day - left[-1].day <= MAX_GAP_DAYS
-        and _dom_distance(left[-1], right[0]) <= 5
+        left.year_month < right.year_month
+        and MIN_GAP_DAYS <= right.day - left.day <= MAX_GAP_DAYS
+        and _dom_distance(left, right) <= 5
     )
 
 
@@ -357,11 +412,13 @@ def _merge_sequential_lanes(lanes):
     while True:
         merged_pair = None
         for i, left in enumerate(ordered):
-            next_candidates = [j for j, right in enumerate(ordered) if j != i and _can_chain_lanes(left, right)]
+            next_candidates = [j for j, right in enumerate(ordered)
+                               if j != i and _same_monthly_cadence(left[-1], right[0])]
             if len(next_candidates) == 1:
                 target = next_candidates[0]
                 right = ordered[target]
-                prev_candidates = [k for k, other in enumerate(ordered) if k != target and _can_chain_lanes(other, right)]
+                prev_candidates = [k for k, other in enumerate(ordered)
+                                   if k != target and _same_monthly_cadence(other[-1], right[0])]
                 if len(prev_candidates) == 1:
                     merged_pair = (i, target)
                     break
@@ -411,23 +468,123 @@ def _fixed_fallback_lanes(cluster, raw_gaps):
     return merged
 
 
-def _monthly_hints(key, items):
+def _monthly_lanes(items):
+    if len(items) < MIN_OCCURRENCES:
+        return
     for cluster in _clusters(items):
-        hint = _hint_from_cluster(key, cluster)
-        if hint is not None:
-            yield hint
-            continue
-        if len(cluster) <= MIN_OCCURRENCES:
+        if len(cluster) < MIN_OCCURRENCES:
             continue
         raw_gaps = [right.day - left.day for left, right in zip(cluster, cluster[1:])]
-        if min(raw_gaps) >= MIN_GAP_DAYS or max(raw_gaps) <= 8:
+        if min(raw_gaps) >= MIN_GAP_DAYS:
+            if len({item.year_month for item in cluster}) >= MIN_OCCURRENCES:
+                yield cluster
+            continue
+        if len(cluster) == MIN_OCCURRENCES or max(raw_gaps) <= 8:
             continue
         lanes = _cadence_lanes(cluster, raw_gaps)
         if lanes is None:
             lanes = _fixed_fallback_lanes(cluster, raw_gaps)
-        for lane in lanes:
-            gaps = [right.day - left.day for left, right in zip(lane, lane[1:])]
-            yield _build_hint(key, lane, min(gaps), max(gaps), len({item.year_month for item in lane}))
+        yield from lanes
+
+
+def _label_lanes(items):
+    lanes = list(_monthly_lanes(items))
+    if lanes:
+        return lanes
+
+    # References can distinguish parallel contracts with identical label,
+    # dates and amounts when the label alone offers no cadence lane.
+    by_reference = defaultdict(list)
+    for item in items:
+        for reference, explicit in item.references.items():
+            if explicit:
+                by_reference[reference].append(item)
+    candidates = [lane for _, charges in sorted(by_reference.items()) for lane in _monthly_lanes(charges)]
+    matches = Counter(item.occurrence for lane in candidates for item in lane)
+    return [lane for lane in candidates if all(matches[item.occurrence] == 1 for item in lane)]
+
+
+def _conflicting_references(lanes, candidates):
+    labels_by_month = {}
+    conflicts = set()
+    for (account, currency, _, label), lane in lanes:
+        for item in lane:
+            for reference in item.references:
+                key = (account, currency, reference)
+                if key in candidates:
+                    slot = (*key, item.year_month)
+                    if labels_by_month.setdefault(slot, label) != label:
+                        conflicts.add(key)
+    return conflicts
+
+
+def _within_bridge_drift(amount, baseline):
+    # Ten percent allows modest renewal adjustments. Fractions preserve the
+    # inclusive boundary for every supported amount.
+    return abs(amount - baseline) * 10 <= baseline
+
+
+def _has_bridge_context(reference, left_label, right_label, left, right):
+    if all(item.references[reference] for run in (left, right) for item in run):
+        return True
+
+    # A long number can be shared by a customer's unrelated services. Require
+    # insurance context on both labels, with at least one explicit insurance
+    # term or a coverage code next to a premium or renewal term.
+    left_insurance = _INSURANCE_CONTEXT.search(left_label) is not None
+    right_insurance = _INSURANCE_CONTEXT.search(right_label) is not None
+    return (
+        left_insurance and (right_insurance or _PREMIUM_WORD.search(right_label) is not None)
+        or right_insurance and _PREMIUM_WORD.search(left_label) is not None
+    )
+
+
+def _bridge_prefix_end(reference, runs, start):
+    """Return the first run index after the bridge starting at start."""
+    anchor = Fraction(runs[start][1][-1].amount)
+    for index in range(start + 1, len(runs)):
+        left_key, left = runs[index - 1]
+        right_key, right = runs[index]
+        if left_key[3] == right_key[3] or not _same_monthly_cadence(left[-1], right[0]):
+            return index
+        if not _has_bridge_context(reference, left_key[3], right_key[3], left, right):
+            return index
+        previous, current = Fraction(left[-1].amount), Fraction(right[0].amount)
+        if not _within_bridge_drift(current, anchor):
+            return index
+        # An exact return uses the same band as the outbound adjustment so
+        # a 10% decrease followed by restoration is reversible.
+        if not _within_bridge_drift(current, previous):
+            if current != anchor or not _within_bridge_drift(previous, anchor):
+                return index
+    return len(runs)
+
+
+def _reference_bridges(lanes):
+    by_reference = defaultdict(list)
+    for index, ((account, currency, _, _), lane) in enumerate(lanes):
+        references = set(lane[0].references).intersection(*(item.references for item in lane[1:]))
+        for reference in references:
+            by_reference[account, currency, reference].append(index)
+
+    candidates = {key: indices for key, indices in by_reference.items()
+                  if len({lanes[index][0][3] for index in indices}) > 1}
+    if not candidates:
+        return
+    conflicts = _conflicting_references(lanes, candidates)
+    matches = Counter(index for key, indices in candidates.items() if key not in conflicts for index in indices)
+    for key, indices in sorted(candidates.items()):
+        if key in conflicts or any(matches[index] != 1 for index in indices):
+            continue
+        ordered = sorted(indices, key=lambda index: lanes[index][1][0].day)
+        runs = [lanes[index] for index in ordered]
+        start = 0
+        while start < len(runs):
+            end = _bridge_prefix_end(key[2], runs, start)
+            if end - start >= 2:
+                combined = [item for _, run in runs[start:end] for item in run]
+                yield ordered[start:end], key[1], combined
+            start = end
 
 
 def detect_recurring_charges(owner: str, entries: Iterable[RecurringEntry],
@@ -437,20 +594,27 @@ def detect_recurring_charges(owner: str, entries: Iterable[RecurringEntry],
 
     Only eligible DBIT expense entries on ``selected_accounts`` with non-zero exact
     amounts and non-empty merchant evidence (``counterparty_name`` preferred over
-    ``description``) are considered. Entries are separated by account, currency,
-    label source, and normalized label. Each hint requires at least three monthly
-    occurrences across at least three distinct calendar months with consecutive
-    date gaps in [23, 38] days. Within an account and monthly cadence lane,
-    amount changes stay in one history with the latest observed amount used for
-    the estimate. Overlapping charges on the same account separate unambiguous
-    cadence lanes first, and otherwise retain independently monthly fixed-amount
-    histories without double-counting sequential price transitions.
+    ``description``) are considered. Entries are separated by account and currency,
+    and ordinarily by label source and normalized label. Each hint requires at
+    least three monthly occurrences across at least three distinct calendar
+    months with consecutive date gaps in [23, 38] days. Amounts can vary freely
+    within a label, and the latest amount is used for the estimate. Overlapping
+    charges on the same account separate unambiguous cadence lanes first, and
+    otherwise retain independently monthly fixed-amount histories. A reference
+    can connect established runs with different labels, the same account,
+    currency and cadence, and amount drift within ten percent at the bridge.
+    A bare number without a contract marker requires insurance context on both
+    labels. A rejected boundary leaves the established prefix joined and starts
+    a fresh walk with its own initial amount.
     """
     owner, accounts = _scope(owner, selected_accounts, max_entries)
     groups = _groups(owner, entries, accounts, max_entries)
-    hints = []
-    for key, items in sorted(groups.items()):
-        hints.extend(_monthly_hints(key, items))
+    lanes = [(key, lane) for key, items in sorted(groups.items()) for lane in _label_lanes(items)]
+    hints, used = [], set()
+    for indices, currency, lane in _reference_bridges(lanes):
+        hints.append(_build_hint(currency, lane))
+        used.update(indices)
+    hints.extend(_build_hint(key[1], lane) for index, (key, lane) in enumerate(lanes) if index not in used)
     hints.sort(key=lambda hint: (hint.currency, hint.normalized_label, hint.label_source,
                                  hint.amount, hint.first_date, hint.last_date, hint.account_ids))
     return tuple(hints)
