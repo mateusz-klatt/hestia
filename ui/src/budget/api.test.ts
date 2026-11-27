@@ -534,7 +534,7 @@ describe("budget api", () => {
     expect(new Headers(sent(fetchMock, 3).init.headers).has("X-Hestia-Contract-Version")).toBe(false);
   });
 
-  it("negotiates 0.63.0 for mortgage references and forecast audits", async () => {
+  it("negotiates 0.64.0 for mortgage references and forecast audits", async () => {
     const contractHeader = "X-Hestia-Contract-Version";
     const fetchMock = respond(200, {});
     await budgetApi.mortgages();
@@ -544,7 +544,7 @@ describe("budget api", () => {
     expect(sent(fetchMock, 2).url.pathname).toBe("/api/budget/analytics/mortgage-reference-candidates");
     expect(sent(fetchMock, 2).url.search).toBe("");
     for (const index of [0, 1, 2]) {
-      expect(new Headers(sent(fetchMock, index).init.headers).get(contractHeader)).toBe("0.63.0");
+      expect(new Headers(sent(fetchMock, index).init.headers).get(contractHeader)).toBe("0.64.0");
     }
 
     const schedule = {
@@ -556,7 +556,7 @@ describe("budget api", () => {
     expect(new Headers(sent(fetchMock, 3).init.headers).has(contractHeader)).toBe(false);
     const references = [{ hash: "a".repeat(64), last4: "Z001" }];
     await budgetApi.saveMortgage({ ...schedule, match_references: references });
-    expect(new Headers(sent(fetchMock, 4).init.headers).get(contractHeader)).toBe("0.63.0");
+    expect(new Headers(sent(fetchMock, 4).init.headers).get(contractHeader)).toBe("0.64.0");
     expect(JSON.parse(sent(fetchMock, 4).init.body as string)).toEqual({ ...schedule, match_references: references });
 
     for (const [read, index] of [[budgetApi.mortgages, 5], [budgetApi.forecast, 7]] as const) {
@@ -564,7 +564,7 @@ describe("budget api", () => {
         new Response(JSON.stringify({ error: "budget_analytics_contract_version_invalid" }), { status: 400 }),
       ));
       expect(await read()).toEqual({ ok: true, data: {} });
-      expect(new Headers(sent(fetchMock, index).init.headers).get(contractHeader)).toBe("0.63.0");
+      expect(new Headers(sent(fetchMock, index).init.headers).get(contractHeader)).toBe("0.64.0");
       expect(new Headers(sent(fetchMock, index + 1).init.headers).has(contractHeader)).toBe(false);
     }
   });

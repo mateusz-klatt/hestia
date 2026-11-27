@@ -68,7 +68,7 @@ _CONTRACT_HEADER = "X-Hestia-Contract-Version"
 _CONTRACT_VERSION = re.compile(r"0\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\Z")
 _APPOINTMENTS_INBOX_VERSION = (0, 58, 0)
 _LINK_INDICATORS_VERSION = (0, 60, 0)
-_MORTGAGE_REFERENCES_VERSION = (0, 63, 0)
+_MORTGAGE_REFERENCES_VERSION = (0, 64, 0)
 _NEGOTIATED_OPS = frozenset({
     "inbox", "inbox-mark", "transactions", _TRANSACTIONS_BY_KEYS_OP, "mortgages",
     _MORTGAGE_CANDIDATES_OP, "mortgage-save", "forecast",

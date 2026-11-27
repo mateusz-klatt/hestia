@@ -41,7 +41,7 @@ class MortgageReferencesAPITests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await fixture.BudgetAnalyticsAPITests.asyncSetUp(self)
 
-    def _headers(self, version="0.63.0", *, user="alice", origin=False):
+    def _headers(self, version="0.64.0", *, user="alice", origin=False):
         headers = self.headers(user, origin=origin)
         if version is not None:
             headers[_CONTRACT_HEADER] = version
@@ -63,7 +63,7 @@ class MortgageReferencesAPITests(unittest.IsolatedAsyncioTestCase):
         self.assert_private_headers(response)
         return await response.json()
 
-    async def _save(self, body, version="0.63.0"):
+    async def _save(self, body, version="0.64.0"):
         response = await self.post("mortgage-save", body, headers=self._headers(version, origin=True))
         result = await self._success(response)
         api_contract.BudgetAnalyticsMortgageScheduleResult.model_validate(result)
@@ -75,7 +75,7 @@ class MortgageReferencesAPITests(unittest.IsolatedAsyncioTestCase):
         self._recurring(self.alice_id, "insurance", f"Ubezpieczenie polisy nr {_POLICY}", ("7", "7", "7"))
         self._recurring(self.alice_id, "utility", "Synthetic monthly utilities", ("3", "3", "3"))
         self._recurring(self.bob_id, "foreign", f"RATA KREDYTU NR {_FOREIGN}", ("17", "17", "17"))
-        for version in (None, "0.62.0", "0.999.0", "0.063.0"):
+        for version in (None, "0.62.0", "0.999.0", "0.064.0"):
             with self.subTest(version=version):
                 response = await self.get(_CANDIDATES, headers=self._headers(version))
                 self.assertEqual(response.status, 400)
@@ -85,7 +85,7 @@ class MortgageReferencesAPITests(unittest.IsolatedAsyncioTestCase):
         for user, expected in (("viewer", 403), ("disabled", 401)):
             response = await self.get(_CANDIDATES, headers=self._headers(user=user))
             self.assertEqual(response.status, expected)
-        self.assertEqual((await self.get(_CANDIDATES, headers={_CONTRACT_HEADER: "0.63.0"})).status, 401)
+        self.assertEqual((await self.get(_CANDIDATES, headers={_CONTRACT_HEADER: "0.64.0"})).status, 401)
 
         for user, tokens in (("alice", (_LOAN, _POLICY)), ("bob", (_FOREIGN,))):
             with self.subTest(user=user):
@@ -177,7 +177,7 @@ class MortgageReferencesAPITests(unittest.IsolatedAsyncioTestCase):
         created = await self._save(_schedule(match_references=[_reference(_LOAN), _reference(_POLICY)]))
 
         with mock.patch.object(analytics_views.BudgetAnalyticsViews, "_now", return_value=_NOW):
-            for version in ("0.63.0", "0.62.0", None):
+            for version in ("0.64.0", "0.62.0", None):
                 with self.subTest(version=version):
                     result = await self._success(await self.get(
                         "forecast", params={"months": "1"}, headers=self._headers(version),
@@ -189,7 +189,7 @@ class MortgageReferencesAPITests(unittest.IsolatedAsyncioTestCase):
                     audits = result["deduplications"]
                     self.assertEqual(len(audits), 2)
                     self.assertEqual({row["matched_due_date"] for row in audits}, {"2026-10-05"})
-                    if version == "0.63.0":
+                    if version == "0.64.0":
                         self.assertEqual({row["match_type"] for row in audits}, {"linked"})
                         self.assertEqual({row["amount_delta"] for row in audits}, {"-0.5", "-93"})
                     else:

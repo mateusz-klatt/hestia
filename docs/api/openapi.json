@@ -2030,7 +2030,7 @@
             "type": "string"
           },
           "amount_delta": {
-            "description": "Signed decimal bank amount minus schedule amount, available from 0.63.0.",
+            "description": "Signed decimal bank amount minus schedule amount, available from 0.64.0.",
             "title": "Amount Delta",
             "type": "string"
           },
@@ -4656,7 +4656,7 @@
             "type": "string"
           },
           "match_references": {
-            "description": "Requires 0.63.0. Omit to preserve links or send [] to clear them.",
+            "description": "Requires 0.64.0. Omit to preserve links or send [] to clear them.",
             "items": {
               "$ref": "#/components/schemas/BudgetAnalyticsMortgageMatchReference"
             },
@@ -4755,7 +4755,7 @@
             "type": "string"
           },
           "match_references": {
-            "description": "Available from 0.63.0.",
+            "description": "Available from 0.64.0.",
             "items": {
               "$ref": "#/components/schemas/BudgetAnalyticsMortgageMatchReference"
             },
@@ -4879,7 +4879,7 @@
             "type": "string"
           },
           "match_references": {
-            "description": "Available from 0.63.0.",
+            "description": "Available from 0.64.0.",
             "items": {
               "$ref": "#/components/schemas/BudgetAnalyticsMortgageMatchReference"
             },
@@ -18296,7 +18296,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.63.0"
+    "version": "0.64.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -20072,7 +20072,7 @@
             }
           },
           {
-            "description": "Opt in to mortgage match references and forecast matching audit fields from 0.63.0.",
+            "description": "Opt in to mortgage match references and forecast matching audit fields from 0.64.0.",
             "in": "header",
             "name": "X-Hestia-Contract-Version",
             "required": false,
@@ -21012,11 +21012,11 @@
     },
     "/api/budget/analytics/mortgage-reference-candidates": {
       "get": {
-        "description": "Returns up to 200 distinct reference digests and masked labels from the owner's recurring charges. Requires X-Hestia-Contract-Version 0.63.0 or later. Makes no bank requests or stored changes.",
+        "description": "Returns up to 200 distinct reference digests and masked labels from the owner's recurring charges. Requires X-Hestia-Contract-Version 0.64.0 or later. Makes no bank requests or stored changes.",
         "operationId": "getBudgetAnalyticsMortgageReferenceCandidates",
         "parameters": [
           {
-            "description": "Opt in to mortgage match references and forecast matching audit fields from 0.63.0.",
+            "description": "Opt in to mortgage match references and forecast matching audit fields from 0.64.0.",
             "in": "header",
             "name": "X-Hestia-Contract-Version",
             "required": true,
@@ -21129,7 +21129,7 @@
         "operationId": "saveBudgetAnalyticsMortgage",
         "parameters": [
           {
-            "description": "Opt in to mortgage match references and forecast matching audit fields from 0.63.0.",
+            "description": "Opt in to mortgage match references and forecast matching audit fields from 0.64.0.",
             "in": "header",
             "name": "X-Hestia-Contract-Version",
             "required": false,
@@ -21251,7 +21251,7 @@
         "operationId": "getBudgetAnalyticsMortgages",
         "parameters": [
           {
-            "description": "Opt in to mortgage match references and forecast matching audit fields from 0.63.0.",
+            "description": "Opt in to mortgage match references and forecast matching audit fields from 0.64.0.",
             "in": "header",
             "name": "X-Hestia-Contract-Version",
             "required": false,

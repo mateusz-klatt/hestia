@@ -534,7 +534,7 @@ export interface paths {
         };
         /**
          * List masked recurring bank payment references
-         * @description Returns up to 200 distinct reference digests and masked labels from the owner's recurring charges. Requires X-Hestia-Contract-Version 0.63.0 or later. Makes no bank requests or stored changes.
+         * @description Returns up to 200 distinct reference digests and masked labels from the owner's recurring charges. Requires X-Hestia-Contract-Version 0.64.0 or later. Makes no bank requests or stored changes.
          */
         get: operations["getBudgetAnalyticsMortgageReferenceCandidates"];
         put?: never;
@@ -3104,7 +3104,7 @@ export interface components {
             amount: string;
             /**
              * Amount Delta
-             * @description Signed decimal bank amount minus schedule amount, available from 0.63.0.
+             * @description Signed decimal bank amount minus schedule amount, available from 0.64.0.
              */
             amount_delta?: string;
             /** Currency */
@@ -4010,7 +4010,7 @@ export interface components {
             label: string;
             /**
              * Match References
-             * @description Requires 0.63.0. Omit to preserve links or send [] to clear them.
+             * @description Requires 0.64.0. Omit to preserve links or send [] to clear them.
              */
             match_references?: components["schemas"]["BudgetAnalyticsMortgageMatchReference"][];
             /** Remind Days Before */
@@ -4048,7 +4048,7 @@ export interface components {
             label: string;
             /**
              * Match References
-             * @description Available from 0.63.0.
+             * @description Available from 0.64.0.
              */
             match_references?: components["schemas"]["BudgetAnalyticsMortgageMatchReference"][];
             /** Paid Months */
@@ -4098,7 +4098,7 @@ export interface components {
             label: string;
             /**
              * Match References
-             * @description Available from 0.63.0.
+             * @description Available from 0.64.0.
              */
             match_references?: components["schemas"]["BudgetAnalyticsMortgageMatchReference"][];
             /** Paid Months */
@@ -10057,7 +10057,7 @@ export interface operations {
                 currency?: string;
             };
             header?: {
-                /** @description Opt in to mortgage match references and forecast matching audit fields from 0.63.0. */
+                /** @description Opt in to mortgage match references and forecast matching audit fields from 0.64.0. */
                 "X-Hestia-Contract-Version"?: string;
             };
             path?: never;
@@ -10830,7 +10830,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                /** @description Opt in to mortgage match references and forecast matching audit fields from 0.63.0. */
+                /** @description Opt in to mortgage match references and forecast matching audit fields from 0.64.0. */
                 "X-Hestia-Contract-Version": string;
             };
             path?: never;
@@ -10925,7 +10925,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opt in to mortgage match references and forecast matching audit fields from 0.63.0. */
+                /** @description Opt in to mortgage match references and forecast matching audit fields from 0.64.0. */
                 "X-Hestia-Contract-Version"?: string;
             };
             path?: never;
@@ -11024,7 +11024,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Opt in to mortgage match references and forecast matching audit fields from 0.63.0. */
+                /** @description Opt in to mortgage match references and forecast matching audit fields from 0.64.0. */
                 "X-Hestia-Contract-Version"?: string;
             };
             path?: never;

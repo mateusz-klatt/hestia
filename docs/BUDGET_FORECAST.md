@@ -2,7 +2,7 @@
 
 > **Status:** Revised design proposal v4 (Round-3 review fixes applied; owner decisions **Q1–Q6** and **(a)–(c)** all decided; target: OpenAPI `0.26.0`, zero schema migration in v1).
 >
-> **Mortgage links in OpenAPI 0.63.0** The mortgage editor can link recurring bank debits to a schedule. Forecast rule version 2 uses these links and can infer a match for an unlinked loan. See [§5.4](#54-deduplication-mortgage-schedule-vs-recurring-hint).
+> **Mortgage links in OpenAPI 0.64.0** The mortgage editor can link recurring bank debits to a schedule. Forecast rule version 2 uses these links and can infer a match for an unlinked loan. See [§5.4](#54-deduplication-mortgage-schedule-vs-recurring-hint).
 >
 > **Compatibility (OpenAPI 0.33.0):** budget_forecast_config_conflict (0.31–0.32) wycofany w 0.33; konflikt to teraz 200 + summary.baseline_conflicts. `summary.baseline_conflicts` is optional. 0.33.0 is not a strictly additive change.  
 > **Baseline:** `master` at `dc03790` (schema `0019`, OpenAPI `0.25.0` at `hestia/api_contract.py:76` with `GET /api/budget/analytics/quarantine`).
@@ -122,7 +122,7 @@ Forecast rule version 2 compares same-currency debits with enabled schedules and
 2. **Inferred loans** match schedules without links. A hint with a loan keyword (`RATA KREDYTU`, `KREDYT`, `POŻYCZKA`, or `LEASING`) qualifies when its amount is within 10% of the schedule amount and the payment is within three days of the due date. Keyword matching ignores case and diacritics. An inferred match requires exactly one eligible hint for the schedule and exactly one eligible schedule for the hint. Hints with an explicit match candidate are excluded from inference.
 3. **Other recurring charges** continue to use the original exact-amount algorithm below for unlinked schedules. An installment taken by an inferred match is unavailable to this algorithm.
 
-The schedule amount is projected and matched hints are suppressed for the entire horizon. The mortgage editor stores each selected bank reference as a SHA-256 hash of its normalized letters and digits plus its last four characters. In OpenAPI 0.63.0 audit rows for linked and inferred matches include `match_type` and `amount_delta` (observed amount minus scheduled amount). Clients below 0.63.0 receive the existing audit fields.
+The schedule amount is projected and matched hints are suppressed for the entire horizon. The mortgage editor stores each selected bank reference as a SHA-256 hash of its normalized letters and digits plus its last four characters. In OpenAPI 0.64.0 audit rows for linked and inferred matches include `match_type` and `amount_delta` (observed amount minus scheduled amount). Clients below 0.64.0 receive the existing audit fields.
 
 #### Original exact-amount algorithm
 

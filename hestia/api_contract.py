@@ -129,8 +129,8 @@ from .budget.loan_references import MAX_MATCH_REFERENCES
 # 0.61.0: additive OCR issuer display name on receipt list, search and detail.
 # 0.62.0: additive crib_humidity (display-only %RH) and crib_battery_ok (opt-in 433 low-battery flag) on
 #         Globals and GlobalsPatch, negotiated via X-Hestia-Contract-Version (and contract_version query on SSE).
-# 0.63.0: opt-in mortgage payment references and forecast matching audit (migration 0036).
-CONTRACT_VERSION = "0.63.0"
+# 0.64.0: opt-in mortgage payment references and forecast matching audit (migration 0036).
+CONTRACT_VERSION = "0.64.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -2505,7 +2505,7 @@ class BudgetAnalyticsMortgageSaveRequest(BaseModel):
     enabled: bool
     expected_version: Annotated[int, Field(ge=0)]
     match_references: Annotated[_MortgageMatchReferences, Field(
-        json_schema_extra=_OMIT, description="Requires 0.63.0. Omit to preserve links or send [] to clear them.",
+        json_schema_extra=_OMIT, description="Requires 0.64.0. Omit to preserve links or send [] to clear them.",
     )] = None
 
 
@@ -2535,7 +2535,7 @@ class BudgetAnalyticsMortgageSchedule(BaseModel):
     created_at: float
     updated_at: float
     match_references: Annotated[_MortgageMatchReferences, Field(
-        json_schema_extra=_OMIT, description="Available from 0.63.0.",
+        json_schema_extra=_OMIT, description="Available from 0.64.0.",
     )] = None
 
 
@@ -2904,7 +2904,7 @@ class BudgetAnalyticsForecastDeduplication(BaseModel):
     account_stale: bool
     match_type: Annotated[Literal["linked", "inferred"], Field(json_schema_extra=_OMIT)] = None
     amount_delta: Annotated[str, Field(
-        json_schema_extra=_OMIT, description="Signed decimal bank amount minus schedule amount, available from 0.63.0.",
+        json_schema_extra=_OMIT, description="Signed decimal bank amount minus schedule amount, available from 0.64.0.",
     )] = None
 
 
@@ -5369,7 +5369,7 @@ def _analytics_paths():
     }
     mortgage_contract_version = {
         "name": "X-Hestia-Contract-Version", "in": "header", "required": False,
-        "description": "Opt in to mortgage match references and forecast matching audit fields from 0.63.0.",
+        "description": "Opt in to mortgage match references and forecast matching audit fields from 0.64.0.",
         "schema": tx_contract_version["schema"],
     }
     reads = (
@@ -5408,7 +5408,7 @@ def _analytics_paths():
     read_overrides = {
         "mortgage-reference-candidates": ("List masked recurring bank payment references", (
             "Returns up to 200 distinct reference digests and masked labels from the owner's recurring charges. "
-            "Requires X-Hestia-Contract-Version 0.63.0 or later. Makes no bank requests or stored changes."
+            "Requires X-Hestia-Contract-Version 0.64.0 or later. Makes no bank requests or stored changes."
         )),
         "inbox": ("Read owner-private live active alerts inbox (pure read-only)", (
             "Pure read-only single-snapshot evaluation of currently active consent renewal, mortgage due and "

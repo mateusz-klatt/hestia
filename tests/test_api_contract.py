@@ -59,7 +59,7 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.63.0")
+        self.assertEqual(document["info"]["version"], "0.64.0")
         analytics = "/api/budget/analytics/"
         candidates = document["paths"].pop(analytics + "mortgage-reference-candidates")["get"]
         self.assertEqual(candidates["x-required-permission"], "budget.view")

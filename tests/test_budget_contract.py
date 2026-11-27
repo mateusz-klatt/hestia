@@ -483,7 +483,7 @@ class BudgetOpenApiTests(unittest.TestCase):
         version = parameters.pop("X-Hestia-Contract-Version")
         self.assertEqual(version["in"], "header")
         self.assertFalse(version["required"])
-        self.assertIn("0.63.0", version["description"])
+        self.assertIn("0.64.0", version["description"])
         self.assertEqual(set(parameters), {"months", "currency"})
         for param in parameters.values():
             self.assertEqual(param["in"], "query")

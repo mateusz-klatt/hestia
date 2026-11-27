@@ -127,7 +127,7 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
             for operation, model in models.items():
                 headers = self.headers()
                 if operation == "mortgage-reference-candidates":
-                    headers["X-Hestia-Contract-Version"] = "0.63.0"
+                    headers["X-Hestia-Contract-Version"] = "0.64.0"
                 response = await self.get(operation, headers=headers)
                 self.assertEqual(response.status, 200, await response.text())
                 self.assert_private_headers(response)
@@ -184,7 +184,7 @@ class BudgetAnalyticsAPITests(unittest.IsolatedAsyncioTestCase):
         for operation in analytics_api.READS:
             headers = self.headers()
             if operation == "mortgage-reference-candidates":
-                headers["X-Hestia-Contract-Version"] = "0.63.0"
+                headers["X-Hestia-Contract-Version"] = "0.64.0"
             for params in ({"unexpected": "x", **(PERIOD if operation in analytics_api._QUERY_FIELDS else {})},
                            MultiDict([("period", "2026-11"), ("period", "2026-10")])):
                 response = await self.get(operation, params=params, headers=headers)
