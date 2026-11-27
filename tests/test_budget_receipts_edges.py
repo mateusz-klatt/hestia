@@ -122,10 +122,10 @@ class ParserEdgeTests(unittest.TestCase):
         cases = (
             (f"NIP: {seller}\nNIP nabywcy: {buyer}", seller),
             (f"Nabywca:\nKlient Testowy\nNIP: {buyer}\nSprzedawca: Sklep Testowy\nNIP: {seller}", seller),
-            (f"Nabywca:\nNIP: {buyer}\nSprzedawca Sklep Testowy\nNIP: {seller}", seller),
+            (f"Nabywca:\nNIP: {buyer}\nSprzedawca\nSklep Testowy\nNIP: {seller}", seller),
+            (f"Nabywca:\nNIP: {buyer}\nSprzedawca NIP: {seller}", seller),
             (f"Nabywca może zwrócić towar\nNIP: {seller}", seller),
             (f"Zwrot zgłasza nabywca, podając NIP: {seller}", seller),
-            (f"Sprzedawca: Nabywca:\nSklep Testowy\nNIP: {seller}\nKlient Testowy\nNIP: {buyer}", seller),
             (f"NIP: {seller} Nabywca: NIP: {buyer}", seller),
             (f"Nabywca: NIP: {buyer} Sprzedawca: NIP: {seller}", seller),
             (f"NIP odbiorcy: {buyer}\nNIP sprzedawcy: {seller}", seller),
@@ -143,6 +143,40 @@ class ParserEdgeTests(unittest.TestCase):
                 self.assertEqual(redact_pan(text), text)
                 for boundary in ("", "PARAGON FISKALNY", "-------"):
                     self.assertEqual(parse_receipt(f"{text}\n{boundary}\nNIP: {seller}")["raw_nip"], seller)
+
+    def test_gap_under_buyer_heading_keeps_its_nip_in_the_buyer_block(self):
+        buyer_block = "Nabywca:\n\nKlient Testowy\nul. Testowa 1\nNIP: 1020101012"
+        seller_block = "Sprzedawca:\n\nSklep Testowy\nNIP: 1010101016"
+        self.assertEqual(parse_receipt(f"{buyer_block}\n\n{seller_block}")["raw_nip"], "1010101016")
+        self.assertIsNone(parse_receipt(buyer_block)["raw_nip"])
+
+    def test_headings_and_seller_prose_keep_unread_buyer_nip_in_its_block(self):
+        for line in ("Faktura VAT", "PARAGON FISKALNY", "Pozycje", "Podsumowanie", "Suma PLN",
+                     "Sprzedawca udziela gwarancji na towar"):
+            with self.subTest(line=line):
+                text = f"Nabywca:\nKlient Testowy\n{line}\nNIP: 1020101012"
+                self.assertIsNone(parse_receipt(text)["raw_nip"])
+                self.assertEqual(parse_receipt(f"{text}\n\nNIP: 1010101016")["raw_nip"], "1010101016")
+
+    def test_explicit_boundaries_end_a_buyer_block_before_its_nip(self):
+        for boundary in ("-------", "Sprzedawca:"):
+            with self.subTest(boundary=boundary):
+                text = f"Nabywca:\nKlient Testowy\n{boundary}\nNIP: 1010101016"
+                self.assertEqual(parse_receipt(text)["raw_nip"], "1010101016")
+
+    def test_invalid_nip_does_not_allow_a_blank_to_end_the_buyer_block(self):
+        text = "Nabywca:\nNIP: 1060101017\n\nNIP: 1020101012"
+        self.assertIsNone(parse_receipt(text)["raw_nip"])
+
+    def test_buyer_nip_with_an_inline_qualifier_allows_a_later_blank_to_end_the_block(self):
+        for label in ("NIP nabywcy:", "NIP odbiorcy"):
+            with self.subTest(label=label):
+                text = f"{label} 1020101012\n\nNIP: 1010101016"
+                self.assertEqual(parse_receipt(text)["raw_nip"], "1010101016")
+
+    def test_paired_empty_seller_and_buyer_headings_trust_the_seller_column_first(self):
+        text = "Sprzedawca: Nabywca:\nSklep Testowy\nNIP: 1010101016\nKlient Testowy\nNIP: 1020101012"
+        self.assertEqual(parse_receipt(text)["raw_nip"], "1010101016")
 
     def test_redacting_a_buyer_heading_preserves_its_nip_context(self):
         text = "Sklep Testowy\nNabywca: Klient Testowy, karta 5351 0055 5555 5555\nNIP: 1020101012"

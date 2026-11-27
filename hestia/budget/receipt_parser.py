@@ -263,18 +263,19 @@ _NIP_BODY = set("0123456789 -")
 BUYER_PARTY_LABELS = r"dane nabywcy|nabywca|odbiorca|kupujący|billed to|bill to|sold to|customer"
 _OCR_BUYER_LABELS = BUYER_PARTY_LABELS.replace(" ", r"\s+")
 _SELLER_LABELS = r"sprzedawca|merchant|seller|from|faktura\s+wystawiona\s+przez"
+_BARE_PARTY_END = r"(?=\.?$|\s+NIP\b)"
 _NIP_PARTY = re.compile(
-    # Adjacent empty column headings introduce the seller's column first.
-    r"(?P<seller>^sprzedawca\s*:?\s+nabywca\s*:?$|^sprzedawca\b"
-    rf"|\b(?:{_SELLER_LABELS})\s*:|^(?:{_SELLER_LABELS})(?=$|\s+NIP\b))"
-    # A bare buyer heading ends at the line break or leads straight into a NIP.
-    r"|(?P<buyer>\bNIP\s+(?:nabywcy|odbiorcy)\b"
-    rf"|\b(?:{_OCR_BUYER_LABELS})\s*:|^(?:{_OCR_BUYER_LABELS})(?=\.?$|\s+NIP\b))",
+    # Paired empty headings put the seller column first, so its first valid NIP is trusted.
+    r"(?P<seller>^sprzedawca\s*:?\s+nabywca\s*:?$"
+    rf"|\b(?:{_SELLER_LABELS})\s*:|^(?:{_SELLER_LABELS}){_BARE_PARTY_END})"
+    r"|(?P<buyer>\b(?P<buyer_nip>NIP)\s+(?:nabywcy|odbiorcy)\b"
+    rf"|\b(?:{_OCR_BUYER_LABELS})\s*:|^(?:{_OCR_BUYER_LABELS}){_BARE_PARTY_END})",
     re.IGNORECASE,
 )
 _NIP_SELLER_LABEL = re.compile(r"\bNIP\s+sprzedawcy\b", re.IGNORECASE)
-_NIP_SECTION_BREAK = re.compile(
-    r"^(?:[-–—=_*]{3,}$|(?:paragon|faktura|pozycje|podsumowanie)\b|suma(?=\s*(?:$|:)|\s+(?:pln|brutto)\b))",
+_NIP_DIVIDER = re.compile(r"[-–—=_*]{3,}")
+_NIP_SECTION_HEADING = re.compile(
+    r"^(?:(?:paragon|faktura|pozycje|podsumowanie)\b|suma(?=\s*(?:$|:)|\s+(?:pln|brutto)\b))",
     re.IGNORECASE,
 )
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -940,11 +941,14 @@ def _nip_candidate(line):
 def _seller_nip(lines, normalized_lines):
     """Find the first valid NIP outside a buyer block on the page."""
     in_buyer_block = False
+    buyer_nip_skipped = False
     for line, original in zip(lines, normalized_lines, strict=True):
         line = _NIP_SELLER_LABEL.sub("Sprzedawca: NIP", line.strip())
         original = _NIP_SELLER_LABEL.sub("Sprzedawca: NIP", original.strip())
-        if not original or _NIP_SECTION_BREAK.match(original):
+        if _NIP_DIVIDER.fullmatch(original) or (buyer_nip_skipped and (
+                not original or _NIP_SECTION_HEADING.match(original))):
             in_buyer_block = False
+            buyer_nip_skipped = False
         parties = list(_NIP_PARTY.finditer(line))
         if line != original:
             original_roles = [party.lastgroup for party in _NIP_PARTY.finditer(original)]
@@ -953,15 +957,23 @@ def _seller_nip(lines, normalized_lines):
                 # lines and skip ambiguous NIPs on the partly redacted line.
                 for role in original_roles:
                     in_buyer_block = role == "buyer"
+                    buyer_nip_skipped = False
                 continue
         start = 0
+        buyer_nip_label = ""
         for party in parties:
             if not in_buyer_block and valid_nip(candidate := _nip_candidate(line[start:party.start()])):
                 return candidate
             in_buyer_block = party.lastgroup == "buyer"
+            buyer_nip_skipped = False
             start = party.end()
-        if not in_buyer_block and valid_nip(candidate := _nip_candidate(line[start:])):
-            return candidate
+            buyer_nip_label = party["buyer_nip"] or ""
+        # The qualified buyer marker consumes the NIP label along with the role.
+        candidate = _nip_candidate(buyer_nip_label + line[start:])
+        if valid_nip(candidate):
+            if not in_buyer_block:
+                return candidate
+            buyer_nip_skipped = True
     return None
 
 
