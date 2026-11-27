@@ -281,8 +281,10 @@ def _import_copies(store, session, owner, copies, now):
 def _record_claims(claims, claims_by_document, document, candidates):
     for candidate in candidates:
         tx_key = candidate.transaction_key
-        claims[tx_key].setdefault(document, candidate.available_purchase)
         claims_by_document[document].add(tx_key)
+        # An uncorroborated debit affects this document's uniqueness only.
+        if candidate.is_corroborated:
+            claims[tx_key].setdefault(document, candidate)
 
 
 def _waiting_candidates(session, owner, copies, *, shared_rfcs):
@@ -342,7 +344,12 @@ def _has_distinct_claim(session, owner, row, claimers, receipts, waiting):
 
 
 def _reopen_competing_links(session, owner, now, claims, receipts, waiting):
-    blocked_keys = [key for key, claimers in claims.items() if None in claimers.values()]
+    occupied_claims = {}
+    for key, claimers in claims.items():
+        occupied = [document for document, candidate in claimers.items() if candidate.is_occupied]
+        if occupied:
+            occupied_claims[key] = occupied
+    blocked_keys = list(occupied_claims)
     evidence = case((func.json_valid(BudgetReceipt.linked_evidence), BudgetReceipt.linked_evidence))
     # Manual relinks replace the marker. A manual confirmation that preserves the bank link
     # still increments the version and cannot start from an imported receipt with a link.
@@ -359,7 +366,7 @@ def _reopen_competing_links(session, owner, now, claims, receipts, waiting):
         ))
         for row in rows:
             key = row.linked_account_id, row.linked_entry_ref
-            if _has_distinct_claim(session, owner, row, claims[key], receipts, waiting):
+            if _has_distinct_claim(session, owner, row, occupied_claims[key], receipts, waiting):
                 _latch_receipt_source_changed(session, owner, row, now, unlink=True, actor=_GMAIL_IMPORT_ACTOR)
 
 
@@ -399,7 +406,8 @@ def settle(store, session, owner, now):
     for claimers in claims.values():
         if len(claimers) != 1:
             continue
-        document, match = next(iter(claimers.items()))
+        document, candidate = next(iter(claimers.items()))
+        match = candidate.available_purchase
         if match is None or document in claim_only or len(claims_by_document[document]) != 1:
             continue
         kind, key = document

@@ -2,6 +2,7 @@
 import re
 from dataclasses import dataclass
 from datetime import date
+from enum import Enum, auto
 
 from sqlalchemy import case, func, or_
 
@@ -48,7 +49,6 @@ _GOOGLE_BILLING = re.compile(
 )
 _GOOGLE_ISSUERS = {("google",), ("google", "commerce"), ("google", "ireland"), ("google", "llc"),
                    ("google", "payment"), ("google", "payments")}
-_UNCORROBORATED_GOOGLE_DEBIT = object()
 _BILLING_DESCRIPTORS = {
     ("apple", "distribution", "international"): re.compile(r"apple\.com/bill(?:\s+cork)?(?:\s+[a-z]{2})?"),
 }
@@ -63,10 +63,27 @@ class CardPurchase:
     receipt_date: str
 
 
+class _CardCandidateBlock(Enum):
+    OCCUPIED = auto()
+    UNCORROBORATED_GOOGLE_DEBIT = auto()
+
+
 @dataclass(frozen=True, repr=False)
 class CardCandidate:
     transaction_key: tuple[str, str]
-    available_purchase: CardPurchase | None
+    result: CardPurchase | _CardCandidateBlock
+
+    @property
+    def available_purchase(self) -> CardPurchase | None:
+        return self.result if isinstance(self.result, CardPurchase) else None
+
+    @property
+    def is_corroborated(self) -> bool:
+        return self.result is not _CardCandidateBlock.UNCORROBORATED_GOOGLE_DEBIT
+
+    @property
+    def is_occupied(self) -> bool:
+        return self.result is _CardCandidateBlock.OCCUPIED
 
 
 def _card_amount_matches(payload, currency, amount, lines, metadata):
@@ -160,7 +177,7 @@ def _card_row(session, owner, invoice, transaction, account_kind, amount, receip
             return None
         if not amount_matches or not any(_google_billing_matches(google_issuer, line) for line in descriptors):
             # An uncorroborated Google debit still prevents a unique match in this window.
-            return _UNCORROBORATED_GOOGLE_DEBIT
+            return _CardCandidateBlock.UNCORROBORATED_GOOGLE_DEBIT
     elif not _merchant_matches(invoice, lines, creditor):
         return None
     evidence = link_evidence(owner, transaction.account_id, transaction.entry_reference, payload,
@@ -213,8 +230,9 @@ def card_purchase_candidates(session, owner, invoice, *, received_date=None, inc
         except (AnalyticsError, KeyError, ValueError, TypeError, RecursionError):
             continue
         if candidate is not None:
-            purchase = None if occupied or candidate is _UNCORROBORATED_GOOGLE_DEBIT else candidate
-            candidates.append(CardCandidate((transaction.account_id, transaction.entry_reference), purchase))
+            if occupied and candidate is not _CardCandidateBlock.UNCORROBORATED_GOOGLE_DEBIT:
+                candidate = _CardCandidateBlock.OCCUPIED
+            candidates.append(CardCandidate((transaction.account_id, transaction.entry_reference), candidate))
     return candidates
 
 

@@ -874,3 +874,70 @@ class GmailCardImportTests(AnalyticsCase):
         self.assertEqual((row.id, row.status, row.version, row.linked_entry_ref),
                          (original_id, "imported", 2, None))
         self.assertTrue(self.gmail.known(OWNER, challenger.gmail_id_hmac))
+
+    def _google_invoice(self, mail_id, number, amount="7,50"):
+        body = (DOCUMENT.replace("TEST/42", number).replace("Cedar Tools", "Google Ireland Limited")
+                .replace("7,50", amount))
+        return self.message(mail_id, body=body)
+
+    def _confirm_google_workspace(self):
+        self._add_debit("synthetic-card", lines=["Card purchase", "GOOGLE*Workspace"])
+        self.commit(self._google_invoice("workspace", "WS/100"))
+        return self.assert_linked_once("WS/100")
+
+    def test_uncorroborated_google_debit_cannot_reopen_workspace_or_confirm_youtube(self):
+        original_id = self._confirm_google_workspace()
+        self._add_debit("youtube-charge", amount="19", day="2026-11-24",
+                        lines=["Card purchase", "GOOGLE*YouTube"])
+        youtube = self._google_invoice("youtube", "YT/100", "19,00")
+        self.commit(youtube)
+        self.gmail.retain(OWNER, 1, settle_cards=True)
+
+        row, = self.rows(db.BudgetReceipt)
+        self.assertEqual((row.id, row.status, row.version, row.linked_entry_ref),
+                         (original_id, "confirmed", 2, "synthetic-card"))
+        with self.sessions() as session:
+            self.assertIsNotNone(session.get(db.AppMeta, waiting_key(OWNER, youtube.gmail_id_hmac)))
+
+    def test_positive_google_claim_still_reopens_workspace(self):
+        original_id = self._confirm_google_workspace()
+        competitor = self._google_invoice("competing-workspace", "WS/101")
+        self.commit(competitor)
+        self.gmail.retain(OWNER, 1, settle_cards=True)
+
+        row, = self.rows(db.BudgetReceipt)
+        self.assertEqual((row.id, row.status, row.version, row.linked_entry_ref),
+                         (original_id, "needs_review", 3, None))
+        with self.sessions() as session:
+            self.assertIsNotNone(session.get(db.AppMeta, waiting_key(OWNER, competitor.gmail_id_hmac)))
+
+    def test_numberless_forward_can_reopen_workspace_only_on_a_positive_match(self):
+        for amount, expected in (
+            ("19.00", ("confirmed", 2, "synthetic-card")),
+            ("7.50", ("needs_review", 3, None)),
+        ):
+            with self.subTest(amount=amount):
+                self._reset_state()
+                original_id = self._confirm_google_workspace()
+                body = f"Receipt\nMerchant: Google Ireland Limited\nDate: 2026-11-23\nGrand Total: PLN {amount}"
+                forward = _email(self.processor.settings.spouse_forward_senders[0], "Forwarded receipt", rfc_id=None)
+                forward.add_attachment(_email(UNLISTED, body, rfc_id=None))
+                mail_id = "numberless-forward"
+                run = Mock()
+                run.message.side_effect = [_metadata(forward) | {"id": mail_id}, _raw(forward) | {"id": mail_id}]
+                pending = self.processor.process(run, mail_id, digest(SECRET, GMAIL_MESSAGE_DOMAIN, mail_id))
+                self.assertTrue(pending.card_required)
+                self.assertEqual(pending.trust_path, "spouse_forward")
+                self.assertEqual(
+                    (pending.rfc_message_id_hmac, pending.invoice.invoice_number,
+                     pending.document_provenance["number_hmac"]),
+                    (None, None, None),
+                )
+                self.commit(pending)
+                self.gmail.retain(OWNER, 1, settle_cards=True)
+
+                row, = self.rows(db.BudgetReceipt)
+                self.assertEqual(row.id, original_id)
+                self.assertEqual((row.status, row.version, row.linked_entry_ref), expected)
+                with self.sessions() as session:
+                    self.assertIsNotNone(session.get(db.AppMeta, waiting_key(OWNER, pending.gmail_id_hmac)))
