@@ -351,7 +351,7 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
     def test_repayments_one_sided_split_multicurrency_delayed_deselected_and_verified_exclusions(self):
         deselected_id = [{"scheme": "IBAN", "identification": "PL11111111111111111111111111"}]
         # One-sided repayment, split repayments (600 + 400), multi-currency (PLN vs EUR),
-        # delayed (> 3 days), deselected counterparty identity, auto-with-category (implicit),
+        # delayed (> 3 days), deselected counterparty identity, automatically categorized purchases,
         # and explicit expense with stale manual excluded annotation.
         rules = [
             {"id": "rule-auto", "kind": "auto", "category_id": "cat-food"},
@@ -374,7 +374,7 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
             _tx("acc-a", "desel-repay", amount="300", booking_date="2026-11-05", transaction_date="2026-11-05",
                 kind="expense", category_id="cat-food", source="rule", rule_id="rule-explicit",
                 metadata={"creditor_accounts": deselected_id}),
-            # Rule with kind="auto" + category -> STILL implicit expense and warns!
+            # A matching category rule gives a usable expense without confirmation.
             _tx("acc-a", "auto-cat", amount="50", booking_date="2026-11-07", transaction_date="2026-11-07",
                 kind="expense", category_id="cat-food", source="rule", rule_id="rule-auto"),
             # Explicit expense with stale manual excluded annotation -> STILL warns!
@@ -382,7 +382,7 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
                 kind="expense", category_id="cat-food", source="rule", rule_id="rule-explicit",
                 annotation={"version": 1, "mode": "manual", "category_id": None, "kind": "excluded", "stale": True}),
             stale_unrelated_tx,
-            # Manual auto annotation with category -> implicit expense, warns!
+            # Choosing a category while leaving kind="auto" gives a usable expense.
             _tx("acc-a", "manual-auto", amount="20", booking_date="2026-11-09", transaction_date="2026-11-09",
                 kind="expense", category_id="cat-food", source="manual",
                 annotation={"version": 1, "mode": "manual", "category_id": "cat-food", "kind": "auto", "stale": False}),
@@ -401,7 +401,10 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
             settings=DEFAULT_SETTINGS,
         )
         self.assertEqual(before["summary"]["spent"], "3750")
-        self.assertEqual(before["coverage"]["pending_transfer_rows"], 10)
+        self.assertEqual(before["coverage"]["pending_transfer_rows"], 3)
+        self.assertEqual(before["coverage"]["pending_row_keys"], [
+            "acc-a/desel-repay", "acc-a/stale-excl", "acc-a/stale-excl-unrelated",
+        ])
         self.assertTrue(before["coverage"]["provisional"])
         stale_unrelated_res = _eval(transactions=[stale_unrelated_tx], rules=rules, settings=DEFAULT_SETTINGS)
         self.assertEqual(stale_unrelated_res["summary"]["spent"], "60")
@@ -471,16 +474,28 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
         self.assertFalse(clean_extra["coverage"]["provisional"])
         self.assertEqual(clean_extra["coverage"]["ledger_as_of"], now_ts)
 
-    def test_implicit_purchase_fallback_by_account_kind(self):
-        purchase = _tx("acc-a", "purchase", amount="125.25", booking_date="2026-11-10", transaction_date="2026-11-10")
+    def test_automatically_classified_purchases_need_no_confirmation_for_any_account_kind(self):
+        rules = [{"id": "rule-auto", "kind": "auto", "category_id": "cat-food"}]
+        purchases = [
+            _tx("acc-a", "default-purchase", amount="125.25", transaction_date="2026-11-10"),
+            _tx("acc-a", "rule-purchase", amount="50", transaction_date="2026-11-10",
+                category_id="cat-food", source="rule", rule_id="rule-auto"),
+            _tx("acc-a", "manual-category", amount="20", transaction_date="2026-11-10",
+                category_id="cat-food", source="manual", annotation={
+                    "version": 1, "mode": "manual", "category_id": "cat-food", "kind": "auto", "stale": False,
+                }),
+        ]
         for kind in ("credit_card", "current", "savings", "other", "unknown"):
             with self.subTest(kind=kind):
                 result = _eval(
-                    transactions=[purchase], account_kinds={"acc-a": kind}, settings=DEFAULT_SETTINGS,
+                    transactions=purchases, rules=rules, account_kinds={"acc-a": kind}, settings=DEFAULT_SETTINGS,
                 )
-                self.assertEqual(result["summary"]["spent"], "125.25")
-                self.assertEqual(result["coverage"]["pending_transfer_rows"], 0 if kind == "credit_card" else 1)
-                self.assertEqual(result["coverage"]["provisional"], kind != "credit_card")
+                self.assertEqual(result["summary"]["spent"], "195.25")
+                self.assertEqual(result["coverage"]["pending_transfer_rows"], 0)
+                self.assertEqual(result["coverage"]["pending_row_keys"], [])
+                self.assertFalse(result["coverage"]["provisional"])
+                self.assertEqual({row["category_id"]: row["net_spending"] for row in result["category_spend"]},
+                                 {"cat-food": "70", None: "125.25"})
 
     def test_card_debits_with_unresolved_transfer_evidence_remain_pending(self):
         account_kinds = {"acc-a": "credit_card", "acc-b": "current"}
@@ -593,7 +608,7 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
             settings=DEFAULT_SETTINGS,
         )
         self.assertEqual(nov_at_dec2["summary"]["spent"], "35")  # 45 - 10 refund
-        self.assertEqual(nov_at_dec2["coverage"]["pending_transfer_rows"], 4)  # late_booked, ref_warn, inc_warn, rent_warn
+        self.assertEqual(nov_at_dec2["coverage"]["pending_transfer_rows"], 3)  # ref_warn, inc_warn, rent_warn
 
         dec_at_dec2 = _eval(
             period="2026-12",
@@ -634,10 +649,11 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
             {"id": "rule-exp", "kind": "expense", "category_id": "cat-food"},
         ]
         txs = [
-            # Counted pending rows across all 4 coverage paths:
+            # Ordinary automatic purchases are already classified as expenses:
             _tx("acc-a", "imp-dbit", amount="40"),
             _tx("acc-a", "rule-auto-dbit", amount="50", kind="expense", category_id="cat-food",
                 source="rule", rule_id="rule-auto"),
+            # Pending rows across all 4 coverage paths have actual unresolved evidence:
             _tx("acc-card", "card-stale-excl", amount="60", kind="expense", category_id="cat-food",
                 source="rule", rule_id="rule-exp",
                 annotation={"version": 1, "mode": "manual", "category_id": None, "kind": "excluded", "stale": True}),
@@ -664,8 +680,6 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
             settings=cfg,
         )
         expected_keys = [
-            "acc-a/imp-dbit",
-            "acc-a/rule-auto-dbit",
             "acc-card/card-stale-excl",
             "acc-a/ref-sug",
             "acc-a/rent-rev",
@@ -697,14 +711,14 @@ class MonthlyBudgetTransferAndProvisionalTests(unittest.TestCase):
         api_contract.BudgetAnalyticsMonthlyBudget.model_validate(clean_only)
 
         exact_500 = _eval(
-            transactions=[_tx("acc-a", f"eq-{idx:03d}", amount="1") for idx in range(500)],
+            transactions=[_tx("acc-a", f"eq-{idx:03d}", amount="1", transfer_status="suggested") for idx in range(500)],
             settings=cfg,
         )
         self.assertEqual(exact_500["coverage"]["pending_transfer_rows"], 500)
         self.assertEqual(len(exact_500["coverage"]["pending_row_keys"]), 500)
         self.assertFalse(exact_500["coverage"]["pending_row_keys_truncated"])
 
-        many_txs = [_tx("acc-a", f"p-{idx:03d}", amount="1") for idx in range(505)]
+        many_txs = [_tx("acc-a", f"p-{idx:03d}", amount="1", transfer_status="suggested") for idx in range(505)]
         capped = _eval(transactions=many_txs, settings=cfg)
         self.assertEqual(capped["coverage"]["pending_transfer_rows"], 505)
         self.assertEqual(len(capped["coverage"]["pending_row_keys"]), month_budget.MAX_PENDING_ROW_KEYS)
@@ -1487,7 +1501,7 @@ class MonthlyBudgetChartsTests(unittest.TestCase):
             # Income in 2026-12 window [2026-11-20..2026-12-19] -> must NOT enter Nov!
             _tx("acc-a", "inc-dec26", amount="7000", direction="CRDT", booking_date="2026-11-26",
                 kind="income", category_id="cat-salary", source="manual"),
-            # Closed month 2026-09: implicit debit -> provisional=True on 2026-09 bucket only!
+            # Closed month 2026-09: ordinary debit stays provisional only while transfer scan is limited.
             _tx("acc-a", "sep-imp", amount="120", booking_date="2026-09-10", transaction_date="2026-09-10"),
             # Closed month 2026-08: excluded only -> has_activity=True, provisional=False even with scan_limited=True!
             _tx("acc-a", "aug-excl", amount="50", booking_date="2026-08-10", kind="excluded", source="manual"),
@@ -1938,3 +1952,130 @@ class CardExposureTests(unittest.TestCase):
         ):
             with self.subTest(kwargs=kwargs), self.assertRaises(month_budget.MonthDataError):
                 _eval(account_kinds={"card-a": "credit_card"}, **kwargs)
+
+    def test_bank_evidenced_card_repayment_avoids_double_counting_and_respects_scope_and_overrides(self):
+        # Independent review scenario: 1000 booked card purchase + 1000 current-account debit with
+        # distinctive bank memo "Spłata karty kredytowej", no structured owned IBAN and no paired CRDT.
+        card_purchase = _tx("acc-card", "card-buy-1", amount="1000", booking_date="2026-11-05",
+                            kind="expense", category_id="cat-food")
+        repayment = _tx("acc-main", "repay-1", amount="1000", booking_date="2026-11-10")
+        repayment["payload"]["remittance_information"] = ["Spłata karty kredytowej"]
+        split_auto = _tx("acc-main", "repay-split", amount="250", booking_date="2026-11-11")
+        split_auto["payload"]["remittance_information"] = ["Automatyczna spłata", "zadłużenia karty"]
+
+        ordinary_card_pos = _tx("acc-card", "pos-2", amount="300", booking_date="2026-11-06")
+        ordinary_card_pos["payload"]["remittance_information"] = ["Płatność kartą kredytową - Market"]
+        card_fee = _tx("acc-main", "fee-1", amount="50", booking_date="2026-11-12")
+        card_fee["payload"]["remittance_information"] = ["Opłata za spłatę karty kredytowej"]
+
+        ts = _utc_ts("2026-11-22T12:00:00Z")
+        res = _eval(
+            settings=DEFAULT_SETTINGS,
+            transactions=[card_purchase, repayment, split_auto, ordinary_card_pos, card_fee],
+            identities={"acc-main": [], "acc-card": []},
+            account_kinds={"acc-main": "current", "acc-card": "credit_card"},
+            account_component_timestamps={"acc-main": ts, "acc-card": ts},
+        )
+        self.assertEqual(res["summary"]["spent"], "1350")
+        self.assertFalse(res["coverage"]["provisional"])
+        self.assertEqual(res["coverage"]["pending_transfer_rows"], 0)
+        self.assertEqual(res["coverage"]["pending_row_keys"], [])
+
+        # Repro: checking + savings selected (NO selected credit card), card excluded, no creditor ID -> expense + provisional.
+        no_card_repay = _tx("acc-main", "repay-no-card", amount="500", booking_date="2026-11-10")
+        no_card_repay["payload"]["remittance_information"] = ["Spłata karty kredytowej"]
+        ordinary_buy = _tx("acc-main", "grocery-1", amount="120", booking_date="2026-11-09")
+        ordinary_buy["payload"]["remittance_information"] = ["Biedronka zakupy"]
+        no_card_res = _eval(
+            settings=DEFAULT_SETTINGS,
+            transactions=[no_card_repay, ordinary_buy],
+            identities={"acc-main": [], "acc-savings": [], "acc-off-card": []},
+            account_kinds={"acc-main": "current", "acc-savings": "savings"},
+            account_component_timestamps={"acc-main": ts, "acc-savings": ts},
+        )
+        self.assertEqual(no_card_res["summary"]["spent"], "620")
+        self.assertTrue(no_card_res["coverage"]["provisional"])
+        self.assertEqual(no_card_res["coverage"]["pending_row_keys"], ["acc-main/repay-no-card"])
+
+        # Multiple selected cards without creditor identity -> ambiguous, stays expense + provisional.
+        multi_res = _eval(
+            settings=DEFAULT_SETTINGS,
+            transactions=[no_card_repay],
+            identities={"acc-main": [], "acc-c1": [{"scheme": "IBAN", "identification": "PL111"}],
+                        "acc-c2": [{"scheme": "IBAN", "identification": "PL222"}]},
+            account_kinds={"acc-main": "current", "acc-c1": "credit_card", "acc-c2": "credit_card"},
+            account_component_timestamps={"acc-main": ts, "acc-c1": ts, "acc-c2": ts},
+        )
+        self.assertEqual(multi_res["summary"]["spent"], "500")
+        self.assertTrue(multi_res["coverage"]["provisional"])
+
+        # Matching structured creditor identity resolves multiple selected cards unambiguously.
+        resolved_repay = _tx(
+            "acc-main", "repay-resolved", amount="500", booking_date="2026-11-10",
+            metadata={"creditor_accounts": [{"scheme": "IBAN", "identification": "PL111"}]},
+        )
+        resolved_repay["payload"]["remittance_information"] = ["Spłata karty kredytowej"]
+        resolved_res = _eval(
+            settings=DEFAULT_SETTINGS,
+            transactions=[resolved_repay],
+            identities={"acc-main": [], "acc-c1": [{"scheme": "IBAN", "identification": "PL111"}],
+                        "acc-c2": [{"scheme": "IBAN", "identification": "PL222"}]},
+            account_kinds={"acc-main": "current", "acc-c1": "credit_card", "acc-c2": "credit_card"},
+            account_component_timestamps={"acc-main": ts, "acc-c1": ts, "acc-c2": ts},
+        )
+        self.assertEqual(resolved_res["summary"]["spent"], "0")
+        self.assertFalse(resolved_res["coverage"]["provisional"])
+
+        # Explicit unknown external creditor outside own portfolio -> stays expense + provisional.
+        external_repay = _tx(
+            "acc-main", "repay-external", amount="650", booking_date="2026-11-10",
+            metadata={"creditor_accounts": [{"scheme": "IBAN", "identification": "PL99999999999999999999999999"}]},
+        )
+        external_repay["payload"]["remittance_information"] = ["Spłata karty kredytowej"]
+        external_res = _eval(
+            settings=DEFAULT_SETTINGS,
+            transactions=[external_repay],
+            identities={"acc-main": [], "acc-card": [{"scheme": "IBAN", "identification": "PL111"}]},
+            account_kinds={"acc-main": "current", "acc-card": "credit_card"},
+            account_component_timestamps={"acc-main": ts, "acc-card": ts},
+        )
+        self.assertEqual(external_res["summary"]["spent"], "650")
+        self.assertTrue(external_res["coverage"]["provisional"])
+        self.assertEqual(external_res["coverage"]["pending_row_keys"], ["acc-main/repay-external"])
+
+        # Creditor account explicitly identifies deselected owned card -> stays spent + provisional even with >1 selected.
+        desel_repay = _tx(
+            "acc-main", "repay-desel", amount="700", booking_date="2026-11-10",
+            metadata={"creditor_accounts": [{"scheme": "IBAN", "identification": "PL61109010140000071219812874"}]},
+        )
+        desel_repay["payload"]["remittance_information"] = ["Spłata karty kredytowej"]
+        desel_res = _eval(
+            settings=DEFAULT_SETTINGS,
+            transactions=[desel_repay],
+            identities={
+                "acc-main": [],
+                "acc-savings": [],
+                "acc-deselected-card": [{"scheme": "IBAN", "identification": "PL61109010140000071219812874"}],
+            },
+            account_kinds={"acc-main": "current", "acc-savings": "savings"},
+            account_component_timestamps={"acc-main": ts, "acc-savings": ts},
+        )
+        self.assertEqual(desel_res["summary"]["spent"], "700")
+        self.assertTrue(desel_res["coverage"]["provisional"])
+        self.assertEqual(desel_res["coverage"]["pending_row_keys"], ["acc-main/repay-desel"])
+
+        # Post-hoc manual override back to expense counts in spent without provisional flag.
+        manual_override = _tx("acc-main", "repay-manual", amount="400", booking_date="2026-11-10",
+                              kind="expense", category_id="cat-food", source="manual",
+                              annotation={"version": 1, "mode": "manual", "category_id": "cat-food",
+                                          "kind": "expense", "stale": False, "label": None})
+        manual_override["payload"]["remittance_information"] = ["Spłata karty kredytowej"]
+        manual_res = _eval(
+            settings=DEFAULT_SETTINGS,
+            transactions=[manual_override],
+            identities={"acc-main": [], "acc-card": []},
+            account_kinds={"acc-main": "current", "acc-card": "credit_card"},
+            account_component_timestamps={"acc-main": ts, "acc-card": ts},
+        )
+        self.assertEqual(manual_res["summary"]["spent"], "400")
+        self.assertFalse(manual_res["coverage"]["provisional"])

@@ -275,12 +275,9 @@ def _max_money(first: str, second: str) -> str:
     return first if core.compare_money(first, second) >= 0 else second
 
 
-def _identity_pair_set(values: Sequence[Mapping]) -> frozenset[tuple[str, str]]:
-    return frozenset((item["scheme"], item["identification"]) for item in values)
-
-
-def _other_owned_identities(identities: Mapping[str, Sequence[Mapping]]) -> dict[str, frozenset[tuple[str, str]]]:
-    per_account = {account_id: _identity_pair_set(values) for account_id, values in identities.items()}
+def _other_owned_identities(
+    per_account: Mapping[str, frozenset[tuple[str, str]]],
+) -> dict[str, frozenset[tuple[str, str]]]:
     return {
         account_id: frozenset().union(*(pairs for other_id, pairs in per_account.items() if other_id != account_id))
         for account_id in per_account
@@ -299,21 +296,14 @@ def _future_accepted_keys(transfers: Sequence[Mapping], evaluation_date: str) ->
     return frozenset(keys)
 
 
-def _is_explicit_expense(eff: Mapping, annotation: Mapping, rules_by_id: Mapping[str, Mapping]) -> bool:
-    if eff["source"] == "manual":
-        return annotation["kind"] == "expense"
-    if eff["source"] == "rule":
-        return rules_by_id[eff["rule_id"]]["kind"] == "expense"
-    return False
-
-
 def _has_unresolved_transfer_evidence(
     row: Mapping,
     *,
     counterpart_outside_horizon: bool,
     other_identities: frozenset[tuple[str, str]],
+    unresolved_bank_repayment: bool = False,
 ) -> bool:
-    if counterpart_outside_horizon:
+    if counterpart_outside_horizon or unresolved_bank_repayment:
         return True
     if row["transfer"]["status"] in ("suggested", "review", "boundary"):
         return True
@@ -323,7 +313,7 @@ def _has_unresolved_transfer_evidence(
     metadata = row["metadata"]
     if metadata is not None and other_identities:
         field = "creditor_accounts" if row["payload"]["credit_debit_indicator"] == "DBIT" else "debtor_accounts"
-        if _identity_pair_set(metadata.get(field, ())) & other_identities:
+        if core.identity_pair_set(metadata.get(field, ())) & other_identities:
             return True
     return False
 
@@ -1082,8 +1072,12 @@ def _evaluate_monthly_budget_core(
         if limit_row["enabled"]:
             observed_currencies.add(limit_row["currency"])
 
-    rules_by_id = {row["id"]: row for row in rules}
-    other_owned = _other_owned_identities(identities)
+    per_account_identities = {account_id: core.identity_pair_set(values) for account_id, values in identities.items()}
+    selected_accounts = frozenset(account_component_timestamps) | {row["account_id"] for row in transactions}
+    selected_card_accounts = frozenset(
+        account_id for account_id, kind in account_kinds.items() if kind == "credit_card"
+    ) & selected_accounts
+    other_owned = _other_owned_identities(per_account_identities)
     future_accepted = _future_accepted_keys(transfers, evaluation_date)
 
     configured = settings is not None
@@ -1138,6 +1132,22 @@ def _evaluate_monthly_budget_core(
         report_date = (tx_date or posting_date) if direction == "DBIT" else posting_date
         kind = eff["kind"]
         cat_id = eff["category_id"]
+        unresolved_bank_repayment = False
+        if (
+            eff["source"] == "default"
+            and kind == "expense"
+            and core.is_bank_card_repayment(payload, row["metadata"])
+        ):
+            if "_default_kind" not in row and core.bank_card_transfer_allowed(
+                acct_id,
+                row["metadata"],
+                selected_accounts=selected_accounts,
+                account_identities=per_account_identities,
+                selected_card_accounts=selected_card_accounts,
+            ):
+                kind = "transfer"
+            else:
+                unresolved_bank_repayment = True
 
         cal_period = report_date[:7]
         cal_bucket = buckets.get(cal_period)
@@ -1155,6 +1165,7 @@ def _evaluate_monthly_budget_core(
                 row,
                 counterpart_outside_horizon=counterpart_outside,
                 other_identities=other_owned.get(acct_id, frozenset()),
+                unresolved_bank_repayment=unresolved_bank_repayment,
             )
             row_key = f"{acct_id}/{row['entry_reference']}"
             if in_calendar:
@@ -1164,8 +1175,7 @@ def _evaluate_monthly_budget_core(
                         purchase_date_fallback_count += 1
                     if nonzero:
                         cal_bucket.has_affecting_unexcluded = True
-                        if unresolved or (account_kinds.get(acct_id) != "credit_card"
-                                          and not _is_explicit_expense(eff, row["annotation"], rules_by_id)):
+                        if unresolved:
                             cal_bucket.record_pending(row_key)
                     cal_bucket.observed_spend_categories.add(cat_id)
                     if mortgage_cat_id is not None and cat_id == mortgage_cat_id:

@@ -19,6 +19,7 @@ from hestia import db
 from hestia.budget.gmail_client import GmailClient
 from hestia.budget.gmail_message import GmailMessageProcessor
 from hestia.budget.gmail_payment import ImportedPayment, _payee_key
+from hestia.budget.gmail_shop_items import extract_shop_items
 from hestia.budget.gmail_store import (GMAIL_MESSAGE_DOMAIN, IMPORT_TTL, ORDER_REFERENCE_DOMAIN, PAYMENT_PAYEE_DOMAIN,
                                       PROVENANCE_TTL, GmailStore, PendingMessage, PendingPayment, _payment_order_key,
                                       _payment_payee_key, _payment_sender_key, digest)
@@ -27,6 +28,7 @@ from hestia.budget.gmail_trust import PaymentSender
 from hestia.budget.gmail_worker import ReceiptParserWorker
 from hestia.budget.receipt_parser import ReceiptError
 from hestia.budget.receipt_store import BudgetReceiptStore
+from tests.test_budget_gmail_message import SHOP_TABLE
 from tests.test_budget_gmail_sync import FakeClock, FakeGmailTransport, OWNER, SETTINGS, page, response
 
 
@@ -60,6 +62,18 @@ class GmailPaymentDedupeTests(TestCase):
             payee_rows = [session.get(db.AppMeta, _payment_payee_key(row.id)) for row in receipts]
             return ([row.value for row in reference_rows if row is not None],
                     [row.value for row in payee_rows if row is not None])
+
+    def test_itemized_shop_lines_keep_quantities_and_prices_after_commit(self):
+        owner = "shop-items"
+        fields = ImportedPayment("Example Shop", "Shop order", "14.3", "PLN", ())
+        payment = PendingPayment(fields, date(2026, 11, 25), "a" * 64,
+                                 items=extract_shop_items(SHOP_TABLE, fields.total_amount, fields.currency))
+        self._import_payments(owner, (payment,), 1)
+        with self.sessions() as session:
+            rows = session.scalars(select(db.BudgetReceiptLine).where(
+                db.BudgetReceiptLine.owner == owner).order_by(db.BudgetReceiptLine.line_no))
+            self.assertEqual([(row.line_no, row.quantity, row.raw_unit, row.unit_price_raw, row.net_line_total)
+                              for row in rows], [(1, "2", "szt.", "3.4", "6.8"), (2, "1", "szt.", "7.5", "7.5")])
 
     def test_reference_less_shop_payment_binds_first_reference_in_every_import_order(self):
         fields = ImportedPayment("Example Shop", "Example purchase", "50", "PLN", ())

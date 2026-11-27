@@ -14,7 +14,7 @@ from hestia.budget.gmail_invoice import ImportedInvoice
 from hestia.budget.gmail_store import (ORDER_REFERENCE_DOMAIN, PAYMENT_PAYEE_DOMAIN, PAYMENT_SENDER_DOMAIN,
                                       RFC_MESSAGE_DOMAIN, digest)
 from hestia.budget.gmail_trust import PaymentSender
-from hestia.budget.gmail_worker import PDFUnsupported, WorkerRejected, WorkerUnavailable
+from hestia.budget.gmail_worker import PDFUnsupported, WorkerRejected, WorkerUnavailable, _render, _validate_output
 
 
 MERCHANT = "synthetic-billing@respectenergy.pl"
@@ -33,6 +33,25 @@ INVOICE = (
 )
 PDF_TEXT = Path(__file__).parent / "fixtures" / "gmail" / "pdf_text"
 
+
+SHOP_TABLE = """Zamówione produkty
+Kolorowe kredki (8 szt.)
+Kod produktu: 31415
+Ilość: 2 x
+Cena za sztukę: 3,40 zł
+2x
+6,80 zł
+Blok rysunkowy (1 szt.)
+Kod produktu: 31416
+Ilość: 1 x
+Cena za sztukę: 7,50 zł
+1x
+7,50 zł
+Wartość zamówienia
+14,30 zł
+Łącznie
+14,30 zł
+"""
 
 def _email(sender=MERCHANT, text=INVOICE, *, rfc_id=RFC_ID, **body_options):
     domain = sender.rpartition("@")[2]
@@ -105,6 +124,87 @@ class GmailMessageProcessorTests(unittest.TestCase):
             PaymentSender("@market.example.test", "Example Market"),
         )
         return _email("orders@billing.shop.example.test", text, **body_options)
+
+    def test_cancellation_notice_skips_new_purchase_for_direct_and_forwarded_original(self):
+        notice = "Potwierdzenie anulowania zamówienia we Example"
+        inner = self._payment_email("Wartość zamówienia: 21,90 PLN")
+        self.settings.document_senders = self.settings.payment_senders
+        inner["Subject"] = notice
+        inner.add_attachment(b"%PDF-synthetic", maintype="application", subtype="pdf")
+        attached = _email(OWNER, "Notatka do zamówienia.")
+        attached.add_attachment(inner)
+        encoded = notice.replace("ó", "&amp;oacute;")
+        inline = _email(SPOUSE, "Notatka.\n---------- Forwarded message ---------\n"
+                        f"From: {inner['From']}\nSubject: {encoded}\n\nWartość zamówienia: 21,90 PLN")
+        for message in (inner, attached, inline):
+            with self.subTest(sender=message["From"]):
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual((pending.outcome, pending.invoice, pending.payment, pending.forwarded_manually),
+                                 ("skipped_non_receipt", None, None, False))
+        self.worker.parse.assert_not_called()
+
+        purchase = self._payment_email("Wartość zamówienia: 21,90 PLN")
+        purchase["Subject"] = "Zamówienie opłacone"
+        cover = _email(OWNER, "Proszę sprawdzić.")
+        cover["Subject"] = notice
+        cover.add_attachment(purchase)
+        self.assertEqual(self._process(_metadata(cover), _raw(cover)).payment.fields.total_amount, "21.9")
+
+    def test_order_cancellation_preserves_gateway_terminal_failure(self):
+        self.settings.payment_senders = (PaymentSender("@gateway.example.test", "PayNow", gateway=True,
+                                                      provider="paynow"),)
+        body = ("Twoja transakcja AB12-CDE-FGH-IJK straciła ważność.\n"
+                "Kwota transakcji: 21,90 PLN")
+        inner = _email("alert@gateway.example.test", body)
+        inner["Subject"] = "Potwierdzenie anulowania zamówienia"
+        outer = _email(OWNER, "Proszę sprawdzić.")
+        outer.add_attachment(inner)
+        for message in (inner, outer):
+            pending = self._process(_metadata(message), _raw(message))
+            self.assertEqual((pending.outcome, pending.payment, pending.failed_gateway[0]),
+                             ("skipped_non_receipt", None, "PayNow"))
+
+    def test_itemized_shop_table_in_direct_and_forwarded_mail(self):
+        inner = self._payment_email(SHOP_TABLE)
+        outer = _email(OWNER, "Notatka właściciela")
+        outer.add_attachment(inner)
+        for message, trust_path in ((inner, "direct_allowlist"), (outer, "owner_forward")):
+            with self.subTest(trust_path=trust_path):
+                pending = self._process(_metadata(message), _raw(message))
+                self.assertEqual((pending.outcome, pending.trust_path), ("imported", trust_path))
+                self.assertEqual((pending.payment.fields.total_amount, pending.payment.fields.currency),
+                                 ("14.3", "PLN"))
+                self.assertEqual([(item["raw_name"], item["quantity"], item["unit_price_raw"], item["net_line_total"])
+                                  for item in pending.payment.items],
+                                 [("Kolorowe kredki (8 szt.)", "2", "3.4", "6.8"),
+                                  ("Blok rysunkowy (1 szt.)", "1", "7.5", "7.5")])
+
+    def test_shop_alternative_checks_item_identity_and_keeps_summary_fast_path(self):
+        self.worker.parse.side_effect = lambda kind, source: _validate_output(_render(
+            {"text": b"T", "html": b"H"}[kind] + source))
+        for plain, html, item_count, renders in (
+                (SHOP_TABLE, SHOP_TABLE, 2, 2),
+                (SHOP_TABLE, SHOP_TABLE.replace("Blok rysunkowy", "Szkicownik"), 0, 2),
+                (SHOP_TABLE, SHOP_TABLE.replace("3,40 zł", "3,39 zł"), 0, 2),
+                (SHOP_TABLE.replace("3,40 zł", "3,39 zł"), SHOP_TABLE, 0, 1),
+                (SHOP_TABLE, "Łącznie: 14,30 zł", 2, 2),
+                ("Łącznie: 14,30 zł", SHOP_TABLE, 0, 1)):
+            with self.subTest(item_count=item_count, renders=renders):
+                message = self._payment_email(plain)
+                cells = "".join(f"<tr><td>{line}</td></tr>" for line in html.splitlines())
+                message.add_alternative(f"<table>{cells}</table>", subtype="html")
+                self.worker.parse.reset_mock()
+                payment = self._process(_metadata(message), _raw(message)).payment
+                self.assertEqual((payment.fields.total_amount, len(payment.items)), ("14.3", item_count))
+                self.assertEqual(self.worker.parse.call_count, renders)
+
+    def test_payment_gateway_cannot_supply_shop_items(self):
+        self.settings.payment_senders = (PaymentSender("@gateway.example.test", "Example Gateway", gateway=True),)
+        message = _email("shop@gateway.example.test", SHOP_TABLE)
+        with patch.object(gmail_message, "inspect_shop_items", side_effect=AssertionError("Unexpected shop parser")):
+            pending = self._process(_metadata(message), _raw(message))
+        self.assertEqual((pending.outcome, pending.payment.fields.total_amount, pending.payment.items),
+                         ("imported", "14.3", ()))
 
     def test_payment_uses_warsaw_internal_date_and_decoded_subject(self):
         message = self._payment_email("Amount paid: 123,45 PLN\nDate paid: 2026-11-22")

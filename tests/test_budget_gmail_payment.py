@@ -105,6 +105,14 @@ class PaymentFixtureTests(unittest.TestCase):
 
 
 class PaymentExtractionTests(unittest.TestCase):
+    def test_encoded_letters_in_receipt_descriptions(self):
+        for encoded in ("&oacute;", "&amp;oacute;", "&#243;", "&#xf3;"):
+            subject = f"Status zam{encoded}wienia"
+            self.assertEqual(_extract("Total 3 PLN", subject).description, "Status zamówienia")
+            self.assertEqual(_extract(f"Tytuł: {subject}\nTotal 3 PLN").description, "Status zamówienia")
+        literal = "Plan A & B &lt; &amp; &unknown; &#64;"
+        self.assertEqual(_extract("Total 3 PLN", literal).description, literal)
+
     def test_amount_currency_position_grouping_and_bounds(self):
         for value, amount, currency in (
             ("1\u00a0234,56 zł brutto", "1234.56", "PLN"),
@@ -187,6 +195,22 @@ class PaymentExtractionTests(unittest.TestCase):
         for marker in ("rozpoczęcie transakcji", "rozpoczęcia transakcji"):
             self.assertIsNone(_extract("Total 2 PLN", f"Example {marker}"))
         self.assertIsNone(_extract("Potwierdzenie rozpoczęcia transakcji\nTotal 2 PLN"))
+
+    def test_completed_order_cancellation_subject_skips_only_an_affirmative_notice(self):
+        body = "Wartość zamówienia: 21,90 PLN"
+        notice = "Potwierdzenie anulowania zamówienia"
+        for subject in (notice, notice + " we Example", notice + " w sklepie Example.",
+                        notice.upper().replace(" ", "\u00a0"), notice + " nr 12345",
+                        notice.replace("ó", "&oacute;"), notice.replace("ó", "&amp;oacute;")):
+            with self.subTest(subject=subject):
+                self.assertIsNone(_extract(body, subject))
+        for subject in ("Prośba o " + notice.lower(), "Jak uzyskać " + notice.lower() + "?",
+                        notice + "?", notice.replace("ó", "&#243;") + "?", notice + " nie jest dostępne",
+                        notice + " we Example nie zostało wysłane",
+                        "Nie otrzymano: " + notice, notice.ljust(256) + " nie dotarło"):
+            with self.subTest(subject=subject):
+                self.assertEqual(_extract(body, subject).total_amount, "21.9")
+        self.assertEqual(_extract(body + "\nJak anulować zamówienie?", "Potwierdzenie zamówienia").total_amount, "21.9")
 
     def test_refund_and_correction_markers(self):
         for marker in ("zwrot", "refund", "korekta", "faktura korygująca", "credit note"):

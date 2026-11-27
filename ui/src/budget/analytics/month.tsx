@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import { t } from "../../i18n";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
+import type { ReceiptsApi } from "../receipts_api";
 import { currentMonth, isMonth, monthLabel, shiftMonth } from "./model";
 import type { RuleCandidate } from "./model";
 import { OverviewPanel } from "./overview";
@@ -14,6 +15,7 @@ export interface MonthViewProps {
   api: Pick<BudgetApi,
     "overview" | "analyticsTransactions" | "analyticsTransactionsByKeys" | "categories" | "annotate" | "transfers"
     | "decideTransfer">;
+  receiptsList?: ReceiptsApi["receiptsList"] | undefined;
   accounts: readonly BudgetAccount[];
   connections?: readonly BudgetConnection[] | undefined;
   locale: string;
@@ -35,7 +37,7 @@ export interface MonthViewProps {
   onCreateRule?: ((candidate: RuleCandidate) => void) | undefined;
 }
 
-export function MonthView({ api, accounts, connections = [], locale, revision, onAccessLoss, initialMonth,
+export function MonthView({ api, receiptsList, accounts, connections = [], locale, revision, onAccessLoss, initialMonth,
   initialCurrency, initialProvisionalKeys, initialProvisionalTotal, initialProvisionalTruncated,
   today = () => new Date(), onCreateRule }: MonthViewProps) {
   const latest = currentMonth(today());
@@ -62,7 +64,7 @@ export function MonthView({ api, accounts, connections = [], locale, revision, o
         locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onCurrencies={setCurrencies} loadCategories={loadCategories} />
       <TransfersPanel api={api} period={month} accounts={accounts} connections={connections} locale={locale}
         revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed} />
-      <TransactionsPanel api={api} period={month} currencies={currencies} accounts={accounts} connections={connections}
+      <TransactionsPanel api={api} receiptsList={receiptsList} period={month} currencies={currencies} accounts={accounts} connections={connections}
         locale={locale} revision={revision + changes} onAccessLoss={onAccessLoss} onChanged={changed}
         initialCurrency={initialCurrency} initialProvisionalKeys={provisionalKeys}
         initialProvisionalTotal={provisionalTotal} initialProvisionalTruncated={provisionalTruncated}

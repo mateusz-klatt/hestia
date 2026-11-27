@@ -1,10 +1,13 @@
 // A period's entries with the owner's category/kind corrections (2D). Rows come from the server one bounded page
 // at a time; a correction is an explicit, versioned decision, and a conflict reloads instead of overwriting.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { t, tPlural } from "../../i18n";
 import type { BudgetApi } from "../api";
 import type { BudgetAccount, BudgetConnection } from "../model";
 import { formatAmount, transactionDate, transactionText } from "../model";
+import type { ReceiptsApi } from "../receipts_api";
+import type { ReceiptSummary } from "../receipts_model";
 import { CategoryBadge } from "./category_badge";
 import { buildCategoryColors } from "./category_colors";
 import { ExportMenu } from "./export_menu";
@@ -15,6 +18,7 @@ import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, TRANSACTION
   pairCandidates, pairDate, pairPeriods, transactionRowKey } from "./model";
 import type { AnalyticsCategory, AnalyticsTransaction, AnalyticsTransactionsByKeysRequest, CategoryChoice, KindChoice,
   RuleCandidate, TransactionFilter } from "./model";
+import { useTransactionDocuments } from "./transaction_documents";
 
 /** Background pagination stops once this many rows are in memory; remaining pages load on demand. */
 export const TRANSACTION_ROW_CAP = 5000;
@@ -98,6 +102,7 @@ const PAIR_LOADING: PairPage = { rows: [], loading: true, failed: false, limited
 
 export interface TransactionsProps {
   api: Pick<BudgetApi, "analyticsTransactions" | "analyticsTransactionsByKeys" | "categories" | "annotate" | "decideTransfer">;
+  receiptsList?: ReceiptsApi["receiptsList"] | undefined;
   period: string;
   currencies: readonly string[];
   accounts: readonly BudgetAccount[];
@@ -165,7 +170,7 @@ function orderRows(
   return sort === null ? [...rows] : sortTransactions(rows, sort, categoryName, locale);
 }
 
-export function TransactionsPanel({ api, period, currencies, accounts, connections = [], locale, revision, onAccessLoss,
+export function TransactionsPanel({ api, receiptsList, period, currencies, accounts, connections = [], locale, revision, onAccessLoss,
   onChanged, rowCap = TRANSACTION_ROW_CAP, initialCurrency, initialProvisionalKeys, initialProvisionalTotal,
   initialProvisionalTruncated, focusOnMount = false, onCreateRule }: TransactionsProps) {
   const startingFilter: TransactionFilter = initialCurrency === undefined ? NO_FILTER : { ...NO_FILTER, currency: initialCurrency };
@@ -182,6 +187,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
   const activeProvisionalKeys = provisionalChecked && initialProvisionalKeys !== undefined ? initialProvisionalKeys : undefined;
   const [page, setPage] = useState<Page>(LOADING);
   const [categories, setCategories] = useState<AnalyticsCategory[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [frozenOrder, setFrozenOrder] = useState<readonly string[] | null>(null);
   const [pairing, setPairing] = useState<string | null>(null);
@@ -191,6 +197,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
   const [reloads, setReloads] = useState(0);
   const [sort, setSort] = useState<TransactionSort | null>(null);
   const sectionRef = useRef<HTMLElement>(null);
+  const entryTrigger = useRef<HTMLButtonElement | null>(null);
   const didScrollOnLoad = useRef(false);
   // Every period, filter or reload change takes a new generation; late pages and saves of an older one are dropped.
   const generation = useRef(0);
@@ -266,6 +273,7 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     const runToken = ++walkToken.current;
     picker.current += 1;
     setPage(LOADING);
+    setSelected(null);
     setEditing(null);
     setFrozenOrder(null);
     setPairing(null);
@@ -369,12 +377,21 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     [matchingRows, sort, frozenOrder, categoryName, locale],
   );
   const shownTotal = provisionalOnly ? matchingRows.length : page.total;
+  const expenses = useMemo(() => page.rows.filter(isExpense), [page.rows]);
+  const documents = useTransactionDocuments(receiptsList, expenses, revision);
+  const selectedRow = selected === null ? undefined : shownRows.find((row) => rowKey(row) === selected);
 
   const closePairs = useCallback(() => {
     picker.current += 1;
     setPairing(null);
     setFrozenOrder(null);
   }, []);
+
+  const closeEntry = useCallback(() => {
+    setSelected(null);
+    setEditing(null);
+    closePairs();
+  }, [closePairs]);
 
   const openPairs = useCallback((row: AnalyticsTransaction) => {
     if (!canPair(row)) return;
@@ -463,6 +480,31 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     setEditing(null);
     setFrozenOrder(null);
   };
+  const openEntry = (key: string, trigger: HTMLButtonElement, edit: boolean) => {
+    if (busy !== null) return;
+    entryTrigger.current = trigger;
+    setSelected(key);
+    if (edit) startEditing(key);
+    else {
+      closePairs();
+      setEditing(null);
+      setNotice(null);
+    }
+  };
+  const categoryButton = (row: AnalyticsTransaction, onClick: (button: HTMLButtonElement) => void) => {
+    const category = row.effective.category_id;
+    const label = categoryName(category);
+    return (
+      <button type="button" className="budget-entry-category" disabled={busy !== null}
+        aria-label={`${t("budget.transactions.category")}, ${label}`} aria-haspopup="dialog" title={label}
+        onClick={(event) => { onClick(event.currentTarget); }}>
+        <CategoryBadge color={categoryColors.get(category !== null && categoryNames.has(category) ? category : null)} label={label} />
+        <span aria-hidden="true">⌄</span>
+      </button>
+    );
+  };
+  const documentsFor = (row: AnalyticsTransaction) => documents.byRow.get(rowKey(row)) ?? [];
+  const detailsTitle = t("budget.receipts.open");
   const changeSort = (key: TransactionSortKey) => {
     const next = nextSort(sort, key);
     setSort(next);
@@ -479,8 +521,15 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
     </div>
   ) : null;
 
+  const selectedDocuments = selectedRow === undefined ? [] : documentsFor(selectedRow);
+  const selectedRule = selectedRow === undefined ? null : counterpartyRuleCandidate(selectedRow);
+  const selectedEditing = selectedRow !== undefined && editing === rowKey(selectedRow);
+  const selectedPairing = selectedRow !== undefined && pairing === rowKey(selectedRow);
+
   return (
-    <section className="budget-entries" aria-label={t("budget.transactions.title")} ref={sectionRef}>
+    <>
+    <section className="budget-entries" aria-label={t("budget.transactions.title")} ref={sectionRef}
+      inert={selectedRow !== undefined} tabIndex={-1}>
       <header className="budget-entries-head">
         <h4>{t("budget.transactions.title")}</h4>
         <ExportMenu filename={exportBasename(period)} periods={[period]} filter={filter}
@@ -515,16 +564,14 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
             <input name="provisional" type="checkbox" checked={provisionalOnly}
               onChange={(event) => {
                 setProvisionalFilter({ period, keys: initialProvisionalKeys, checked: event.currentTarget.checked });
-                setEditing(null);
-                setFrozenOrder(null);
-                setPairing(null);
+                closeEntry();
               }} />
             {t("budget.transactions.provisionalOnly")}
           </label>
         )}
         <button type="submit">{t("budget.transactions.apply")}</button>
       </form>
-      {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
+      {notice === null || selectedRow !== undefined ? null : <p className="budget-notice" role="alert">{notice}</p>}
       {activeProvisionalKeys !== undefined && initialProvisionalTruncated === true ? (
         <div className="budget-notice budget-entries-action" role="note">
           <span>{t("budget.transactions.provisionalTruncated", {
@@ -551,88 +598,249 @@ export function TransactionsPanel({ api, period, currencies, accounts, connectio
           <p className="budget-muted">{t("budget.transactions.total", { count: shownTotal })}</p>
           {page.loading ? <p className="budget-muted" role="status">{t("budget.transactions.loadingMore", { count: page.rows.length })}</p> : null}
           {truncatedNotice}
-          <div className="budget-views budget-sort" role="group" aria-label={t("budget.transactions.sort")}>
-            {SORT_KEYS.map((key) => {
-              const active = sort?.key === key;
-              const direction = active ? sort.direction : undefined;
-              const label = sortLabel(key);
-              const directionText = direction === "asc"
-                ? t("budget.transactions.sortAsc")
-                : direction === "desc" ? t("budget.transactions.sortDesc") : undefined;
-              return (
-                <button
-                  type="button"
-                  key={key}
-                  aria-pressed={active}
-                  data-sort={direction}
-                  aria-label={directionText === undefined ? label : `${label}, ${directionText}`}
-                  onClick={() => { changeSort(key); }}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-          <ul className="budget-entry-list" aria-label={t("budget.transactions.title")}>
-            {shownRows.map((row) => {
-              const key = rowKey(row);
-              const transferKey = TRANSACTION_TRANSFER_STATUS_KEYS[row.transfer.status];
-              const transfer = transferKey === undefined ? "" : t(transferKey);
-              const accountCandidate = counterpartyRuleCandidate(row);
-              return (
-                <li key={key} className="budget-entry">
-                  <div className="budget-entry-main">
-                    <span className="budget-muted">{transactionDate(row)}</span>
-                    <span className="budget-entry-text">{counterparty(row) ?? transactionText(row)}</span>
-                    <strong className={row.credit_debit_indicator === "DBIT" ? "is-debit" : "is-credit"}>
-                      {formatAmount(row.amount, row.currency, locale, row.credit_debit_indicator)}
-                    </strong>
-                  </div>
-                  <div className="budget-entry-facts">
-                    <span>{accountName(row.account_id)}</span>
-                    <CategoryBadge
-                      color={categoryColors.get(
-                        row.effective.category_id !== null && categoryNames.has(row.effective.category_id)
-                          ? row.effective.category_id
-                          : null,
-                      )}
-                      label={categoryName(row.effective.category_id)}
-                    />
-                    {row.effective.kind === "expense" || row.effective.kind === "income" ? null
-                      : <span className="budget-chip">{kindText(row.effective.kind)}</span>}
-                    {row.effective.source === "manual" ? <span>{t("budget.transactions.manual")}</span> : null}
-                    {row.effective.source === "rule" ? <span>{t("budget.transactions.rule")}</span> : null}
-                    {transfer === "" ? null : <span className="budget-chip">{transfer}</span>}
-                    {row.transfer.ambiguous ? <span className="budget-warn">{t("budget.transactions.ambiguous")}</span> : null}
-                    {oneOffLabel(row) === "" ? null : <span className="budget-chip budget-one-off">{oneOffLabel(row)}</span>}
-                    {row.annotation.stale ? <span className="budget-warn">{t("budget.transactions.stale")}</span> : null}
-                    {editing === key ? null : (
-                      <button type="button" disabled={busy !== null} onClick={() => { startEditing(key); }}>{t("budget.transactions.edit")}</button>
-                    )}
-                    {canPair(row) && pairing !== key ? (
-                      <button type="button" disabled={busy !== null} onClick={() => { openPairs(row); }}>{t("budget.transactions.pair")}</button>
-                    ) : null}
-                    {editing === key || onCreateRule === undefined || accountCandidate === null ? null : (
-                      <button type="button" disabled={busy !== null} title={row.counterparty_account ?? undefined}
-                        onClick={() => { onCreateRule(accountCandidate); }}>{t("budget.transactions.accountRule")}</button>
-                    )}
-                  </div>
-                  {editing === key ? (
-                    <Editor row={row} categories={categories} kindText={kindText} saving={busy === key}
-                      onSave={(category, kind, label) => { void save(row, category, kind, label); }} onCancel={stopEditing}
-                      onCreateRule={onCreateRule} />
-                  ) : null}
-                  {pairing === key ? (
-                    <PairPicker debit={row} page={pairPage} accounts={accounts} connections={connections} locale={locale}
-                      disabled={busy !== null} onConfirm={(credit) => { void confirmPair(row, credit); }} onCancel={closePairs} />
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
+          <table className="budget-transaction-table" aria-label={t("budget.transactions.title")}>
+            <thead>
+              <tr>
+                {SORT_KEYS.map((key) => {
+                  const direction = sort?.key === key ? sort.direction : undefined;
+                  const ariaSort = direction === "asc" ? "ascending" : direction === "desc" ? "descending" : undefined;
+                  return (
+                    <th scope="col" key={key} aria-sort={ariaSort}>
+                      <button type="button" onClick={() => { changeSort(key); }}>
+                        <span>{sortLabel(key)}</span>
+                        <span className="budget-transaction-sort-arrow" aria-hidden="true">
+                          {direction === "asc" ? "↑" : direction === "desc" ? "↓" : ""}
+                        </span>
+                      </button>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {shownRows.map((row) => {
+                const key = rowKey(row);
+                const transferKey = TRANSACTION_TRANSFER_STATUS_KEYS[row.transfer.status];
+                const transfer = transferKey === undefined ? "" : t(transferKey);
+                const title = entryTitle(row);
+                return (
+                  <tr key={key} className="budget-entry--interactive"
+                    onClick={(event) => {
+                      if (event.target instanceof Element && event.target.closest("button") !== null) return;
+                      const trigger = event.currentTarget.querySelector<HTMLButtonElement>(".budget-entry-open");
+                      if (trigger !== null) openEntry(key, trigger, false);
+                    }}>
+                    <td>
+                      <button type="button" className="budget-entry-open" disabled={busy !== null}
+                        aria-label={`${detailsTitle}, ${title}`} aria-haspopup="dialog"
+                        onClick={(event) => { openEntry(key, event.currentTarget, false); }}>
+                        <span className="budget-entry-date">{transactionDate(row)}</span>
+                        <span className="budget-entry-text">{title}</span>
+                      </button>
+                      <div className="budget-entry-facts">
+                        <span>{accountName(row.account_id)}</span>
+                        {row.effective.kind === "expense" || row.effective.kind === "income" ? null
+                          : <span className="budget-chip">{kindText(row.effective.kind)}</span>}
+                        {transfer === "" ? null : <span className="budget-chip">{transfer}</span>}
+                        {row.transfer.ambiguous ? <span className="budget-warn">{t("budget.transactions.ambiguous")}</span> : null}
+                        {oneOffLabel(row) === "" ? null : <span className="budget-chip budget-one-off">{oneOffLabel(row)}</span>}
+                        {row.annotation.stale ? <span className="budget-warn">{t("budget.transactions.stale")}</span> : null}
+                      </div>
+                    </td>
+                    <td>
+                      {categoryButton(row, (trigger) => { openEntry(key, trigger, true); })}
+                    </td>
+                    <td>
+                      <div className="budget-transaction-amount">
+                        <EntryDocumentIndicator enabled={receiptsList !== undefined && isExpense(row)}
+                          state={documents.state} rows={documentsFor(row)} />
+                        <strong className={row.credit_debit_indicator === "DBIT" ? "is-debit" : "is-credit"}>
+                          {formatAmount(row.amount, row.currency, locale, row.credit_debit_indicator)}
+                        </strong>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </>
       )}
     </section>
+    {selectedRow === undefined ? null : (
+      <EntryDrawer title={detailsTitle} trigger={entryTrigger.current} focusFallback={sectionRef.current} busy={busy !== null}
+        mode={selectedEditing ? "edit" : selectedPairing ? "pair" : "details"} onClose={closeEntry}>
+        <div className="budget-entry-drawer-hero">
+          <h4>{entryTitle(selectedRow)}</h4>
+          <strong className={selectedRow.credit_debit_indicator === "DBIT" ? "is-debit" : "is-credit"}>
+            {formatAmount(selectedRow.amount, selectedRow.currency, locale, selectedRow.credit_debit_indicator)}
+          </strong>
+        </div>
+        <dl className="budget-entry-details">
+          <div><dt>{t("budget.transactions.date")}</dt><dd>{transactionDate(selectedRow) ?? t("budget.receipts.noDate")}</dd></div>
+          <div><dt>{t("budget.transactions.account")}</dt><dd>{accountName(selectedRow.account_id)}</dd></div>
+          <div><dt>{t("budget.transactions.category")}</dt><dd>
+            {categoryButton(selectedRow, () => { startEditing(rowKey(selectedRow)); })}
+            {selectedRow.effective.source === "manual" ? <span className="budget-muted"> {t("budget.transactions.manual")}</span> : null}
+            {selectedRow.effective.source === "rule" ? <span className="budget-muted"> {t("budget.transactions.rule")}</span> : null}
+          </dd></div>
+          <div><dt>{t("budget.transactions.kind")}</dt><dd>{kindText(selectedRow.effective.kind)}</dd></div>
+          {transactionText(selectedRow) !== "" && transactionText(selectedRow) !== entryTitle(selectedRow) ? (
+            <div><dt>{t("budget.recurring.sources.description")}</dt><dd>{transactionText(selectedRow)}</dd></div>
+          ) : null}
+        </dl>
+        {receiptsList !== undefined && isExpense(selectedRow) ? (
+          <EntryDocuments state={documents.state} rows={selectedDocuments} locale={locale} />
+        ) : null}
+        {notice === null ? null : <p className="budget-notice" role="alert">{notice}</p>}
+        <div className="budget-entry-drawer-actions">
+          {canPair(selectedRow) && !selectedPairing ? (
+            <button type="button" disabled={busy !== null} onClick={() => { openPairs(selectedRow); }}>{t("budget.transactions.pair")}</button>
+          ) : null}
+          {selectedEditing || onCreateRule === undefined || selectedRule === null ? null : (
+            <button type="button" disabled={busy !== null} title={selectedRow.counterparty_account ?? undefined}
+              onClick={() => { onCreateRule(selectedRule); }}>{t("budget.transactions.accountRule")}</button>
+          )}
+        </div>
+        {selectedEditing ? (
+          <Editor row={selectedRow} categories={categories} kindText={kindText} saving={busy === rowKey(selectedRow)}
+            onSave={(category, kind, label) => { void save(selectedRow, category, kind, label); }} onCancel={stopEditing}
+            onCreateRule={onCreateRule} />
+        ) : null}
+        {selectedPairing ? (
+          <PairPicker debit={selectedRow} page={pairPage} accounts={accounts} connections={connections} locale={locale}
+            disabled={busy !== null} onConfirm={(credit) => { void confirmPair(selectedRow, credit); }} onCancel={closePairs} />
+        ) : null}
+      </EntryDrawer>
+    )}
+    </>
+  );
+}
+
+function isExpense(row: AnalyticsTransaction): boolean {
+  return row.credit_debit_indicator === "DBIT" && row.effective.kind === "expense";
+}
+
+function entryTitle(row: AnalyticsTransaction): string {
+  return counterparty(row) || transactionText(row) || t("budget.receipts.unknownMerchant");
+}
+
+function documentKind(row: ReceiptSummary): string {
+  return t(`budget.receipts.documentKind.${row.document_kind ?? "receipt"}`);
+}
+
+type DocumentIndexState = ReturnType<typeof useTransactionDocuments>["state"];
+
+function EntryDocumentIndicator({ enabled, state, rows }: {
+  enabled: boolean;
+  state: DocumentIndexState;
+  rows: readonly ReceiptSummary[];
+}) {
+  if (!enabled) return <span className="budget-entry-document" aria-hidden="true" />;
+  const document = rows.find((row) => row.status === "confirmed" && row.document_kind !== "payment_confirmation");
+  let kind = "unknown";
+  let label = state === "loading" ? t("budget.receipts.loading") : t("budget.receipts.detailError");
+  if (state === "ready") {
+    if (document !== undefined) {
+      kind = "present";
+      label = documentKind(document);
+    } else if (rows.some((row) => row.status === "needs_review")) {
+      kind = "review";
+      label = t("budget.receipts.statuses.needs_review");
+    } else if (rows.some((row) => row.document_kind === "payment_confirmation")) {
+      kind = "payment";
+      label = t("budget.receipts.documentKind.payment_confirmation");
+    } else {
+      kind = "missing";
+      label = `${t("budget.receipts.title")} · ${t("budget.receipts.unlinkedState")}`;
+    }
+  }
+  return <span className="budget-entry-document" data-document-state={kind} role="img" aria-label={label} title={label} />;
+}
+
+function EntryDocuments({ state, rows, locale }: { state: DocumentIndexState; rows: readonly ReceiptSummary[]; locale: string }) {
+  return (
+    <section className="budget-entry-documents">
+      <h4>{t("budget.receipts.title")}</h4>
+      {state === "loading" ? <p className="budget-muted" role="status">{t("budget.receipts.loading")}</p>
+        : state === "unavailable" ? <p className="budget-muted">{t("budget.receipts.detailError")}</p>
+          : rows.length === 0 ? <p className="budget-muted">{t("budget.receipts.unlinkedState")}</p> : (
+            <ul>
+              {rows.map((row) => (
+                <li key={row.receipt_id}>
+                  <div className="budget-entry-document-summary">
+                    <strong>{documentKind(row)}</strong>
+                    <span className="budget-muted">{[row.raw_shop_name, row.invoice_number, row.receipt_date].filter(Boolean).join(" · ")}</span>
+                    {row.status === "needs_review" ? <span className="budget-warn">{t("budget.receipts.statuses.needs_review")}</span> : null}
+                  </div>
+                  {row.total_amount && row.currency ? (
+                    <span className="budget-entry-document-amount">{formatAmount(row.total_amount, row.currency, locale)}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+    </section>
+  );
+}
+
+function EntryDrawer({ title, trigger, focusFallback, busy, mode, onClose, children }: {
+  title: string;
+  trigger: HTMLButtonElement | null;
+  focusFallback: HTMLElement | null;
+  busy: boolean;
+  mode: "details" | "edit" | "pair";
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const heading = useId();
+  const drawerRef = useRef<HTMLElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => () => {
+    if (trigger?.isConnected) trigger.focus();
+    else if (focusFallback?.isConnected) focusFallback.focus();
+  }, [trigger, focusFallback]);
+  useEffect(() => {
+    const field = mode === "edit" ? drawerRef.current?.querySelector<HTMLSelectElement>('select[name="category_id"]') : null;
+    (field ?? closeRef.current)?.focus();
+  }, [mode]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || drawerRef.current === null) return;
+      const drawer = drawerRef.current;
+      const controls = [...drawer.querySelectorAll<HTMLElement>(
+        "button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href]",
+      )];
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (first === undefined || !drawer.contains(document.activeElement)
+        || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last ?? drawer : first ?? drawer).focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("keydown", onKey); };
+  }, [busy, onClose]);
+
+  return (
+    <div className="modal-overlay budget-receipt-overlay" onClick={(event) => {
+      if (event.target === event.currentTarget && !busy) onClose();
+    }}>
+      <aside ref={drawerRef} className="modal-card budget-entry-drawer" role="dialog" aria-modal="true"
+        aria-labelledby={heading} tabIndex={-1}>
+        <header className="budget-entry-drawer-head">
+          <h3 id={heading}>{title}</h3>
+          <button ref={closeRef} type="button" disabled={busy} onClick={onClose}>{t("budget.main.close")}</button>
+        </header>
+        <div className="budget-entry-drawer-body">{children}</div>
+      </aside>
+    </div>
   );
 }
 

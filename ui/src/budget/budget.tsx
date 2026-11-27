@@ -1,6 +1,7 @@
 // Owner-private budget view (2C). Reads only the stored-data API; the "refresh" action queues a server job
 // under the server's quotas and never talks to a bank from the browser. Data live only in component state.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createRoot } from "react-dom/client";
 import { logout } from "../api/client";
 import { currentLocale, t, tPlural } from "../i18n";
@@ -32,6 +33,7 @@ import { ReceiptsView } from "./receipts";
 import type { ReceiptsApi } from "./receipts_api";
 import { createPendingReceiptStore } from "./receipts_model";
 import "./budget.css";
+import "./navigation.css";
 
 const PRESET_KEYS = {
   "30": "budget.main.presets.30",
@@ -41,6 +43,12 @@ const PRESET_KEYS = {
 } as const;
 
 type View = "monthly_budget" | "accounts" | "inbox" | "month" | "year" | "limits" | "recurring" | "mortgages" | "forecast" | "quarantine" | "rules" | "receipts";
+
+const PRIMARY_VIEWS = ["monthly_budget", "month", "inbox"] as const;
+const SECONDARY_VIEWS = [
+  "accounts", "year", "limits", "recurring", "mortgages", "forecast", "quarantine", "rules",
+] as const;
+const SECONDARY_VIEW_SET: ReadonlySet<View> = new Set(SECONDARY_VIEWS);
 
 function serverMonthToToday(month: string): (() => Date) | undefined {
   const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(month);
@@ -124,6 +132,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
   const [pending, setPending] = useState<BudgetConsentFlow[]>([]);
   const [detail, setDetail] = useState<string | null>(null);
   const [view, setView] = useState<View>("monthly_budget");
+  const [moreOpen, setMoreOpen] = useState(false);
   const [devicesFocus, setDevicesFocus] = useState(0);
   // A month chosen in the monthly budget or year view; the month view opens on it.
   const [focusMonth, setFocusMonth] = useState<string | undefined>(undefined);
@@ -178,6 +187,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
       setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined);
       setView("accounts");
+      setMoreOpen(false);
       setDevicesFocus(0);
       setSessionUpgrade(false);
       setReloggingIn(false);
@@ -216,6 +226,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     setReceiptAccess(true); setReceiptUnavailable(false);
     setLimits(null); setShowLimits(false); setShowConsentHealth(false); setConsents([]); setPending([]);
     setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setFocusRule(undefined); setView("accounts");
+    setMoreOpen(false);
     setDevicesFocus(0);
     const target = next ?? (disabled ? "disabled" : "denied");
     setSessionUpgrade(target === "sessionUpgrade");
@@ -568,6 +579,32 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     void logout().then(onLogout);
   }, [onLogout]);
 
+  const openAuthorizedView = useCallback((nextView: View, beforeShow?: () => void) => {
+    setMoreOpen(false);
+    authorizeView(() => {
+      beforeShow?.();
+      setView(nextView);
+    });
+  }, [authorizeView]);
+
+  const selectNavView = useCallback((item: View) => {
+    openAuthorizedView(item, () => {
+      if (item === "month") {
+        setFocusMonth(undefined);
+        setFocusToday(undefined);
+        setFocusCurrency(undefined);
+        setFocusProvisional(undefined);
+      }
+      if (item === "rules") setFocusRule(undefined);
+    });
+  }, [openAuthorizedView]);
+
+  useEffect(() => {
+    if (!active || load !== "ready" || !hasAnalytics(capabilities)) {
+      setMoreOpen(false);
+    }
+  }, [active, load, capabilities]);
+
   if (!active) return null;
   const shownLoad: Load = principal === committedPrincipal ? load : "loading";
   if (shownLoad === "serverChanged") {
@@ -584,6 +621,11 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
     && receiptAccess
     && !receiptUnavailable
     && authorization?.own_budget?.can_use_receipts === true;
+  const receiptPermissions = authorization?.own_budget?.permissions;
+  const transactionReceiptsList = receiptsAllowed
+    && receiptPermissions?.includes("budget.receipts.view") === true
+    && receiptPermissions.includes("budget.receipts.match")
+    ? guardedReceiptsApi.receiptsList : undefined;
   // Analytics views are available only while the server offers analytics; receipts are gated independently.
   const shownView: View = view === "receipts"
     ? (receiptsAllowed ? "receipts" : "accounts")
@@ -599,7 +641,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
           </button>
         ) : null}
         {shownLoad === "ready" && canManageDevices ? (
-          <button type="button" onClick={() => { authorizeView(() => { setView("accounts"); setDevicesFocus((current) => current + 1); }); }}>
+          <button type="button" onClick={() => { openAuthorizedView("accounts", () => { setDevicesFocus((current) => current + 1); }); }}>
             {t("budget.main.devices")}
           </button>
         ) : null}
@@ -664,17 +706,13 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
         </section>
       )}
       {analysis ? (
-        <div className="budget-views" role="group" aria-label={t("budget.main.viewsLabel")}>
-          {(["monthly_budget", "accounts", "inbox", "month", "year", "limits", "recurring", "mortgages", "forecast", "quarantine", "rules", ...(receiptsAllowed ? (["receipts"] as const) : [])] as const).map((item) => (
-            <button type="button" key={item} aria-pressed={shownView === item}
-              onClick={() => { authorizeView(() => { setView(item); if (item === "month") { setFocusMonth(undefined); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); } if (item === "rules") setFocusRule(undefined); }); }}>{labelOf(MAIN_VIEW_KEYS, item)}</button>
-          ))}
-        </div>
+        <BudgetNavigation shownView={shownView} receiptsAllowed={receiptsAllowed}
+          moreOpen={moreOpen} onOpenChange={setMoreOpen} onSelectView={selectNavView} />
       ) : null}
       {shownView === "monthly_budget" ? (
         <MonthBudgetView api={api} accounts={accounts} locale={locale} revision={revision}
           onAccessLoss={barrier} onOpenMonth={(month, serverCurrentMonth, options) => {
-            authorizeView(() => {
+            openAuthorizedView("month", () => {
               setFocusMonth(month);
               setFocusToday(() => serverMonthToToday(serverCurrentMonth));
               setFocusCurrency(options?.currency);
@@ -683,39 +721,37 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
                 total: options.provisionalTotal ?? options.provisionalKeys.length,
                 truncated: options.provisionalTruncated === true,
               });
-              setView("month");
             });
           }} />
       ) : shownView === "inbox" ? (
         <InboxView api={api} connections={connections} consentEnabled={consentEnabled} locale={locale}
           revision={revision} onAccessLoss={barrier}
           onOpenAccounts={(openConsentHealth) => {
-            authorizeView(() => {
-              setView("accounts");
+            openAuthorizedView("accounts", () => {
               if (openConsentHealth && consentEnabled) setShowConsentHealth(true);
             });
           }}
-          onOpenMortgages={() => { authorizeView(() => { setView("mortgages"); }); }}
-          onOpenLimits={() => { authorizeView(() => { setView("limits"); }); }} />
+          onOpenMortgages={() => { openAuthorizedView("mortgages"); }}
+          onOpenLimits={() => { openAuthorizedView("limits"); }} />
       ) : shownView === "month" ? (
         <MonthView key={`${focusMonth ?? "current"}-${focusCurrency ?? "all"}-${focusProvisional === undefined ? "full" : `provisional:${String(focusProvisional.keys.length)}:${focusProvisional.truncated ? "1" : "0"}`}`}
-          api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
+          api={api} receiptsList={transactionReceiptsList} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} initialMonth={focusMonth} initialCurrency={focusCurrency}
           initialProvisionalKeys={focusProvisional?.keys}
           initialProvisionalTotal={focusProvisional?.total}
           initialProvisionalTruncated={focusProvisional?.truncated}
           {...(focusToday === undefined ? {} : { today: focusToday })}
-          onCreateRule={(candidate) => { authorizeView(() => { setFocusRule(candidate); setView("rules"); }); }} />
+          onCreateRule={(candidate) => { openAuthorizedView("rules", () => { setFocusRule(candidate); }); }} />
       ) : shownView === "year" ? (
         <YearView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision} onAccessLoss={barrier}
           onOpenMonth={(month) => {
-            authorizeView(() => {
-              setFocusMonth(month); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined); setView("month");
+            openAuthorizedView("month", () => {
+              setFocusMonth(month); setFocusToday(undefined); setFocusCurrency(undefined); setFocusProvisional(undefined);
             });
           }} />
       ) : shownView === "limits" ? (
         <SpendingLimitsView api={api} accounts={accounts} locale={locale} revision={revision}
-          onAccessLoss={barrier} onOpenRules={() => { authorizeView(() => { setView("rules"); }); }} />
+          onAccessLoss={barrier} onOpenRules={() => { openAuthorizedView("rules"); }} />
       ) : shownView === "recurring" ? (
         <RecurringView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
           onAccessLoss={barrier} />
@@ -724,7 +760,7 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
           onAccessLoss={barrier} />
       ) : shownView === "forecast" ? (
         <ForecastView api={api} accounts={accounts} connections={connections} locale={locale} revision={revision}
-          onAccessLoss={barrier} onOpenMortgages={() => { authorizeView(() => { setView("mortgages"); }); }} />
+          onAccessLoss={barrier} onOpenMortgages={() => { openAuthorizedView("mortgages"); }} />
       ) : shownView === "quarantine" ? (
         <QuarantineView api={api} accounts={accounts} connections={connections} revision={revision}
           onAccessLoss={barrier} />
@@ -810,6 +846,152 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
         </>
       )}
     </section>
+  );
+}
+
+interface BudgetNavigationProps {
+  shownView: View;
+  receiptsAllowed: boolean;
+  moreOpen: boolean;
+  onOpenChange: (next: boolean) => void;
+  onSelectView: (view: View) => void;
+}
+
+/** Everyday navigation keeping four primary views visible and placing secondary tools behind More. */
+function BudgetNavigation({
+  shownView, receiptsAllowed, moreOpen, onOpenChange, onSelectView,
+}: BudgetNavigationProps) {
+  const navRef = useRef<HTMLElement>(null);
+  const moreTriggerRef = useRef<HTMLButtonElement>(null);
+  const morePanelRef = useRef<HTMLDivElement>(null);
+  const focusFirstMoreRef = useRef(false);
+  const morePanelId = useId();
+  const secondaryActive = SECONDARY_VIEW_SET.has(shownView);
+  const primaryViews: readonly View[] = receiptsAllowed ? [...PRIMARY_VIEWS, "receipts"] : PRIMARY_VIEWS;
+
+  const closeMore = useCallback((restoreFocus: boolean) => {
+    focusFirstMoreRef.current = false;
+    onOpenChange(false);
+    if (restoreFocus) moreTriggerRef.current?.focus();
+  }, [onOpenChange]);
+
+  useEffect(() => {
+    if (!moreOpen || !focusFirstMoreRef.current) return;
+    focusFirstMoreRef.current = false;
+    morePanelRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  }, [moreOpen]);
+
+  useEffect(() => {
+    if (!moreOpen) return undefined;
+    const onDocumentClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (target instanceof Node && !navRef.current?.contains(target)) {
+        closeMore(false);
+      }
+    };
+    const onDocumentKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented) {
+        const activeEl = document.activeElement;
+        const inside = activeEl !== null && (navRef.current?.contains(activeEl) ?? false);
+        event.preventDefault();
+        closeMore(inside);
+      }
+    };
+    document.addEventListener("click", onDocumentClick);
+    document.addEventListener("keydown", onDocumentKeyDown);
+    return () => {
+      document.removeEventListener("click", onDocumentClick);
+      document.removeEventListener("keydown", onDocumentKeyDown);
+    };
+  }, [moreOpen, closeMore]);
+
+  const handleNavKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape" && moreOpen) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeMore(true);
+    }
+  };
+
+  const handleMorePanelKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const panel = morePanelRef.current;
+    if (panel === null) return;
+    const items = [...panel.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+    if (items.length === 0) return;
+    const activeEl = document.activeElement;
+    const currentIndex = activeEl instanceof HTMLButtonElement ? items.indexOf(activeEl) : -1;
+    const rtl = getComputedStyle(panel).direction === "rtl";
+    const nextArrow = rtl ? "ArrowLeft" : "ArrowRight";
+    const prevArrow = rtl ? "ArrowRight" : "ArrowLeft";
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowDown" || event.key === nextArrow) {
+      nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length;
+    } else if (event.key === "ArrowUp" || event.key === prevArrow) {
+      nextIndex = currentIndex <= 0 ? items.length - 1 : currentIndex - 1;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = items.length - 1;
+    }
+    if (nextIndex !== null) {
+      event.preventDefault();
+      items[nextIndex]?.focus();
+    }
+  };
+
+  return (
+    <nav ref={navRef} className="budget-views budget-nav" aria-label={t("budget.main.viewsLabel")}
+      onKeyDown={handleNavKeyDown}>
+      <div className="budget-nav-bar">
+        {primaryViews.map((item) => (
+          <button type="button" key={item} aria-pressed={shownView === item}
+            onClick={() => { onSelectView(item); }}>
+            {labelOf(MAIN_VIEW_KEYS, item)}
+          </button>
+        ))}
+        <button ref={moreTriggerRef} type="button" className="budget-nav-more-toggle"
+          aria-label={t("budget.main.moreOptions")}
+          aria-expanded={moreOpen} aria-controls={morePanelId}
+          data-secondary-active={secondaryActive ? "true" : undefined}
+          onClick={() => {
+            focusFirstMoreRef.current = false;
+            onOpenChange(!moreOpen);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown" && !moreOpen) {
+              event.preventDefault();
+              focusFirstMoreRef.current = true;
+              onOpenChange(true);
+            }
+          }}>
+          {t("budget.main.moreOptions")}
+        </button>
+        {!moreOpen && secondaryActive ? (
+          <button type="button" className="budget-nav-current" aria-pressed="true"
+            onClick={() => { onSelectView(shownView); }}>
+            {labelOf(MAIN_VIEW_KEYS, shownView)}
+          </button>
+        ) : null}
+      </div>
+      {moreOpen ? (
+        <div ref={morePanelRef} id={morePanelId} className="budget-nav-more" role="group"
+          aria-label={t("budget.main.moreOptions")} onKeyDown={handleMorePanelKeyDown}>
+          {SECONDARY_VIEWS.map((item) => (
+            <button type="button" key={item} aria-pressed={shownView === item}
+              onClick={(event) => {
+                const activeEl = document.activeElement;
+                const keyboardFromPanel = event.detail === 0
+                  && activeEl !== null
+                  && (morePanelRef.current?.contains(activeEl) ?? false);
+                onSelectView(item);
+                if (keyboardFromPanel) moreTriggerRef.current?.focus();
+              }}>
+              {labelOf(MAIN_VIEW_KEYS, item)}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </nav>
   );
 }
 

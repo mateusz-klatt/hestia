@@ -27,8 +27,8 @@ from ..db import BudgetTransaction as Transaction, BudgetTransactionMetadata as 
 from ..db import BudgetTransferDecision as Decision, BudgetTransferLeg as Leg
 from .analytics_core import (AnalyticsError, KINDS, COUNTERPARTY_RULE_PREFIX, clean_one_off_label, compare_money,
                              compatible_kind, compile_rules, counterparty_key_id, counterparty_rule_from_identification, counterparty_rule_parts,
-                             counterparty_rule_value, effective_date, financial_fingerprint, first_matching_rule,
-                             match_rule, match_texts, pair_fingerprint)
+                             counterparty_rule_value, default_effective_kind, effective_date, financial_fingerprint,
+                             first_matching_rule, match_rule, match_texts, pair_fingerprint)
 from .client import _reject_constant, _unique_error_fields
 from .config import BudgetConfigError, _read_secret
 from .i18n import LANGUAGES
@@ -869,7 +869,10 @@ class BudgetAnalyticsStore(BudgetHTTPStore):
                 current_id = row.get("base_effective", row["effective"]).get("rule_id")
                 if current_id not in replaced and first_matching_rule(watch_compiled, row["payload"], texts) is None:
                     continue
-            rule, kind = match_rule(compiled, row["payload"], texts)
+            default_kind = row.get("_default_kind")
+            if default_kind is None:
+                default_kind = default_effective_kind(row["payload"], row["metadata"])
+            rule, kind = match_rule(compiled, row["payload"], texts, default_kind=default_kind)
             effective = {
                 "kind": kind,
                 "category_id": None if rule is None else rule["category_id"],

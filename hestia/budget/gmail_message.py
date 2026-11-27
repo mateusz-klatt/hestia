@@ -15,10 +15,12 @@ import re
 from zoneinfo import ZoneInfo
 
 from .gmail_address import canonical_mailbox
+from .gmail_apple import apple_document_number, inspect_apple_subscription_items
 from .gmail_client import GmailError
 from .gmail_document import ImportedDocument, extract_document
 from .gmail_invoice import _FORWARDED_INVOICE_NUMBERS, extract_invoice
-from .gmail_payment import _payee_key, inspect_payment
+from .gmail_payment import _payee_key, confirms_order_cancellation, inspect_payment
+from .gmail_shop_items import inspect_shop_items
 from .gmail_store import (DOCUMENT_NUMBER_DOMAIN, DOCUMENT_RECEIPT_DOMAIN, GATEWAY_REF_DOMAIN, ORDER_REFERENCE_DOMAIN, PAYMENT_PAYEE_DOMAIN, PAYMENT_SENDER_DOMAIN,
                           RFC_MESSAGE_DOMAIN, PendingMessage, PendingPayment, digest, normalize_parse_failed_reason)
 from .gmail_trust import (_FORWARD_MARKERS, _INVALID_FORWARD, _forward_sender, _forwarded_original, _inline_forward,
@@ -380,7 +382,7 @@ class GmailMessageProcessor:
                        rfc_message_id_hmac=_rfc_message_hmac(message, secret),
                        document_provenance=provenance, parse_failed_reason=None)
 
-    def _payment_from_part(self, kind, part, subjects, pending, sender, message, *, cut_inline=False):
+    def _payment_from_part(self, kind, part, subjects, pending, sender, message, *, cut_inline=False, apple=False):
         try:
             payload = _document_payload(kind, part)
             if not payload:
@@ -421,6 +423,11 @@ class GmailMessageProcessor:
         if any(abs((body_date - receipt_date).days) > 3 for body_date in payment.body_dates):
             return pending, False, False
         reference = payment.order_reference
+        apple_number = apple_document_number(text) if apple else None
+        item_block = None
+        if not sender.gateway:
+            inspect_items = inspect_apple_subscription_items if apple else inspect_shop_items
+            item_block = inspect_items(text, payment.total_amount, payment.currency)
         provenance = PendingPayment(
             replace(payment, order_reference=None), receipt_date,
             digest(secret, PAYMENT_SENDER_DOMAIN, sender.sender),
@@ -437,19 +444,54 @@ class GmailMessageProcessor:
             blik_ref_hmac=(digest(secret, GATEWAY_REF_DOMAIN, inspected.blik_ref)
                            if inspected.blik_ref is not None else None),
             card_last4=inspected.card_last4,
+            items=item_block or (), item_block_rejected=item_block == (),
+            apple_document_hmac=digest(secret, DOCUMENT_NUMBER_DOMAIN, apple_number) if apple_number else None,
         )
         return replace(pending, outcome="imported", payment=provenance,
                        rfc_message_id_hmac=_rfc_message_hmac(message, secret)), False, False
+
+    def _reconcile_alternative_items(self, result, message, pending, sender, subjects, inline_outer, apple):
+        # Only compare representations from the same multipart/alternative. For inline
+        # forwards the trust gate has already compared the two original From/Message-ID headers.
+        envelope = message if inline_outer is None else inline_outer
+        plain = envelope.get_body(("plain",))
+        html = next((part.get_body(("html",)) for part in mime_parts(envelope)
+                     if part.get_content_type() == "multipart/alternative"
+                     and part.get_body(("plain",)) is plain and plain is not None), None)
+        if html is None:
+            return result
+        try:
+            alternate, _, _ = self._payment_from_part(
+                "html", html, subjects, pending, sender, message, cut_inline=inline_outer is not None, apple=apple,
+            )
+        except WorkerUnavailable:
+            alternate = pending
+        first, second = result.payment, alternate.payment
+        items = ()
+        if (second is not None and not (first.item_block_rejected or second.item_block_rejected)
+                and first.fields.total_amount == second.fields.total_amount
+                and first.fields.currency == second.fields.currency):
+            evidence = ((first.card_last4, second.card_last4), (first.order_reference_hmac, second.order_reference_hmac),
+                        (first.apple_document_hmac, second.apple_document_hmac),
+                        (first.fields.body_dates, second.fields.body_dates), (first.items, second.items))
+            if all(not left or not right or left == right for left, right in evidence):
+                items = first.items or second.items
+        return replace(result, payment=replace(first, items=items))
 
     def _payment(self, message, pending, sender, *, inline_outer=None):
         subjects = tuple(map(str, message.get_all("Subject", ())))
         failure = pending
         missing_total = False
+        apple = not sender.gateway and domain_matches(forward_sender_domain(message) or "", "apple.com")
         for kind, part in _body_parts(message):
             result, should_continue, part_missing = self._payment_from_part(
-                kind, part, subjects, pending, sender, message,
+                kind, part, subjects, pending, sender, message, apple=apple,
             )
             if not should_continue:
+                # Render a second shop representation only after the selected one yielded a complete table.
+                if kind == "text" and result.payment is not None and (apple or result.payment.items):
+                    return self._reconcile_alternative_items(
+                        result, message, pending, sender, subjects, inline_outer, apple)
                 return result
             failure = result if result is not pending else failure
             missing_total |= part_missing
@@ -457,10 +499,18 @@ class GmailMessageProcessor:
             html_part = inline_outer.get_body(("html",))
             if html_part is not None:
                 result, _, _ = self._payment_from_part(
-                    "html", html_part, subjects, pending, sender, message, cut_inline=True,
+                    "html", html_part, subjects, pending, sender, message, cut_inline=True, apple=apple,
                 )
                 return result
         return failure
+
+    def _cancelled_order(self, message, pending, sender, *, inline_outer=None):
+        if not any(confirms_order_cancellation(str(subject)) for subject in message.get_all("Subject", ())):
+            return None
+        if sender is not None and sender.gateway:
+            # A gateway can still report a correlated terminal failure for an earlier registration.
+            return self._payment(message, pending, sender, inline_outer=inline_outer)
+        return pending
 
     def _parse(self, raw, pending):
         message = BytesParser(policy=policy.default).parsebytes(raw)
@@ -487,11 +537,14 @@ class GmailMessageProcessor:
                 if _forwarded_original(nested, render_html) is not None:
                     return replace(pending, outcome="skipped_non_receipt")
                 return self._manual_forward(message, inner, pending)
+            sender = payment_sender_for(inner.raw_items(), payment_senders)
+            inline_outer = None if _has_rfc822_attachment(message) else message
+            if cancelled := self._cancelled_order(inner, pending, sender, inline_outer=inline_outer):
+                return cancelled
             manual = _forward_sender(inner) not in self.settings.sender_allowlist
             document_failure = pending
             document_sender = payment_sender_for(inner.raw_items(), document_senders)
             if document_sender is not None:
-                inline_outer = None if _has_rfc822_attachment(message) else message
                 imported = self._document(inner, pending, document_sender, inline_outer=inline_outer,
                                           forwarded=True, manual=manual, allow_undated_template=not manual)
                 if imported.outcome == "imported" or imported.parse_failed_reason == "multiple_documents":
@@ -503,9 +556,7 @@ class GmailMessageProcessor:
                 if (imported.outcome == "imported" and pattern is not None
                         and pattern.fullmatch(imported.invoice.invoice_number)):
                     return imported
-            sender = payment_sender_for(inner.raw_items(), payment_senders)
             if sender is not None:
-                inline_outer = None if _has_rfc822_attachment(message) else message
                 imported = self._payment(inner, pending, sender, inline_outer=inline_outer)
                 if document_failure.diagnostic_reason == "pdf_no_text":
                     imported = replace(imported, diagnostic_reason="pdf_no_text")
@@ -518,6 +569,8 @@ class GmailMessageProcessor:
                 return document_failure
             return self._manual_forward(message, inner, pending)
         sender = payment_sender_for(message.raw_items(), payment_senders)
+        if cancelled := self._cancelled_order(message, pending, sender):
+            return cancelled
         document_sender = payment_sender_for(message.raw_items(), document_senders)
         if document_sender is not None:
             issuer_sender = classify_sender(message.raw_items(), self.settings.sender_allowlist, ()) == "direct_allowlist"

@@ -4,27 +4,31 @@ The caller passes canonical observations of the owner's selected accounts and
 marks entries that cannot support hints (pending, uncertain, undated) as
 ineligible. Only booked DBIT expenses with a non-zero exact decimal amount and
 deterministic merchant evidence (structured counterparty name, falling back to
-remittance description) are grouped, separately per currency and label source.
+remittance description) are grouped, separately per account, currency and label
+source.
 
 A hint requires at least three observed monthly occurrences across at least
-three distinct calendar months with consecutive gaps in [23, 38] days. Clusters
-containing shorter gaps (weekly/bi-weekly charges, frequent purchases, duplicate
-charges) are rejected rather than arbitrarily pruned. Hints show every observed
-occurrence as evidence and never assert that a subscription is unwanted or
-unused.
+three distinct calendar months with consecutive gaps in [23, 38] days. A monthly
+history may change its amount. Overlapping charges on the same account first
+separate unambiguous monthly cadence lanes before allowing amount transitions,
+and otherwise retain independently monthly fixed-amount histories. Other
+short-gap clusters (weekly/bi-weekly charges, frequent purchases, duplicate
+charges) are rejected. Hints show every observed occurrence as evidence and
+never assert that a subscription is unwanted or unused.
 
 Errors carry fixed messages and never echo amounts, references, descriptions or
 identifiers.
 """
 from __future__ import annotations
 
+import calendar
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
 import re
 import unicodedata
 
-RULE_VERSION = 1
+RULE_VERSION = 3
 MIN_OCCURRENCES = 3
 MIN_GAP_DAYS = 23
 MAX_GAP_DAYS = 38
@@ -106,9 +110,11 @@ class RecurringHint:
 @dataclass(frozen=True)
 class _Charge:
     day: int
+    day_of_month: int
     year_month: tuple[int, int]
     occurrence: RecurringOccurrence
     display_label: str
+    amount: str
 
 
 def _text(value, maximum=MAX_TEXT):
@@ -146,7 +152,7 @@ def _parse_date(value):
         parsed = date.fromisoformat(value)
     except ValueError:
         raise RecurringInputError() from None
-    return parsed.toordinal(), (parsed.year, parsed.month)
+    return parsed.toordinal(), parsed.day, (parsed.year, parsed.month)
 
 
 def _clean_label(value):
@@ -191,13 +197,16 @@ def _validated_charge(owner, entry, accounts, seen):
             or not isinstance(entry.fingerprint, str) or not _FINGERPRINT.fullmatch(entry.fingerprint)):
         raise RecurringInputError()
     amount = _amount(entry.amount)
-    day, year_month = _parse_date(entry.date)
+    day, day_of_month, year_month = _parse_date(entry.date)
     merchant = _label(entry.counterparty_name, entry.description)
     if entry.direction != "DBIT" or entry.effective_kind != "expense" or amount == "0" or merchant is None:
         return None
     source, display, normalized = merchant
     occurrence = RecurringOccurrence(entry.account_id, entry.entry_reference, entry.date, entry.fingerprint)
-    return (entry.currency, source, normalized, amount), _Charge(day, year_month, occurrence, display)
+    return (
+        (entry.account_id, entry.currency, source, normalized),
+        _Charge(day, day_of_month, year_month, occurrence, display, amount),
+    )
 
 
 def _groups(owner, entries, accounts, max_entries):
@@ -225,22 +234,13 @@ def _clusters(items):
     return clusters
 
 
-def _hint_from_cluster(key, cluster):
-    if len(cluster) < MIN_OCCURRENCES:
-        return None
-    gaps = [right.day - left.day for left, right in zip(cluster, cluster[1:])]
-    min_gap, max_gap = min(gaps), max(gaps)
-    if min_gap < MIN_GAP_DAYS:
-        return None
-    distinct_months = len({item.year_month for item in cluster})
-    if distinct_months < MIN_OCCURRENCES:
-        return None
-    currency, source, normalized, amount = key
+def _build_hint(key, cluster, min_gap, max_gap, distinct_months):
+    _, currency, source, normalized = key
     return RecurringHint(
         label=cluster[-1].display_label,
         normalized_label=normalized,
         label_source=source,
-        amount=amount,
+        amount=cluster[-1].amount,
         currency=currency,
         cadence="monthly",
         occurrence_count=len(cluster),
@@ -254,6 +254,182 @@ def _hint_from_cluster(key, cluster):
     )
 
 
+def _hint_from_cluster(key, cluster):
+    if len(cluster) < MIN_OCCURRENCES:
+        return None
+    gaps = [right.day - left.day for left, right in zip(cluster, cluster[1:])]
+    min_gap, max_gap = min(gaps), max(gaps)
+    if min_gap < MIN_GAP_DAYS:
+        return None
+    distinct_months = len({item.year_month for item in cluster})
+    if distinct_months < MIN_OCCURRENCES:
+        return None
+    return _build_hint(key, cluster, min_gap, max_gap, distinct_months)
+
+
+def _dom_distance(left: _Charge, right: _Charge) -> int:
+    left_clamped = min(left.day_of_month, calendar.monthrange(*right.year_month)[1])
+    right_clamped = min(right.day_of_month, calendar.monthrange(*left.year_month)[1])
+    return min(abs(right.day_of_month - left_clamped), abs(left.day_of_month - right_clamped))
+
+
+def _is_strict_monthly_lane(lane):
+    if len(lane) < MIN_OCCURRENCES:
+        return False
+    for left, right in zip(lane, lane[1:]):
+        if left.year_month >= right.year_month or not (MIN_GAP_DAYS <= right.day - left.day <= MAX_GAP_DAYS):
+            return False
+    return True
+
+
+def _is_submonthly_rhythm(raw_gaps, lanes):
+    if max(raw_gaps) > 15 or max(raw_gaps) - min(raw_gaps) > 2:
+        return False
+    return all(
+        right.day - left.day <= 29
+        for lane in lanes
+        for left, right in zip(lane, lane[1:])
+        if calendar.monthrange(*left.year_month)[1] >= 30
+    )
+
+
+def _cadence_lanes(cluster, raw_gaps):
+    n = len(cluster)
+    if n < 2 * MIN_OCCURRENCES:
+        return None
+    all_edges = []
+    tight_edges = []
+    for i, left in enumerate(cluster):
+        for j in range(i + 1, n):
+            right = cluster[j]
+            gap = right.day - left.day
+            if gap > MAX_GAP_DAYS:
+                break
+            if gap >= MIN_GAP_DAYS and left.year_month < right.year_month:
+                dist = _dom_distance(left, right)
+                all_edges.append((i, j, dist))
+                if dist <= 4:
+                    tight_edges.append((i, j))
+    for edges, check_unused in (
+        ([(i, j) for i, j, _ in all_edges], False),
+        (tight_edges, True),
+    ):
+        succ, pred, unique = {}, {}, True
+        for i, j in edges:
+            if i in succ or j in pred:
+                unique = False
+                break
+            succ[i] = j
+            pred[j] = i
+        if not unique:
+            continue
+        if check_unused:
+            used = set(edges)
+            if any((i, j) not in used and dist <= 5 for i, j, dist in all_edges):
+                continue
+        lanes = []
+        for i in range(n):
+            if i not in pred:
+                lane = []
+                cur = i
+                while cur is not None:
+                    lane.append(cluster[cur])
+                    cur = succ.get(cur)
+                if len(lane) < MIN_OCCURRENCES:
+                    lanes = None
+                    break
+                lanes.append(lane)
+        if lanes is not None and not _is_submonthly_rhythm(raw_gaps, lanes):
+            return lanes
+    return None
+
+
+def _can_chain_lanes(left, right):
+    return (
+        left[-1].year_month < right[0].year_month
+        and MIN_GAP_DAYS <= right[0].day - left[-1].day <= MAX_GAP_DAYS
+        and _dom_distance(left[-1], right[0]) <= 5
+    )
+
+
+def _merge_sequential_lanes(lanes):
+    ordered = sorted(lanes, key=lambda lane: (lane[0].day, lane[0].occurrence.entry_reference))
+    while True:
+        merged_pair = None
+        for i, left in enumerate(ordered):
+            next_candidates = [j for j, right in enumerate(ordered) if j != i and _can_chain_lanes(left, right)]
+            if len(next_candidates) == 1:
+                target = next_candidates[0]
+                right = ordered[target]
+                prev_candidates = [k for k, other in enumerate(ordered) if k != target and _can_chain_lanes(other, right)]
+                if len(prev_candidates) == 1:
+                    merged_pair = (i, target)
+                    break
+        if merged_pair is None:
+            return ordered
+        i, target = merged_pair
+        combined = ordered[i] + ordered[target]
+        ordered = [lane for idx, lane in enumerate(ordered) if idx not in (i, target)]
+        ordered.append(combined)
+        ordered.sort(key=lambda lane: (lane[0].day, lane[0].occurrence.entry_reference))
+
+
+def _fixed_fallback_lanes(cluster, raw_gaps):
+    by_amount = {}
+    for item in cluster:
+        by_amount.setdefault(item.amount, []).append(item)
+    if len(by_amount) == 1:
+        return ()
+    fixed_lanes = []
+    leftover = []
+    for charges in by_amount.values():
+        for fixed_cluster in _clusters(charges):
+            if _is_strict_monthly_lane(fixed_cluster):
+                fixed_lanes.append(fixed_cluster)
+            else:
+                leftover.extend(fixed_cluster)
+    if not fixed_lanes:
+        return ()
+    if leftover:
+        recovered = []
+        for rem_cluster in _clusters(leftover):
+            if _is_strict_monthly_lane(rem_cluster):
+                recovered.append(rem_cluster)
+                continue
+            rem_gaps = [right.day - left.day for left, right in zip(rem_cluster, rem_cluster[1:])]
+            sub_lanes = _cadence_lanes(rem_cluster, rem_gaps) if rem_gaps else None
+            if sub_lanes is not None:
+                recovered.extend(sub_lanes)
+            else:
+                recovered = None
+                break
+        if recovered:
+            fixed_lanes.extend(recovered)
+    merged = _merge_sequential_lanes(fixed_lanes)
+    if _is_submonthly_rhythm(raw_gaps, merged):
+        return ()
+    return merged
+
+
+def _monthly_hints(key, items):
+    for cluster in _clusters(items):
+        hint = _hint_from_cluster(key, cluster)
+        if hint is not None:
+            yield hint
+            continue
+        if len(cluster) <= MIN_OCCURRENCES:
+            continue
+        raw_gaps = [right.day - left.day for left, right in zip(cluster, cluster[1:])]
+        if min(raw_gaps) >= MIN_GAP_DAYS or max(raw_gaps) <= 8:
+            continue
+        lanes = _cadence_lanes(cluster, raw_gaps)
+        if lanes is None:
+            lanes = _fixed_fallback_lanes(cluster, raw_gaps)
+        for lane in lanes:
+            gaps = [right.day - left.day for left, right in zip(lane, lane[1:])]
+            yield _build_hint(key, lane, min(gaps), max(gaps), len({item.year_month for item in lane}))
+
+
 def detect_recurring_charges(owner: str, entries: Iterable[RecurringEntry],
                              selected_accounts: set[str] | frozenset[str], *,
                              max_entries: int = MAX_ENTRIES) -> tuple[RecurringHint, ...]:
@@ -261,18 +437,20 @@ def detect_recurring_charges(owner: str, entries: Iterable[RecurringEntry],
 
     Only eligible DBIT expense entries on ``selected_accounts`` with non-zero exact
     amounts and non-empty merchant evidence (``counterparty_name`` preferred over
-    ``description``) are considered. Each hint requires at least three monthly
+    ``description``) are considered. Entries are separated by account, currency,
+    label source, and normalized label. Each hint requires at least three monthly
     occurrences across at least three distinct calendar months with consecutive
-    date gaps in [23, 38] days.
+    date gaps in [23, 38] days. Within an account and monthly cadence lane,
+    amount changes stay in one history with the latest observed amount used for
+    the estimate. Overlapping charges on the same account separate unambiguous
+    cadence lanes first, and otherwise retain independently monthly fixed-amount
+    histories without double-counting sequential price transitions.
     """
     owner, accounts = _scope(owner, selected_accounts, max_entries)
     groups = _groups(owner, entries, accounts, max_entries)
     hints = []
     for key, items in sorted(groups.items()):
-        for cluster in _clusters(items):
-            hint = _hint_from_cluster(key, cluster)
-            if hint is not None:
-                hints.append(hint)
+        hints.extend(_monthly_hints(key, items))
     hints.sort(key=lambda hint: (hint.currency, hint.normalized_label, hint.label_source,
-                                 hint.amount, hint.first_date, hint.last_date))
+                                 hint.amount, hint.first_date, hint.last_date, hint.account_ids))
     return tuple(hints)

@@ -739,7 +739,7 @@ describe("CategorySwatch and CategoryBadge render", () => {
     });
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 
-    const txBadges = [...host.querySelectorAll<HTMLElement>(".budget-entry .budget-cat-badge")];
+    const txBadges = [...host.querySelectorAll<HTMLElement>(".budget-transaction-table tbody .budget-cat-badge")];
     expect(txBadges.map((el) => el.textContent)).toEqual(["Fuel", "Uncategorised"]);
     expect(cssColorToHex(txBadges[0]?.style.backgroundColor ?? "")).toBe(expected.get("fuel").background);
     expect(cssColorToHex(txBadges[1]?.style.backgroundColor ?? "")).toBe(NEUTRAL_CATEGORY_COLOR.background);
