@@ -59,7 +59,14 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.64.0")
+        self.assertEqual(document["info"]["version"], "0.65.0")
+        # 0.65.0 additive multi-status receipt list filter.
+        schemas["BudgetReceiptListRequest"]["properties"].pop("statuses")
+        document["info"]["version"] = "0.64.0"
+        canonical_0_64 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_64).hexdigest(),
+                         "21dc7aa11934bd0a8c2e26c1730b10acbca7e050d9ff40240e5aac6eb8ba0517")
+
         # 0.64.0 additive mortgage references and forecast matching audit.
         analytics = "/api/budget/analytics/"
         candidates = document["paths"].pop(analytics + "mortgage-reference-candidates")["get"]

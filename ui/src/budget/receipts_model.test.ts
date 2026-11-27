@@ -68,7 +68,7 @@ import {
   validPolishNip,
   validReceiptDateRange,
 } from "./receipts_model";
-import type { ReceiptCandidate, ReceiptDetail, ReceiptSummary } from "./receipts_model";
+import type { ReceiptCandidate, ReceiptDetail, ReceiptFilter, ReceiptSummary } from "./receipts_model";
 
 function summary(overrides: Partial<ReceiptSummary> = {}): ReceiptSummary {
   return {
@@ -172,6 +172,27 @@ describe("receipts_model", () => {
     expect(isRedactedValue("Regular Shop")).toBe(false);
     expect(isRedactedValue(null)).toBe(false);
     expect(isRedactedValue(undefined)).toBe(false);
+  });
+
+  it("sends Needs action to list and applies the same statuses to search results", () => {
+    const filter: ReceiptFilter = { ...EMPTY_RECEIPT_FILTER, status: "needs_action" };
+    expect(buildReceiptListRequest(filter, "next-page", 100)).toEqual({
+      statuses: ["imported", "needs_review", "draft"],
+      cursor: "next-page",
+      limit: 100,
+    });
+
+    const search = { ...filter, query: "Synthetic Grocery" };
+    const rows = [
+      summary({ receipt_id: "search-imported", status: "imported" }),
+      summary({ receipt_id: "search-confirmed", status: "confirmed" }),
+      summary({ receipt_id: "search-review", status: "needs_review" }),
+      summary({ receipt_id: "search-draft", status: "draft" }),
+    ];
+    expect(hasClientSideFilter(filter)).toBe(false);
+    expect(hasClientSideFilter(search)).toBe(true);
+    expect(filterReceiptRows(rows, search, true).map((row) => row.receipt_id))
+      .toEqual(["search-imported", "search-review", "search-draft"]);
   });
 
   it("builds list request parameters, detects client-side filters & stale cursors, and filters rows cleanly", () => {

@@ -177,7 +177,7 @@ class MortgageReferencesAPITests(unittest.IsolatedAsyncioTestCase):
         created = await self._save(_schedule(match_references=[_reference(_LOAN), _reference(_POLICY)]))
 
         with mock.patch.object(analytics_views.BudgetAnalyticsViews, "_now", return_value=_NOW):
-            for version in ("0.64.0", "0.63.0", "0.62.0", None):
+            for version in ("0.65.0", "0.64.0", "0.63.0", "0.62.0", None):
                 with self.subTest(version=version):
                     result = await self._success(await self.get(
                         "forecast", params={"months": "1"}, headers=self._headers(version),
@@ -189,7 +189,7 @@ class MortgageReferencesAPITests(unittest.IsolatedAsyncioTestCase):
                     audits = result["deduplications"]
                     self.assertEqual(len(audits), 2)
                     self.assertEqual({row["matched_due_date"] for row in audits}, {"2026-10-05"})
-                    if version == "0.64.0":
+                    if version in ("0.64.0", "0.65.0"):
                         self.assertEqual({row["match_type"] for row in audits}, {"linked"})
                         self.assertEqual({row["amount_delta"] for row in audits}, {"-0.5", "-93"})
                     else:

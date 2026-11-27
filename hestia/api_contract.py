@@ -131,7 +131,8 @@ from .budget.loan_references import MAX_MATCH_REFERENCES
 #         Globals and GlobalsPatch, negotiated via X-Hestia-Contract-Version (and contract_version query on SSE).
 # 0.63.0: owner dismissal of offline import quarantine items and batches, with import_key and unresolved_count.
 # 0.64.0: opt-in mortgage payment references and forecast matching audit (migration 0036).
-CONTRACT_VERSION = "0.64.0"
+# 0.65.0: optional multi-status filter on receipt lists (zero migration).
+CONTRACT_VERSION = "0.65.0"
 OPENAPI_PATH = Path(__file__).resolve().parent.parent / "docs" / "api" / "openapi.json"
 
 # De-duplicated string literals (SonarPython S1192): the OpenAPI content-type, the paths reused
@@ -3233,11 +3234,27 @@ class BudgetReceiptListRequest(BaseModel):
     model_config = _STRICT
     month: Annotated[str, Field(pattern=r"^[0-9]{4}-[0-9]{2}$")] | None = None
     status: Literal["draft", "confirmed", "needs_review", "imported"] | None = None
+    statuses: Annotated[
+        list[Literal["draft", "confirmed", "needs_review", "imported"]],
+        Field(
+            default=None,
+            min_length=1,
+            description="Filter by any of these statuses (duplicates ignored). Available from 0.65.0. "
+                        "Omit status when using this field.",
+            json_schema_extra=_OMIT,
+        ),
+    ] = None
     document_kind: BudgetReceiptDocumentKind | None = None
     linked: bool | None = None
     evidence: Literal["exclude", "only", "include"] = "exclude"
     limit: Annotated[int, Field(ge=1, le=200)] = 50
     cursor: BudgetReceiptCursor | None = None
+
+    @model_validator(mode="after")
+    def _check_status_filters(self) -> "BudgetReceiptListRequest":
+        if {"status", "statuses"} <= self.model_fields_set:
+            raise ValueError("status and statuses are mutually exclusive")
+        return self
 
 
 class BudgetReceiptSearchRequest(BaseModel):
