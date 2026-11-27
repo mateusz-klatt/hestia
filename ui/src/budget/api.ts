@@ -35,6 +35,7 @@ const RECEIPT_CONTRACT_HEADER = "X-Hestia-Contract-Version";
 export const RECEIPT_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.57.0" } as const;
 const RECEIPT_GROUP_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.59.0" } as const;
 const LINK_INDICATORS_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.60.0" } as const;
+const RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.61.0" } as const;
 
 export interface ReceiptDevice {
   token_id: string;
@@ -193,15 +194,16 @@ export function createBudgetApi(expectedActor: string | null = null) {
 
   function readReceipts<T>(target: URL, body?: object): Promise<BudgetResult<T>> {
     const init: RequestInit = body === undefined
-      ? { headers: LINK_INDICATORS_CONTRACT_HEADERS }
+      ? { headers: RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS }
       : {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...LINK_INDICATORS_CONTRACT_HEADERS },
+        headers: { "Content-Type": "application/json", ...RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS },
         body: JSON.stringify(body),
       };
     return runGated<T>(target, init, false, async (finalTarget, finalInit) => {
       let result = await request<T>(finalTarget, finalInit);
       for (const fallback of [
+        LINK_INDICATORS_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER],
         RECEIPT_GROUP_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER],
         RECEIPT_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER],
       ]) {

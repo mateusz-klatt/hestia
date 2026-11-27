@@ -6179,6 +6179,11 @@ export interface components {
             /** Currency */
             currency: string | null;
             /**
+             * Display Shop Name
+             * @description Canonical OCR issuer name when available. Emitted on list, search and detail from 0.61.0.
+             */
+            display_shop_name?: string | null;
+            /**
              * Document Kind
              * @default null
              */
@@ -6888,6 +6893,11 @@ export interface components {
             created_at: number;
             /** Currency */
             currency: string | null;
+            /**
+             * Display Shop Name
+             * @description Canonical OCR issuer name when available. Emitted on list, search and detail from 0.61.0.
+             */
+            display_shop_name?: string | null;
             /**
              * Document Kind
              * @default null

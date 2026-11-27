@@ -11410,6 +11410,18 @@
             ],
             "title": "Currency"
           },
+          "display_shop_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical OCR issuer name when available. Emitted on list, search and detail from 0.61.0.",
+            "title": "Display Shop Name"
+          },
           "document_kind": {
             "anyOf": [
               {
@@ -13688,6 +13700,18 @@
               }
             ],
             "title": "Currency"
+          },
+          "display_shop_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Canonical OCR issuer name when available. Emitted on list, search and detail from 0.61.0.",
+            "title": "Display Shop Name"
           },
           "document_kind": {
             "anyOf": [
@@ -18118,7 +18142,7 @@
   "info": {
     "description": "Local cloud-free smart-home control API. Generated from hestia/api_contract.py \u2014 do not edit by hand; run `python -m hestia.api_contract`.",
     "title": "hestia API",
-    "version": "0.60.0"
+    "version": "0.61.0"
   },
   "openapi": "3.1.0",
   "paths": {

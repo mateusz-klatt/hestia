@@ -59,7 +59,13 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.60.0")
+        self.assertEqual(document["info"]["version"], "0.61.0")
+        for schema in ("BudgetReceiptSummary", "BudgetReceiptDetail"):
+            schemas[schema]["properties"].pop("display_shop_name")
+        document["info"]["version"] = "0.60.0"
+        canonical_0_60 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_60).hexdigest(),
+                         "25ea81058b9e5d80854438a89a04c10d58b50fc06f6d4d1b422cd6ccf1f35b8d")
         # 0.60.0 additive receipt link indicators on analytics transactions and receipt list summaries.
         tx_get_params = document["paths"]["/api/budget/analytics/transactions"]["get"]["parameters"]
         tx_header = tx_get_params.pop()

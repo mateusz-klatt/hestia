@@ -507,6 +507,37 @@ describe("ReceiptsView", () => {
     expect(host.textContent).toContain("Powiązany");
   });
 
+  it("displays the OCR issuer from the server while keeping the raw name in the editor", async () => {
+    const raw = "TL Centrun Testowe Sp. 2 O.O.";
+    const canonical = "Centrum Testowe";
+    const ocr = receiptSummary({
+      receipt_id: "ocr-test",
+      raw_nip: "1010101016",
+      raw_shop_name: raw,
+      display_shop_name: canonical,
+    });
+    const legacy = receiptSummary({ receipt_id: "legacy-test", raw_shop_name: "Legacy Vendor" });
+    const clients = fakeClients([ocr, legacy], receiptDetail(ocr));
+    vi.mocked(clients.rApi.receiptsSearch).mockImplementation(() =>
+      ok<ReceiptListResult>({ receipts: [ocr], next_cursor: null }));
+
+    await renderReceipts(clients);
+    const merchantLabels = () => [...host.querySelectorAll(".budget-receipt-merchant")].map((row) => row.textContent);
+    expect(merchantLabels()).toEqual([canonical, "Legacy Vendor"]);
+
+    await typeInto(inputByName("query"), canonical);
+    await submit(host.querySelector(".budget-range"));
+    expect(clients.rApi.receiptsSearch).toHaveBeenLastCalledWith({ query: canonical, limit: 50 });
+    expect(merchantLabels()).toEqual([canonical]);
+
+    await click(openDetailById(ocr.receipt_id));
+    expect(dialog().querySelector(".budget-receipt-hero-merchant")?.textContent).toBe(canonical);
+    expect(inputByName("raw_shop_name", dialog()).value).toBe(raw);
+    await click(button("Confirm receipt", dialog()));
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(clients.rApi.confirmReceipt).mock.lastCall?.[0]).not.toHaveProperty("raw_shop_name");
+  });
+
   it("applies server filters, client-side hints, search API, cursor pagination, and recovers once from expired cursors", async () => {
     const clients = fakeClients([
       receiptSummary({ receipt_id: "p1-a", status: "needs_review", document_kind: "invoice", source_kind: "attachment", receipt_date: "2026-11-10", linked: true }),

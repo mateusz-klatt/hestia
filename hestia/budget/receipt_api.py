@@ -39,6 +39,7 @@ _GATEWAY_EVIDENCE_VERSION = (0, 52, 0)
 _ID_MATCH_VERSION = (0, 57, 0)
 _MANY_TO_ONE_VERSION = (0, 59, 0)
 _LINK_INDICATORS_VERSION = (0, 60, 0)
+_DISPLAY_SHOP_NAME_VERSION = (0, 61, 0)
 _CURRENT_VERSION = tuple(int(part) for part in api_contract.CONTRACT_VERSION.split("."))
 _RECEIPT_RESULT_KEY = {"parse-text": "draft", "confirm": "receipt", "list": "receipts",
                        "search": "receipts", "detail": "receipt"}
@@ -91,12 +92,16 @@ def _receipt_id(request, *, field="receipt_id"):
     return request.query[field]
 
 
-def _run(owner, operation, values, secret, device_id, actor=None, *, include_linked_transaction=False):
+def _run(owner, operation, values, secret, device_id, actor=None, *,
+         include_linked_transaction=False, include_display_shop_name=False):
     store = _store(secret, device_id, actor)
     if operation == "parse-text":
         return store.parse_text(owner, values["text"], source_kind=values["source_kind"])
     if operation in ("list", "search"):
-        return getattr(store, operation)(owner, values, include_linked_transaction=include_linked_transaction)
+        return getattr(store, operation)(
+            owner, values, include_linked_transaction=include_linked_transaction,
+            include_display_shop_name=include_display_shop_name,
+        )
     return getattr(store, operation.replace("/", "_"))(owner, values)
 
 
@@ -128,6 +133,11 @@ def _receipt_contract(request, operation):
 
 
 def _response(operation, result, version):
+    if version < _DISPLAY_SHOP_NAME_VERSION and operation in _RECEIPT_RESULT_KEY:
+        key = _RECEIPT_RESULT_KEY[operation]
+        receipts = result[key] if key == "receipts" else (result[key],)
+        for receipt in receipts:
+            receipt.pop("display_shop_name", None)
     if version < _LINK_INDICATORS_VERSION and operation in _RECEIPT_RESULT_KEY:
         key = _RECEIPT_RESULT_KEY[operation]
         receipts = result[key] if key == "receipts" else (result[key],)
@@ -187,7 +197,10 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
                     raise ReceiptError("budget_receipt_not_found", 404)
                 identifier = _receipt_id(request, field="group_id" if operation == "group/detail" else "receipt_id")
                 result = await api._settled_thread(
-                    lambda: _run_read(owner, operation, identifier, secret, device_id, actor),
+                    lambda: _run_read(
+                        owner, operation, identifier, secret, device_id, actor,
+                        include_display_shop_name=version >= _DISPLAY_SHOP_NAME_VERSION,
+                    ),
                 )
                 return _response(operation, result, version)
             if device_id is None:
@@ -213,7 +226,10 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
             actor = request.get(device_token.ACTOR_REQUEST_KEY, owner) if device_id is not None else owner
             if operation in ("list", "search") and version >= _LINK_INDICATORS_VERSION:
                 result = await api._settled_thread(
-                    lambda: _run(owner, operation, values, secret, device_id, actor, include_linked_transaction=True),
+                    lambda: _run(
+                        owner, operation, values, secret, device_id, actor, include_linked_transaction=True,
+                        include_display_shop_name=version >= _DISPLAY_SHOP_NAME_VERSION,
+                    ),
                 )
             else:
                 result = await api._settled_thread(lambda: _run(owner, operation, values, secret, device_id, actor))
@@ -386,10 +402,10 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
     app.router.add_post(device_token.LOGIN_PATH, login)
 
 
-def _run_read(owner, operation, identifier, secret, device_id=None, actor=None):
+def _run_read(owner, operation, identifier, secret, device_id=None, actor=None, *, include_display_shop_name=False):
     store = _store(secret, device_id, actor)
     if operation == "detail":
-        return store.detail(owner, identifier)
+        return store.detail(owner, identifier, include_display_shop_name=include_display_shop_name)
     if operation == "group/detail":
         return store.group_detail(owner, identifier)
     store.image(owner, identifier)

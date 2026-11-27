@@ -18,13 +18,13 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from sqlalchemy import and_, delete, exists, func, literal_column, or_, select
+from sqlalchemy import and_, case, delete, exists, func, literal, literal_column, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
 from .. import authz
 from ..db import (AppMeta, BudgetAccount as Account, BudgetAccountDisplay as AccountDisplay,
-                  BudgetConnection as Connection, BudgetReceipt as Receipt,
+                  BudgetAnalyticsAudit as Audit, BudgetConnection as Connection, BudgetReceipt as Receipt,
                   BudgetReceiptDeviceToken as DeviceToken, BudgetReceiptLine as Line,
                   BudgetReceiptLinkGroup as ReceiptLinkGroup, BudgetReceiptLinkMember as ReceiptLinkMember,
                   BudgetShop as Shop,
@@ -36,7 +36,8 @@ from .gmail_payment import _payee_key, bank_payee_texts, bank_ref_tokens, canoni
 from .gmail_store import (GATEWAY_REF_DOMAIN, _payment_payee_key, digest, receipt_ref_hmacs,
                           retain_imports, tombstone_receipt)
 from .receipt_group_solver import MAX_GROUP_POOL, MAX_GROUP_PROPOSALS, find_receipt_groups
-from .receipt_parser import (GATEWAY_PHRASE_TOKENS, _IBAN_COUNTRY_SPECS, _IBAN_MAX, _IBAN_MIN, _STOP_TOKENS,
+from .receipt_parser import (GATEWAY_PHRASE_TOKENS, _IBAN_COUNTRY_SPECS, _IBAN_MAX, _IBAN_MIN,
+                             _REMOVED, _STOP_TOKENS,
                              CONFIRMED_TEXT_TTL_SECONDS, DRAFT_TTL_SECONDS, MAX_RECEIPT_LINES, ReceiptError,
                              _iban_checksum, chain_for, contains_gateway_marker, merchant_score_groups,
                              merchant_tokens, merchant_word_tokens, normalize_shop_name, parse_receipt,
@@ -54,6 +55,8 @@ MAX_GROUP_TX_CANDIDATES = 10
 MAX_GROUP_SPAN_DAYS = 14
 _GROUP_STRENGTH_ORDER = {"id": 0, "nip": 1, "distinctive": 2, "generic": 3, "none": 4}
 _CUR3 = re.compile(r"[A-Z]{3}\Z", re.ASCII)
+_OCR_SOURCES = ("local_ocr", "photo", "cloud_ai")
+_SHOP_NAME_CONFIRMED = "shop_name_confirmed"
 
 
 class ReceiptGroupError(ReceiptError):
@@ -349,6 +352,86 @@ def _group_links_for_receipts(session, owner, receipt_ids):
         ReceiptLinkGroup, ReceiptLinkGroup.id == participants.c.group_id,
     ).where(ReceiptLinkGroup.owner == owner))
     return {receipt_id: (group, count) for receipt_id, group, count in rows}
+
+
+def _seller_names_query(owner, nips):
+    """Return at most one confirmed name and one registered name per NIP."""
+    # Old confirmations lack the boolean. Use their audit time as a fallback.
+    # A known link-only save has a false flag and does not change the ranking.
+    valid_after = case((func.json_valid(Audit.after_json), Audit.after_json))
+    latest_confirm_id = select(Audit.id).where(
+        Audit.owner == Receipt.owner, Audit.subject_id == Receipt.id,
+        Audit.subject_type == "receipt", Audit.action == "confirm",
+        valid_after.is_not(None),
+        func.json_extract(valid_after, "$." + _SHOP_NAME_CONFIRMED).is_not(False),
+    ).order_by(Audit.changed_at.desc(), Audit.id.desc()).limit(1).correlate(Receipt).scalar_subquery()
+    confirmation = aliased(Audit)
+    confirmed_name = func.trim(Receipt.raw_shop_name)
+    shop_name = func.trim(Shop.name)
+    confirmed = select(
+        Receipt.raw_nip.label("nip"), confirmed_name.label("name"), literal(0).label("source"),
+        func.coalesce(confirmation.changed_at, Receipt.created_at).label("named_at"),
+        confirmation.id.label("audit_id"), Receipt.id.label("id"),
+    ).outerjoin(confirmation, confirmation.id == latest_confirm_id).where(
+        Receipt.owner == owner, Receipt.status == "confirmed",
+        Receipt.document_kind == "receipt", Receipt.source_kind.in_(_OCR_SOURCES), Receipt.raw_nip.in_(nips),
+        confirmed_name.not_in(("", _REMOVED)),
+    )
+    registered = select(Shop.nip, shop_name, literal(1), Shop.updated_at, literal(None), Shop.id).where(
+        Shop.owner == owner, Shop.nip.in_(nips), shop_name.not_in(("", _REMOVED)),
+    )
+    names = confirmed.union_all(registered).subquery()
+    ranked = select(names.c.nip, names.c.name, names.c.source, func.row_number().over(
+        partition_by=(names.c.nip, names.c.source),
+        order_by=(names.c.audit_id.is_not(None).desc(), names.c.named_at.desc(), names.c.audit_id.desc(),
+                  case((names.c.source == 0, names.c.id)).desc(), names.c.id),
+    ).label("rank")).subquery()
+    return select(
+        ranked.c.nip,
+        func.max(case((ranked.c.source == 0, ranked.c.name))).label("confirmed"),
+        func.max(case((ranked.c.source == 1, ranked.c.name))).label("registered"),
+    ).where(ranked.c.rank == 1).group_by(ranked.c.nip)
+
+
+def _is_ocr_receipt(row):
+    return row.document_kind == "receipt" and row.source_kind in _OCR_SOURCES
+
+
+def _ocr_receipt_nip(row):
+    if _is_ocr_receipt(row) and valid_nip(row.raw_nip):
+        return row.raw_nip
+    return None
+
+
+def _display_shop_name(row, confirmed=None, registered=None):
+    nip = _ocr_receipt_nip(row)
+    if nip is None:
+        return None
+    for name in (confirmed, registered):
+        safe_name = redact_digit_field(normalize_shop_name(name))
+        if safe_name and safe_name != _REMOVED:
+            return safe_name
+    # With no raw name, chain_for uses only the existing exact NIP mapping.
+    chain = chain_for(None, nip)
+    return chain.title() if chain is not None else None
+
+
+def _page_shop_names(session, owner, rows):
+    nips = sorted({nip for row in rows if (nip := _ocr_receipt_nip(row)) is not None})
+    if not nips:
+        return {}
+    return {nip: (confirmed, registered) for nip, confirmed, registered in session.execute(
+        _seller_names_query(owner, nips),
+    )}
+
+
+def _detail_result(session, row, receipt, include_display_shop_name):
+    if include_display_shop_name:
+        names = _page_shop_names(session, row.owner, (row,))
+        name = _display_shop_name(row, *names.get(row.raw_nip, (None, None)))
+        if name is not None:
+            receipt["display_shop_name"] = name
+    return {"receipt": receipt}
 
 
 def _positive_money(value):
@@ -828,7 +911,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             Line.receipt_id == row.id, Line.owner == row.owner)))
         return sum_money((net, negate_money(row.total_amount)))
 
-    def _summary(self, session, row, *, group_link=None, linked_transaction=_UNSET):
+    def _summary(self, session, row, *, group_link=None, linked_transaction=_UNSET, display_shop_name=None):
         shop = None if row.shop_id is None else session.get(Shop, row.shop_id)
         group = None if group_link is None else group_link[0]
         linked_account_id = row.linked_account_id if group is None else group.account_id
@@ -859,6 +942,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             summary["link_group"] = _group_ref(*group_link)
         if linked_transaction is not _UNSET:
             summary["linked_transaction"] = linked_transaction
+        if display_shop_name is not None:
+            summary["display_shop_name"] = display_shop_name
         return summary
 
     def _detail(self, session, row):
@@ -1421,6 +1506,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             if effective["lines"] is None and not group_conflict:
                 self._check_stored_lines(session, owner, row.id, effective["total_amount"])
             row_was_draft = row.status == "draft"
+            shop_name_confirmed = row_was_draft or effective["raw_shop_name"] != row.raw_shop_name
             preserve_link = row.linked_account_id is not None and not self._match_allowed
             if link is not None and not self._match_allowed:
                 raise DeviceTokenError(403, "budget_forbidden")
@@ -1456,6 +1542,8 @@ class BudgetReceiptStore(BudgetHTTPStore):
             except IntegrityError:
                 raise ReceiptError("budget_receipt_tx_already_linked", 409) from None
             after = audit_payload(row, "confirm", self._actor)
+            if _is_ocr_receipt(row):
+                after[_SHOP_NAME_CONFIRMED] = shop_name_confirmed
             if grouped:
                 before["linked"] = after["linked"] = True
             write_audit(session, owner, row, "confirm", before, after, now)
@@ -1567,7 +1655,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
                                             separators=(",", ":")).encode("ascii")).hexdigest()
         return limit, month, status, linked, query, kind, evidence, context
 
-    def _list(self, owner, values, *, search, include_linked_transaction=False):
+    def _list(self, owner, values, *, search, include_linked_transaction, include_display_shop_name):
         limit, month, status, linked, query, kind, evidence, context = self._filters(values, search=search)
         with self.transaction() as session:
             owner = self._owner(session, owner, "budget.receipts.view")
@@ -1594,19 +1682,21 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 query_obj = query_obj.where(self._cursor_clause(cursor))
             ordered = query_obj.order_by(Receipt.receipt_date.desc(), Receipt.id)
             if search:
-                needle = fold_for_match(query.strip())
-                selected = []
-                for row in session.scalars(ordered):
-                    if not self._matches(session, row, needle):
-                        continue
-                    selected.append(row)
-                    if len(selected) > limit:
-                        break
+                selected, display_names = self._search_page(
+                    session, owner, ordered, fold_for_match(query.strip()), limit, include_display_shop_name,
+                )
             else:
                 selected = list(session.scalars(ordered.limit(limit + 1)))
+                display_names = {}
             more = len(selected) > limit
             selected = selected[:limit]
             next_cursor = self._encode_cursor(owner, context, selected[-1]) if more else None
+            if include_display_shop_name and not search:
+                names = _page_shop_names(session, owner, selected)
+                display_names = {
+                    row.id: _display_shop_name(row, *names.get(row.raw_nip, (None, None)))
+                    for row in selected
+                }
             page_ids = [row.id for row in selected]
             links = _group_links_for_receipts(session, owner, page_ids)
             linked_txs = (
@@ -1618,16 +1708,42 @@ class BudgetReceiptStore(BudgetHTTPStore):
                 self._summary(
                     session, row, group_link=links.get(row.id),
                     linked_transaction=linked_txs.get(row.id) if include_linked_transaction else _UNSET,
+                    display_shop_name=display_names.get(row.id),
                 )
                 for row in selected
             ]
             return {"receipts": receipts, "next_cursor": next_cursor}
 
-    def list(self, owner, values, *, include_linked_transaction=False):
-        return self._list(owner, values, search=False, include_linked_transaction=include_linked_transaction)
+    def list(self, owner, values, *, include_linked_transaction=False, include_display_shop_name=False):
+        return self._list(owner, values, search=False, include_linked_transaction=include_linked_transaction,
+                          include_display_shop_name=include_display_shop_name)
 
-    def search(self, owner, values, *, include_linked_transaction=False):
-        return self._list(owner, values, search=True, include_linked_transaction=include_linked_transaction)
+    def search(self, owner, values, *, include_linked_transaction=False, include_display_shop_name=False):
+        return self._list(owner, values, search=True, include_linked_transaction=include_linked_transaction,
+                          include_display_shop_name=include_display_shop_name)
+
+    def _search_page(self, session, owner, ordered, needle, limit, include_display_shop_name):
+        if include_display_shop_name:
+            # Resolve in SQL before pagination so a canonical-only match can be anywhere in the ledger.
+            candidate_nips = ordered.with_only_columns(Receipt.raw_nip).order_by(None).where(
+                Receipt.document_kind == "receipt", Receipt.source_kind.in_(_OCR_SOURCES),
+                Receipt.raw_nip.is_not(None),
+            ).distinct().cte("receipt_search_nips")
+            names = _seller_names_query(owner, select(candidate_nips.c.raw_nip)).subquery()
+            ordered = ordered.outerjoin(names, and_(
+                names.c.nip == Receipt.raw_nip, Receipt.document_kind == "receipt",
+                Receipt.source_kind.in_(_OCR_SOURCES),
+            )).add_columns(names.c.confirmed, names.c.registered)
+        selected, display_names = [], {}
+        for entry in session.execute(ordered.execution_options(yield_per=limit + 1)):
+            row = entry[0]
+            name = _display_shop_name(row, entry.confirmed, entry.registered) if include_display_shop_name else None
+            if (name is not None and needle in fold_for_match(name)) or self._matches(session, row, needle):
+                selected.append(row)
+                display_names[row.id] = name
+                if len(selected) > limit:
+                    break
+        return selected, display_names
 
     @staticmethod
     def _matches(session, row, needle):
@@ -1638,7 +1754,7 @@ class BudgetReceiptStore(BudgetHTTPStore):
             Line.raw_name_key.like("%" + _like_escape(needle) + "%", escape="\\"),
         ).limit(1)) is not None
 
-    def detail(self, owner, receipt_id):
+    def detail(self, owner, receipt_id, *, include_display_shop_name=False):
         with self.transaction() as session:
             owner = self._owner(session, owner, "budget.receipts.view")
             now = self._now()
@@ -1646,11 +1762,11 @@ class BudgetReceiptStore(BudgetHTTPStore):
             row = self._owned(session, owner, receipt_id)
             receipt = self._detail(session, row)
             if not self._match_allowed or "link_group" in receipt:
-                return {"receipt": receipt}
+                return _detail_result(session, row, receipt, include_display_shop_name)
             want_one_to_one = row.status in ("imported", "draft", "needs_review")
             want_group = _group_member_eligible(row, allow_imported=True)
             if not want_one_to_one and not want_group:
-                return {"receipt": receipt}
+                return _detail_result(session, row, receipt, include_display_shop_name)
             # Re-issue outside the writer lock. The token is bound to this receipt's
             # own reservation; confirm and group/link re-verify inside BEGIN IMMEDIATE.
             preview = _receipt_preview(row)
@@ -1658,9 +1774,9 @@ class BudgetReceiptStore(BudgetHTTPStore):
             self._owner(session, owner, "budget.receipts.view", require_same_target=True)
             row = self._owned(session, owner, receipt_id)
             receipt = self._detail(session, row)
+            result = _detail_result(session, row, receipt, include_display_shop_name)
             if not self._match_allowed or "link_group" in receipt:
-                return {"receipt": receipt}
-            result = {"receipt": receipt}
+                return result
             candidates = []
             if want_one_to_one:
                 candidates = self._candidates(session, owner, preview, {}, include_receipt_id=preview.id)

@@ -658,7 +658,7 @@ class LinkIndicatorsHTTPTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("receipt", (await post_resp.json())["transactions"][0])
 
         # Invalid or future contract version returns 400.
-        for bad in ("0.61.0", "bad"):
+        for bad in ("0.62.0", "bad"):
             resp = await self.client.get(analytics_api.PREFIX + "/transactions",
                                          params={"period": "2026-11"},
                                          headers=self.headers() | {_HEADER: bad})

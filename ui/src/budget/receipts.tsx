@@ -66,6 +66,7 @@ import {
   receiptHasRedactedLines,
   receiptMerchantGroupKey,
   receiptNeedsConfirmation,
+  receiptShopName,
   receiptTotalAdjustment,
   reconcileLinkChoice,
   resolveDraftFromDetailSession,
@@ -2317,7 +2318,7 @@ export function ReceiptsView({
                         </span>
                         <strong className="budget-receipt-merchant">
                           <RedactedOrText
-                            value={row.raw_shop_name}
+                            value={receiptShopName(row)}
                             fallback={row.forwarded_sender_domain ?? t("budget.receipts.unknownMerchant")}
                           />
                         </strong>
@@ -2640,7 +2641,7 @@ function ReceiptGroupDocumentRow({ receipt, current, locale, onOpenReceipt }: {
 }) {
   const name = (
     <RedactedOrText
-      value={receipt.raw_shop_name}
+      value={receiptShopName(receipt)}
       fallback={receipt.gateway ?? receipt.forwarded_sender_domain ?? t("budget.receipts.unknownMerchant")}
     />
   );
@@ -3501,7 +3502,7 @@ function ReceiptDetailDrawer({
                 <div>
                   <h4 className="budget-receipt-hero-merchant">
                     <RedactedOrText
-                      value={detail.raw_shop_name}
+                      value={receiptShopName(detail)}
                       fallback={detail.forwarded_sender_domain ?? t("budget.receipts.unknownMerchant")}
                     />
                   </h4>
