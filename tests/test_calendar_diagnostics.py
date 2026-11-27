@@ -7,6 +7,7 @@ import itertools
 import logging
 import os
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -340,16 +341,21 @@ class CalendarDiagnosticsTests(unittest.TestCase):
         self.assertFalse(diagnostics_enabled(environ={"HESTIA_CALENDAR_SYNC_DEBUG": "0"}))
 
         with patch.dict(os.environ, {}, clear=False), \
+             patch.object(diag_log, "setLevel", wraps=diag_log.setLevel) as set_level, \
+             patch.object(diag_log, "addHandler", wraps=diag_log.addHandler) as add_handler, \
              patch.object(time, "thread_time", wraps=time.thread_time) as cpu_clock, \
              patch.object(p, "_clocks", wraps=p._clocks) as provider_clocks, \
              patch.object(p, "PullMetrics", wraps=p.PullMetrics) as pull_metrics, \
              patch.object(diag_mod, "_RoundCollector", wraps=diag_mod._RoundCollector) as round_col:
             os.environ.pop("HESTIA_CALENDAR_SYNC_DEBUG", None)
+            self.assertFalse(configure_diagnostics())
             self.assertEqual(engine.run_once(), {"read": 2, "delivered": 0, "errors": {}})
             self.assertEqual(engine.run_once(), {"read": 2, "delivered": 0, "errors": {}})
 
         self.assertEqual(caldav_tr.responses, [])
         self.assertEqual(google_tr.responses, [])
+        self.assertEqual(set_level.call_count, 0)
+        self.assertEqual(add_handler.call_count, 0)
         self.assertEqual(cpu_clock.call_count, 0)
         self.assertEqual(provider_clocks.call_count, 0)
         self.assertEqual(pull_metrics.call_count, 0)
@@ -357,13 +363,33 @@ class CalendarDiagnosticsTests(unittest.TestCase):
         self.assertEqual(diag_handler.records, [])
         self.assertEqual(parent_handler.records, [])
 
-        # Direct provider pulls with diagnostics disabled allocate no PullMetrics.
+        # Even if diag_log was previously set to DEBUG, a disabled round makes no logging-config calls and emits nothing.
+        diag_log.setLevel(logging.DEBUG)
         caldav_tr.responses.append(http.dav_acl(token="tok-1"))
         google_tr.responses.extend([http.google_acl(), http.google_page([], token="g-3"), http.google_acl()])
+        with patch.dict(os.environ, {}, clear=False), \
+             patch.object(diag_log, "setLevel", wraps=diag_log.setLevel) as set_level, \
+             patch.object(diag_log, "addHandler", wraps=diag_log.addHandler) as add_handler, \
+             patch.object(time, "thread_time", wraps=time.thread_time) as cpu_clock:
+            os.environ.pop("HESTIA_CALENDAR_SYNC_DEBUG", None)
+            self.assertFalse(configure_diagnostics())
+            self.assertEqual(engine.run_once(), {"read": 2, "delivered": 0, "errors": {}})
+        self.assertEqual(caldav_tr.responses, [])
+        self.assertEqual(google_tr.responses, [])
+        self.assertEqual(set_level.call_count, 0)
+        self.assertEqual(add_handler.call_count, 0)
+        self.assertEqual(cpu_clock.call_count, 0)
+        self.assertEqual(diag_handler.records, [])
+
+        # Direct provider pulls with diagnostics disabled allocate no PullMetrics.
+        caldav_tr.responses.append(http.dav_acl(token="tok-1"))
+        google_tr.responses.extend([http.google_acl(), http.google_page([], token="g-4"), http.google_acl()])
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("HESTIA_CALENDAR_SYNC_DEBUG", None)
             self.assertIsNone(caldav.pull(caldav._checkpoint("tok-1", DEFAULT_PRINCIPAL)).metrics)
-            self.assertIsNone(google.pull(p.GoogleProvider.CURSOR_PREFIX + "g-2").metrics)
+            self.assertIsNone(google.pull(p.GoogleProvider.CURSOR_PREFIX + "g-3").metrics)
+        self.assertEqual(caldav_tr.responses, [])
+        self.assertEqual(google_tr.responses, [])
 
     def test_dedicated_logger_does_not_propagate_or_raise_instances_logger(self):
         self.store.configure([{"id": "family", "calendars": [
@@ -394,25 +420,66 @@ class CalendarDiagnosticsTests(unittest.TestCase):
         parent_logger.setLevel(logging.NOTSET)
         instances_logger.setLevel(logging.NOTSET)
         diag_log.handlers.clear()
+        diag_log.setLevel(logging.CRITICAL + 1)
 
-        # First call attaches a single StreamHandler; second call does not duplicate it.
-        self.assertTrue(configure_diagnostics(environ={"HESTIA_CALENDAR_SYNC_DEBUG": "1"}))
-        self.assertTrue(configure_diagnostics(environ={"HESTIA_CALENDAR_SYNC_DEBUG": "1"}))
+        # Concurrent configure calls install exactly one marked StreamHandler and call setLevel once.
+        barrier = threading.Barrier(8)
+        results: list[bool] = []
+        results_lock = threading.Lock()
+
+        def configure_worker():
+            barrier.wait(timeout=5)
+            enabled = configure_diagnostics(environ={"HESTIA_CALENDAR_SYNC_DEBUG": "1"})
+            with results_lock:
+                results.append(enabled)
+
+        with patch.object(diag_log, "addHandler", wraps=diag_log.addHandler) as add_handler, \
+             patch.object(diag_log, "setLevel", wraps=diag_log.setLevel) as set_level:
+            threads = [threading.Thread(target=configure_worker) for _ in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+            self.assertTrue(all(not thread.is_alive() for thread in threads))
+            self.assertTrue(configure_diagnostics(environ={"HESTIA_CALENDAR_SYNC_DEBUG": "1"}))
+
+        self.assertEqual(results, [True] * 8)
+        self.assertEqual(add_handler.call_count, 1)
+        self.assertEqual(set_level.call_count, 1)
         self.assertFalse(diag_log.propagate)
         self.assertEqual(len(diag_log.handlers), 1)
         self.assertIsInstance(diag_log.handlers[0], logging.StreamHandler)
+        self.assertTrue(getattr(diag_log.handlers[0], "_hestia_calendar_diagnostics", False))
         self.assertEqual(diag_log.level, logging.DEBUG)
         self.assertEqual(root_logger.level, logging.INFO)
         self.assertEqual(parent_logger.getEffectiveLevel(), logging.INFO)
         self.assertEqual(instances_logger.getEffectiveLevel(), logging.INFO)
 
+        # An unrelated (unmarked) handler does not block installing the marked handler once,
+        # and setLevel is skipped when the level is already DEBUG.
+        unmarked = _ListHandler()
+        diag_log.handlers[:] = [unmarked]
+        with patch.object(diag_log, "addHandler", wraps=diag_log.addHandler) as add_handler, \
+             patch.object(diag_log, "setLevel", wraps=diag_log.setLevel) as set_level:
+            self.assertTrue(configure_diagnostics(environ={"HESTIA_CALENDAR_SYNC_DEBUG": "1"}))
+            self.assertTrue(configure_diagnostics(environ={"HESTIA_CALENDAR_SYNC_DEBUG": "1"}))
+        self.assertEqual(add_handler.call_count, 1)
+        self.assertEqual(set_level.call_count, 0)
+        self.assertEqual(len(diag_log.handlers), 2)
+        self.assertTrue(getattr(diag_log.handlers[1], "_hestia_calendar_diagnostics", False))
+
         # Diagnostics emit only on diag_log; parent/root stay clean and instances DEBUG stays suppressed.
         diag_handler = _ListHandler()
+        setattr(diag_handler, "_hestia_calendar_diagnostics", True)
         diag_log.handlers[:] = [diag_handler]
-        with patch.dict(os.environ, {"HESTIA_CALENDAR_SYNC_DEBUG": "1"}):
+        with patch.dict(os.environ, {"HESTIA_CALENDAR_SYNC_DEBUG": "1"}), \
+             patch.object(diag_log, "addHandler", wraps=diag_log.addHandler) as add_handler, \
+             patch.object(diag_log, "setLevel", wraps=diag_log.setLevel) as set_level:
             engine.run_once()
             instances_logger.debug("Skipping orphan override for calendar event secret-id at 2026-11-01")
 
+        self.assertEqual(add_handler.call_count, 0)
+        self.assertEqual(set_level.call_count, 0)
         self.assertEqual(root_handler.records, [])
         endpoints, summary = _parse_logs(diag_handler.records)
         self.assertEqual(endpoints[0]["reason"], "no_checkpoint")

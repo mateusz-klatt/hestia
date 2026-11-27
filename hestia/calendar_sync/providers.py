@@ -25,7 +25,7 @@ from icalendar import Calendar
 
 from . import events as codec
 from .diagnostics import diagnostics_enabled
-from .types import CalendarInfo, ProviderError, PullMetrics, RemoteEvent, Snapshot
+from .types import CalendarInfo, PollContext, ProviderError, PullMetrics, RemoteEvent, Snapshot
 
 
 def _clocks() -> tuple[float, float]:
@@ -754,7 +754,6 @@ class CalDAVProvider:
         self._account_hash = hashlib.sha256(username.encode("utf-8")).hexdigest()
         self._auth = "Basic " + base64.b64encode((username + ":" + password).encode()).decode()
         self._credential_hash = hashlib.sha256(self._auth.encode("ascii")).hexdigest()
-        self._principal_cache: dict[tuple[str, str], str | None] | None = None
         self._transport = transport or HTTPTransport()
 
     def allocate_id(self, uid: str) -> str:
@@ -812,6 +811,7 @@ class CalDAVProvider:
         return CalendarInfo(identifier, display.text if display is not None and display.text else identifier,
                             writable, None if writable else "CalDAV must grant read, create, edit and delete access to VEVENTs")
 
+    supports_poll_context = True
     _CALENDAR_PROPS = ('<d:resourcetype/><d:displayname/><d:current-user-privilege-set/>'
                        '<c:supported-calendar-component-set/><d:current-user-principal/><d:sync-token/>')
 
@@ -862,8 +862,7 @@ class CalDAVProvider:
                     result[identifier] = info
         return list(result.values())
 
-    def _check_collection(self, *, resolve_principal: bool = False,
-                          principal_cache: dict[tuple[str, str], str | None] | None = None) -> tuple[str | None, str | None]:
+    def _check_collection(self, *, principal_cache: dict[tuple[str, str], str | None] | None = None) -> tuple[str | None, str | None]:
         if not self.calendar_id:
             raise ProviderError("Select an explicit CalDAV calendar collection")
         base, responses = self._propfind(self.calendar_id, self._CALENDAR_PROPS)
@@ -891,7 +890,7 @@ class CalDAVProvider:
         )
         if principal_href:
             principal = urljoin(self.calendar_id, principal_href)
-        elif resolve_principal and not unauthenticated:
+        elif principal_cache is not None and not unauthenticated:
             principal = self._resolve_root_principal(principal_cache)
         else:
             principal = None
@@ -939,11 +938,11 @@ class CalDAVProvider:
             return False, "token_changed"
         return True, "token_unchanged"
 
-    def pull(self, cursor: str | None) -> Snapshot:
+    def pull(self, cursor: str | None, *, poll_context: PollContext | None = None) -> Snapshot:
         collect = diagnostics_enabled()
         wall0, cpu0 = _clocks() if collect else (0.0, 0.0)
-        principal_cache = {} if self._principal_cache is None else self._principal_cache
-        before, before_principal = self._check_collection(resolve_principal=True, principal_cache=principal_cache)
+        principal_cache = {} if poll_context is None else poll_context.principal_cache
+        before, before_principal = self._check_collection(principal_cache=principal_cache)
         matched, reason = self._match_checkpoint(cursor, before, before_principal)
         if matched:
             metrics = None
@@ -975,7 +974,7 @@ class CalDAVProvider:
             seen.add(remote_id)
             records.append(_ical_record(remote_id, data.text.encode(), etag.text, floating_time_zone=self.floating_time_zone))
         pw1, pc1 = _clocks() if collect else (0.0, 0.0)
-        after, after_principal = self._check_collection(resolve_principal=True, principal_cache=principal_cache)
+        after, after_principal = self._check_collection(principal_cache=principal_cache)
         if before != after or before_principal != after_principal:
             raise ProviderError("CalDAV calendar changed during inventory; retry required", retryable=True)
         metrics = None

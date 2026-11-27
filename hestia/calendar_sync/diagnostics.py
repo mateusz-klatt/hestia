@@ -5,11 +5,15 @@ from dataclasses import dataclass
 import hashlib
 import logging
 import os
+import threading
 import time
 
 LOGGER_NAME = "hestia.calendar_sync.diagnostics"
+_HANDLER_MARKER = "_hestia_calendar_diagnostics"
+_CONFIG_LOCK = threading.Lock()
 diag_log = logging.getLogger(LOGGER_NAME)
 diag_log.propagate = False
+diag_log.setLevel(logging.CRITICAL + 1)
 
 
 def diagnostics_enabled(environ=None) -> bool:
@@ -19,15 +23,17 @@ def diagnostics_enabled(environ=None) -> bool:
 
 
 def configure_diagnostics(environ=None) -> bool:
-    """Configure the dedicated diagnostics logger without touching parent or sibling loggers."""
+    """Configure the dedicated diagnostics logger once, without touching other loggers."""
     if not diagnostics_enabled(environ):
-        diag_log.setLevel(logging.CRITICAL + 1)
         return False
-    if not diag_log.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-        diag_log.addHandler(handler)
-    diag_log.setLevel(logging.DEBUG)
+    with _CONFIG_LOCK:
+        if not any(getattr(handler, _HANDLER_MARKER, False) for handler in diag_log.handlers):
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            setattr(handler, _HANDLER_MARKER, True)
+            diag_log.addHandler(handler)
+        if diag_log.level != logging.DEBUG:
+            diag_log.setLevel(logging.DEBUG)
     return True
 
 

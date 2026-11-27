@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from xml.sax.saxutils import escape
@@ -509,6 +510,145 @@ class CalendarIncrementalFastPathTests(unittest.TestCase):
         self.assertEqual(len([c for c in root_calls if c[2]["headers"]["Authorization"] == auth_main]), 1)
         self.assertEqual(len([c for c in root_calls if c[2]["headers"]["Authorization"] == auth_other]), 1)
         self.assertFalse(any(c[0] == "REPORT" for c in shared_transport.calls))
+
+    def test_overlapping_rounds_keep_separate_principal_caches_and_discard_after_round(self):
+        root_url = "https://caldav.icloud.com/"
+        cal1_url = "https://caldav.icloud.com/1/calendars/home/"
+        cal2_url = "https://caldav.icloud.com/1/calendars/work/"
+        item1 = fixed_dav_item(http.PAYLOAD, uid="overlap-uid-1", href=cal1_url + "one.ics", etag='"v1"')
+        item2 = fixed_dav_item(http.PAYLOAD, uid="overlap-uid-2", href=cal2_url + "two.ics", etag='"v1"')
+        groups = [
+            {"id": "group-1", "calendars": [
+                {"id": "apple-1", "provider": "caldav", "account": "wife", "calendar_id": cal1_url},
+            ]},
+            {"id": "group-2", "calendars": [
+                {"id": "apple-2", "provider": "caldav", "account": "wife", "calendar_id": cal2_url},
+            ]},
+        ]
+        self.store.configure(groups)
+        _, sessions2 = db.init_db(self.temp.name + "/incremental-2.db")
+        store2 = SyncStore(sessions2, clock=lambda: self.now)
+        store2.configure(groups)
+
+        round1_paused = threading.Event()
+        round2_done = threading.Event()
+
+        class _OverlappingTransport:
+            def __init__(self):
+                self.lock = threading.Lock()
+                self.root_calls: dict[str, int] = {}
+                self.report_calls: dict[str, int] = {}
+                self.round_principals = {
+                    "round-1": "/principal-round-1/",
+                    "round-2": "/principal-round-2/",
+                    "round-3": "/principal-round-1/",
+                    "round-4": "/principal-round-3/",
+                }
+                self.active_label = "round-1"
+
+            def request(self, method, url, **kwargs):
+                label = threading.current_thread().name
+                if label not in self.round_principals:
+                    label = self.active_label
+                if label == "round-1" and method == "PROPFIND" and url == cal2_url and not round1_paused.is_set():
+                    round1_paused.set()
+                    if not round2_done.wait(timeout=5):
+                        raise TimeoutError("round-2 did not finish while round-1 was paused")
+                with self.lock:
+                    if url == root_url:
+                        self.root_calls[label] = self.root_calls.get(label, 0) + 1
+                    elif method == "REPORT":
+                        self.report_calls[label] = self.report_calls.get(label, 0) + 1
+                if url == root_url:
+                    return http.multistatus(http.dav_response(
+                        f'<d:current-user-principal><d:href>{self.round_principals[label]}</d:href></d:current-user-principal>',
+                        href="/",
+                    ))
+                if method == "PROPFIND":
+                    return http.dav_acl(token="tok-1", href=url, principal=None)
+                return http.multistatus(item1 if url == cal1_url else item2)
+
+        transport = _OverlappingTransport()
+        shared_providers = {
+            "apple-1": p.CalDAVProvider(cal1_url, username="user", password="secret", transport=transport),
+            "apple-2": p.CalDAVProvider(cal2_url, username="user", password="secret", transport=transport),
+        }
+        engine1 = SyncEngine(self.store, shared_providers)
+        engine2 = SyncEngine(store2, shared_providers)
+
+        results: dict[str, dict] = {}
+        errors: dict[str, BaseException] = {}
+
+        def run_round1():
+            try:
+                results["round-1"] = engine1.run_once()
+            except BaseException as exc:
+                errors["round-1"] = exc
+            finally:
+                round1_paused.set()
+
+        def run_round2():
+            try:
+                if not round1_paused.wait(timeout=5):
+                    raise TimeoutError("round-1 did not pause mid-round")
+                results["round-2"] = engine2.run_once()
+            except BaseException as exc:
+                errors["round-2"] = exc
+            finally:
+                round2_done.set()
+
+        t1 = threading.Thread(target=run_round1, name="round-1")
+        t2 = threading.Thread(target=run_round2, name="round-2")
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        self.assertFalse(t1.is_alive())
+        self.assertFalse(t2.is_alive())
+        self.assertEqual(errors, {})
+        self.assertEqual(results, {
+            "round-1": {"read": 2, "delivered": 0, "errors": {}},
+            "round-2": {"read": 2, "delivered": 0, "errors": {}},
+        })
+        # Each overlapping round resolved the root principal once in its own round-local cache.
+        self.assertEqual(transport.root_calls, {"round-1": 1, "round-2": 1})
+        self.assertEqual(transport.report_calls, {"round-1": 2, "round-2": 2})
+
+        cal1, cal2 = shared_providers["apple-1"], shared_providers["apple-2"]
+        with self.sessions() as session:
+            self.assertEqual(session.get(db.CalendarEndpoint, "apple-1").cursor,
+                             cal1._checkpoint("tok-1", "https://caldav.icloud.com/principal-round-1/"))
+            self.assertEqual(session.get(db.CalendarEndpoint, "apple-2").cursor,
+                             cal2._checkpoint("tok-1", "https://caldav.icloud.com/principal-round-1/"))
+        with sessions2() as session:
+            self.assertEqual(session.get(db.CalendarEndpoint, "apple-1").cursor,
+                             cal1._checkpoint("tok-1", "https://caldav.icloud.com/principal-round-2/"))
+            self.assertEqual(session.get(db.CalendarEndpoint, "apple-2").cursor,
+                             cal2._checkpoint("tok-1", "https://caldav.icloud.com/principal-round-2/"))
+
+        # No cache is stored on shared provider or engine objects.
+        for obj in (cal1, cal2, engine1, engine2):
+            self.assertFalse(hasattr(obj, "_principal_cache"))
+
+        # After round-1 finishes, its cache is gone: round-3 performs a fresh root lookup (shared within round-3).
+        transport.active_label = "round-3"
+        self.now += 60
+        self.assertEqual(engine1.run_once(), {"read": 2, "delivered": 0, "errors": {}})
+        self.assertEqual(transport.root_calls["round-3"], 1)
+        self.assertEqual(transport.report_calls.get("round-3", 0), 0)
+
+        # Round-4 sees a newly resolved principal at the root and takes the full path for both endpoints.
+        transport.active_label = "round-4"
+        self.now += 60
+        self.assertEqual(engine1.run_once(), {"read": 2, "delivered": 0, "errors": {}})
+        self.assertEqual(transport.root_calls["round-4"], 1)
+        self.assertEqual(transport.report_calls["round-4"], 2)
+        with self.sessions() as session:
+            self.assertEqual(session.get(db.CalendarEndpoint, "apple-1").cursor,
+                             cal1._checkpoint("tok-1", "https://caldav.icloud.com/principal-round-3/"))
+            self.assertEqual(session.get(db.CalendarEndpoint, "apple-2").cursor,
+                             cal2._checkpoint("tok-1", "https://caldav.icloud.com/principal-round-3/"))
 
     def test_legacy_invalid_mismatched_and_empty_token_checkpoints_take_full_path(self):
         self.configure_endpoints("apple")

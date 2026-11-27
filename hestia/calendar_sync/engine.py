@@ -5,13 +5,12 @@ that endpoint. A later round reads every source before retrying failed writes.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
 import math
 import threading
 
 from .diagnostics import round_collector
 from .events import validate_payload
-from .types import ProviderError
+from .types import PollContext, ProviderError
 
 
 def error_code(exc):
@@ -43,19 +42,6 @@ def validate_snapshot(snapshot):
             validate_payload(event.payload)
 
 
-@contextmanager
-def _poll_principal_cache(providers):
-    cache: dict[tuple[str, str], str | None] = {}
-    attached = [provider for provider in providers.values() if hasattr(provider, "_principal_cache")]
-    for provider in attached:
-        provider._principal_cache = cache
-    try:
-        yield
-    finally:
-        for provider in attached:
-            provider._principal_cache = None
-
-
 class SyncEngine:
     def __init__(self, store, providers):
         self.store = store
@@ -65,24 +51,28 @@ class SyncEngine:
     def run_once(self):
         with self._lock:
             collector = round_collector()
+            poll_context = PollContext()
             snapshots, errors = {}, {}
-            with _poll_principal_cache(self.providers):
-                for endpoint in self.store.endpoints():
-                    endpoint_id = endpoint["id"]
-                    forced_pending = endpoint["needs_reobservation"] and endpoint["provider"] == "caldav"
-                    state = collector.start_pull(endpoint_id, endpoint["provider"])
-                    try:
-                        cursor = None if forced_pending else endpoint["cursor"]
-                        snapshot = self.providers[endpoint_id].pull(cursor)
-                        collector.after_pull(state)
-                        validate_snapshot(snapshot)
-                        snapshots[endpoint_id] = snapshot
-                        collector.finish_pull(state, snapshot, forced_pending=forced_pending)
-                    except Exception as exc:
-                        collector.fail_pull(state)
-                        code = error_code(exc)
-                        self.store.endpoint_error(endpoint_id, code)
-                        errors[endpoint_id] = code
+            for endpoint in self.store.endpoints():
+                endpoint_id = endpoint["id"]
+                forced_pending = endpoint["needs_reobservation"] and endpoint["provider"] == "caldav"
+                state = collector.start_pull(endpoint_id, endpoint["provider"])
+                try:
+                    cursor = None if forced_pending else endpoint["cursor"]
+                    provider = self.providers[endpoint_id]
+                    if getattr(provider, "supports_poll_context", False):
+                        snapshot = provider.pull(cursor, poll_context=poll_context)
+                    else:
+                        snapshot = provider.pull(cursor)
+                    collector.after_pull(state)
+                    validate_snapshot(snapshot)
+                    snapshots[endpoint_id] = snapshot
+                    collector.finish_pull(state, snapshot, forced_pending=forced_pending)
+                except Exception as exc:
+                    collector.fail_pull(state)
+                    code = error_code(exc)
+                    self.store.endpoint_error(endpoint_id, code)
+                    errors[endpoint_id] = code
             ingestion_errors = self.store.ingest(snapshots, isolate_errors=True, stats=collector.ingest_stats)
             collector.finish_ingest()
             for endpoint_id, exc in ingestion_errors.items():

@@ -14,6 +14,12 @@ class PullMetrics:
     parse_cpu_ms: float = 0.0
 
 
+@dataclass
+class PollContext:
+    """Round-local state passed explicitly to provider pulls; never stored on shared objects."""
+    principal_cache: dict[tuple[str, str], str | None] = field(default_factory=dict)
+
+
 @dataclass(frozen=True)
 class CalendarInfo:
     id: str
