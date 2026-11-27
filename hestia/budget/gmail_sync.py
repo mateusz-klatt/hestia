@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 import fcntl
 import hmac
 import json
+import logging
 from pathlib import Path
 import random
 import re
@@ -14,6 +15,7 @@ from types import MappingProxyType
 
 from .gmail_address import canonical_mailbox
 from .gmail_client import GmailCredentials, GmailError, RunLimit, has_spam_or_trash_label
+from .gmail_message import MessageParserUnavailable
 from .gmail_store import DAY, GMAIL_MESSAGE_DOMAIN, MAILBOX_DOMAIN, SCOPE_DOMAIN, _PHASE_RESET, digest
 from .gmail_trust import PaymentSender
 from .rate_limit import parse_retry_after
@@ -23,6 +25,7 @@ MAX_SYNC_MESSAGES_PER_RUN = 100
 MANUAL_COOLDOWN = 60
 _ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z", re.ASCII)
 _HISTORY_ID = re.compile(r"[0-9]{1,64}\Z", re.ASCII)
+log = logging.getLogger("hestia.budget.gmail_sync")
 # Bare terms search subject and body. Gmail braces combine them with sender rules as alternatives.
 _DOCUMENT_TERMS = (
     "filename:pdf", "faktura", "fakturę", "faktury", "paragon", "e-paragon", "invoice", "receipt",
@@ -145,6 +148,7 @@ class _Progress:
     terms: tuple = field(default_factory=tuple)
     label_id: str | None = None
     retry_skipped_before: float | None = None
+    previous_parser_abort: str | None = None
 
 
 class GmailSync:
@@ -196,13 +200,15 @@ class GmailSync:
             self.store.transition(owner, expected_version, status, mailbox_hmac, queue_sync=defer_profile)
             return self.store.status(owner)
 
-    def _commit(self, owner, progress, changes, pending=(), *, starting_recovery=False, starting_incremental=False):
+    def _commit(self, owner, progress, changes, pending=(), *, starting_recovery=False, starting_incremental=False,
+                parser_abort=None):
         imported, skipped, drained = self.store.commit(
             owner, progress.generation, changes, pending,
             starting_recovery=starting_recovery, starting_incremental=starting_incremental,
             settle_cards=not self.settings.require_sender_authentication and changes.get("sync_phase") == "idle",
             enforce_pending_cap=self.settings.require_sender_authentication,
             retry_skipped_before=progress.retry_skipped_before,
+            parser_abort=parser_abort,
         )
         progress.imported += imported
         progress.skipped += skipped
@@ -274,6 +280,12 @@ class GmailSync:
                     self._commit(owner, progress, {}, chunk)
             if seen is not None and seen >= self.settings.backfill_max_messages:
                 raise RunLimit()
+        except MessageParserUnavailable:
+            if pending:
+                # A full import queue must not mask an outage detected during parsing.
+                with suppress(RunLimit):
+                    self._commit(owner, progress, {}, pending)
+            raise
         except (GmailError, RunLimit):
             if pending:
                 self._commit(owner, progress, {}, pending)
@@ -377,10 +389,21 @@ class GmailSync:
         attention = error.attention
         if error.code == "daily_quota" or hint.suspended:
             attention = "quota"
+        pending = ()
+        parser_abort = None
+        if isinstance(error, MessageParserUnavailable):
+            item = error.failed_message
+            if item.gmail_id_hmac == progress.previous_parser_abort:
+                # Quarantine this message while still reporting the current outage.
+                pending = (item,)
+            else:
+                parser_abort = item.gmail_id_hmac
         self._commit(owner, progress, {"failures": failures, "backoff_until": deadline, "run_requested": 0,
                                       "next_sync_at": max(deadline, now + self.settings.sync_interval_seconds),
                                       "attention": attention, "last_http_status": error.http_status,
-                                      "last_error": error.code})
+                                      "last_error": error.code}, pending, parser_abort=parser_abort)
+        if pending:
+            log.warning("gmail parse_failed reason=%s after consecutive parser aborts", pending[0].parse_failed_reason)
 
     def sync(self, owner, *, force_full_resync=False, poll=False):
         self._require_owner(owner)
@@ -403,7 +426,7 @@ class GmailSync:
                 raise GmailError("budget_receipt_gmail_cooldown", 429)
             run = self.client.run(owner, generation, self.settings.credentials, lambda: self.store.fence(owner, generation))
             progress = _Progress(generation, run, terms=_terms(self.settings))
-            self._commit(owner, progress, {"last_attempt_at": now, "run_requested": 1})
+            progress.previous_parser_abort = self.store.begin_sync_attempt(owner, generation, now)
             try:
                 if not self.processor.ready():
                     raise GmailError("parser_unavailable")

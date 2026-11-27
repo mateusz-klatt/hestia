@@ -3,10 +3,11 @@ from dataclasses import replace
 from unittest import TestCase
 from unittest.mock import Mock
 
+from hestia.budget.gmail_discovery import _MAX_DISCOVERY_PDF_BYTES
 from hestia.budget.gmail_message import GmailMessageProcessor
 from hestia.budget.gmail_store import DOCUMENT_NUMBER_DOMAIN, RFC_MESSAGE_DOMAIN, digest
 from hestia.budget.gmail_trust import PaymentSender
-from hestia.budget.gmail_worker import WorkerUnavailable, _render, _validate_output
+from hestia.budget.gmail_worker import MAX_PDF_BYTES, WorkerUnavailable, _render, _validate_output
 from tests.test_budget_gmail_message import (
     GMAIL_HASH,
     INVOICE,
@@ -230,8 +231,55 @@ class GmailDocumentDiscoveryTests(TestCase):
         message.add_attachment(DOCUMENT_PDF, maintype="application", subtype="pdf")
         self.assertTrue(self.process(message).card_required)
         self.worker.parse.side_effect = WorkerUnavailable()
+        self.worker.ready.return_value = False
         with self.assertRaisesRegex(GmailError, "parser_unavailable"):
             self.process(message)
+
+    def test_oversized_discovery_pdf_is_rejected_before_parsing_any_part(self):
+        pdf = b"%PDF-1.4".ljust(_MAX_DISCOVERY_PDF_BYTES + 1, b" ")
+        for sender, subtype in ((UNLISTED, "pdf"), (SPOUSE, "octet-stream")):
+            with self.subTest(sender=sender):
+                message = _email(sender, DOCUMENT)
+                message.add_attachment(pdf, maintype="application", subtype=subtype, filename="invoice.pdf")
+                result = self.process(message)
+                self.assertEqual((result.outcome, result.parse_failed_reason), ("parse_failed", "other"))
+                self.worker.parse.assert_not_called()
+
+        at_limit = _email(UNLISTED)
+        at_limit.set_content(b"", maintype="text", subtype="plain")
+        at_limit.add_attachment(pdf[:-1], maintype="application", subtype="pdf")
+        self.worker.parse.side_effect = None
+        self.worker.parse.return_value = DOCUMENT
+        self.assertTrue(self.process(at_limit).card_required)
+        self.worker.parse.assert_called_once_with("pdf", pdf[:-1])
+
+    def test_discovery_size_limit_preserves_trusted_document_and_issuer_limits(self):
+        settings = replace(self.settings, sender_allowlist=("bills@respectenergy.pl",),
+                           document_senders=(PaymentSender(UNLISTED, "Cedar Tools"),))
+        self.processor = GmailMessageProcessor(settings, self.worker, discover_documents=True)
+        pdf = b"%PDF-1.4".ljust(_MAX_DISCOVERY_PDF_BYTES + 1, b" ")
+        for sender, text in ((UNLISTED, DOCUMENT), ("bills@respectenergy.pl", INVOICE)):
+            with self.subTest(sender=sender):
+                message = _email(sender)
+                message.set_content(b"", maintype="text", subtype="plain")
+                message.add_attachment(pdf, maintype="application", subtype="pdf")
+                self.worker.parse.reset_mock(side_effect=True)
+                self.worker.parse.return_value = text
+                self.assertEqual(self.process(message).outcome, "imported")
+                self.worker.parse.assert_called_once_with("pdf", pdf)
+
+        # An allowlisted issuer can still reach discovery when its template does not match.
+        self.worker.parse.reset_mock()
+        self.worker.parse.return_value = DOCUMENT
+        self.assertTrue(self.process(message).card_required)
+        self.assertEqual(self.worker.parse.call_count, 2)
+
+        message.clear_content()
+        message.set_content(b"", maintype="text", subtype="plain")
+        message.add_attachment(pdf.ljust(MAX_PDF_BYTES + 1, b" "), maintype="application", subtype="pdf")
+        self.worker.parse.reset_mock()
+        self.assertEqual(self.process(message).outcome, "skipped_oversized")
+        self.worker.parse.assert_not_called()
 
     def test_two_pdfs_of_same_document_keep_matching_and_drop_differing_positions(self):
         base_text = _settlement_text()

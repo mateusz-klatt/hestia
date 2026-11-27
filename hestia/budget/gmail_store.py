@@ -54,6 +54,7 @@ STATUS_FIELDS = ("grant_status", "grant_generation", "version", "sync_phase", "a
                  "next_sync_at", "backoff_until", "failures", "last_http_status", "last_error",
                  "batch_processed_count")
 _PARSE_FAILED_REASONS_PREFIX = "budget_gmail_parse_failed_reasons:"
+_PARSER_ABORT_PREFIX = "budget_gmail_parser_abort:"
 _RETRY_WINDOW_PREFIX = "budget_gmail_retry_full_window:"
 _INC_RESET_PREFIX = "budget_gmail_inc_reset:"
 _RELAXED_SINCE_PREFIX = "budget_gmail_relaxed_since:"
@@ -329,6 +330,19 @@ class GmailStore(BudgetStore):
     def fence(self, owner, generation):
         self._active(self.state(owner), generation)
 
+    def begin_sync_attempt(self, owner, generation, now):
+        """Consume the previous run's abort marker as this run begins."""
+        with self.transaction() as session:
+            BudgetHTTPStore._owner(session, owner)
+            row = self._state(session, owner)
+            self._active(row, generation)
+            row.last_attempt_at, row.run_requested = now, 1
+            marker = session.get(AppMeta, _PARSER_ABORT_PREFIX + owner)
+            if marker is not None:
+                session.delete(marker)
+                return marker.value
+            return None
+
     def schedule_sync(self, owner, *, now, force_full_resync, cooldown, retry_parse_failed=False, backfill_days=365):
         """Queue a poller run. The request does not fetch or parse mail."""
         with self.transaction() as session:
@@ -480,7 +494,7 @@ class GmailStore(BudgetStore):
                 setattr(row, key, value)
             session.execute(delete(AppMeta).where(
                 AppMeta.key.in_((_reasons_key(owner), _retry_window_key(owner), _inc_reset_key(owner),
-                                 _RELAXED_SINCE_PREFIX + owner)),
+                                 _RELAXED_SINCE_PREFIX + owner, _PARSER_ABORT_PREFIX + owner)),
             ))
             gmail_card_import.forget_waiting(session, owner)
             row.grant_status = status
@@ -886,7 +900,7 @@ class GmailStore(BudgetStore):
         return receipt.id
 
     def commit(self, owner, generation, changes, pending=(), *, starting_recovery=False, starting_incremental=False,
-               retry_skipped_before=None, settle_cards=False, enforce_pending_cap=True):
+               retry_skipped_before=None, settle_cards=False, enforce_pending_cap=True, parser_abort=None):
         """Commit up to one chunk; never advance a page past an uncommitted message."""
         imported = skipped = 0
         drained = True
@@ -1005,6 +1019,8 @@ class GmailStore(BudgetStore):
                 was_recovery = row.sync_phase != "incremental"
                 for key, value in changes.items():
                     setattr(row, key, value)
+                if parser_abort is not None:
+                    session.merge(AppMeta(key=_PARSER_ABORT_PREFIX + owner, value=parser_abort))
                 if changes.get("sync_phase") == "idle":
                     # A force request may arrive after the worker chose what to scan.
                     row.run_requested = int(bool(row.force_full_resync))

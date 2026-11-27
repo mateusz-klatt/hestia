@@ -18,9 +18,11 @@ from hestia.budget.gmail_store import (
     _reasons_key, digest,
 )
 from hestia.budget.gmail_sync import GmailSettings, GmailSync, PaymentSender
+from hestia.budget.gmail_worker import WorkerUnavailable
 from hestia.budget.receipt_reconcile import reconcile_receipt_links
 from hestia.budget.receipt_store import BudgetReceiptStore
 from hestia.calendar_sync.providers import HTTPResponse, ProviderError
+from tests.test_budget_gmail_message import MERCHANT, _email, _metadata, _raw
 
 OWNER = "owner"
 MAILBOX = "invoices@example.test"
@@ -632,6 +634,114 @@ class GmailSyncTests(TestCase):
         self.transport.routes.pop(("/messages/two", None))
         self.assertEqual(self.sync()["imported_count"], 2)
         self.assertEqual(self.processor.processed, ["one", "two", "two", "three"])
+
+    def _use_poison_pdf(self, *, strict=False):
+        settings = replace(SETTINGS, require_sender_authentication=strict, sender_allowlist=(MERCHANT,))
+        payload = b"%PDF-1.4 synthetic PDF"
+        poison = _email(MERCHANT if strict else "invoices@unlisted.example", text="")
+        poison.set_content(b"", maintype="text", subtype="plain")
+        poison.add_attachment(payload, maintype="application", subtype="pdf")
+        worker = mock.Mock()
+        worker.ready.return_value = True
+
+        def parse(kind, part):
+            if kind == "pdf" and part == payload:
+                raise WorkerUnavailable("synthetic parse exchange failed")
+            return part.decode("utf-8")
+
+        worker.parse.side_effect = parse
+        self.service.settings = settings
+        self.service.processor = gmail_message.GmailMessageProcessor(settings, worker, discover_documents=True)
+        self._route_mime("poison", poison)
+        self._route_mime("good", _email())
+        self.transport.routes[("/messages", None)] = response(page("poison", "good"))
+        self.enable()
+        return worker
+
+    def _route_mime(self, message_id, message):
+        responses = {"raw": _raw(message), "metadata": _metadata(message)}
+        self.transport.routes[("/messages/" + message_id, None)] = lambda params: response(
+            {**responses[params["format"][0]], "id": message_id}
+        )
+
+    def test_failed_pdf_with_healthy_probe_is_skipped_and_can_be_retried(self):
+        worker = self._use_poison_pdf()
+        with self.assertLogs("hestia.budget.gmail_message", level="WARNING") as logs:
+            result = self.sync()
+        self.assertIn("reason=worker_rejected", logs.output[0])
+        self.assertEqual((result["imported_count"], result["skipped_count"], result["has_more"]), (1, 1, False))
+        self.assertEqual(worker.ready.call_count, 2)
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"worker_rejected": 1})
+        failed_hash = digest(SETTINGS.hmac_secret, GMAIL_MESSAGE_DOMAIN, "poison")
+        outcomes = {row.gmail_id_hmac: row.outcome for row in self.rows(db.BudgetGmailMessage)}
+        self.assertEqual(outcomes[failed_hash], "parse_failed")
+        self.assertIsNone(self.store.state(OWNER).last_error)
+
+        self.tick()
+        self.service.schedule(OWNER, retry_parse_failed=True)
+        self.assertFalse(self.store.known(OWNER, failed_hash))
+        worker.parse.reset_mock(side_effect=True)
+        worker.parse.return_value = ""
+        self.sync(poll=True)
+        worker.parse.assert_called_once_with("pdf", b"%PDF-1.4 synthetic PDF")
+        outcomes = {row.gmail_id_hmac: row.outcome for row in self.rows(db.BudgetGmailMessage)}
+        self.assertEqual(outcomes[failed_hash], "skipped_non_receipt")
+
+    def test_failed_probe_aborts_and_startup_outage_breaks_the_message_streak(self):
+        worker = self._use_poison_pdf()
+        # The second attempt never reaches the message because the worker is still down.
+        worker.ready.side_effect = [True, False, False, True, False]
+        for delay in (60, 120, 240):
+            with self.assertRaisesRegex(GmailError, "^parser_unavailable$"):
+                self.sync()
+            status = self.store.status(OWNER)
+            self.assertEqual(status["last_error"], "parser_unavailable")
+            self.assertEqual(status["batch_processed_count"], 0)
+            self.assertEqual(status["parse_failed_reasons"], {})
+            self.assertEqual(self.rows(db.BudgetGmailMessage), [])
+            self.assertEqual(self.transport.requests("/messages/good"), [])
+            self.tick(delay)
+        self.assertEqual(worker.parse.call_count, 2)
+
+    def test_two_consecutive_probe_failures_quarantine_the_same_message(self):
+        worker = self._use_poison_pdf()
+        worker.ready.side_effect = [True, False, True, False, True]
+        with self.assertRaisesRegex(GmailError, "^parser_unavailable$"):
+            self.sync()
+        self.assertEqual(self.rows(db.BudgetGmailMessage), [])
+
+        self.tick()
+        # The next service instance reads the abort marker from the database.
+        self.service = GmailSync(
+            self.service.settings, GmailStore(self.sessions, clock=self.clock.wall), self.client,
+            self.service.processor, self.path, jitter=lambda *_: 0,
+        )
+        with self.assertLogs("hestia.budget.gmail_sync", level="WARNING") as logs:
+            with self.assertRaisesRegex(GmailError, "^parser_unavailable$"):
+                self.sync()
+        self.assertIn("reason=worker_rejected", logs.output[0])
+        failed, = self.rows(db.BudgetGmailMessage)
+        self.assertEqual((failed.outcome, failed.receipt_id), ("parse_failed", None))
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {"worker_rejected": 1})
+        self.assertEqual(self.store.state(OWNER).batch_processed_count, 1)
+
+        self.tick(120)
+        result = self.sync()
+        self.assertEqual((result["imported_count"], result["skipped_count"], result["has_more"]), (1, 0, False))
+        self.assertEqual(len(self.transport.requests("/messages/poison")), 4)
+        self.assertEqual([call.args[0] for call in worker.parse.call_args_list], ["pdf", "pdf", "text"])
+
+    def test_buffered_imports_at_pending_cap_do_not_mask_a_parser_outage(self):
+        worker = self._use_poison_pdf(strict=True)
+        worker.ready.side_effect = [True, False]
+        self._route_mime("second", _email(rfc_id="<second@synthetic.example>"))
+        self.transport.routes[("/messages", None)] = response(page("good", "second", "poison"))
+        with mock.patch("hestia.budget.gmail_store.MAX_PENDING_IMPORTS", 1):
+            with self.assertRaisesRegex(GmailError, "^parser_unavailable$"):
+                self.sync()
+        imported, = self.rows(db.BudgetGmailMessage)
+        self.assertEqual(imported.outcome, "imported")
+        self.assertEqual(self.store.status(OWNER)["parse_failed_reasons"], {})
 
     def test_incremental_intersects_history_with_scoped_search_and_resumes(self):
         self.service.settings = replace(SETTINGS, label_name="Bills private")
