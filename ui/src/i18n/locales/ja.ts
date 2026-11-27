@@ -523,6 +523,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "選択した銀行取引はすでに別の書類と紐付けられています。",
   "budget.receipts.staleSource": "候補リンクのトークンが無効になりました（元帳更新または店舗名・NIPの変更）。詳細を再読み込みしましたので紐付けを確認して再確定してください。",
   "budget.receipts.totalMismatch": "明細の合計は書類の合計金額と一致する必要があります。",
+  "budget.receipts.partialLinesRemainder": "明細の一部のみ読み取れました。差額の{amount}はその他の明細として記録されます。",
+  "budget.receipts.partialLinesSummary": "明細の一部のみ読み取れました。合計金額のみ保存されます。",
   "budget.receipts.invalidForm": "店舗名、有効な日付、正の合計金額、通貨、NIPを確認してください。",
   "budget.receipts.confirmError": "確定に失敗しました。内容を確認してもう一度お試しください。",
   "budget.receipts.deleteAction": "書類を削除",

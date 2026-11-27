@@ -1114,6 +1114,47 @@ describe("ReceiptsView", () => {
     expect("raw_nip" in (sent ?? {})).toBe(false);
   });
 
+  it("shows and submits only the total when a redacted receipt would need a remainder", async () => {
+    const detail = receiptDetail({ status: "draft", total_amount: "50.00", math_delta: "-7.50" });
+    const candidate = receiptCandidate({ amount: "50.00", match_strength: "nip" });
+    const clients = fakeClients([detail], detail, [candidate]);
+
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailButton(0, "Szczegóły"));
+    const drawer = dialog();
+
+    expect(drawer.textContent).toContain("Pozycje odczytane częściowo — zostanie zapisana tylko suma.");
+    expect(drawer.textContent).not.toContain("Przy zatwierdzaniu zachowane zostaną zapisane pozycje.");
+    expect(drawer.textContent).not.toContain("różnica 7,50 zł jako pozostałe");
+    expect(inputByName("line_name", drawer).disabled).toBe(true);
+    expect(linkRadio("candidate:0", drawer).checked).toBe(true);
+    const confirm = button("Zatwierdź dokument", drawer);
+    expect(confirm.disabled).toBe(false);
+    await click(confirm);
+
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+    const request = vi.mocked(clients.rApi.confirmReceipt).mock.calls[0]?.[0];
+    expect(request).toMatchObject({
+      total_amount: "50",
+      link: {
+        account_id: candidate.account_id,
+        entry_reference: candidate.entry_reference,
+        candidate_token: candidate.candidate_token,
+      },
+    });
+    expect(request?.lines).toEqual([{
+      line_kind: "other",
+      raw_name: "Tylko suma",
+      ptu_code: null,
+      quantity: "1",
+      raw_unit: null,
+      unit_price_raw: null,
+      gross_line_total: "50",
+      discount_amount: "0",
+      net_line_total: "50",
+    }]);
+  });
+
   it("omits redacted merchant name in bulk confirm instead of echoing [usunięto]", async () => {
     const redactedImportRow = receiptSummary({
       receipt_id: "imp-redacted-shop",
@@ -1706,6 +1747,54 @@ describe("ReceiptsView", () => {
     expect(linkRadio("unlink", dCash).checked).toBe(true);
     expect(button("Confirm receipt", dCash).disabled).toBe(false);
     await click(button("Close", dCash));
+  });
+
+  it("preselects the bank candidate and confirms a partially read receipt on one click", async () => {
+    const detail = receiptDetail({
+      status: "draft",
+      total_amount: "67.01",
+      math_delta: "-7.01",
+      lines: ["10.00", "20.00", "30.00"].map<ReceiptDetail["lines"][number]>((amount, index) => ({
+        line_no: index + 1,
+        line_kind: "item",
+        raw_name: `Synthetic item ${String(index + 1)}`,
+        raw_name_key: `synthetic item ${String(index + 1)}`,
+        ptu_code: null,
+        quantity: "1",
+        raw_unit: null,
+        unit_price_raw: null,
+        gross_line_total: amount,
+        discount_amount: "0",
+        net_line_total: amount,
+      })),
+    });
+    const candidate = receiptCandidate({ amount: "67.01", match_strength: "nip" });
+    const clients = fakeClients([detail], detail, [candidate]);
+
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailButton(0, "Szczegóły"));
+    const drawer = dialog();
+
+    expect(clients.rApi.receiptDetail).toHaveBeenCalledWith(detail.receipt_id);
+    expect(drawer.textContent).toContain("Sugerowane dopasowanie");
+    expect(linkRadio("candidate:0", drawer).checked).toBe(true);
+    expect(drawer.textContent).toContain("Pozycje odczytane częściowo — różnica 7,01 zł jako pozostałe.");
+    expect(drawer.textContent).not.toContain("Suma pozycji musi być równa kwocie całkowitej.");
+    const confirm = button("Zatwierdź dokument", drawer);
+    expect(confirm.disabled).toBe(false);
+    await click(confirm);
+
+    expect(clients.rApi.confirmReceipt).toHaveBeenCalledTimes(1);
+    const request = vi.mocked(clients.rApi.confirmReceipt).mock.calls[0]?.[0];
+    expect(request).toMatchObject({
+      total_amount: "67.01",
+      link: {
+        account_id: candidate.account_id,
+        entry_reference: candidate.entry_reference,
+        candidate_token: candidate.candidate_token,
+      },
+    });
+    expect(request?.lines?.map((line) => line.net_line_total)).toEqual(["10", "20", "30", "7.01"]);
   });
 
   it("never confirms or links on implicit Enter or form submit with a preselected candidate", async () => {

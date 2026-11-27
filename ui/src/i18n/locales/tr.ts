@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Seçilen banka işlemi zaten başka bir belgeye bağlı.",
   "budget.receipts.staleSource": "Aday bağlantı belirteci artık geçerli değil (defter veya satıcı/NIP değişti). Ayrıntılar yeniden yüklendi — bağlantıyı inceleyip tekrar onaylayın.",
   "budget.receipts.totalMismatch": "Satırların toplamı belge toplamına eşit olmalıdır.",
+  "budget.receipts.partialLinesRemainder": "Kalemler yalnızca kısmen okundu — {amount} tutarındaki fark diğer kalemler olarak kaydedilecek.",
+  "budget.receipts.partialLinesSummary": "Kalemler yalnızca kısmen okundu — sadece toplam tutar kaydedilecek.",
   "budget.receipts.invalidForm": "Satıcıyı, geçerli tarihi, pozitif tutarı, para birimini ve NIP numarasını kontrol edin.",
   "budget.receipts.confirmError": "Onaylama başarısız oldu. Değişikliklerinizi kontrol edip tekrar deneyin.",
   "budget.receipts.deleteAction": "Belgeyi sil",

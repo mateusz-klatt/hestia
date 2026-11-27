@@ -523,6 +523,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "선택한 은행 거래는 이미 다른 문서에 연결되어 있습니다.",
   "budget.receipts.staleSource": "후보 연결 토큰이 더 이상 유효하지 않습니다(원장 변경 또는 가맹점/NIP 수정). 상세 정보를 다시 불러왔으니 연결을 확인한 뒤 다시 확정하세요.",
   "budget.receipts.totalMismatch": "항목 합계가 문서 총액과 같아야 합니다.",
+  "budget.receipts.partialLinesRemainder": "일부 항목만 인식되었습니다. 차액 {amount}은 기타 항목으로 기록됩니다.",
+  "budget.receipts.partialLinesSummary": "일부 항목만 인식되었습니다. 총액만 저장됩니다.",
   "budget.receipts.invalidForm": "가맹점명, 유효한 날짜, 양수 총액, 통화 및 NIP를 확인하세요.",
   "budget.receipts.confirmError": "확정에 실패했습니다. 변경 내용을 확인하고 다시 시도하세요.",
   "budget.receipts.deleteAction": "문서 삭제",

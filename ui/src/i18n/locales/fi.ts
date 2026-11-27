@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Valittu pankkitapahtuma on jo linkitetty toiseen tositteeseen.",
   "budget.receipts.staleSource": "Ehdokaslinkin tunnus ei ole enää voimassa (kirjanpito tai kauppias/NIP muuttui). Tiedot ladattu uudelleen — tarkista linkitys ja vahvista.",
   "budget.receipts.totalMismatch": "Rivien summan on oltava yhtä suuri kuin kokonaissumma.",
+  "budget.receipts.partialLinesRemainder": "Rivit tunnistettiin vain osittain — {amount} kirjataan muihin riveihin.",
+  "budget.receipts.partialLinesSummary": "Rivit tunnistettiin vain osittain — vain kokonaissumma tallennetaan.",
   "budget.receipts.invalidForm": "Tarkista kauppias, kelvollinen päivämäärä, positiivinen summa, valuutta ja NIP.",
   "budget.receipts.confirmError": "Vahvistus epäonnistui. Tarkista muutokset ja yritä uudelleen.",
   "budget.receipts.deleteAction": "Poista tosite",

@@ -522,6 +522,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "所選銀行交易已連結至其他憑證。",
   "budget.receipts.staleSource": "關聯候選權杖已失效（帳本已更新或已變更商家/NIP）。明細已重新載入——請檢查關聯選項並再次確認。",
   "budget.receipts.totalMismatch": "明細加總必須等於憑證總額。",
+  "budget.receipts.partialLinesRemainder": "僅辨識了部分明細，差額 {amount} 將記為其他項目。",
+  "budget.receipts.partialLinesSummary": "僅辨識了部分明細，將只儲存總金額。",
   "budget.receipts.invalidForm": "請檢查商家、有效日期、正數總額、幣別及NIP。",
   "budget.receipts.confirmError": "確認失敗，請檢查變更內容後重試。",
   "budget.receipts.deleteAction": "刪除憑證",

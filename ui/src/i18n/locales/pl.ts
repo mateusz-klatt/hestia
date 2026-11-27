@@ -526,6 +526,8 @@ const pl: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Wybrana transakcja bankowa jest już powiązana z innym dokumentem.",
   "budget.receipts.staleSource": "Token powiązania jest nieaktualny (zmiana w księdze lub zmiana sprzedawcy/NIP). Odświeżono szczegóły — wybierz powiązanie ponownie.",
   "budget.receipts.totalMismatch": "Suma pozycji musi być równa kwocie całkowitej.",
+  "budget.receipts.partialLinesRemainder": "Pozycje odczytane częściowo — różnica {amount} jako pozostałe.",
+  "budget.receipts.partialLinesSummary": "Pozycje odczytane częściowo — zostanie zapisana tylko suma.",
   "budget.receipts.invalidForm": "Sprawdź nazwę sprzedawcy, datę, dodatnią kwotę, walutę i NIP.",
   "budget.receipts.confirmError": "Nie udało się zatwierdzić dokumentu. Sprawdź dane i spróbuj ponownie.",
   "budget.receipts.deleteAction": "Usuń dokument",

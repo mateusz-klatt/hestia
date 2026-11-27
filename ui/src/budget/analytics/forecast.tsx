@@ -170,18 +170,20 @@ function ForecastChart({ months, currency, locale }: {
       </svg>
       <details className="budget-recurring-evidence">
         <summary>{t("budget.forecast.totalsTable")}</summary>
-        <table className="budget-limits-table" style={{ tableLayout: "fixed" }}>
-          <caption>{monthlyTotalsTitle} · {currency}</caption>
-          <thead><tr><th scope="col">{t("budget.forecast.month")}</th><th scope="col">{t("budget.forecast.total")}</th></tr></thead>
-          <tbody>
-            {rows.map(({ month, amount }) => (
-              <tr key={month}>
-                <th scope="row">{monthLabel(month, locale)}</th>
-                <td>{formatAmount(amount, currency, locale)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="budget-table-wrap budget-chart-data-wrap" role="region" aria-label={`${monthlyTotalsTitle} · ${currency}`} tabIndex={0}>
+          <table className="budget-limits-table" style={{ tableLayout: "fixed" }}>
+            <caption>{monthlyTotalsTitle} · {currency}</caption>
+            <thead><tr><th scope="col">{t("budget.forecast.month")}</th><th scope="col">{t("budget.forecast.total")}</th></tr></thead>
+            <tbody>
+              {rows.map(({ month, amount }) => (
+                <tr key={month}>
+                  <th scope="row">{monthLabel(month, locale)}</th>
+                  <td>{formatAmount(amount, currency, locale)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </details>
     </div>
   );

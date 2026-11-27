@@ -523,6 +523,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Tá an t-idirbheart bainc roghnaithe nasctha cheana féin le doiciméad eile.",
   "budget.receipts.staleSource": "Níl comhartha an iarrthóra bailí a thuilleadh (athraíodh an mórleabhar nó an ceannaí/NIP). Sonraí athlódáilte — athbhreithnigh an nasc agus deimhnigh arís.",
   "budget.receipts.totalMismatch": "Caithfidh suim na línte a bheith cothrom leis an iomlán.",
+  "budget.receipts.partialLinesRemainder": "Níor aithníodh ach cuid de na míreanna — taifeadfar an difríocht de {amount} mar mhíreanna eile.",
+  "budget.receipts.partialLinesSummary": "Níor aithníodh ach cuid de na míreanna — ní shábhálfar ach an t-iomlán.",
   "budget.receipts.invalidForm": "Seiceáil ainm an cheannaí, dáta bailí, suim dheimhneach, airgeadra agus NIP.",
   "budget.receipts.confirmError": "Theip ar an deimhniú. Seiceáil d’athruithe agus bain triail eile as.",
   "budget.receipts.deleteAction": "Scrios doiciméad",

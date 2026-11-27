@@ -523,6 +523,8 @@ const messages: Partial<Messages> = {
   "budget.receipts.txAlreadyLinked": "Transaksi bank yang dipilih sudah dipautkan ke dokumen lain.",
   "budget.receipts.staleSource": "Token calon pautan tidak lagi sah (lejar berubah atau peniaga/NIP disunting). Butiran dimuat semula — semak pautan dan sahkan semula.",
   "budget.receipts.totalMismatch": "Jumlah semua baris mesti sama dengan jumlah dokumen.",
+  "budget.receipts.partialLinesRemainder": "Hanya sebahagian item dikenal pasti — perbezaan {amount} akan direkodkan sebagai item lain.",
+  "budget.receipts.partialLinesSummary": "Hanya sebahagian item dikenal pasti — hanya jumlah keseluruhan akan disimpan.",
   "budget.receipts.invalidForm": "Semak nama peniaga, tarikh sah, jumlah positif, mata wang dan NIP.",
   "budget.receipts.confirmError": "Pengesahan gagal. Semak perubahan anda dan cuba lagi.",
   "budget.receipts.deleteAction": "Padam dokumen",
