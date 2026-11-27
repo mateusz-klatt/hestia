@@ -59,7 +59,23 @@ class OpenApiArtifactTests(unittest.TestCase):
         """Remove each additive surface before verifying earlier contract snapshots."""
         document = api_contract.build_openapi()
         schemas = document["components"]["schemas"]
-        self.assertEqual(document["info"]["version"], "0.67.0")
+        self.assertEqual(document["info"]["version"], "0.69.0")
+        # Unwind the evidence attachment surface to the previous contract.
+        attach = document["paths"].pop("/api/budget/receipts/attach-evidence")["post"]
+        self.assertEqual(attach["x-required-permission"], "legacy_receipts")
+        header, = attach["parameters"]
+        self.assertEqual((header["name"], header["in"], header["required"]),
+                         ("X-Hestia-Contract-Version", "header", True))
+        detail = schemas["BudgetReceiptDetailResult"]
+        self.assertNotIn("evidence_target", detail["required"])
+        self.assertNotIn("default", detail["properties"].pop("evidence_target"))
+        schemas.pop("BudgetReceiptAttachEvidenceRequest")
+        schemas.pop("BudgetReceiptEvidenceTarget")
+        document["info"]["version"] = "0.67.0"
+        canonical_0_67 = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(hashlib.sha256(canonical_0_67).hexdigest(),
+                         "4b7bdd193668cfcb8b83beb6c79cf32dcb2374cc194b182e83383fd9c69fac93")
+
         # 0.67.0 additive manual receipt transaction picker.
         picker = document["paths"].pop("/api/budget/receipts/transaction-search")["post"]
         self.assertEqual(picker["x-required-permission"], "budget.receipts.match")
@@ -1055,7 +1071,7 @@ class TolerantResponseContractTests(unittest.TestCase):
         "BudgetReceiptLineInput", "BudgetReceiptLinkRequest", "BudgetReceiptListRequest",
         "BudgetReceiptSearchRequest", "BudgetReceiptDeleteRequest",
         "BudgetReceiptManualLinkRequest", "BudgetReceiptTransactionSearchRequest",
-        "BudgetReceiptGroupCandidatesRequest", "BudgetReceiptGroupMemberInput",
+        "BudgetReceiptGroupCandidatesRequest", "BudgetReceiptGroupMemberInput", "BudgetReceiptAttachEvidenceRequest",
         "BudgetReceiptGroupLinkRequest", "BudgetReceiptGroupUnlinkRequest",
         "BudgetReceiptDeviceBrowserRequest", "BudgetReceiptDeviceRedeemRequest",
         "BudgetReceiptDeviceRevokeRequest", "BudgetReceiptDeviceCancelRequest", "BudgetReceiptDeviceLoginRequest",

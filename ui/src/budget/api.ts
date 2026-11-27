@@ -15,6 +15,7 @@ import type { AnalyticsCategory, AnalyticsForecast, AnalyticsInbox, AnalyticsInb
   SpendingLimitSaveRequest, SpendingLimitSaved, TransactionFilter, TransferDecisionRequest, TransferDecisionResult,
   TransferList, TransferQueue } from "./analytics/model";
 import type {
+  ReceiptAttachEvidenceRequest,
   ReceiptConfirmRequest,
   ReceiptConfirmResult,
   ReceiptDeleteRequest,
@@ -42,6 +43,7 @@ const QUARANTINE_CONTRACT_HEADERS = { "X-Hestia-Contract-Version": "0.63.0" } as
 const MORTGAGE_REFERENCES_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.64.0" } as const;
 const RECEIPT_TRANSACTION_SEARCH_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.67.0" } as const;
 const RECEIPT_MULTI_STATUS_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.65.0" } as const;
+const RECEIPT_EVIDENCE_CONTRACT_HEADERS = { [RECEIPT_CONTRACT_HEADER]: "0.69.0" } as const;
 
 export interface ReceiptDevice {
   token_id: string;
@@ -198,17 +200,23 @@ export function createBudgetApi(expectedActor: string | null = null) {
     return runGated<T>(target, init, mutation, request);
   }
 
-  function readReceipts<T>(target: URL, body?: object): Promise<BudgetResult<T>> {
+  function readReceipts<T>(
+    target: URL,
+    body?: object,
+    version: Record<string, string> = RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS,
+  ): Promise<BudgetResult<T>> {
     const init: RequestInit = body === undefined
-      ? { headers: RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS }
+      ? { headers: version }
       : {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS },
+        headers: { "Content-Type": "application/json", ...version },
         body: JSON.stringify(body),
       };
     return runGated<T>(target, init, false, async (finalTarget, finalInit) => {
       let result = await request<T>(finalTarget, finalInit);
       for (const fallback of [
+        ...(version === RECEIPT_EVIDENCE_CONTRACT_HEADERS
+          ? [RECEIPT_DISPLAY_NAME_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER]] : []),
         LINK_INDICATORS_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER],
         RECEIPT_GROUP_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER],
         RECEIPT_CONTRACT_HEADERS[RECEIPT_CONTRACT_HEADER],
@@ -398,7 +406,10 @@ export function createBudgetApi(expectedActor: string | null = null) {
     readReceipts<ReceiptListResult>(url("receipts/search"), body),
   /** Reads one owned receipt, its line items, and needs_review link candidates when available. */
   receiptDetail: (receiptId: string) =>
-    readReceipts<ReceiptDetailResult>(url("receipts/detail", { receipt_id: receiptId })),
+    readReceipts<ReceiptDetailResult>(url("receipts/detail", { receipt_id: receiptId }),
+      undefined, RECEIPT_EVIDENCE_CONTRACT_HEADERS),
+  attachReceiptEvidence: (body: ReceiptAttachEvidenceRequest) =>
+    post<ReceiptConfirmResult>("receipts/attach-evidence", body, RECEIPT_EVIDENCE_CONTRACT_HEADERS, true),
   searchReceiptTransactions: (body: ReceiptTransactionSearchRequest) =>
     post<ReceiptTransactionSearchResult>("receipts/transaction-search", body,
       RECEIPT_TRANSACTION_SEARCH_CONTRACT_HEADERS, false),
@@ -469,5 +480,6 @@ export interface ReceiptGroupWriteApi {
 
 export const budgetApi = createBudgetApi();
 export type BudgetGroupCapableApi = ReturnType<typeof createBudgetApi>;
-type OptionalReceiptsApi = ReceiptGroupWriteApi & Pick<BudgetGroupCapableApi, "searchReceiptTransactions">;
+type OptionalReceiptsApi = ReceiptGroupWriteApi
+  & Pick<BudgetGroupCapableApi, "searchReceiptTransactions" | "attachReceiptEvidence">;
 export type BudgetApi = Omit<BudgetGroupCapableApi, keyof OptionalReceiptsApi> & Partial<OptionalReceiptsApi>;

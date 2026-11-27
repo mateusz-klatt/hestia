@@ -1464,6 +1464,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/budget/receipts/attach-evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attach an imported receipt as evidence for a confirmed bank-linked receipt.
+         * @description Default-off with HESTIA_BUDGET_RECEIPTS_ENABLED. Requires a SQLite users backend and a browser cookie with exact Origin or a receipts-capable device token. Permissions apply to the target ledger and may be delegated. Ledger owner in a browser session with budget.receipts.edit and budget.receipts.match. Requires contract version 0.69.0 or later. Cookie plus Authorization returns 400 budget_auth_ambiguous. 411 means Content-Length is required and 415 means Content-Type must be application/json.
+         */
+        post: operations["attachBudgetReceiptEvidence"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/budget/receipts/confirm": {
         parameters: {
             query?: never;
@@ -6221,6 +6241,17 @@ export interface components {
             /** Currency */
             currency: string;
         };
+        /** BudgetReceiptAttachEvidenceRequest */
+        BudgetReceiptAttachEvidenceRequest: {
+            /** Expected Version */
+            expected_version: number;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Target Expected Version */
+            target_expected_version: number;
+            /** Target Receipt Id */
+            target_receipt_id: string;
+        };
         /** BudgetReceiptCandidate */
         BudgetReceiptCandidate: {
             /** Account Id */
@@ -6479,6 +6510,8 @@ export interface components {
         BudgetReceiptDetailResult: {
             /** Candidates */
             candidates?: components["schemas"]["BudgetReceiptCandidate"][] | null;
+            /** @description Unique eligible confirmed target. Omitted before contract 0.69.0 or when ineligible. */
+            evidence_target?: components["schemas"]["BudgetReceiptEvidenceTarget"] | null;
             /** Group Candidates */
             group_candidates?: components["schemas"]["BudgetReceiptGroupCandidate"][] | null;
             /** No Bank Data */
@@ -6573,6 +6606,17 @@ export interface components {
             last_used_at: number | null;
             /** Token Id */
             token_id: string;
+        };
+        /** BudgetReceiptEvidenceTarget */
+        BudgetReceiptEvidenceTarget: {
+            /** Raw Shop Name */
+            raw_shop_name: string | null;
+            /** Receipt Date */
+            receipt_date: string;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Version */
+            version: number;
         };
         /** BudgetReceiptGmailGrantRequest */
         BudgetReceiptGmailGrantRequest: {
@@ -15515,6 +15559,123 @@ export interface operations {
             };
             /** @description SQLite session users required */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description budget configuration unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+        };
+    };
+    attachBudgetReceiptEvidence: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Evidence attachment is available from 0.69.0. */
+                "X-Hestia-Contract-Version": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetReceiptAttachEvidenceRequest"];
+            };
+        };
+        responses: {
+            /** @description owner-scoped stored state; no bank request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetReceiptConfirmResult"];
+                };
+            };
+            /** @description invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description A missing or invalid credential, device_token_expired, or device_token_revoked. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description admin owner or browser-origin requirement failed; middleware may return an empty body */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Receipts disabled or contract version below 0.69.0. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Stale receipt version (budget_receipt_conflict), changed or ambiguous target (budget_receipt_stale_source), or missing SQLite users backend (budget_requires_sqlite_users). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Length is required. */
+            411: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description JSON body exceeds 16384 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetError"];
+                };
+            };
+            /** @description Content-Type must be application/json. */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };

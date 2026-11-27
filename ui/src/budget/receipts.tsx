@@ -87,6 +87,7 @@ import type {
   ReceiptDetail,
   ReceiptDetailResult,
   ReceiptDocumentKind,
+  ReceiptEvidenceTarget,
   ReceiptFilter,
   ReceiptGroupCandidate,
   ReceiptGroupDetailResult,
@@ -153,6 +154,7 @@ type DetailState =
       detail: ReceiptDetail;
       candidates: ReceiptCandidate[];
       groupCandidates: ReceiptGroupCandidate[];
+      evidenceTarget?: ReceiptEvidenceTarget | null;
       noBankData: boolean;
       candidatesOnly?: boolean;
     }
@@ -289,6 +291,7 @@ function pendingActionLabel(kind: ReceiptActionKind): string {
     case "delete": return t("budget.receipts.deleting");
     case "group_link": return t("budget.receipts.linkingGroup");
     case "group_unlink": return t("budget.receipts.unlinkingGroup");
+    case "attach_evidence": return t("budget.receipts.attachingEvidence");
   }
 }
 
@@ -1614,6 +1617,7 @@ export function ReceiptsView({
         detail: receipt,
         candidates,
         groupCandidates,
+        evidenceTarget: result.data.evidence_target ?? null,
         noBankData: result.data.no_bank_data === true,
       });
       if (receipt.image_available) {
@@ -1703,7 +1707,9 @@ export function ReceiptsView({
     if (!isSameDrawerSession()) return;
 
     const serverChanged = updated.status !== previous.status || updated.version !== previous.version;
-    const confirmNotice = serverChanged ? t("budget.receipts.confirmSuccess") : null;
+    const confirmNotice = serverChanged
+      ? t(updated.evidence_for_receipt_id === null ? "budget.receipts.confirmSuccess" : "budget.receipts.attachEvidenceSuccess")
+      : null;
     if (refreshOutcome.kind === "stale_or_aborted") return;
     if (refreshOutcome.kind === "error") {
       if (pendingNav !== null) {
@@ -2633,6 +2639,7 @@ interface DrawerProps {
   api: Pick<
     ReceiptsApi,
     | "confirmReceipt"
+    | "attachReceiptEvidence"
     | "deleteReceipt"
     | "fetchReceiptLinkGroupDetail"
     | "receiptGroupCandidates"
@@ -3298,6 +3305,41 @@ function ReceiptDetailDrawer({
     }
   };
 
+  const submitAttachEvidence = async (detail: ReceiptDetail, target: ReceiptEvidenceTarget) => {
+    if (api.attachReceiptEvidence === undefined || !isOpenReceipt(detail.receipt_id)) return;
+    const lock = store.tryAcquire(detail.receipt_id, "attach_evidence");
+    if (lock === null) return;
+    keepActionErrorRef.current = null;
+    setActionError(null);
+    let outcome: ReceiptSettledEvent["outcome"] | undefined;
+    try {
+      const result = await api.attachReceiptEvidence({
+        receipt_id: detail.receipt_id,
+        expected_version: detail.version,
+        target_receipt_id: target.receipt_id,
+        target_expected_version: target.version,
+      });
+      if (onAccessLoss(result, { explicitDisabledOnly: true })
+          || !drawerMountedRef.current || !isOpenReceipt(detail.receipt_id)) {
+        outcome = settledOutcome(result, "confirmed");
+        return;
+      }
+      if (result.ok) {
+        onConfirmed(result.data.receipt, detail);
+      } else if (isConflictOrStaleError(result)) {
+        setActionError(t("budget.receipts.attachEvidenceStale"));
+        keepActionErrorRef.current = { mode: "always" };
+        onConflictOrStale(detail.receipt_id);
+      } else {
+        setActionError(t("budget.receipts.attachEvidenceError"));
+        keepActionErrorRef.current = { mode: "always" };
+        onMutationError();
+      }
+    } finally {
+      store.release(detail.receipt_id, lock, outcome);
+    }
+  };
+
   const submitUnlinkGroup = async (detail: ReceiptDetail, groupVersion: number) => {
     const group = detail.link_group;
     if (group == null || api.unlinkReceiptGroup === undefined || !isOpenReceipt(detail.receipt_id)) return;
@@ -3525,11 +3567,12 @@ function ReceiptDetailDrawer({
             <button type="button" onClick={onRetryDetail}>{t("budget.receipts.retry")}</button>
           </div>
         ) : (() => {
-          const { detail, candidates, groupCandidates } = detailState;
+          const { detail, candidates, groupCandidates, evidenceTarget } = detailState;
           const group = detail.link_group;
+          const attachedTo = detail.evidence_for_receipt_id;
           const currentCandidateSetKey = buildCandidateSetKey(detail, candidates);
           const storedKeepCandidate = findCurrentLinkedCandidate(detail, candidates);
-          const activeDraft = group != null || confirmDraft === null
+          const activeDraft = group != null || attachedTo !== null || confirmDraft === null
             ? null
             : clearStaleCandidateSelection(confirmDraft, detail.receipt_id, currentCandidateSetKey, storedKeepCandidate);
           const canPickManually = searchTransactions !== undefined && activeDraft !== null
@@ -3599,6 +3642,28 @@ function ReceiptDetailDrawer({
                   {t("budget.receipts.forwardedManually", { domain: detail.forwarded_sender_domain })}
                 </p>
               ) : null}
+
+              {evidenceTarget == null || api.attachReceiptEvidence === undefined || candidates.length > 0 ? null : (
+                <div className="budget-notice budget-entries-action">
+                  <button
+                    type="button"
+                    disabled={actionBusy !== null || groupControllerOpen
+                      || (activeDraft !== null && isReceiptDraftDirty(detail, activeDraft, candidates))}
+                    onClick={() => { void submitAttachEvidence(detail, evidenceTarget); }}
+                  >
+                    {t("budget.receipts.attachEvidenceAction", {
+                      merchant: evidenceTarget.raw_shop_name ?? t("budget.receipts.unknownMerchant"),
+                      date: evidenceTarget.receipt_date,
+                    })}
+                  </button>
+                </div>
+              )}
+
+              {attachedTo === null ? null : (
+                <button type="button" onClick={() => { onOpenReceipt(attachedTo); }}>
+                  {t("budget.receipts.openEvidenceTarget")}
+                </button>
+              )}
 
               {bannerCandidate === null ? null : ((candidate) => {
                 const accountText = receiptAccountLabel(
@@ -3795,7 +3860,9 @@ function ReceiptDetailDrawer({
                     {detail.payment_evidence.map((evidence) => (
                       <li key={evidence.receipt_id}>
                         <span className="budget-muted">{evidence.receipt_date ?? t("budget.receipts.noDate")}</span>
-                        <span>{evidence.gateway ?? t("budget.receipts.unknownMerchant")}</span>
+                        <button type="button" onClick={() => { onOpenReceipt(evidence.receipt_id); }}>
+                          {evidence.gateway ?? t("budget.receipts.open")}
+                        </button>
                         {evidence.gateway_status === "registered" ? (
                           <span className="budget-chip budget-receipt-gateway" data-gateway-status="registered">
                             {t("budget.receipts.gateway.registered")}

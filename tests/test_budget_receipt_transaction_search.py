@@ -361,7 +361,8 @@ class ReceiptTransactionSearchHTTPTests(IsolatedAsyncioTestCase):
         for version in (None, "0.66.0"):
             response = await self._post("transaction-search", body, version=version)
             self.assertEqual((response.status, (await response.json())["error"]), (404, "budget_receipt_not_found"))
-        for version in ("0.68.0", "garbage"):
+        major, minor, _patch = map(int, api_contract.CONTRACT_VERSION.split("."))
+        for version in (f"{major}.{minor + 1}.0", "garbage"):
             response = await self._post("transaction-search", body, version=version)
             self.assertEqual((response.status, (await response.json())["error"]),
                              (400, "budget_receipt_contract_version_invalid"))

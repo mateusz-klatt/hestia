@@ -17,7 +17,7 @@ export type ReceiptsApi = Pick<
 > & Partial<Pick<
   BudgetApi,
   "fetchReceiptLinkGroupDetail" | "receiptGroupCandidates" | "linkReceiptGroup" | "unlinkReceiptGroup"
-  | "searchReceiptTransactions" | "isAuthorizationLocked"
+  | "searchReceiptTransactions" | "attachReceiptEvidence" | "isAuthorizationLocked"
 >>;
 
 export function createReceiptsApi(api: ReceiptsApi = budgetApi): ReceiptsApi {
@@ -27,6 +27,8 @@ export function createReceiptsApi(api: ReceiptsApi = budgetApi): ReceiptsApi {
     receiptDetail: (receiptId: string) => api.receiptDetail(receiptId),
     ...(api.searchReceiptTransactions === undefined ? {}
       : { searchReceiptTransactions: api.searchReceiptTransactions.bind(api) }),
+    ...(api.attachReceiptEvidence === undefined ? {}
+      : { attachReceiptEvidence: api.attachReceiptEvidence.bind(api) }),
     ...(api.fetchReceiptLinkGroupDetail === undefined ? {}
       : { fetchReceiptLinkGroupDetail: api.fetchReceiptLinkGroupDetail.bind(api) }),
     ...(api.receiptGroupCandidates === undefined ? {}

@@ -23,6 +23,7 @@ PREFIX = "/api/budget/receipts"
 FLAG = "HESTIA_BUDGET_RECEIPTS_ENABLED"
 READS = ("detail", "image", "group/detail")
 _TX_SEARCH = "transaction-search"
+_ATTACH_EVIDENCE = "attach-evidence"
 WRITES = {
     "parse-text": (api_contract.BudgetReceiptParseTextRequest, 49152),
     "confirm": (api_contract.BudgetReceiptConfirmRequest, 131072),
@@ -30,6 +31,7 @@ WRITES = {
     "search": (api_contract.BudgetReceiptSearchRequest, 16384),
     _TX_SEARCH: (api_contract.BudgetReceiptTransactionSearchRequest, 16384),
     "delete": (api_contract.BudgetReceiptDeleteRequest, 16384),
+    _ATTACH_EVIDENCE: (api_contract.BudgetReceiptAttachEvidenceRequest, 16384),
     "group/candidates": (api_contract.BudgetReceiptGroupCandidatesRequest, 16384),
     "group/link": (api_contract.BudgetReceiptGroupLinkRequest, 16384),
     "group/unlink": (api_contract.BudgetReceiptGroupUnlinkRequest, 16384),
@@ -44,6 +46,7 @@ _MANY_TO_ONE_VERSION = (0, 59, 0)
 _LINK_INDICATORS_VERSION = (0, 60, 0)
 _DISPLAY_SHOP_NAME_VERSION = (0, 61, 0)
 _MULTI_STATUS_VERSION = (0, 65, 0)
+_EVIDENCE_TARGET_VERSION = (0, 69, 0)
 _CURRENT_VERSION = tuple(int(part) for part in api_contract.CONTRACT_VERSION.split("."))
 _RECEIPT_RESULT_KEY = {"parse-text": "draft", "confirm": "receipt", "list": "receipts",
                        "search": "receipts", "detail": "receipt"}
@@ -105,6 +108,8 @@ def _run(owner, operation, values, secret, device_id, actor=None, *,
     store = _store(secret, device_id, actor)
     if operation == "parse-text":
         return store.parse_text(owner, values["text"], source_kind=values["source_kind"])
+    if operation == _ATTACH_EVIDENCE:
+        return store.attach_evidence(owner, values)
     if operation in ("list", "search"):
         return getattr(store, operation)(
             owner, values, include_linked_transaction=include_linked_transaction,
@@ -127,7 +132,7 @@ _DEVICE_BROWSER_REQUESTS = {
 
 
 def _receipt_contract(request, operation):
-    if (operation not in _RECEIPT_RESULT_KEY and operation not in ("gmail-status", _TX_SEARCH)
+    if (operation not in _RECEIPT_RESULT_KEY and operation not in ("gmail-status", _TX_SEARCH, _ATTACH_EVIDENCE)
             and operation not in _GROUP_OPERATIONS):
         return (0, 0, 0)
     values = request.headers.getall(_CONTRACT_HEADER, [])
@@ -209,6 +214,7 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
                     lambda: _run_read(
                         owner, operation, identifier, secret, device_id, actor,
                         include_display_shop_name=version >= _DISPLAY_SHOP_NAME_VERSION,
+                        include_evidence_target=version >= _EVIDENCE_TARGET_VERSION,
                     ),
                 )
                 return _response(operation, result, version)
@@ -219,7 +225,8 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
                 if retry is not None:
                     return _device_error(429, "device_token_rate_limited", retry)
             version = _receipt_contract(request, operation)
-            if operation in _GROUP_OPERATIONS and version < _MANY_TO_ONE_VERSION:
+            if ((operation in _GROUP_OPERATIONS and version < _MANY_TO_ONE_VERSION)
+                    or (operation == _ATTACH_EVIDENCE and version < _EVIDENCE_TARGET_VERSION)):
                 raise ReceiptError("budget_receipt_not_found", 404)
             if operation == _TX_SEARCH and version < MANUAL_LINK_VERSION:
                 raise ReceiptError("budget_receipt_not_found", 404)
@@ -421,10 +428,12 @@ def register(app, read_json_body, *, auth_enabled, session_secret, login_limiter
     app.router.add_post(device_token.LOGIN_PATH, login)
 
 
-def _run_read(owner, operation, identifier, secret, device_id=None, actor=None, *, include_display_shop_name=False):
+def _run_read(owner, operation, identifier, secret, device_id=None, actor=None, *,
+              include_display_shop_name=False, include_evidence_target=False):
     store = _store(secret, device_id, actor)
     if operation == "detail":
-        return store.detail(owner, identifier, include_display_shop_name=include_display_shop_name)
+        return store.detail(owner, identifier, include_display_shop_name=include_display_shop_name,
+                            include_evidence_target=include_evidence_target)
     if operation == "group/detail":
         return store.group_detail(owner, identifier)
     store.image(owner, identifier)

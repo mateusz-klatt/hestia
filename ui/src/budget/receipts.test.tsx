@@ -531,6 +531,38 @@ async function submit(form: HTMLFormElement | null): Promise<void> {
 }
 
 describe("ReceiptsView", () => {
+  it("offers evidence attachment in Polish and submits only on explicit click", async () => {
+    const source = receiptSummary({
+      receipt_id: "evidence", status: "imported", raw_shop_name: "Fikcjusz Bistro", version: 3,
+    });
+    const initial = receiptDetail(source);
+    const target = { receipt_id: "target", version: 9, raw_shop_name: "Fikcjusz", receipt_date: "2026-04-15" };
+    const clients = fakeClients([source], initial);
+    vi.mocked(clients.rApi.receiptDetail).mockImplementationOnce(() => ok({
+      receipt: initial, candidates: [], evidence_target: target,
+    }));
+    const attach = vi.fn<NonNullable<ReceiptsApi["attachReceiptEvidence"]>>(() => ok({
+      ok: true,
+      receipt: receiptDetail({ ...source, status: "confirmed", version: 4, evidence_for_receipt_id: target.receipt_id }),
+    }));
+    clients.rApi.attachReceiptEvidence = attach;
+
+    await renderReceipts(clients, { locale: "pl" });
+    await click(openDetailById(source.receipt_id, "Szczegóły"));
+    const action = button("Dołącz jako dowód do paragonu Fikcjusz (2026-04-15)", dialog());
+    expect(action.disabled).toBe(false);
+    expect(attach).not.toHaveBeenCalled();
+    expect(clients.rApi.confirmReceipt).not.toHaveBeenCalled();
+
+    await click(action);
+    expect(attach).toHaveBeenCalledExactlyOnceWith({
+      receipt_id: source.receipt_id, expected_version: source.version,
+      target_receipt_id: target.receipt_id, target_expected_version: target.version,
+    });
+    expect(clients.rApi.confirmReceipt).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
   it("shows grouped members and gateway evidence in the same drawer without legacy write actions", async () => {
     const groupDetail = receiptGroupDetail();
     const rows = [...groupDetail.members, ...(groupDetail.evidence === null ? [] : [groupDetail.evidence])];
