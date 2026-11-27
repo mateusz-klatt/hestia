@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n}秒前",
   "time.minutesAgo": "{n}分鐘前",
   "time.hoursAgo": "{n}小時前",
+  "globals.cribHumidity": "嬰兒床濕度：{humidity}",
 
   "type.light": "燈光",
   "type.blind": "百葉窗",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "套用",
   "budget.transactions.provisionalOnly": "僅限未確認或暫定紀錄",
   "budget.transactions.all": "全部",
+  "budget.transactions.excludeSkipped": "不含已排除項目",
+  "budget.transactions.hiddenSkipped": "已隱藏 {count} 筆（本人轉帳 / 信用卡還款）",
+  "budget.transactions.showAll": "顯示",
   "budget.transactions.uncategorised": "未分類",
   "budget.transactions.automatic": "自動（依規則）",
   "budget.transactions.kinds.auto": "自動",

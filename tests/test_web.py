@@ -26,11 +26,14 @@ from unittest import mock
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.web_middlewares import middleware
 
-from hestia import auth, authz, db, proxy, store_sql, web
+from hestia import api_contract, auth, authz, db, proxy, store_sql, web
 from hestia.automations import AutomationEngine, AutomationStore, rule_vocab
 from hestia.budget import household, household_api
 from hestia.protocol import Frame, build_frame, tlv
 
+
+_CONTRACT_MAJOR, _CONTRACT_MINOR, _ = (int(part) for part in api_contract.CONTRACT_VERSION.split("."))
+_FUTURE_CONTRACT_VERSION = f"{_CONTRACT_MAJOR}.{_CONTRACT_MINOR + 1}.0"
 
 DOOR_EVENT_NODE12 = build_frame(
     0x1E, 0x09,
@@ -1087,16 +1090,69 @@ class DiscoveryTests(_WebTestBase):
 
     def test_discovery_reflects_global_fields(self):
         self.rt.state.crib_temp = 22.5
+        self.rt.state.crib_humidity = 48.0
         self.rt.state.crib_temp_ts = 1_699_900_000.0
+        self.rt.state.crib_battery_ok = False
         self.rt.state.outdoor_temp = -1.0
         self.rt.state.outdoor_humidity = 44.0
         self.rt.state.outdoor_temp_ts = 1_700_000_000.0
         self.rt.state.outdoor_battery_ok = True
-        _, _, body = _get(self.web.address, "/api/discovery")
-        self.assertEqual(json.loads(body)["globals"],
-                         {"crib_temp": 22.5, "crib_temp_ts": "2023-11-13T18:26:40Z", "outdoor_temp": -1.0,
-                          "outdoor_humidity": 44.0, "outdoor_temp_ts": "2023-11-14T22:13:20Z",
-                          "outdoor_battery_ok": True})
+        # No header (or pre-0.62.0 header): crib_humidity and crib_battery_ok are omitted entirely.
+        for headers in ({}, {"X-Hestia-Contract-Version": "0.60.0"}):
+            with self.subTest(headers=headers):
+                status, _, body = _get(self.web.address, "/api/discovery", headers=headers)
+                self.assertEqual(status, 200)
+                globs = json.loads(body)["globals"]
+                self.assertEqual(globs,
+                                 {"crib_temp": 22.5, "crib_temp_ts": "2023-11-13T18:26:40Z",
+                                  "outdoor_temp": -1.0, "outdoor_humidity": 44.0,
+                                  "outdoor_temp_ts": "2023-11-14T22:13:20Z", "outdoor_battery_ok": True})
+                self.assertNotIn("crib_humidity", globs)
+                self.assertNotIn("crib_battery_ok", globs)
+        # 0.62.0 client with HESTIA_RTL433_BATTERY_WARN unset: receives crib_humidity, omits crib_battery_ok.
+        status, _, body = _get(self.web.address, "/api/discovery",
+                               headers={"X-Hestia-Contract-Version": "0.62.0"})
+        self.assertEqual(status, 200)
+        globs = json.loads(body)["globals"]
+        self.assertEqual(globs,
+                         {"crib_temp": 22.5, "crib_humidity": 48.0, "crib_temp_ts": "2023-11-13T18:26:40Z",
+                          "outdoor_temp": -1.0, "outdoor_humidity": 44.0,
+                          "outdoor_temp_ts": "2023-11-14T22:13:20Z", "outdoor_battery_ok": True})
+        self.assertNotIn("crib_battery_ok", globs)
+        # 0.62.0 client with HESTIA_RTL433_BATTERY_WARN=1: receives both crib_humidity and crib_battery_ok;
+        # pre-0.62.0 clients still omit both.
+        with mock.patch.dict("os.environ", {"HESTIA_RTL433_BATTERY_WARN": "1"}):
+            status, _, body = _get(self.web.address, "/api/discovery",
+                                   headers={"X-Hestia-Contract-Version": "0.62.0"})
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["globals"],
+                             {"crib_temp": 22.5, "crib_humidity": 48.0, "crib_temp_ts": "2023-11-13T18:26:40Z",
+                              "crib_battery_ok": False, "outdoor_temp": -1.0,
+                              "outdoor_humidity": 44.0, "outdoor_temp_ts": "2023-11-14T22:13:20Z",
+                              "outdoor_battery_ok": True})
+            status, _, body = _get(self.web.address, "/api/discovery",
+                                   headers={"X-Hestia-Contract-Version": "0.60.0"})
+            self.assertEqual(status, 200)
+            old_globs = json.loads(body)["globals"]
+            self.assertNotIn("crib_humidity", old_globs)
+            self.assertNotIn("crib_battery_ok", old_globs)
+
+    def test_discovery_rejects_invalid_or_future_contract_version(self):
+        for bad in ("invalid", "1.0.0", _FUTURE_CONTRACT_VERSION, "0.01.0"):
+            with self.subTest(bad=bad):
+                status, _, body = _get(self.web.address, "/api/discovery",
+                                       headers={"X-Hestia-Contract-Version": bad})
+                self.assertEqual(status, 400)
+                self.assertEqual(json.loads(body), {"ok": False, "error": "contract_version_invalid"})
+        # Duplicate header values are rejected too.
+        raw = _raw_http(
+            self.web.address,
+            b"GET /api/discovery HTTP/1.0\r\nHost: localhost\r\n"
+            b"X-Hestia-Contract-Version: 0.60.0\r\n"
+            b"X-Hestia-Contract-Version: 0.62.0\r\n\r\n",
+        )
+        self.assertEqual(_raw_status(raw), 400)
+        self.assertEqual(json.loads(_raw_body(raw)), {"ok": False, "error": "contract_version_invalid"})
 
     def test_discovery_includes_klima(self):
         sentinel = {"file": "/ext/infrared/klima.ir", "modes": {"cool": [22]},
@@ -1930,14 +1986,127 @@ class SSEHandlerTests(_WebTestBase):
             conn.close()
         self._wait_unsubscribed()
 
-    def _raw_sse(self, path="/api/events"):
+    def _raw_sse(self, path="/api/events", headers=()):
         """Plain socket SSE so we control the close ourselves (http.client
         hides the socket once getresponse() runs)."""
         import socket
         host, port = self.web.address
         s = socket.create_connection((host, port), timeout=3.0)
-        s.send(f"GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n".encode())
+        extra = "".join(f"{name}: {value}\r\n" for name, value in headers)
+        s.send(f"GET {path} HTTP/1.0\r\nHost: localhost\r\n{extra}\r\n".encode())
         return s
+
+    def _read_sse_json(self, sock, body=b""):
+        while b"\n\n" not in body:
+            body += _recv_until(sock, b"\n\n")
+        block, _, rest = body.partition(b"\n\n")
+        self.assertTrue(block.startswith(b"data: "), block)
+        return json.loads(block[len(b"data: "):].decode()), rest
+
+    def test_events_contract_gating_omits_crib_extras_below_0_62_and_includes_at_0_62(self):
+        crib_event = {
+            "type": "globals",
+            "fields": {
+                "crib_temp": 21.3,
+                "crib_humidity": 48.0,
+                "crib_temp_ts": "2026-11-27T18:00:00Z",
+                "crib_battery_ok": False,
+            },
+        }
+        crib_event_no_batt = {
+            "type": "globals",
+            "fields": {
+                "crib_temp": 21.3,
+                "crib_humidity": 48.0,
+                "crib_temp_ts": "2026-11-27T18:00:00Z",
+            },
+        }
+        humidity_only_event = {"type": "globals", "fields": {"crib_humidity": 49.0}}
+        # 1) With HESTIA_RTL433_BATTERY_WARN unset: 0.62.0 receives crib_humidity but omits crib_battery_ok;
+        #    < 0.62.0 / unversioned omits both.
+        s_none = self._raw_sse("/api/events")
+        s_old = self._raw_sse("/api/events", headers=[("X-Hestia-Contract-Version", "0.60.0")])
+        s_new_hdr = self._raw_sse("/api/events", headers=[("X-Hestia-Contract-Version", "0.62.0")])
+        s_new_qry = self._raw_sse("/api/events?contract_version=0.62.0")
+        s_both = self._raw_sse("/api/events?contract_version=0.62.0",
+                               headers=[("X-Hestia-Contract-Version", "0.62.0")])
+        socks = (s_none, s_old, s_new_hdr, s_new_qry, s_both)
+        try:
+            bodies = {}
+            for sock in socks:
+                data = _recv_until(sock, b"\r\n\r\n")
+                head, _, body = data.partition(b"\r\n\r\n")
+                self.assertIn(b"HTTP/1.0 200 OK", head.split(b"\r\n", 1)[0])
+                bodies[sock] = body
+            self._wait_subscribed(n=len(socks))
+            self.loop_thread.submit(self._publish_async(humidity_only_event))
+            self.loop_thread.submit(self._publish_async(crib_event))
+            for sock in (s_none, s_old):
+                payload, _ = self._read_sse_json(sock, bodies[sock])
+                self.assertEqual(payload, {
+                    "type": "globals",
+                    "fields": {"crib_temp": 21.3, "crib_temp_ts": "2026-11-27T18:00:00Z"},
+                })
+                self.assertNotIn("crib_humidity", payload["fields"])
+                self.assertNotIn("crib_battery_ok", payload["fields"])
+            for sock in (s_new_hdr, s_new_qry, s_both):
+                first, rest = self._read_sse_json(sock, bodies[sock])
+                self.assertEqual(first, humidity_only_event)
+                second, _ = self._read_sse_json(sock, rest)
+                self.assertEqual(second, crib_event_no_batt)
+                self.assertNotIn("crib_battery_ok", second["fields"])
+            self.loop_thread.submit(self._close_bus_async())
+            self._wait_unsubscribed()
+        finally:
+            for sock in socks:
+                sock.close()
+
+    def test_events_contract_gating_includes_crib_battery_when_warn_enabled(self):
+        crib_event = {
+            "type": "globals",
+            "fields": {
+                "crib_temp": 21.3,
+                "crib_humidity": 48.0,
+                "crib_temp_ts": "2026-11-27T18:00:00Z",
+                "crib_battery_ok": False,
+            },
+        }
+        with mock.patch.dict("os.environ", {"HESTIA_RTL433_BATTERY_WARN": "1"}):
+            s_old = self._raw_sse("/api/events", headers=[("X-Hestia-Contract-Version", "0.60.0")])
+            s_new = self._raw_sse("/api/events", headers=[("X-Hestia-Contract-Version", "0.62.0")])
+            try:
+                b_old = _recv_until(s_old, b"\r\n\r\n").partition(b"\r\n\r\n")[2]
+                b_new = _recv_until(s_new, b"\r\n\r\n").partition(b"\r\n\r\n")[2]
+                self._wait_subscribed(n=2)
+                self.loop_thread.submit(self._publish_async(crib_event))
+                p_old, _ = self._read_sse_json(s_old, b_old)
+                p_new, _ = self._read_sse_json(s_new, b_new)
+                self.assertEqual(p_old, {
+                    "type": "globals",
+                    "fields": {"crib_temp": 21.3, "crib_temp_ts": "2026-11-27T18:00:00Z"},
+                })
+                self.assertEqual(p_new, crib_event)
+                self.loop_thread.submit(self._close_bus_async())
+                self._wait_unsubscribed()
+            finally:
+                s_old.close()
+                s_new.close()
+
+    def test_events_rejects_invalid_future_or_mismatched_contract_version(self):
+        cases = (
+            ("/api/events", {"X-Hestia-Contract-Version": "invalid"}),
+            ("/api/events", {"X-Hestia-Contract-Version": _FUTURE_CONTRACT_VERSION}),
+            ("/api/events?contract_version=invalid", {}),
+            (f"/api/events?contract_version={_FUTURE_CONTRACT_VERSION}", {}),
+            ("/api/events?contract_version=0.60.0&contract_version=0.62.0", {}),
+            ("/api/events?contract_version=0.62.0", {"X-Hestia-Contract-Version": "0.60.0"}),
+        )
+        for path, headers in cases:
+            with self.subTest(path=path, headers=headers):
+                status, _, body = _get(self.web.address, path, headers=headers)
+                self.assertEqual(status, 400)
+                self.assertEqual(json.loads(body), {"ok": False, "error": "contract_version_invalid"})
+        self.assertFalse(self.rt.event_bus._subs)
 
     def test_oserror_on_write_breaks_loop(self):
         """Client disconnect → server's next write fails → handler exits."""

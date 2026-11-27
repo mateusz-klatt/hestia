@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "prieš {n} s",
   "time.minutesAgo": "prieš {n} min.",
   "time.hoursAgo": "prieš {n} val.",
+  "globals.cribHumidity": "Drėgmė prie lovytės: {humidity}",
 
   "type.light": "šviesa",
   "type.blind": "žaliuzė",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Taikyti",
   "budget.transactions.provisionalOnly": "Tik nepatvirtintos arba preliminarios",
   "budget.transactions.all": "Visi",
+  "budget.transactions.excludeSkipped": "Be neįtrauktų",
+  "budget.transactions.hiddenSkipped": "Paslėpta {count} (savo pervedimai / kortelių grąžinimai)",
+  "budget.transactions.showAll": "Rodyti",
   "budget.transactions.uncategorised": "Be kategorijos",
   "budget.transactions.automatic": "Automatiškai (taisyklės)",
   "budget.transactions.kinds.auto": "Automatiškai",

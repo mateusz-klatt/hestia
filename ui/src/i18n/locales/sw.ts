@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} sek zilizopita",
   "time.minutesAgo": "{n} dak zilizopita",
   "time.hoursAgo": "{n} saa zilizopita",
+  "globals.cribHumidity": "Unyevu wa kitanda cha mtoto: {humidity}",
 
   "type.light": "taa",
   "type.blind": "pazia",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Tumia",
   "budget.transactions.provisionalOnly": "Yasiyothibitishwa au ya muda tu",
   "budget.transactions.all": "Zote",
+  "budget.transactions.excludeSkipped": "Bila zilizotengwa",
+  "budget.transactions.hiddenSkipped": "{count} zimefichwa (uhamisho wako / ulipaji wa kadi)",
+  "budget.transactions.showAll": "Onyesha",
   "budget.transactions.uncategorised": "Bila kategoria",
   "budget.transactions.automatic": "Otomatiki (kanuni)",
   "budget.transactions.kinds.auto": "Otomatiki",

@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "för {n}s sen",
   "time.minutesAgo": "för {n}min sen",
   "time.hoursAgo": "för {n}h sen",
+  "globals.cribHumidity": "Luftfuktighet vid spjälsängen: {humidity}",
 
   "type.light": "lampa",
   "type.blind": "persienn",
@@ -846,6 +847,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Tillämpa",
   "budget.transactions.provisionalOnly": "Endast obekräftade eller preliminära",
   "budget.transactions.all": "Alla",
+  "budget.transactions.excludeSkipped": "Utan undantagna",
+  "budget.transactions.hiddenSkipped": "{count} dolda (egna överföringar / kortbetalningar)",
+  "budget.transactions.showAll": "Visa",
   "budget.transactions.uncategorised": "Utan kategori",
   "budget.transactions.automatic": "Automatiskt (regler)",
   "budget.transactions.kinds.auto": "Automatiskt",

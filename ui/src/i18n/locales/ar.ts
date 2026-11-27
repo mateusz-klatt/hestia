@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "منذ {n} ث",
   "time.minutesAgo": "منذ {n} د",
   "time.hoursAgo": "منذ {n} س",
+  "globals.cribHumidity": "رطوبة سرير الطفل: {humidity}",
 
   "type.light": "ضوء",
   "type.blind": "ستارة",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "تطبيق",
   "budget.transactions.provisionalOnly": "غير المؤكدة أو الأولية فقط",
   "budget.transactions.all": "الكل",
+  "budget.transactions.excludeSkipped": "باستثناء المستبعدة",
+  "budget.transactions.hiddenSkipped": "مخفي {count} (التحويلات بين حساباتك / سداد البطاقات)",
+  "budget.transactions.showAll": "عرض",
   "budget.transactions.uncategorised": "غير مصنّف",
   "budget.transactions.automatic": "تلقائي (قواعد)",
   "budget.transactions.kinds.auto": "تلقائي",

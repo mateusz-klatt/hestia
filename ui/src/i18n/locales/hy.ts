@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} վրկ առաջ",
   "time.minutesAgo": "{n} րոպ առաջ",
   "time.hoursAgo": "{n} ժ առաջ",
+  "globals.cribHumidity": "Մանկական մահճակալի խոնավությունը՝ {humidity}",
 
   "type.light": "լույս",
   "type.blind": "շերտավարագույր",
@@ -848,6 +849,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Կիրառել",
   "budget.transactions.provisionalOnly": "Միայն չհաստատված կամ նախնական",
   "budget.transactions.all": "Բոլորը",
+  "budget.transactions.excludeSkipped": "Առանց բացառվածների",
+  "budget.transactions.hiddenSkipped": "Թաքցված է {count} (սեփական փոխանցումներ / քարտի մարումներ)",
+  "budget.transactions.showAll": "Ցույց տալ",
   "budget.transactions.uncategorised": "Առանց կատեգորիայի",
   "budget.transactions.automatic": "Ինքնաշխատ (կանոններ)",
   "budget.transactions.kinds.auto": "Ինքնաշխատ",

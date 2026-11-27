@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n}s geleden",
   "time.minutesAgo": "{n}min geleden",
   "time.hoursAgo": "{n}u geleden",
+  "globals.cribHumidity": "Luchtvochtigheid bij het wiegje: {humidity}",
 
   "type.light": "lamp",
   "type.blind": "jaloezie",
@@ -846,6 +847,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Toepassen",
   "budget.transactions.provisionalOnly": "Alleen onbevestigde of voorlopige",
   "budget.transactions.all": "Alle",
+  "budget.transactions.excludeSkipped": "Zonder uitgesloten",
+  "budget.transactions.hiddenSkipped": "{count} verborgen (eigen overboekingen / creditcardaflossingen)",
+  "budget.transactions.showAll": "Tonen",
   "budget.transactions.uncategorised": "Zonder categorie",
   "budget.transactions.automatic": "Automatisch (regels)",
   "budget.transactions.kinds.auto": "Automatisch",

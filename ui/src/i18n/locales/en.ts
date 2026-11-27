@@ -179,6 +179,7 @@ const en = {
   "time.secondsAgo": "{n}s ago",
   "time.minutesAgo": "{n}m ago",
   "time.hoursAgo": "{n}h ago",
+  "globals.cribHumidity": "Crib humidity: {humidity}",
 
   // Device type names (the classifier's values), shown in the "inferred type" cell + as a fallback label.
   "type.light": "light",
@@ -876,6 +877,9 @@ const en = {
   "budget.transactions.apply": "Apply",
   "budget.transactions.provisionalOnly": "Only entries with uncertain classification",
   "budget.transactions.all": "All",
+  "budget.transactions.excludeSkipped": "Excluding skipped",
+  "budget.transactions.hiddenSkipped": "{count} hidden (own transfers / card repayments)",
+  "budget.transactions.showAll": "Show",
   "budget.transactions.uncategorised": "Uncategorised",
   "budget.transactions.automatic": "Automatic (rules)",
   "budget.transactions.kinds.auto": "Automatic",

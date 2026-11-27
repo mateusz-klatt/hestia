@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} s sitten",
   "time.minutesAgo": "{n} min sitten",
   "time.hoursAgo": "{n} h sitten",
+  "globals.cribHumidity": "Pinnasängyn ilmankosteus: {humidity}",
 
   "type.light": "valo",
   "type.blind": "kaihdin",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Käytä",
   "budget.transactions.provisionalOnly": "Vain vahvistamattomat tai alustavat",
   "budget.transactions.all": "Kaikki",
+  "budget.transactions.excludeSkipped": "Ilman ohitettuja",
+  "budget.transactions.hiddenSkipped": "Piilotettu {count} (omat tilisiirrot / luottokorttimaksut)",
+  "budget.transactions.showAll": "Näytä",
   "budget.transactions.uncategorised": "Luokittelematon",
   "budget.transactions.automatic": "Automaattinen (säännöt)",
   "budget.transactions.kinds.auto": "Automaattinen",

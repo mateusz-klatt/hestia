@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} mp-e",
   "time.minutesAgo": "{n} perce",
   "time.hoursAgo": "{n} órája",
+  "globals.cribHumidity": "Kiságy páratartalma: {humidity}",
 
   "type.light": "lámpa",
   "type.blind": "redőny",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Alkalmazás",
   "budget.transactions.provisionalOnly": "Csak meg nem erősített vagy előzetes",
   "budget.transactions.all": "Mind",
+  "budget.transactions.excludeSkipped": "Kihagyottak nélkül",
+  "budget.transactions.hiddenSkipped": "{count} elrejtve (saját átvezetések / kártyatörlesztések)",
+  "budget.transactions.showAll": "Megjelenítés",
   "budget.transactions.uncategorised": "Kategória nélkül",
   "budget.transactions.automatic": "Automatikus (szabályok)",
   "budget.transactions.kinds.auto": "Automatikus",

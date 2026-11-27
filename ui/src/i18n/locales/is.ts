@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "fyrir {n} sek.",
   "time.minutesAgo": "fyrir {n} mín.",
   "time.hoursAgo": "fyrir {n} klst.",
+  "globals.cribHumidity": "Raki við vögguna: {humidity}",
 
   "type.light": "ljós",
   "type.blind": "gardína",
@@ -847,6 +848,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Virkja",
   "budget.transactions.provisionalOnly": "Aðeins óstaðfestar eða bráðabirgðafærslur",
   "budget.transactions.all": "Allt",
+  "budget.transactions.excludeSkipped": "Án undanskildra",
+  "budget.transactions.hiddenSkipped": "{count} falið (eigin millifærslur / kortagreiðslur)",
+  "budget.transactions.showAll": "Sýna",
   "budget.transactions.uncategorised": "Án flokks",
   "budget.transactions.automatic": "Sjálfvirkt (reglur)",
   "budget.transactions.kinds.auto": "Sjálfvirkt",

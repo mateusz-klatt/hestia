@@ -6,6 +6,7 @@ import { battFmt, battLow, fmtHumidity, fmtTemp, freshnessMeta, onOff, stateStr,
  *  render) and `LiveView` (live controller), so either can be passed to `renderGlobals` structurally. */
 export interface GlobalsView {
   crib: HTMLElement;
+  cribHumidity: HTMLElement;
   cribMeta: HTMLElement;
   outdoor: HTMLElement;
   outdoorHumidity: HTMLElement;
@@ -16,6 +17,24 @@ export interface GlobalsView {
 export interface DeviceView extends GlobalsView {
   hdrText: HTMLElement;
   rows: HTMLElement;
+}
+
+/** Paint the crib humidity companion (" · 48%"): hidden and cleared when null (e.g. Tuya route,
+ *  humidity-less packet, or pre-0.62.0 server), shown with a localised tooltip/aria-label otherwise. */
+export function paintCribHumidity(el: HTMLElement, humidity: number | null): void {
+  if (humidity === null) {
+    el.textContent = "";
+    el.hidden = true;
+    el.title = "";
+    el.removeAttribute("aria-label");
+    return;
+  }
+  const formatted = fmtHumidity(humidity);
+  const label = t("globals.cribHumidity", { humidity: formatted });
+  el.textContent = ` · ${formatted}`;
+  el.hidden = false;
+  el.title = label;
+  el.setAttribute("aria-label", label);
 }
 
 /** Paint one freshness/battery badge from a sample ts (+ optional battery flag): muted "N ago", red+bold
@@ -178,9 +197,10 @@ export function renderDeviceRows(tbody: HTMLElement, devices: Record<string, Dev
 
 export function renderGlobals(v: GlobalsView, g: Globals, now: number = Date.now()): void {
   v.crib.textContent = fmtTemp(g.crib_temp);
+  paintCribHumidity(v.cribHumidity, g.crib_humidity ?? null);
   v.outdoor.textContent = fmtTemp(g.outdoor_temp);
   v.outdoorHumidity.textContent = fmtHumidity(g.outdoor_humidity);
-  paintMeta(v.cribMeta, g.crib_temp_ts, null, now);                      // crib (mains baby-monitor): no battery
+  paintMeta(v.cribMeta, g.crib_temp_ts, g.crib_battery_ok ?? null, now);
   paintMeta(v.outdoorMeta, g.outdoor_temp_ts, g.outdoor_battery_ok, now);
 }
 

@@ -17,6 +17,7 @@ import { ANALYTICS_ERROR, EFFECTIVE_KINDS, NO_FILTER, RELOAD_ERRORS, TRANSACTION
   TRANSACTION_TRANSFER_STATUS_KEYS, UNCATEGORISED, annotationRequest, canPair, canonicalAmount,
   counterparty, counterpartyRuleCandidate, accountName as nameOf, currentChoice, daysBetween, kindChoice, kindChoicesFor, labelOf, manualPairRequest,
   pairCandidates, pairDate, pairPeriods, transactionRowKey } from "./model";
+import { KIND_FILTER_EXCLUDE_SKIPPED, isSkipInBudgetKind, readKindFilterPreference, writeKindFilterPreference } from "./kind_filter";
 import type { AnalyticsCategory, AnalyticsTransaction, AnalyticsTransactionReceipt, AnalyticsTransactionsByKeysRequest, CategoryChoice, KindChoice,
   RuleCandidate, TransactionFilter } from "./model";
 import { useTransactionDocuments } from "./transaction_documents";
@@ -174,9 +175,18 @@ function orderRows(
 export function TransactionsPanel({ api, receiptsList, period, currencies, accounts, connections = [], locale, revision, onAccessLoss,
   onChanged, rowCap = TRANSACTION_ROW_CAP, initialCurrency, initialProvisionalKeys, initialProvisionalTotal,
   initialProvisionalTruncated, focusOnMount = false, onCreateRule }: TransactionsProps) {
-  const startingFilter: TransactionFilter = initialCurrency === undefined ? NO_FILTER : { ...NO_FILTER, currency: initialCurrency };
-  const [filter, setFilter] = useState<TransactionFilter>(startingFilter);
-  const [draft, setDraft] = useState<TransactionFilter>(startingFilter);
+  const [filter, setFilter] = useState<TransactionFilter>(() => ({
+    ...NO_FILTER,
+    currency: initialCurrency ?? "",
+    kind: readKindFilterPreference(),
+  }));
+  const [draft, setDraft] = useState<TransactionFilter>(() => filter);
+  const excludeSkipped = filter.kind === KIND_FILTER_EXCLUDE_SKIPPED;
+  const serverKind = excludeSkipped ? "" : filter.kind;
+  const serverFilter = useMemo<TransactionFilter>(
+    () => ({ currency: filter.currency, category: filter.category, kind: serverKind, query: filter.query }),
+    [filter.currency, filter.category, serverKind, filter.query],
+  );
   const [provisionalFilter, setProvisionalFilter] = useState<{
     period: string;
     keys: readonly string[] | undefined;
@@ -223,14 +233,14 @@ export function TransactionsPanel({ api, receiptsList, period, currencies, accou
         ? await api.analyticsTransactionsByKeys({
           row_keys: [...rowKeys],
           ...(cursor === undefined ? {} : { cursor }),
-          ...(filter.currency === "" ? {} : { currency: filter.currency }),
-          ...(filter.category === "" ? {} : { category_id: filter.category }),
-          ...(filter.kind === "" ? {} : { kind: filter.kind as NonNullable<AnalyticsTransactionsByKeysRequest["kind"]> }),
-          ...(filter.query === "" ? {} : { query: filter.query }),
+          ...(serverFilter.currency === "" ? {} : { currency: serverFilter.currency }),
+          ...(serverFilter.category === "" ? {} : { category_id: serverFilter.category }),
+          ...(serverFilter.kind === "" ? {} : { kind: serverFilter.kind as NonNullable<AnalyticsTransactionsByKeysRequest["kind"]> }),
+          ...(serverFilter.query === "" ? {} : { query: serverFilter.query }),
         })
         : cursor === undefined
-          ? await api.analyticsTransactions(period, filter)
-          : await api.analyticsTransactions(period, filter, cursor);
+          ? await api.analyticsTransactions(period, serverFilter)
+          : await api.analyticsTransactions(period, serverFilter, cursor);
       const accessLost = onAccessLoss(result);
       if (genToken !== generation.current || runToken !== walkToken.current) return;
       if (accessLost) {
@@ -263,11 +273,11 @@ export function TransactionsPanel({ api, receiptsList, period, currencies, accou
       cursor = next;
       first = false;
     }
-  }, [api, period, filter, onAccessLoss, rowCap]);
+  }, [api, period, serverFilter, onAccessLoss, rowCap]);
 
   useEffect(() => {
     staleReloads.current = 0;
-  }, [api, period, filter, revision, activeProvisionalKeys]);
+  }, [api, period, serverFilter, revision, activeProvisionalKeys]);
 
   useEffect(() => {
     const token = ++generation.current;
@@ -290,7 +300,7 @@ export function TransactionsPanel({ api, receiptsList, period, currencies, accou
     // The first page paints immediately. Later pages follow the cursor until the cap, the period changes,
     // or the access barrier rejects an answer. A stale cursor restarts from the first page (up to the retry cap).
     void walkPages(token, runToken, undefined, [], false, activeProvisionalKeys);
-  }, [api, period, filter, revision, reloads, onAccessLoss, walkPages, activeProvisionalKeys]);
+  }, [api, period, serverFilter, revision, reloads, onAccessLoss, walkPages, activeProvisionalKeys]);
   useEffect(() => () => { generation.current += 1; walkToken.current += 1; picker.current += 1; }, []);
 
   const more = useCallback(() => {
@@ -369,18 +379,36 @@ export function TransactionsPanel({ api, receiptsList, period, currencies, accou
   );
   const accountName = (id: string) => nameOf(accounts, connections, id, t("budget.transactions.account"));
   const kindText = (kind: string) => labelOf(TRANSACTION_KIND_KEYS, kind);
-  const matchingRows = useMemo(() => {
+  const baseRows = useMemo(() => {
     if (provisionalKeySet === null) return page.rows;
     return page.rows.filter((row) => provisionalKeySet.has(rowKey(row)));
   }, [page.rows, provisionalKeySet]);
+  const hiddenSkipCount = useMemo(
+    () => (excludeSkipped ? baseRows.filter((row) => isSkipInBudgetKind(row.effective.kind)).length : 0),
+    [baseRows, excludeSkipped],
+  );
+  const matchingRows = useMemo(
+    () => (excludeSkipped ? baseRows.filter((row) => !isSkipInBudgetKind(row.effective.kind)) : baseRows),
+    [baseRows, excludeSkipped],
+  );
   const shownRows = useMemo(
     () => orderRows(matchingRows, sort, frozenOrder, categoryName, locale),
     [matchingRows, sort, frozenOrder, categoryName, locale],
   );
-  const shownTotal = provisionalOnly ? matchingRows.length : page.total;
+  const shownTotal = provisionalOnly
+    ? matchingRows.length
+    : excludeSkipped
+      ? (page.cursor === null && !page.loading ? matchingRows.length : Math.max(matchingRows.length, page.total - hiddenSkipCount))
+      : page.total;
   const expenses = useMemo(() => page.rows.filter(isExpense), [page.rows]);
   const documents = useTransactionDocuments(receiptsList, expenses, revision);
   const selectedRow = selected === null ? undefined : shownRows.find((row) => rowKey(row) === selected);
+
+  const showAllKinds = useCallback(() => {
+    writeKindFilterPreference("");
+    setFilter((current) => (current.kind === "" ? current : { ...current, kind: "" }));
+    setDraft((current) => (current.kind === "" ? current : { ...current, kind: "" }));
+  }, []);
 
   const closePairs = useCallback(() => {
     picker.current += 1;
@@ -536,7 +564,11 @@ export function TransactionsPanel({ api, receiptsList, period, currencies, accou
         <ExportMenu filename={exportBasename(period)} periods={[period]} filter={filter}
           rowKeys={activeProvisionalKeys} accounts={accounts} connections={connections} api={api} onAccessLoss={onAccessLoss} />
       </header>
-      <form className="budget-range" onSubmit={(event) => { event.preventDefault(); setFilter(draft); }}>
+      <form className="budget-range" onSubmit={(event) => {
+        event.preventDefault();
+        writeKindFilterPreference(draft.kind);
+        setFilter(draft);
+      }}>
         <label>{t("budget.transactions.currency")}
           <select name="currency" value={draft.currency} onChange={(event) => { setDraft({ ...draft, currency: event.currentTarget.value }); }}>
             <option value="">{t("budget.transactions.all")}</option>
@@ -552,6 +584,7 @@ export function TransactionsPanel({ api, receiptsList, period, currencies, accou
         </label>
         <label>{t("budget.transactions.kind")}
           <select name="kind" value={draft.kind} onChange={(event) => { setDraft({ ...draft, kind: event.currentTarget.value }); }}>
+            <option value={KIND_FILTER_EXCLUDE_SKIPPED}>{t("budget.transactions.excludeSkipped")}</option>
             <option value="">{t("budget.transactions.all")}</option>
             {EFFECTIVE_KINDS.map((kind) => <option key={kind} value={kind}>{kindText(kind)}</option>)}
           </select>
@@ -585,6 +618,17 @@ export function TransactionsPanel({ api, receiptsList, period, currencies, accou
         <div className="budget-notice budget-entries-action" role="alert">
           <span>{t("budget.transactions.error")}</span>
           <button type="button" onClick={retry}>{t("budget.transactions.retry")}</button>
+        </div>
+      ) : null}
+      {excludeSkipped && !page.failed && hiddenSkipCount > 0 ? (
+        <div className="budget-entries-action">
+          <span className="budget-chip">
+            <span>{t("budget.transactions.hiddenSkipped", { count: hiddenSkipCount })}</span>
+            <span aria-hidden="true">{" · "}</span>
+            <button type="button" className="budget-link" onClick={showAllKinds}>
+              {t("budget.transactions.showAll")}
+            </button>
+          </span>
         </div>
       ) : null}
       {page.loading && shownRows.length === 0 ? <p className="budget-muted" role="status">{t("budget.transactions.loading")}</p> : null}

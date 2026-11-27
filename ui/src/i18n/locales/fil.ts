@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n}s nakalipas",
   "time.minutesAgo": "{n}min nakalipas",
   "time.hoursAgo": "{n}h nakalipas",
+  "globals.cribHumidity": "Halumigmig sa kuna: {humidity}",
 
   "type.light": "ilaw",
   "type.blind": "blind",
@@ -848,6 +849,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Ilapat",
   "budget.transactions.provisionalOnly": "Hindi kumpirmado o pansamantala lamang",
   "budget.transactions.all": "Lahat",
+  "budget.transactions.excludeSkipped": "Walang nilaktawan",
+  "budget.transactions.hiddenSkipped": "{count} ang nakatago (sariling paglilipat / bayad sa card)",
+  "budget.transactions.showAll": "Ipakita",
   "budget.transactions.uncategorised": "Walang kategorya",
   "budget.transactions.automatic": "Awtomatiko (mga panuntunan)",
   "budget.transactions.kinds.auto": "Awtomatiko",

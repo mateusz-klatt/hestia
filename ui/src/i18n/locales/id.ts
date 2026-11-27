@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} dtk lalu",
   "time.minutesAgo": "{n} mnt lalu",
   "time.hoursAgo": "{n} jam lalu",
+  "globals.cribHumidity": "Kelembapan boks bayi: {humidity}",
 
   "type.light": "lampu",
   "type.blind": "tirai",
@@ -848,6 +849,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Terapkan",
   "budget.transactions.provisionalOnly": "Hanya yang belum dikonfirmasi atau sementara",
   "budget.transactions.all": "Semua",
+  "budget.transactions.excludeSkipped": "Tanpa yang dikecualikan",
+  "budget.transactions.hiddenSkipped": "{count} disembunyikan (transfer sendiri / pembayaran kartu)",
+  "budget.transactions.showAll": "Tampilkan",
   "budget.transactions.uncategorised": "Tanpa kategori",
   "budget.transactions.automatic": "Otomatis (aturan)",
   "budget.transactions.kinds.auto": "Otomatis",

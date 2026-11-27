@@ -9,6 +9,7 @@ import { account } from "../fixtures";
 import type { ReceiptSummary } from "../receipts_model";
 import { annotationOf, categoryList, decisionOf, entriesOf, entry } from "./fixtures";
 import type { AnalyticsTransaction, AnalyticsTransactions, AnnotationSaved, TransferDecisionResult } from "./model";
+import { KIND_FILTER_EXCLUDE_SKIPPED, KIND_FILTER_STORAGE_KEY } from "./kind_filter";
 import { TRANSACTION_ROW_CAP, TransactionsPanel } from "./transactions";
 
 function ok<T>(data: T): Promise<BudgetResult<T>> { return Promise.resolve({ ok: true, data }); }
@@ -52,6 +53,11 @@ const accounts = [
 let host: HTMLElement;
 let root: Root;
 beforeEach(async () => {
+  try {
+    localStorage.removeItem(KIND_FILTER_STORAGE_KEY);
+  } catch {
+    // Ignore when localStorage is unavailable in this test environment.
+  }
   await loadLocale("en");
   host = document.createElement("div");
   document.body.append(host);
@@ -60,6 +66,12 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => { root.unmount(); await Promise.resolve(); });
   host.remove();
+  vi.unstubAllGlobals();
+  try {
+    localStorage.removeItem(KIND_FILTER_STORAGE_KEY);
+  } catch {
+    // Ignore when localStorage is unavailable in this test environment.
+  }
   await loadLocale("en");
 });
 
@@ -1069,6 +1081,7 @@ describe("manual own-transfer pairing", () => {
     ];
     const api = fakeApi(rows);
     await show(api);
+    await click(button(t("budget.transactions.showAll")));
     const rendered = [...host.querySelectorAll<HTMLElement>(".budget-transaction-table tbody tr")];
     expect(rendered).toHaveLength(rows.length);
     for (const [index, row] of rendered.entries()) {
@@ -1558,5 +1571,139 @@ describe("manual own-transfer pairing", () => {
     expect(secondBadge?.getAttribute("data-receipt-status")).toBe("needs_review");
 
     expect(rows[2]?.querySelector(".budget-tx-receipt-link")).toBeNull();
+  });
+});
+
+describe("default skip-in-budget kind filter", () => {
+  const rowNames = (): string[] => [...host.querySelectorAll(".budget-transaction-table tbody .budget-entry-text")]
+    .map((item) => item.textContent);
+
+  it("hides skip-in-budget kinds by default, shows the hidden count hint, and reveals them on Show or All", async () => {
+    const rows = [
+      entry("groceries", {
+        metadata: { creditor_name: "Synthetic Grocer", debtor_name: null, mcc: null },
+        effective: { kind: "expense", category_id: "cat-food", source: "default", rule_id: null },
+      }),
+      entry("salary", {
+        credit_debit_indicator: "CRDT",
+        metadata: { creditor_name: null, debtor_name: "Synthetic Employer", mcc: null },
+        effective: { kind: "income", category_id: null, source: "manual", rule_id: null },
+      }),
+      entry("own-transfer", {
+        metadata: { creditor_name: "Synthetic Own Transfer", debtor_name: null, mcc: null },
+        effective: { kind: "transfer", category_id: null, source: "transfer", rule_id: null },
+        transfer: { status: "accepted", decision_id: "dec-1", candidate_count: 0, ambiguous: false },
+      }),
+      entry("card-repay", {
+        metadata: { creditor_name: "Synthetic Card Repayment", debtor_name: null, mcc: null },
+        effective: { kind: "transfer", category_id: null, source: "default", rule_id: null },
+      }),
+      entry("manual-skip", {
+        metadata: { creditor_name: "Synthetic Manual Skip", debtor_name: null, mcc: null },
+        effective: { kind: "excluded", category_id: null, source: "manual", rule_id: null },
+      }),
+    ];
+    const api = fakeApi(rows);
+    await show(api, { locale: "pl" });
+
+    // Server receives kind: "" (no contract change); skip kinds are hidden client-side.
+    expect(api.analyticsTransactions).toHaveBeenCalledTimes(1);
+    expect(api.analyticsTransactions).toHaveBeenCalledWith("2026-11", { currency: "", category: "", kind: "", query: "" });
+    const kindSelect = select("Rodzaj");
+    expect(kindSelect.value).toBe(KIND_FILTER_EXCLUDE_SKIPPED);
+    expect([...kindSelect.options].slice(0, 2).map((option) => [option.value, option.textContent])).toEqual([
+      [KIND_FILTER_EXCLUDE_SKIPPED, "Bez pominiętych"],
+      ["", "Wszystkie"],
+    ]);
+
+    expect(rowNames()).toEqual(["Synthetic Grocer", "Synthetic Employer"]);
+    expect(host.textContent).toContain("Pozycji: 2");
+    expect(host.textContent).toContain("Ukryto 3 (przelewy własne / spłaty kart) · Pokaż");
+
+    // Clicking "Pokaż" switches to "Wszystkie", reveals the hidden rows without a redundant fetch, and hides the hint.
+    await click(button("Pokaż"));
+    expect(api.analyticsTransactions).toHaveBeenCalledTimes(1);
+    expect(select("Rodzaj").value).toBe("");
+    expect(rowNames()).toEqual([
+      "Synthetic Grocer",
+      "Synthetic Employer",
+      "Synthetic Own Transfer",
+      "Synthetic Card Repayment",
+      "Synthetic Manual Skip",
+    ]);
+    expect(host.textContent).toContain("Pozycji: 5");
+    expect(host.textContent).not.toContain("Ukryto 3");
+
+    // Switching back to "Bez pominiętych" hides them again.
+    await choose(select("Rodzaj"), KIND_FILTER_EXCLUDE_SKIPPED);
+    await submit(host.querySelector(".budget-range"));
+    expect(rowNames()).toEqual(["Synthetic Grocer", "Synthetic Employer"]);
+    expect(host.textContent).toContain("Ukryto 3 (przelewy własne / spłaty kart) · Pokaż");
+  });
+
+  it("shows the hidden-skipped hint even when every loaded entry is a skip-in-budget kind", async () => {
+    const api = fakeApi([
+      entry("only-transfer", {
+        metadata: { creditor_name: "Synthetic Only Transfer", debtor_name: null, mcc: null },
+        effective: { kind: "transfer", category_id: null, source: "transfer", rule_id: null },
+      }),
+    ]);
+    await show(api);
+    expect(rowNames()).toEqual([]);
+    expect(host.textContent).toContain("No entries match.");
+    expect(host.textContent).toContain("1 hidden (own transfers / card repayments) · Show");
+
+    await click(button("Show"));
+    expect(rowNames()).toEqual(["Synthetic Only Transfer"]);
+    expect(host.textContent).not.toContain("1 hidden");
+  });
+
+  it("persists the selected kind filter across remounts", async () => {
+    const rows = [
+      entry("expense-1", { metadata: { creditor_name: "Synthetic Expense", debtor_name: null, mcc: null } }),
+      entry("transfer-1", {
+        metadata: { creditor_name: "Synthetic Transfer", debtor_name: null, mcc: null },
+        effective: { kind: "transfer", category_id: null, source: "transfer", rule_id: null },
+      }),
+    ];
+    const api = fakeApi(rows);
+    await show(api);
+    expect(rowNames()).toEqual(["Synthetic Expense"]);
+
+    await choose(select("Type"), "");
+    await submit(host.querySelector(".budget-range"));
+    expect(localStorage.getItem(KIND_FILTER_STORAGE_KEY)).toBe("");
+    expect(rowNames()).toEqual(["Synthetic Expense", "Synthetic Transfer"]);
+
+    await act(async () => { root.unmount(); await Promise.resolve(); });
+    root = createRoot(host);
+    await show(api);
+    expect(select("Type").value).toBe("");
+    expect(rowNames()).toEqual(["Synthetic Expense", "Synthetic Transfer"]);
+    expect(host.textContent).not.toContain("hidden");
+  });
+
+  it("still defaults to hiding skip-in-budget kinds when localStorage throws", async () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => { throw new Error("storage disabled"); },
+      setItem: () => { throw new Error("storage disabled"); },
+      removeItem: () => { throw new Error("storage disabled"); },
+    });
+    const rows = [
+      entry("expense-1", { metadata: { creditor_name: "Synthetic Expense", debtor_name: null, mcc: null } }),
+      entry("transfer-1", {
+        metadata: { creditor_name: "Synthetic Transfer", debtor_name: null, mcc: null },
+        effective: { kind: "transfer", category_id: null, source: "transfer", rule_id: null },
+      }),
+    ];
+    const api = fakeApi(rows);
+    await show(api);
+    expect(select("Type").value).toBe(KIND_FILTER_EXCLUDE_SKIPPED);
+    expect(rowNames()).toEqual(["Synthetic Expense"]);
+    expect(host.textContent).toContain("1 hidden (own transfers / card repayments) · Show");
+
+    await click(button("Show"));
+    expect(select("Type").value).toBe("");
+    expect(rowNames()).toEqual(["Synthetic Expense", "Synthetic Transfer"]);
   });
 });

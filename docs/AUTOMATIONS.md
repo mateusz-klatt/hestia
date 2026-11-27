@@ -391,10 +391,10 @@ with bounded stderr diagnostics and the stream is relaunched after `HESTIA_RTL43
 | `HESTIA_RTL433_MODEL` | outdoor route: only accept readings whose `model` matches (recommended) | — (any) |
 | `HESTIA_RTL433_ID` | outdoor route: only accept readings whose sensor `id` matches; **`*` = any id** (for a sensor whose id randomises on each battery change) | — (any) |
 | `HESTIA_RTL433_CHANNEL` | outdoor route: only accept readings on this `channel` (a physical DIP switch, **stable** across battery changes); pair with `HESTIA_RTL433_ID=*` to track one sensor across battery swaps yet still exclude a neighbour on another channel | — (any) |
-| `HESTIA_RTL433_CRIB_MODEL` | crib route: enable the second 433 MHz target into `crib_temp` + `crib_temp_ts` for packets matching this `model`. Supersedes `HESTIA_NIANIA_*` if both are configured | — (off) |
+| `HESTIA_RTL433_CRIB_MODEL` | crib route: enable the second 433 MHz target into `crib_temp` (+ display-only `crib_humidity` + `crib_temp_ts`) for packets matching this `model`. Supersedes `HESTIA_NIANIA_*` if both are configured | — (off) |
 | `HESTIA_RTL433_CRIB_ID` | crib route: only accept readings whose sensor `id` matches (`*` = any id) | — (any) |
 | `HESTIA_RTL433_CRIB_CHANNEL` | crib route: only accept readings on this `channel` (rejects packets without `channel`) | — (any) |
-| `HESTIA_RTL433_BATTERY_WARN` | opt-in low-battery signal (`outdoor_battery_ok` badge on the dashboard; low-battery transition warning logged for the crib route). Off by default because some sensors (e.g. a rechargeable `Prologue-TH`) report low *permanently* | off |
+| `HESTIA_RTL433_BATTERY_WARN` | opt-in low-battery signal (`outdoor_battery_ok` / `crib_battery_ok` badge on the dashboard; low-battery transition warning logged for the crib route). Off by default because some sensors (e.g. a rechargeable `Prologue-TH`) report low *permanently* | off |
 | `HESTIA_RTL433_PROTOCOL` | restrict decoding to **one** rtl_433 protocol number (`-R`). With two sensors of different protocols, leave `PROTOCOL` **unset** (or both sensors must share that single protocol) | — (all) |
 | `HESTIA_RTL433_RESTART_SECS` | delay before relaunching `rtl_433` after it exits, clamped to `[1, 600]` | `30` |
 
@@ -408,8 +408,10 @@ with bounded stderr diagnostics and the stream is relaunched after `HESTIA_RTL43
 >
 > **Crib precedence, humidity & battery:** if both `HESTIA_NIANIA_*` and `HESTIA_RTL433_CRIB_MODEL` are
 > configured, the `rtl_433` crib route wins — hestia logs a warning once and does **not** start the
-> Tuya poller. Crib humidity is ignored (the API has no crib humidity field). Low battery for crib is
-> logged once per transition into low when `HESTIA_RTL433_BATTERY_WARN` is enabled. Known limitation:
+> Tuya poller. Crib humidity is populated into the display-only `crib_humidity` global (no rule trigger,
+> contract-gated at 0.62.0; Tuya keeps it `null`). Low battery for crib populates `crib_battery_ok`
+> (contract-gated at 0.62.0) and is logged once per transition into low when `HESTIA_RTL433_BATTERY_WARN`
+> is enabled. Known limitation:
 > a global-field trigger edge (`crib_temp` / `outdoor_temp`) that fires while no gateway is connected
 > is dropped and consumed (identical to the Tuya poller), so it will re-arm only once the reading
 > crosses back below the threshold and then rises again.

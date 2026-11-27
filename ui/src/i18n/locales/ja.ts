@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n}秒前",
   "time.minutesAgo": "{n}分前",
   "time.hoursAgo": "{n}時間前",
+  "globals.cribHumidity": "ベビーベッドの湿度: {humidity}",
 
   "type.light": "照明",
   "type.blind": "ブラインド",
@@ -848,6 +849,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "適用",
   "budget.transactions.provisionalOnly": "未確認または暫定のみ",
   "budget.transactions.all": "すべて",
+  "budget.transactions.excludeSkipped": "除外対象を除く",
+  "budget.transactions.hiddenSkipped": "{count}件を非表示（自分の振替 / カード返済）",
+  "budget.transactions.showAll": "表示",
   "budget.transactions.uncategorised": "未分類",
   "budget.transactions.automatic": "自動（ルール）",
   "budget.transactions.kinds.auto": "自動",

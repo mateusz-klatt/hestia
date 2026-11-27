@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "{n} giây trước",
   "time.minutesAgo": "{n} phút trước",
   "time.hoursAgo": "{n} giờ trước",
+  "globals.cribHumidity": "Độ ẩm cũi em bé: {humidity}",
 
   "type.light": "đèn",
   "type.blind": "rèm",
@@ -848,6 +849,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "Áp dụng",
   "budget.transactions.provisionalOnly": "Chỉ chưa xác nhận hoặc tạm tính",
   "budget.transactions.all": "Tất cả",
+  "budget.transactions.excludeSkipped": "Trừ mục đã bỏ qua",
+  "budget.transactions.hiddenSkipped": "Đã ẩn {count} (chuyển khoản nội bộ / trả nợ thẻ)",
+  "budget.transactions.showAll": "Hiển thị",
   "budget.transactions.uncategorised": "Chưa có danh mục",
   "budget.transactions.automatic": "Tự động (quy tắc)",
   "budget.transactions.kinds.auto": "Tự động",

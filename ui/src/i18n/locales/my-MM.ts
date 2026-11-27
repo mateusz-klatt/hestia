@@ -164,6 +164,7 @@ const messages: Partial<Messages> = {
   "time.secondsAgo": "လွန်ခဲ့သော {n} စက္က.",
   "time.minutesAgo": "လွန်ခဲ့သော {n} မိ.",
   "time.hoursAgo": "လွန်ခဲ့သော {n} နာ.",
+  "globals.cribHumidity": "ကလေးပုခက် စိုထိုင်းဆ: {humidity}",
 
   "type.light": "မီး",
   "type.blind": "ဘလိုင်း",
@@ -848,6 +849,9 @@ const messages: Partial<Messages> = {
   "budget.transactions.apply": "အသုံးပြုရန်",
   "budget.transactions.provisionalOnly": "အတည်မပြုရသေး သို့မဟုတ် ယာယီစာရင်းများသာ",
   "budget.transactions.all": "အားလုံး",
+  "budget.transactions.excludeSkipped": "ချန်လှပ်ထားသည်များ မပါ",
+  "budget.transactions.hiddenSkipped": "{count} ခု ဖျောက်ထားသည် (ကိုယ်ပိုင်လွှဲငွေ / ကတ်ပြန်ဆပ်ငွေ)",
+  "budget.transactions.showAll": "ပြသမည်",
   "budget.transactions.uncategorised": "အမျိုးအစား မသတ်မှတ်ရသေး",
   "budget.transactions.automatic": "အလိုအလျောက် (စည်းမျဉ်းများ)",
   "budget.transactions.kinds.auto": "အလိုအလျောက်",

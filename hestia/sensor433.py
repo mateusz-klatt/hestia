@@ -1,6 +1,6 @@
 """Temperature + humidity from local 433 MHz weather sensors via the ``rtl_433`` binary — a stdlib-only,
 opt-in, on-LAN/zero-egress PUSH feeder for the ``outdoor_temp`` and ``crib_temp`` GLOBAL automation
-fields (plus a display-only ``outdoor_humidity`` global).
+fields (plus display-only ``outdoor_humidity`` and ``crib_humidity`` globals).
 
 ``rtl_433 -F json`` emits one JSON object per decoded packet to stdout and flushes it the instant the
 packet is received (empirically verified over a pipe: a keyfob press and the sensor's reading both

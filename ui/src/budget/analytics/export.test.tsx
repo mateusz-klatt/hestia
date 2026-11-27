@@ -19,6 +19,7 @@ import type { ExportContext, ExportRecord } from "./export_rows";
 import { buildWorkbook, crc32, excelSerial, sheetTitle } from "./xlsx_writer";
 import type { XlsxCell } from "./xlsx_writer";
 import { TransactionsPanel } from "./transactions";
+import { KIND_FILTER_STORAGE_KEY } from "./kind_filter";
 import { YearView } from "./year";
 
 const categories: AnalyticsCategory[] = [
@@ -604,6 +605,11 @@ describe("export buttons on the month and year views", () => {
   let root: Root;
   const downloads: { name: string; body: Promise<string> }[] = [];
   beforeEach(async () => {
+    try {
+      localStorage.removeItem(KIND_FILTER_STORAGE_KEY);
+    } catch {
+      // Ignore when storage is unavailable.
+    }
     await loadLocale("en");
     downloads.length = 0;
     host = document.createElement("div");
@@ -623,6 +629,11 @@ describe("export buttons on the month and year views", () => {
     await act(async () => { root.unmount(); await Promise.resolve(); });
     host.remove();
     vi.restoreAllMocks();
+    try {
+      localStorage.removeItem(KIND_FILTER_STORAGE_KEY);
+    } catch {
+      // Ignore when storage is unavailable.
+    }
     await loadLocale("en");
   });
   async function flushView(): Promise<void> {
@@ -636,8 +647,13 @@ describe("export buttons on the month and year views", () => {
     return found;
   }
 
-  it("exports the month view with the applied currency filter", async () => {
-    const analyticsTransactions = vi.fn<BudgetApi["analyticsTransactions"]>(() => ok(entriesOf("2026-11", [row()])));
+  it("exports the month view with the applied currency filter and excludes skipped kinds by default", async () => {
+    const skipped = row({
+      entry_reference: "skip-transfer",
+      remittance_information: ["Own transfer hidden"],
+      effective: { kind: "transfer", category_id: null, source: "transfer", rule_id: null },
+    });
+    const analyticsTransactions = vi.fn<BudgetApi["analyticsTransactions"]>(() => ok(entriesOf("2026-11", [row(), skipped])));
     const api = {
       analyticsTransactions,
       analyticsTransactionsByKeys: vi.fn<BudgetApi["analyticsTransactionsByKeys"]>(() => ok(entriesOf("", [row()]))),
@@ -666,9 +682,11 @@ describe("export buttons on the month and year views", () => {
     await flushView();
     const exportCall = analyticsTransactions.mock.calls.find((call) => call[3] === EXPORT_PAGE_SIZE);
     expect(exportCall?.[0]).toBe("2026-11");
-    expect(exportCall?.[1]).toMatchObject({ currency: "PLN" });
+    expect(exportCall?.[1]).toMatchObject({ currency: "PLN", kind: "" });
     expect(downloads.at(-1)?.name).toBe("hestia-transakcje-2026-11.csv");
-    expect(await downloads.at(-1)?.body).toContain("Rent");
+    const body = await downloads.at(-1)?.body;
+    expect(body).toContain("Rent");
+    expect(body).not.toContain("Own transfer hidden");
   });
 
   it("exports the provisional keys the month view is showing", async () => {
