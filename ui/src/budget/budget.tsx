@@ -420,12 +420,24 @@ export function Budget({ active, api: providedApi, receiptsApi: providedReceipts
       return result;
     };
     const fetchReceiptLinkGroupDetail = effectiveReceiptsApi.fetchReceiptLinkGroupDetail?.bind(effectiveReceiptsApi);
+    const receiptGroupCandidates = effectiveReceiptsApi.receiptGroupCandidates?.bind(effectiveReceiptsApi);
+    const linkReceiptGroup = effectiveReceiptsApi.linkReceiptGroup?.bind(effectiveReceiptsApi);
+    const unlinkReceiptGroup = effectiveReceiptsApi.unlinkReceiptGroup?.bind(effectiveReceiptsApi);
     return {
       receiptsList: (request) => runWithGate(() => effectiveReceiptsApi.receiptsList(request), false, true),
       receiptsSearch: (request) => runWithGate(() => effectiveReceiptsApi.receiptsSearch(request), false, true),
       receiptDetail: (receiptId) => runWithGate(() => effectiveReceiptsApi.receiptDetail(receiptId), false, false),
       ...(fetchReceiptLinkGroupDetail === undefined ? {} : {
         fetchReceiptLinkGroupDetail: (groupId: string) => runWithGate(() => fetchReceiptLinkGroupDetail(groupId), false, false),
+      }),
+      ...(receiptGroupCandidates === undefined ? {} : {
+        receiptGroupCandidates: (receiptId: string) => runWithGate(() => receiptGroupCandidates(receiptId), false),
+      }),
+      ...(linkReceiptGroup === undefined ? {} : {
+        linkReceiptGroup: (request: Parameters<typeof linkReceiptGroup>[0]) => runWithGate(() => linkReceiptGroup(request), true),
+      }),
+      ...(unlinkReceiptGroup === undefined ? {} : {
+        unlinkReceiptGroup: (request: Parameters<typeof unlinkReceiptGroup>[0]) => runWithGate(() => unlinkReceiptGroup(request), true),
       }),
       receiptImage: (receiptId) => runWithGate(() => effectiveReceiptsApi.receiptImage(receiptId), false, false),
       confirmReceipt: (request) => runWithGate(() => effectiveReceiptsApi.confirmReceipt(request), true, false),
