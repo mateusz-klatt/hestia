@@ -10,7 +10,7 @@ import unittest
 from unittest import mock
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, literal_column, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -20,7 +20,7 @@ from hestia.budget.analytics_core import AnalyticsError, canonical_money, financ
 from hestia.budget.analytics_store import BudgetAnalyticsStore
 from hestia.budget.gmail_store import GATEWAY_REF_DOMAIN, digest
 from hestia.budget.receipt_parser import ReceiptError
-from hestia.budget.receipt_reconcile import reconcile_receipt_links
+from hestia.budget.receipt_reconcile import entry_reference_digest, link_evidence, reconcile_receipt_links
 from hestia.budget.receipt_store import (
     MAX_GROUP_POOL,
     MAX_GROUP_PROPOSALS,
@@ -184,6 +184,36 @@ class ReceiptGroupWriteTests(AnalyticsCase):
             reconcile_receipt_links(session, "owner", self.now + 1)
         self.assertEqual(self.receipts.group_detail("owner", group_id)["group"]["group_status"], "needs_review")
         self.assertTrue(self.receipts.group_unlink("owner", {"group_id": group_id, "expected_version": 2})["unlinked"])
+
+    def test_group_link_rejects_a_sealed_pending_transaction(self):
+        reference = "synthetic-pending-debit"
+        self._add_tx(reference, status="PDNG")
+        anchor = self._add_receipt(total_amount="40")
+        peer = self._add_receipt(total_amount="60")
+        self.assertEqual(self.receipts.group_candidates("owner", {"receipt_id": anchor})["transactions"], [])
+
+        # Simulate an issuer regression that seals an ineligible row with its actual ledger evidence.
+        with self.sessions() as session:
+            tx, row_id = session.execute(
+                select(db.BudgetTransaction, literal_column("budget_transactions.rowid")).where(
+                    db.BudgetTransaction.account_id == self.acc_a, db.BudgetTransaction.entry_reference == reference,
+                )
+            ).one()
+            payload = json.loads(tx.payload_json)
+        evidence = link_evidence("owner", self.acc_a, reference, payload, None, None, None,
+                                 financial_fingerprint(payload))
+        link = {
+            "account_id": self.acc_a, "entry_reference": entry_reference_digest(reference),
+            "candidate_token": self.receipts._candidate_token(evidence, self.acc_a, row_id, group=True),
+        }
+
+        with self.assertRaises(ReceiptError) as rejected:
+            self.receipts.group_link("owner", {
+                "link": link, "members": [{"receipt_id": rid, "expected_version": 1} for rid in (anchor, peer)],
+            })
+        self.assertEqual((rejected.exception.status, rejected.exception.code), (409, "budget_receipt_stale_source"))
+        self.assertEqual(self.rows(db.BudgetReceiptLinkGroup), [])
+        self.assertTrue(all(row.version == 1 for row in self.rows(db.BudgetReceipt)))
 
     def test_group_candidates_fall_back_when_zero_fee_evidence_exceeds_date_span(self):
         self._add_tx("split-debit", booking_date="2026-11-22",
